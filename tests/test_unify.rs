@@ -12,13 +12,13 @@ mod tests {
 
     #[test]
     fn test_infer_record_literals() {
-        let expr = Literal(Record(hashmap!{
-            "string" => Literal(String("doesn't matter")),
-            "record" => Literal(Record(hashmap!{
-                "x" => Literal(String("ignored")),
-                "y" => Literal(String("also ignored")),
-            }))
-        }));
+        let expr = Literal(Record(vec![
+            ("string", Literal(String("doesn't matter"))),
+            ("record", Literal(Record(vec![
+                ("x", Literal(String("ignored"))),
+                ("y", Literal(String("also ignored"))),
+            ])))
+        ]));
 
         let expected_type = Type::Record(hashmap!{
             "string" => Type::String,

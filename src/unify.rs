@@ -27,7 +27,7 @@ pub enum Expr<'a> {
 #[derive(Debug, PartialEq)]
 pub enum Literal<'a> {
     String(&'a str),
-    Record(HashMap<Field<'a>, Expr<'a>>)
+    Record(Vec<(Field<'a>, Expr<'a>)>)
 }
 
 
