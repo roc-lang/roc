@@ -1,0 +1,10 @@
+[package]
+name = "roc"
+version = "0.1.0"
+authors = ["Richard Feldman <richard.t.feldman@gmail.com>"]
+
+[dependencies]
+
+[dev-dependencies]
+pretty_assertions="0.5.1"
+maplit = "1.0.1"
