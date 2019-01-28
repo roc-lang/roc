@@ -22,6 +22,7 @@ pub fn literal_to_string<'a>(literal: &'a Literal<'a>) -> String {
         Literal::String(str) => format!("\"{}\"", str),
         Literal::Char(character) => format!("'{}'", character),
         Literal::Symbol(str) => str.to_string(),
+        Literal::HexOctalBinary(str) => str.to_string(),
         Literal::Number(str) => str.to_string(),
         Literal::Record(field_exprs) => {
             let mut field_strings = Vec::new();
