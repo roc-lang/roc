@@ -6,12 +6,15 @@ pub type Field<'a> = &'a str;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Type<'a> {
+    Unbound,
     String,
     Int,
     Float,
     Number,
     Symbol(&'a str),
+    Array(Box<Type<'a>>),
     Record(Vec<(Field<'a>, Type<'a>)>),
+    Tuple(Vec<Type<'a>>),
     Assignment(Ident<'a>, Box<Type<'a>>),
     Union(BTreeSet<Type<'a>>),
 }
@@ -34,7 +37,9 @@ pub enum Literal<'a> {
     String(&'a str),
     Number(&'a str),
     Symbol(&'a str),
-    Record(Vec<(Field<'a>, &'a Expr<'a>)>)
+    Array(Vec<Expr<'a>>),
+    Record(Vec<(Field<'a>, &'a Expr<'a>)>),
+    Tuple(Vec<&'a Expr<'a>>)
 }
 
 
@@ -43,6 +48,29 @@ pub fn infer<'a>(expr: &Expr<'a>) -> Result<Type<'a>, UnificationProblem> {
         Expr::Literal(Literal::String(_)) => Ok(Type::String),
         Expr::Literal(Literal::Number(_)) => Ok(Type::Number),
         Expr::Literal(Literal::Symbol(sym)) => Ok(Type::Symbol(sym)),
+        Expr::Literal(Literal::Array(elem_exprs)) => {
+            let elem_type;
+
+            if elem_exprs.is_empty() {
+                elem_type = Type::Unbound;
+            } else {
+                let mut unified_type = BTreeSet::new();
+
+                // Unify the types of all the elements
+                for elem_expr in elem_exprs {
+                    unified_type.insert(infer(&elem_expr)?);
+                }
+
+                if unified_type.len() == 1 {
+                    // No point in storing a union of 1.
+                    elem_type = unified_type.into_iter().next().unwrap()
+                } else {
+                    elem_type = Type::Union(unified_type)
+                }
+            }
+
+            Ok(Type::Array(Box::new(elem_type)))
+        },
         Expr::Literal(Literal::Record(fields)) => {
             let mut rec_type: Vec<(&'a str, Type<'a>)> = Vec::new();
 
@@ -53,6 +81,17 @@ pub fn infer<'a>(expr: &Expr<'a>) -> Result<Type<'a>, UnificationProblem> {
             }
 
             Ok(Type::Record(rec_type))
+        },
+        Expr::Literal(Literal::Tuple(exprs)) => {
+            let mut tuple_type: Vec<Type<'a>> = Vec::new();
+
+            for subexpr in exprs {
+                let field_type = infer(subexpr)?;
+
+                tuple_type.push(field_type);
+            }
+
+            Ok(Type::Tuple(tuple_type))
         },
         Expr::If(box cond, expr_if_true, expr_if_false) => {
             let cond_type = infer(&cond)?;
@@ -108,6 +147,7 @@ pub fn matches_bool_type<'a>(candidate: &Type<'a>) -> bool {
 pub enum UnificationProblem {
     CannotUnifyAssignments,
     NotMemberOfUnion,
+    TypeMismatch,
     IfConditionNotBool,
     SymbolMismatch
 }

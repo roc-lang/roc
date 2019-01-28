@@ -22,16 +22,34 @@ pub fn literal_to_string<'a>(literal: &'a Literal<'a>) -> String {
         Literal::String(str) => format!("\"{}\"", str),
         Literal::Symbol(str) => str.to_string(),
         Literal::Number(str) => str.to_string(),
-        Literal::Record(fields) => {
+        Literal::Record(field_exprs) => {
             let mut field_strings = Vec::new();
 
-            for (field, subexpr) in fields {
+            for (field, subexpr) in field_exprs {
                 let val = literal_to_string(eval(subexpr));
 
                 field_strings.push(format!("{} = {}", field, val));
             }
 
             format!("{{ {} }}", field_strings.join(", "))
+        },
+        Literal::Tuple(elem_exprs) => {
+            let mut elem_strings = Vec::new();
+
+            for elem_expr in elem_exprs {
+                elem_strings.push(literal_to_string(eval(elem_expr)));
+            }
+
+            format!("({})", elem_strings.join(", "))
+        },
+        Literal::Array(elem_exprs) => {
+            let mut elem_strings = Vec::new();
+
+            for elem_expr in elem_exprs {
+                elem_strings.push(literal_to_string(eval(elem_expr)));
+            }
+
+            format!("[ {} ]", elem_strings.join(", "))
         },
     }
 }
