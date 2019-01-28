@@ -1,14 +1,14 @@
 use unify::Expr;
 use unify::Literal;
 
-pub fn eval<'a>(expr: Expr<'a>) -> Literal<'a> {
+pub fn eval<'a>(expr: &'a Expr<'a>) -> &'a Literal<'a> {
     match expr {
         Expr::Literal(literal) => literal,
-        Expr::Assignment(_, subexpr) => eval(*subexpr)
+        Expr::Assignment(_, subexpr) => eval(subexpr)
     }
 }
 
-pub fn literal_to_string<'a>(literal: Literal<'a>) -> String {
+pub fn literal_to_string<'a>(literal: &'a Literal<'a>) -> String {
     match literal {
         Literal::String(str) => format!("\"{}\"", str),
         Literal::Record(fields) => {
@@ -24,4 +24,3 @@ pub fn literal_to_string<'a>(literal: Literal<'a>) -> String {
         },
     }
 }
-

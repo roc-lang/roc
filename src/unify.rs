@@ -17,8 +17,8 @@ pub enum Type<'a> {
 
 #[derive(Debug, PartialEq)]
 pub enum Expr<'a> {
-    Literal(Literal<'a>),
-    Assignment(Ident<'a>, Box<Expr<'a>>),
+    Literal(&'a Literal<'a>),
+    Assignment(Ident<'a>, Box<&'a Expr<'a>>),
     // TODO add record update
     // TODO add conditional
     // TODO add function
@@ -27,11 +27,11 @@ pub enum Expr<'a> {
 #[derive(Debug, PartialEq)]
 pub enum Literal<'a> {
     String(&'a str),
-    Record(Vec<(Field<'a>, Expr<'a>)>)
+    Record(Vec<(Field<'a>, &'a Expr<'a>)>)
 }
 
 
-pub fn infer<'a>(expr: Expr<'a>) -> Type<'a> {
+pub fn infer<'a>(expr: &Expr<'a>) -> Type<'a> {
     match expr {
         Expr::Literal(Literal::String(_)) => Type::String,
         Expr::Literal(Literal::Record(fields)) => {
@@ -46,7 +46,7 @@ pub fn infer<'a>(expr: Expr<'a>) -> Type<'a> {
             Type::Record(rec_type)
         },
         Expr::Assignment(ident, subexpr) => {
-            Type::Assignment(ident, Box::new(infer(*subexpr)))
+            Type::Assignment(ident, Box::new(infer(subexpr)))
         }
     }
 }

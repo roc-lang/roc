@@ -12,13 +12,20 @@ mod tests {
 
     #[test]
     fn test_infer_record_literals() {
-        let expr = Literal(Record(vec![
-            ("string", Literal(String("doesn't matter"))),
-            ("record", Literal(Record(vec![
-                ("x", Literal(String("ignored"))),
-                ("y", Literal(String("also ignored"))),
-            ])))
-        ]));
+        let str0 = &String("doesn't matter");
+        let str1 = &String("ignored");
+        let str2 = &String("also ignored");
+
+        let x = ("x", &Literal(str1));
+        let y = ("y", &Literal(str2));
+
+        let subrec = &Record(vec![x, y]);
+        let str_pair = ("string", &Literal(str0));
+        let rec_pair = ("record", &Literal(subrec));
+        let toprec = vec![str_pair, rec_pair];
+        let literal = &Record(toprec);
+
+        let expr = Literal(literal);
 
         let expected_type = Type::Record(hashmap!{
             "string" => Type::String,
@@ -28,6 +35,6 @@ mod tests {
             })
         });
 
-        assert_eq!(expected_type, infer(expr));
+        assert_eq!(expected_type, infer(&expr));
     }
 }
