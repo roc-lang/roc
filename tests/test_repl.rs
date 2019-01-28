@@ -19,7 +19,7 @@ mod repl_tests {
 
     #[test]
     fn test_record_literal() {
-        let expected = "{ string = \"abc\", record = { x = \"one\", y = \"two\" } }\n: { record : { x : String, y : String }, string : String }";
+        let expected = "{ string = \"abc\", record = { x = \"one\", y = \"two\" } }\n: { string : String, record : { x : String, y : String } }";
 
         let str0 = &String("abc");
         let str1 = &String("one");

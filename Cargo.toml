@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Richard Feldman <richard.t.feldman@gmail.com>"]
 
 [dependencies]
+lazy_static = "1.2.0"
 
 [dev-dependencies]
 pretty_assertions="0.5.1"

@@ -1,4 +1,3 @@
-#[macro_use] extern crate maplit;
 #[macro_use] extern crate pretty_assertions;
 
 extern crate roc;
@@ -27,14 +26,14 @@ mod tests {
 
         let expr = Literal(literal);
 
-        let expected_type = Type::Record(hashmap!{
-            "string" => Type::String,
-            "record" => Type::Record(hashmap!{
-                "x" => Type::String,
-                "y" => Type::String,
-            })
-        });
+        let expected_type = Type::Record(vec![
+            ("string", Type::String),
+            ("record", Type::Record(vec![
+                ("x", Type::String),
+                ("y", Type::String)
+            ]))
+        ]);
 
-        assert_eq!(expected_type, infer(&expr));
+        assert_eq!(expected_type, infer(&expr).unwrap());
     }
 }

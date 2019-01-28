@@ -1,55 +1,19 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 pub type Ident<'a> = &'a str;
 
 pub type Field<'a> = &'a str;
 
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Type<'a> {
     String,
+    Int,
+    Float,
+    Number,
     Symbol(&'a str),
     Record(Vec<(Field<'a>, Type<'a>)>),
     Assignment(Ident<'a>, Box<Type<'a>>),
-    Union(TypeSet<'a>),
-}
-
-#[derive(Debug)]
-struct TypeSet<'a>(HashSet<Type<'a>>);
-
-impl<'a> PartialOrd for TypeSet<'a> {
-    fn partial_cmp(&self, other: &TypeSet<'a>) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<'a> Ord for TypeSet<'a> {
-    fn cmp(&self, other: &TypeSet<'a>) -> Ordering {
-        panic!("TypeSet does not support ordering or equality. Do not use them!");
-    }
-}
-
-impl<'a> PartialEq for TypeSet<'a> {
-    fn eq(&self, other: &TypeSet) -> bool {
-        match (self, other) {
-            (TypeSet(my_set), TypeSet(other_set)) => {
-                // Delegate to HashSet's eq
-                my_set == other_set
-            }
-        }
-    }
-}
-
-impl<'a> Eq for TypeSet<'a> {}
-
-impl<'a> Hash for TypeSet<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        panic!("at the dissco");
-        // self.id.hash(state);
-        // self.phone.hash(state);
-    }
+    Union(BTreeSet<Type<'a>>),
 }
 
 // CANONICAL IR - we have already done stuff like giving errors for
@@ -68,31 +32,83 @@ pub enum Expr<'a> {
 #[derive(Debug, PartialEq)]
 pub enum Literal<'a> {
     String(&'a str),
+    Number(&'a str),
     Symbol(&'a str),
     Record(Vec<(Field<'a>, &'a Expr<'a>)>)
 }
 
 
-pub fn infer<'a>(expr: &Expr<'a>) -> Result<Type<'a>, ()> {
+pub fn infer<'a>(expr: &Expr<'a>) -> Result<Type<'a>, UnificationProblem> {
     match expr {
         Expr::Literal(Literal::String(_)) => Ok(Type::String),
+        Expr::Literal(Literal::Number(_)) => Ok(Type::Number),
         Expr::Literal(Literal::Symbol(sym)) => Ok(Type::Symbol(sym)),
         Expr::Literal(Literal::Record(fields)) => {
-            let mut rec_type: HashMap<&'a str, Type<'a>> = HashMap::new();
+            let mut rec_type: Vec<(&'a str, Type<'a>)> = Vec::new();
 
             for (field, subexpr) in fields {
                 let field_type = infer(subexpr)?;
 
-                rec_type.insert(&field, field_type);
+                rec_type.push((&field, field_type));
             }
 
             Ok(Type::Record(rec_type))
         },
-        Expr::If(cond, expr_if_true, expr_if_false) => {
-            panic!("TODO union the types of expr_if_true and expr_if_false");
+        Expr::If(box cond, expr_if_true, expr_if_false) => {
+            let cond_type = infer(&cond)?;
+
+            // if-conditionals must be of type Bool
+            if !matches_bool_type(&cond_type) {
+                return Err(UnificationProblem::IfConditionNotBool);
+            }
+
+            // unify the true and false branches
+            let true_type = infer(&expr_if_true)?;
+            let false_type = infer(&expr_if_false)?;
+
+            let mut unified_type = BTreeSet::new();
+
+            unified_type.insert(true_type);
+            unified_type.insert(false_type);
+
+            if unified_type.len() == 1 {
+                // No point in storing a union of 1.
+                //
+                // We can't reuse true_type because it's been moved into the set
+                // but we can pull it back out of the set
+                Ok(unified_type.into_iter().next().unwrap())
+            } else {
+                Ok(Type::Union(unified_type))
+            }
         },
         Expr::Assignment(ident, subexpr) => {
             Ok(Type::Assignment(ident, Box::new(infer(subexpr)?)))
         }
     }
 }
+
+const TRUE_SYMBOL_STR: &'static str = "True";
+const FALSE_SYMBOL_STR: &'static str = "False";
+
+pub fn matches_bool_type<'a>(candidate: &Type<'a>) -> bool {
+    match candidate {
+        Type::Symbol(str) => {
+            str == &TRUE_SYMBOL_STR || str == &FALSE_SYMBOL_STR
+        }
+        Type::Union(types) => {
+            types.len() <= 2 && types.iter().all(|typ| matches_bool_type(typ))
+        }
+        _ => {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum UnificationProblem {
+    CannotUnifyAssignments,
+    NotMemberOfUnion,
+    IfConditionNotBool,
+    SymbolMismatch
+}
+
