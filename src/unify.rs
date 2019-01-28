@@ -8,6 +8,7 @@ pub type Field<'a> = &'a str;
 pub enum Type<'a> {
     Unbound,
     String,
+    Char,
     Int,
     Float,
     Number,
@@ -35,6 +36,7 @@ pub enum Expr<'a> {
 #[derive(Debug, PartialEq)]
 pub enum Literal<'a> {
     String(&'a str),
+    Char(char),
     Number(&'a str),
     Symbol(&'a str),
     Array(Vec<Expr<'a>>),
@@ -46,6 +48,7 @@ pub enum Literal<'a> {
 pub fn infer<'a>(expr: &Expr<'a>) -> Result<Type<'a>, UnificationProblem> {
     match expr {
         Expr::Literal(Literal::String(_)) => Ok(Type::String),
+        Expr::Literal(Literal::Char(_)) => Ok(Type::Char),
         Expr::Literal(Literal::Number(_)) => Ok(Type::Number),
         Expr::Literal(Literal::Symbol(sym)) => Ok(Type::Symbol(sym)),
         Expr::Literal(Literal::Array(elem_exprs)) => {

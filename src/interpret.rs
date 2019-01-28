@@ -20,6 +20,7 @@ pub fn eval<'a>(expr: &'a Expr<'a>) -> &'a Literal<'a> {
 pub fn literal_to_string<'a>(literal: &'a Literal<'a>) -> String {
     match literal {
         Literal::String(str) => format!("\"{}\"", str),
+        Literal::Char(character) => format!("'{}'", character),
         Literal::Symbol(str) => str.to_string(),
         Literal::Number(str) => str.to_string(),
         Literal::Record(field_exprs) => {

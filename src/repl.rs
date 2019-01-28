@@ -19,6 +19,7 @@ pub fn type_to_string<'a>(outermost: bool, typ: &'a Type<'a>) -> String {
     match typ {
         Type::Unbound => "*".to_string(),
         Type::String => "String".to_string(),
+        Type::Char => "Char".to_string(),
         Type::Int => "Int".to_string(),
         Type::Float => "Float".to_string(),
         Type::Number => "Int | Float".to_string(),
