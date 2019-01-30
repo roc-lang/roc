@@ -2,7 +2,7 @@ Uses for unions:
 
 1. Reduce
 
-## reduce : (a, b -> b | Done), b, Vec a -> b
+## reduce : (a, b -> b | Done), b, Array a -> b
 
 Being able to return Done when you're done means you can implement things like
 `find` without needing recursion.
@@ -22,38 +22,51 @@ These types unify, meaning I can say something more specific about my
 types than I can with something like Maybe. "This reduce call never bails
 out early."
 
-# Vec
 
 
-## empty : Vec *
+Example:
 
-## isEmpty : Vec * -> Bool
 
-## length : Vec * -> Int
+fibonacci : Int -> Int
+fibonacci = index ->
+    if index <= 1 then
+        index
+    else
+        fibonacci (index - 1) + fibonacci (index - 2)
 
-## get : Int, Vec elem -> elem | Nil
 
-## put : Int, elem, Vec elem -> Vec elem
 
-## push : elem, Vec elem -> Vec elem
 
-## concat : Vec elem, Vec elem -> Vec elem
+# Array
 
-Not thrilled with this. Order too easy to mess up in pipeline vs not.
 
-## find : (elem -> Bool) -> Vec elem -> elem | Nil
+## empty : Array *
 
-## map : (a -> b), Vec a -> Vec b
+## isEmpty : Array * -> Bool
 
-## indexedMap : (Int, a -> b), Vec a -> Vec b
+## length : Array * -> Int
 
-## reduce : (a, b -> b | Done), b, Vec a -> b
+## get : Int, Array elem -> elem | Nil
 
-## reduceFromEnd : (a, b -> b | Done), b, Vec a -> b
+## put : Int, elem, Array elem -> Array elem
 
-## keepIf : (elem -> Bool), Vec elem -> Vec elem
+## push : elem, Array elem -> Array elem
 
-## dropIf : (elem -> Bool), Vec elem -> Vec elem
+## concat : Array elem, Array elem -> Array elem
+
+## find : (elem -> Bool) -> Array elem -> elem | Nil
+
+## map : (a -> b), Array a -> Array b
+
+## indexedMap : (Int, a -> b), Array a -> Array b
+
+## reduce : (a, b -> b | Done), b, Array a -> b
+
+## reduceFromEnd : (a, b -> b | Done), b, Array a -> b
+
+## keepIf : (elem -> Bool), Array elem -> Array elem
+
+## dropIf : (elem -> Bool), Array elem -> Array elem
 
 
 # String
@@ -66,11 +79,9 @@ Not thrilled with this. Order too easy to mess up in pipeline vs not.
 
 ## concat : String, String -> String
 
-Not thrilled with this. Order too easy to mess up in pipeline vs not.
+## join : String, Array String -> String
 
-## join : String, Vec String -> String
-
-## split : String, String -> Vec String
+## split : String, String -> Array String
 
 ## takeFirst : Int, String -> String
 
