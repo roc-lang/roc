@@ -51,7 +51,7 @@ pub fn literal_to_string<'a>(literal: &'a Literal<'a>) -> String {
                 elem_strings.push(literal_to_string(eval(elem_expr)));
             }
 
-            format!("[ {} ]", elem_strings.join(", "))
+            format!("[{}]", elem_strings.join(", "))
         },
     }
 }

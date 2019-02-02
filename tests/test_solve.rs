@@ -71,4 +71,16 @@ mod tests {
     fn int<'a>() -> Box<&'a Expr<'a>> { Box::new(&HexOctalBinary(0x12)) }
     fn float<'a>() -> Box<&'a Expr<'a>> { Box::new(&FractionalNumber(3.1)) }
     fn num<'a>() -> Box<&'a Expr<'a>> { Box::new(&WholeNumber(5)) }
+
+    // TODO test unions that ought to be equivalent, but only after
+    // a reduction of some sort, e.g.
+    //
+    // ((a|b)|c) vs (a|(b|c))
+    //
+    // ((a|z)|(b|z)) vs (a|b|z)
+    //
+    // ideally, we fix these when constructing unions
+    // e.g. if a user puts this in as an annotation, reduce it immediately
+    // and when we're inferring unions, always infer them flat.
+    // This way we can avoid checking recursively.
 }
