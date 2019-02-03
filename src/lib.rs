@@ -5,5 +5,11 @@
 // pub mod repl;
 
 pub mod solve;
+mod ena;
 
-extern crate ena;
+#[macro_use]
+extern crate log;
+
+#[cfg(feature = "persistent")]
+extern crate dogged;
+

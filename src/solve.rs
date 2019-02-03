@@ -1,41 +1,36 @@
 use std::collections::BTreeSet;
-use self::VarContent::*;
-use self::Operator::*;
-use ena::unify::UnificationTable;
-use ena::unify::UnifyValue;
-use ena::unify::InPlace;
+use self::Variable::*;
+use ena::unify::{UnificationTable, UnifyKey, InPlace};
 
-pub type Name<'a> = &'a str;
+pub type Name = String;
 
-pub type ModuleName<'a> = &'a str;
+pub type ModuleName = String;
 
-type UTable<'a> = UnificationTable<InPlace<Variable<'a>>>;
+type UTable = UnificationTable<InPlace<VarId>>;
 
-type TypeUnion<'a> = BTreeSet<Type<'a>>;
-type VarUnion<'a> = BTreeSet<VarContent<'a>>;
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Type<'a> {
-    Symbol(&'a str),
-    Int,
-    Float,
-    Number,
-    Function(Box<Type<'a>>, Box<Type<'a>>),
-    CallOperator(Operator, Box<&'a Type<'a>>, Box<&'a Type<'a>>),
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Type {
+    // Symbol(String),
+    // Int,
+    // Float,
+    // Number,
+    // TypeUnion(BTreeSet<Type>),
+    // Function(Box<Type>, Box<Type>),
+    CallOperator(Operator, Box<Type>, Box<Type>),
 }
 
 
 #[derive(Debug, PartialEq)]
-pub enum Expr<'a> {
+pub enum Expr {
     HexOctalBinary(i64),    // : Int
     FractionalNumber(f64),  // : Float
     WholeNumber(i64),       // : Int | Float
 
     // Functions
-    CallOperator(Operator, Box<&'a Expr<'a>>, Box<&'a Expr<'a>>),
+    CallOperator(Operator, Box<Expr>, Box<Expr>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Operator {
     Plus, Minus, FloatDivision, IntDivision,
 }
@@ -45,176 +40,232 @@ pub enum Problem {
     Mismatch
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct Variable<'a> {
-    content: VarContent<'a>,
-    rank: u8
-}
-
-#[derive(Debug, PartialEq)]
-enum VarContent<'a> {
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Variable {
     Wildcard,
-    RigidVar(&'a Name<'a>),
-    FlexUnion(TypeUnion<'a>),
-    RigidUnion(TypeUnion<'a>),
-    Structure(FlatType<'a>),
+    RigidVar(Name),
+    FlexUnion(BTreeSet<VarId>),
+    RigidUnion(BTreeSet<VarId>),
+    Structure(FlatType),
     Mismatch
-}
-
-fn unify_rigid<'a>(named: &'a VarContent<'a>, other: &'a VarContent<'a>) -> &'a VarContent<'a> {
-    match other {
-        Wildcard => named,
-        RigidVar(_) => Mismatch,
-        FlexUnion(_) => Mismatch,
-        RigidUnion(_) => Mismatch,
-        Mismatch => other
-    }
-}
-
-fn unify_rigid_union<'a>(rigid_union: &'a VarUnion<'a>, var: &'a VarContent<'a>, other: &'a VarContent<'a>) -> &'a VarContent<'a> {
-    match other {
-        Wildcard => var,
-        RigidVar(_) => Mismatch,
-        FlexUnion(flex_union) => {
-            // a flex union can conform to a rigid one, as long as
-            // as the rigid union contains all the flex union's options
-            if rigid_union.is_subset(flex_union) {
-                var
-            } else {
-                Mismatch
-            }
-        },
-        RigidUnion(_) => Mismatch,
-        Mismatch => other
-    }
-}
-
-fn unify_flex_union<'a>(flex_union: &'a VarUnion<'a>, var: &'a VarContent<'a>, other: &'a VarContent<'a>) -> &'a VarContent<'a> {
-    match other {
-        Wildcard => var,
-        RigidVar(_) => Mismatch,
-        RigidUnion(rigid_union) => {
-            // a flex union can conform to a rigid one, as long as
-            // as the rigid union contains all the flex union's options
-            if rigid_union.is_subset(flex_union) {
-                other
-            } else {
-                Mismatch
-            }
-        },
-        FlexUnion(other_union) => unify_flex_unions(flex_union, var, other_union, other),
-        Structure(flat_type) => unify_flex_union_with_flat_type(flex_union, flat_type),
-        Mismatch => other
-    }
-}
-
-fn unify_flex_unions<'a>(my_union: &'a VarUnion<'a>, my_var: &'a VarContent<'a>, other_union: &'a VarUnion<'a>, other_var: &'a VarContent<'a>) -> &'a VarContent<'a> {
-    // Prioritize not allocating a new BTreeSet if possible.
-    if my_union == other_union {
-        return my_var;
-    }
-
-    let types_in_common = my_union.intersection(other_union);
-
-    if types_in_common.is_empty() {
-        Mismatch
-    } else {
-        let unified_union: VarUnion<'a> = types_in_common.into_iter().collect();
-
-        FlexUnion(unified_union)
-    }
-}
-
-fn actually_unify<'a>(first: &'a VarContent<'a>, second: &'a VarContent<'a>) -> &'a VarContent<'a> {
-    match first {
-        // wildcard types defer to whatever the other type happens to be.
-        Wildcard => second,
-        FlexUnion(union) => unify_flex_union(union, first, second),
-        RigidVar(Name) => unify_rigid(first, second),
-        RigidUnion(union) => unify_rigid_union(union, first, second),
-        Structure(flat_type) => unify_structure(flat_type, first, second),
-        // Mismatches propagate.
-        Mismatch => first
-    }
 }
 
 type CanonicalModuleName = String;
 
-enum FlatType<'a> {
-    Function(Variable<'a>, Variable<'a>),
-    // Apply a higher-kinded type constructor by name
-    // e.g. apply `Array` to the variable `Int` to form `Array Int`
-    // ApplyTypeConstructor(CanonicalModuleName, Name, &'a Variable<'a>)
-    Tuple2(Variable<'a>, Variable<'a>),
-    // Tuple3(Variable<'a>, Variable<'a>, Variable<'a>),
-    // TupleN(Vec<Variable<'a>>), // Last resort - allocates
-    // Record1 (Map.Map N.Name Variable) Variable,
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FlatType {
+    Function(VarId, VarId),
+
+    // Apply a higher-kinded type constructor by name. For example:
+    // "Apply the higher-kinded type constructor `Array` to the variable `Int`
+    // to form `Array Int`."
+    // ApplyTypeConstructor(CanonicalModuleName, Name, VarId)
+    Tuple2(VarId, VarId),
+    Tuple3(VarId, VarId, VarId),
+    // TupleN(Vec<VarId>), // Last resort - allocates
+    // Record1 (Map.Map N.Name VarId) VarId,
 }
 
-fn unify_args<'a>(arg1: &'a Variable<'a>, arg2: Variable) -> Result<Vec<Variable<'a>>, Vec<Variable<'a>>> {
-    guarded_unify(arg1, arg2)
-    // case subUnify arg1 arg2 of
-    // Unify k ->
-    //     k vars
-    //     (\vs () -> unifyArgs vs context others1 others2 ok err)
-    //     (\vs () -> unifyArgs vs context others1 others2 err err)
-}
-
-fn guarded_unify<'a>(utable: UTable<'a>, left: Variable<'a>, right: Variable<'a>) -> Result<(), ()> {
-    if utable.unioned(left, right) {
-        Ok(())
-    } else {
-        let left_descriptor = utable.probe_key(left);
-        let right_descriptor = utable.probe_key(right);
-
-        actually_unify(left, left_descriptor, right, right_descriptor)
-    }
-}
-
-pub fn unify_structure<'a>(utable: &'a mut UTable<'a>, flat_type: &'a FlatType<'a>, var: &'a VarContent<'a>, other: &'a VarContent<'a>) -> &'a VarContent<'a> {
+#[inline]
+fn unify_rigid(named: &Variable, other: &Variable) -> Variable {
     match other {
-        Wildcard => var,
+        Wildcard => named.clone(),
         RigidVar(_) => Mismatch,
-        FlexUnion(union) => unify_flex_union_with_flat_type(flex_union, flat_type),
+        FlexUnion(_) => Mismatch,
         RigidUnion(_) => Mismatch,
-        Structure(other_flat_type) =>
-            match (flat_type, other) {
-                (FlatType::Function(my_arg, my_return),
-                 FlatType::Function(other_arg, other_return)) => {
-                    guarded_unify(utable, my_arg, other_arg);
-                    guarded_unify(utable, my_returned, other_returned);
-                },
-                (FlatType::Tuple2(my_first, my_second),
-                 FlatType::Tuple2(other_first, other_second)) => {
-                    guarded_unify(utable, my_first, other_first);
-                    guarded_unify(utable, my_second, other_second);
-                }
+        Structure(_) => { panic!("TODO"); Mismatch }
+        Mismatch => other.clone()
+    }
+}
+
+#[inline]
+fn unify_rigid_union(utable: &mut UTable, rigid_union: &BTreeSet<VarId>, var: &Variable, other: &Variable) -> Variable {
+    match other {
+        Wildcard => var.clone(),
+        RigidVar(_) => Mismatch,
+        FlexUnion(flex_union) => {
+            if rigid_union_fits_flex_union(utable, &rigid_union, &flex_union) {
+                var.clone()
+            } else {
+                Mismatch
             }
-
-        Mismatch =>
-            other
+        },
+        Structure(_) => { panic!("TODO"); Mismatch }
+        RigidUnion(_) => Mismatch,
+        Mismatch => other.clone()
     }
 }
 
-fn unify_flex_union_with_flat_type<'a>(utable: &'a mut UTable<'a>, flex_union: &'a VarUnion<'a>, flat_type: &'a FlatType<'a>) -> &'a VarContent<'a> {
-    if var_union_contains(flex_union, flat_type) {
-        // This will use the UnifyValue trait to unify the values.
-        utable.union(var1, var2);
-    } else {
+#[inline]
+fn rigid_union_fits_flex_union(utable: &mut UTable, rigid_union: &BTreeSet<VarId>, flex_union: &BTreeSet<VarId>) -> bool {
+    if rigid_union.is_subset(&flex_union) {
+        // If the keys of the rigid one are a subset of the flex keys, we're done.
+        return true;
+    }
+
+    let potentially_missing_flex_ids = flex_union.difference(rigid_union);
+
+    // a flex union can conform to a rigid one, as long 
+    // as the rigid union contains all the flex union's alternative types
+    let rigid_union_values: BTreeSet<Variable> =
+        rigid_union.iter().map(|var_id| utable.probe_value(*var_id)).collect();
+
+    for flex_var_id in potentially_missing_flex_ids {
+        let flex_val = utable.probe_value(*flex_var_id);
+
+        if !rigid_union_values.contains(&flex_val) {
+            return false;
+        }
+    }
+
+    true
+}
+
+#[inline]
+fn unify_flex_union(utable: &mut UTable, flex_union: &BTreeSet<VarId>, var: &Variable, other: &Variable) -> Variable {
+    match other {
+        Wildcard => var.clone(),
+        RigidVar(_) => Mismatch,
+        RigidUnion(rigid_union) => {
+            if rigid_union_fits_flex_union(utable, &rigid_union, &flex_union) {
+                other.clone()
+            } else {
+                Mismatch
+            }
+        },
+        FlexUnion(other_union) => unify_flex_unions(&flex_union, &other_union),
+        Structure(_) => unify_flex_union_with_structure(&flex_union, other),
+        Mismatch => other.clone()
+    }
+}
+
+#[inline]
+fn unify_flex_unions(my_union: &BTreeSet<VarId>, other_union: &BTreeSet<VarId>) -> Variable {
+    let ids_in_common = my_union.intersection(other_union);
+    let unified_union: BTreeSet<VarId> = ids_in_common.into_iter().map(|var_id| *var_id).collect();
+
+    // If they have no types in common, that's a mismatch.
+    if unified_union.len() == 0 {
         Mismatch
+    } else {
+        FlexUnion(unified_union)
     }
 }
 
-
-type ExpectedType<'a> = Type<'a>;
-
-pub enum Constraint<'a> {
-    True,
-    Equal(Type<'a>, ExpectedType<'a>),
-    Batch(Vec<Constraint<'a>>),
+fn unify_vars(utable: &mut UTable, first: &Variable, second: &Variable) -> Variable {
+    match first {
+        // wildcard types defer to whatever the other type happens to be.
+        Wildcard => second.clone(),
+        FlexUnion(union) => unify_flex_union(utable, &union, first, second),
+        RigidVar(Name) => unify_rigid(first, second),
+        RigidUnion(union) => unify_rigid_union(utable, &union, first, second),
+        Structure(flat_type) => unify_structure(utable, flat_type, first, second),
+        // Mismatches propagate.
+        Mismatch => first.clone()
+    }
 }
 
-pub fn infer_type<'a>(expr: Expr<'a>) -> Result<Type<'a>, Problem> {
+#[inline]
+pub fn unify_structure(utable: &mut UTable, flat_type: &FlatType, var: &Variable, other: &Variable) -> Variable {
+    match other {
+        Wildcard => var.clone(),
+        RigidVar(_) => Mismatch,
+        FlexUnion(flex_union) => unify_flex_union_with_structure(&flex_union, var),
+        RigidUnion(_) => Mismatch,
+        Structure(other_flat_type) => unify_flat_types(utable, flat_type, other_flat_type),
+        Mismatch => other.clone()
+    }
+}
+
+#[inline]
+pub fn unify_flat_types(utable: &mut UTable, flat_type: &FlatType, other_flat_type: &FlatType) -> Variable {
+    match (flat_type, other_flat_type) {
+        (FlatType::Function(my_arg, my_return),
+         FlatType::Function(other_arg, other_return)) => {
+            let new_arg = unify_var_ids(utable, *my_arg, *other_arg);
+            let new_return = unify_var_ids(utable, *my_return, *other_return);
+
+            // Propagate any mismatches.
+            if new_arg == Mismatch {
+                new_arg
+            } else if new_return == Mismatch {
+                new_return
+            } else {
+                let new_arg_id = utable.new_key(new_arg);
+                let new_return_id = utable.new_key(new_return);
+
+                Structure(FlatType::Function(new_arg_id, new_return_id))
+            }
+        },
+        (FlatType::Function(_, __return), _) => Mismatch,
+        (_, FlatType::Function(_, __return)) => Mismatch,
+        (FlatType::Tuple2(my_first, my_second),
+         FlatType::Tuple2(other_first, other_second)) => {
+            let new_first = unify_var_ids(utable, *my_first, *other_first);
+            let new_second = unify_var_ids(utable, *my_second, *other_second);
+
+            // Propagate any mismatches.
+            if new_first == Mismatch {
+                new_first
+            } else if new_second == Mismatch {
+                new_second
+            } else {
+                let new_first_id = utable.new_key(new_first);
+                let new_second_id = utable.new_key(new_second);
+
+                Structure(FlatType::Tuple2(new_first_id, new_second_id))
+            }
+        },
+        (FlatType::Tuple2(_, _), _) => Mismatch,
+        (_, FlatType::Tuple2(_, _)) => Mismatch,
+        (FlatType::Tuple3(my_first, my_second, my_third),
+         FlatType::Tuple3(other_first, other_second, other_third)) => {
+            let new_first = unify_var_ids(utable, *my_first, *other_first);
+            let new_second = unify_var_ids(utable, *my_second, *other_second);
+            let new_third = unify_var_ids(utable, *my_third, *other_third);
+
+            // Propagate any mismatches.
+            if new_first == Mismatch {
+                new_first
+            } else if new_second == Mismatch {
+                new_second
+            } else if new_third == Mismatch {
+                new_third
+            } else {
+                let new_first_id = utable.new_key(new_first);
+                let new_second_id = utable.new_key(new_second);
+                let new_third_id = utable.new_key(new_third);
+
+                Structure(FlatType::Tuple3(new_first_id, new_second_id, new_third_id))
+            }
+        },
+        // (FlatType::Tuple3(_, _, _), _) => Mismatch,
+        // (_, FlatType::Tuple3(_, _, _)) => Mismatch,
+    }
+}
+
+#[inline]
+fn unify_flex_union_with_structure(flex_union: &BTreeSet<VarId>, var: &Variable) -> Variable {
+    // TODO I guess iterate through the set, looking up Variables
+    
+    panic!("TODO");
+    // if flex_union.contains(var) {
+        // Narrow the union to the one member type
+        var.clone()
+    // } else {
+    //     Mismatch
+    // }
+}
+
+type ExpectedType = Type;
+
+pub enum Constraint {
+    True,
+    Equal(Type, ExpectedType),
+    Batch(Vec<Constraint>),
+}
+
+pub fn infer_type(expr: Expr) -> Result<Type, Problem> {
     Err(Problem::Mismatch)
 }
 
@@ -222,75 +273,63 @@ struct State {
     errors: Vec<String>
 }
 
-
-impl<'a> UnifyValue for Variable<'a> {
-    // We return our own Mismatch variant to track errors.
-    type Error = ena::unify::NoError;
-
-    fn unify_values(value1: &'a Variable<'a>, value2: &'a Variable<'a>) -> Result<Variable<'a>, ena::unify::NoError> {
-        // TODO unify 'em
-        
-        // TODO problem: Elm's unification mutates and looks things up as it goes.
-        // I can see these possible ways to proceed:
-        // (1) Try to have the table's values contain a mutable reference to the table itself.
-        //     This sounds like a mistake.
-        // (2) Implement unification without mutating as we go.
-        //     Might be too slow, and might not even work.
-        //     Like, what if I need to look something up in the middle?
-        // (3) Make a custom fork of ena that supports Elm's way.
-        //      (3a) Change the unify_values function to accept the table itself, so it can be
-        //      passed in and used during unification
-        //      (3b) Change the unify_values function to accept the table itself, so it can be
-        //      passed in and used during unification. I'm not super confident this would work.
-        //
-        // Possibly before doing any of this, I should look at ena's examples/tests
-        
-        // TODO also I'm pretty sure in this implementation,
-        // I'm supposed to let them take care of the rank.
-        Ok(Variable {content, rank: min(rank1, rank2)})
-    }
-}
-
-fn type_to_var(rank: u8, typ: Type) -> Variable {
+// Given a type, create a constraint variable for it and add it to the table.
+// Return the VarId corresponding to the variable in the table.
+fn type_to_var_id(utable: &mut UTable, typ: Type) -> VarId {
     match typ {
-        Type::CallOperator(op, left_type, right_type) => {
-            let left_var = type_to_var(left_type);
-            let right_var = type_to_var(right_type);
+        Type::CallOperator(op, box left_type, box right_type) => {
+            let left_var_id = type_to_var_id(utable, left_type);
+            let right_var_id = type_to_var_id(utable, right_type);
 
             // TODO should we match on op to hardcode the types we expect?
-            let flat_type = FlatType::Function(left_var, right_var);
-            let content = Structure(flat_type);
+            let flat_type = FlatType::Function(left_var_id, right_var_id);
 
-            utable.new_key(Variable {rank, content})
+            utable.new_key(Structure(flat_type))
         }
     }
 }
 
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VarId(u32);
 
-pub fn unify(utable: Table, left_var: Variable, right_var: Variable) -> Result<(), ()>{
-    let left_content = utable.probe_value(left_var);
-    let right_content = utable.probe_value(right_var);
+impl UnifyKey for VarId {
+    type Value = Variable;
+
+    fn index(&self) -> u32 { self.0 }
+    fn from_index(u: u32) -> VarId { VarId(u) }
+
+    // tag is a static string that's only used in debugging
+    fn tag() -> &'static str { "VarId" }
+}
+
+fn unify_var_ids(utable: &mut UTable, left_id: VarId, right_id: VarId) -> Variable {
+    let left_content = utable.probe_value(left_id);
+    let right_content = utable.probe_value(right_id);
 
     if left_content == right_content {
-        Ok(())
+        left_content
     } else {
-        Ok(actually_unify(left, left_desc, right, right_desc))
+       unify_vars(utable, &left_content, &right_content)
     }
 }
 
-pub fn solve(rank: u8, state: State, constraint: Constraint) {
+type TypeError = String;
+
+pub fn solve(utable: &mut UTable, errors: &mut Vec<TypeError>, constraint: Constraint) {
     match constraint {
-        True =>
-            state
+        Constraint::True => {},
 
-        Equal(actual_type, expectation) => {
-            let actual_var = type_to_var(rank, actual_type)
-            let expected_var = type_to_var(rank, expectation)
-            let answer = unify(actual_var, expected_var)
+        Constraint::Equal(actual_type, expectation) => {
+            let actual_var_id = type_to_var_id(utable, actual_type);
+            let expected_var_id = type_to_var_id(utable, expectation);
+            let answer = unify_var_ids(utable, actual_var_id, expected_var_id);
 
-            match answer {
-                Ok vars ->
-                    panic!("TODO abc");
+            panic!("Oh no! TYPE MISMATCH! (TODO: record errors as appropriate)");
+            ()
+            // match answer {
+            //     Mismatch => {
+            //         panic!("Oh no! TYPE MISMATCH! (TODO: record errors as appropriate)");
+            //     }
                     // do  introduce rank pools vars
                     //     return state
 
@@ -304,7 +343,12 @@ pub fn solve(rank: u8, state: State, constraint: Constraint) {
                 //     return $ addError state $
                 //         Error.BadExpr region category actualType $
                 //         Error.typeReplace expectation expectedType
-            }
+            // }
+        },
+
+        Constraint::Batch(_) => {
+            panic!("TODO");
+            ()
         }
     }
 }
