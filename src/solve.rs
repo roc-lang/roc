@@ -1,47 +1,16 @@
 use std::collections::BTreeSet;
+use std::collections::HashMap;
+use constrain::Constraint;
+use typ::Type;
+use canonical::Annotation;
+use name::Name;
 use self::Variable::*;
 use ena::unify::{UnificationTable, UnifyKey, InPlace};
-
-pub type Name = String;
-
-pub type ModuleName = String;
 
 type UTable = UnificationTable<InPlace<VarId>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Type {
-    // Symbol(String),
-    // Int,
-    // Float,
-    // Number,
-    // TypeUnion(BTreeSet<Type>),
-    // Function(Box<Type>, Box<Type>),
-    CallOperator(Operator, Box<Type>, Box<Type>),
-}
-
-
-#[derive(Debug, PartialEq)]
-pub enum Expr {
-    HexOctalBinary(i64),    // : Int
-    FractionalNumber(f64),  // : Float
-    WholeNumber(i64),       // : Int | Float
-
-    // Functions
-    CallOperator(Operator, Box<Expr>, Box<Expr>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Operator {
-    Plus, Minus, FloatDivision, IntDivision,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Problem {
-    Mismatch
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Variable {
+enum Variable {
     Wildcard,
     RigidVar(Name),
     FlexUnion(BTreeSet<VarId>),
@@ -50,10 +19,8 @@ pub enum Variable {
     Mismatch
 }
 
-type CanonicalModuleName = String;
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum FlatType {
+enum FlatType {
     Function(VarId, VarId),
 
     // Apply a higher-kinded type constructor by name. For example:
@@ -166,7 +133,7 @@ fn unify_vars(utable: &mut UTable, first: &Variable, second: &Variable) -> Varia
 }
 
 #[inline]
-pub fn unify_structure(utable: &mut UTable, flat_type: &FlatType, var: &Variable, other: &Variable) -> Variable {
+fn unify_structure(utable: &mut UTable, flat_type: &FlatType, var: &Variable, other: &Variable) -> Variable {
     match other {
         Wildcard => var.clone(),
         RigidVar(_) => Mismatch,
@@ -178,7 +145,7 @@ pub fn unify_structure(utable: &mut UTable, flat_type: &FlatType, var: &Variable
 }
 
 #[inline]
-pub fn unify_flat_types(utable: &mut UTable, flat_type: &FlatType, other_flat_type: &FlatType) -> Variable {
+fn unify_flat_types(utable: &mut UTable, flat_type: &FlatType, other_flat_type: &FlatType) -> Variable {
     match (flat_type, other_flat_type) {
         (FlatType::Function(my_arg, my_return),
          FlatType::Function(other_arg, other_return)) => {
@@ -257,40 +224,27 @@ fn unify_flex_union_with_structure(flex_union: &BTreeSet<VarId>, var: &Variable)
     // }
 }
 
-type ExpectedType = Type;
-
-pub enum Constraint {
-    True,
-    Equal(Type, ExpectedType),
-    Batch(Vec<Constraint>),
-}
-
-pub fn infer_type(expr: Expr) -> Result<Type, Problem> {
-    Err(Problem::Mismatch)
-}
-
-struct State {
-    errors: Vec<String>
-}
 
 // Given a type, create a constraint variable for it and add it to the table.
 // Return the VarId corresponding to the variable in the table.
 fn type_to_var_id(utable: &mut UTable, typ: Type) -> VarId {
     match typ {
-        Type::CallOperator(op, box left_type, box right_type) => {
-            let left_var_id = type_to_var_id(utable, left_type);
-            let right_var_id = type_to_var_id(utable, right_type);
+        Type::Call(box fn_type, box arg_type) => {
+            panic!("TODO");
+            utable.new_key(Mismatch)
+            // let left_var_id = type_to_var_id(utable, left_type);
+            // let right_var_id = type_to_var_id(utable, right_type);
 
-            // TODO should we match on op to hardcode the types we expect?
-            let flat_type = FlatType::Function(left_var_id, right_var_id);
+            // // TODO should we match on op to hardcode the types we expect?
+            // let flat_type = FlatType::Function(left_var_id, right_var_id);
 
-            utable.new_key(Structure(flat_type))
+            // utable.new_key(Structure(flat_type))
         }
     }
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct VarId(u32);
+struct VarId(u32);
 
 impl UnifyKey for VarId {
     type Value = Variable;
@@ -313,9 +267,17 @@ fn unify_var_ids(utable: &mut UTable, left_id: VarId, right_id: VarId) -> Variab
     }
 }
 
-type TypeError = String;
+pub type TypeError = String;
 
-pub fn solve(utable: &mut UTable, errors: &mut Vec<TypeError>, constraint: Constraint) {
+pub fn solve_constraint(constraint: Constraint) -> Result<TypeError, HashMap<Name, Annotation>> {
+    let mut utable: UTable = UnificationTable::new();
+
+    solve(&mut utable, constraint);
+
+    Ok("TODO: actually gather errors etc".to_owned())
+}
+
+fn solve(utable: &mut UTable, constraint: Constraint) {
     match constraint {
         Constraint::True => {},
 

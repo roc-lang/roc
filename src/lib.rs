@@ -5,6 +5,11 @@
 // pub mod repl;
 
 pub mod solve;
+mod expr;
+mod constrain;
+mod canonical;
+mod name;
+mod typ;
 mod ena;
 
 #[macro_use]
