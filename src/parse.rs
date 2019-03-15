@@ -109,9 +109,13 @@ where
 
             match u32::from_str_radix(&hex_str, 16) {
                 Ok(code_pt) => {
-                    match char::from_u32(code_pt) {
-                        Some(ch) => value(ch).left(),
-                        None => unexpected_any("Invalid Unicode code point").right()
+                    if code_pt > 0x10FFFF {
+                        unexpected_any("Invalid Unicode code point. It must be no more than \\u{10FFFF}.").right()
+                    } else {
+                        match char::from_u32(code_pt) {
+                            Some(ch) => value(ch).left(),
+                            None => unexpected_any("Invalid Unicode code point.").right()
+                        }
                     }
                 },
                 Err(_) => {
@@ -155,7 +159,7 @@ where
                 })
             },
             '"' => {
-                // We should never consume a quote unless
+                // We should never consume a double quote unless
                 // it's preceded by a backslash
                 Err(Consumed::Empty(I::Error::empty(input.position()).into()))
             },

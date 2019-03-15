@@ -23,7 +23,7 @@ mod tests {
         assert_eq!(Ok((String(expected), "")), parse::string_literal().parse(actual_str));
     }
 
-    fn expect_parsed_string_error<'a>(actual_str: &'a str) {
+    fn expect_parsed_str_error<'a>(actual_str: &'a str) {
         assert!(
             parse::string_literal().parse(actual_str).is_err(),
             "Expected error"
@@ -62,9 +62,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_string_with_unicode_escapes() {
+    fn parse_string_with_valid_unicode_escapes() {
         expect_parsed_str("x\u{00A0}x", "\"x\\u{00A0}x\"");
         expect_parsed_str("x\u{101010}x", "\"x\\u{101010}x\"");
+    }
+
+    #[test]
+    fn parse_string_with_invalid_unicode_escapes() {
+        // Should be too big - max size should be 10FFFF.
+        // (Rust has this restriction. I assume it's a good idea.)
+        expect_parsed_str_error("\"x\\u{110000}x\"");
+
+        // No digits specified
+        expect_parsed_str_error("\"x\\u{}x\"");
+
+        // No opening curly brace
+        expect_parsed_str_error("\"x\\u}x\"");
+
+        // No closing curly brace
+        expect_parsed_str_error("\"x\\u{x\"");
+
+        // No curly braces
+        expect_parsed_str_error("\"x\\ux\"");
     }
 
     // CHAR LITERALS
@@ -111,6 +130,25 @@ mod tests {
     fn parse_char_with_unicode_escapes() {
         expect_parsed_char('\u{00A0}', "'\\u{00A0}'");
         expect_parsed_char('\u{101010}', "'\\u{101010}'");
+    }
+
+    #[test]
+    fn parse_char_with_invalid_unicode_escapes() {
+        // Should be too big - max size should be 10FFFF.
+        // (Rust has this rechariction. I assume it's a good idea.)
+        expect_parsed_char_error("\"x\\u{110000}x\"");
+
+        // No digits specified
+        expect_parsed_char_error("\"x\\u{}x\"");
+
+        // No opening curly brace
+        expect_parsed_char_error("\"x\\u}x\"");
+
+        // No closing curly brace
+        expect_parsed_char_error("\"x\\u{x\"");
+
+        // No curly braces
+        expect_parsed_char_error("\"x\\ux\"");
     }
 
     // NUMBER LITERALS
