@@ -37,6 +37,20 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_ints_with_spaces() {
+        assert_eq!(Ok((Int(987654321), "")), parse::number_literal().parse("987 6 5 432 1"));
+        assert_eq!(Ok((Int(-1234567890), "")), parse::number_literal().parse("-1 234 567 890"));
+    }
+
+    #[test]
+    fn test_parse_ratios_with_spaces() {
+        assert_eq!(Ok((Ratio(-1234567, 1000), "")), parse::number_literal().parse("-1 23 4.567"));
+        assert_eq!(Ok((Ratio(-1920, 10), "")), parse::number_literal().parse("-19 2.0"));
+        assert_eq!(Ok((Ratio(12345, 100), "")), parse::number_literal().parse("1 2 3.45"));
+        assert_eq!(Ok((Ratio(4200, 100), "")), parse::number_literal().parse("4 2.00"));
+    }
+
+    #[test]
     fn test_parse_single_operator() {
         match parse::expr().parse("1234 + 567") {
             Ok((CallOperator(v1, op, v2), "")) => {

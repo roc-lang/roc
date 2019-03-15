@@ -39,10 +39,15 @@ parser! {
             number_literal(),
             ident(),
         )).skip(spaces()).and(
+            // Optionally follow the expression with an operator,
+            //
+            // e.g. In the expression (1 + 2), the subexpression 1
+            // is followed by the operator + and another subexpression, 2
             optional(
                 operator()
                     .skip(spaces())
-                    .and(expr())
+                    .and(expr()
+            )
         )).map(|(v1, maybe_op)| {
             match maybe_op {
                 None => v1,
@@ -76,26 +81,41 @@ pub fn number_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    let decimal_digits = 
-            char('.').with(many1::<Vec<_>, _>(digit()));
+    // Digits before the decimal point can be space-separated
+    // e.g. one million can be written as 1 000 000 
+    let digits_before_decimal = many1::<Vec<_>, _>(digit().skip(optional(char(' '))));
+    let digits_after_decimal =  many1::<Vec<_>, _>(digit());
 
     optional(char('-'))
-        .and(many1::<Vec<_>, _>(digit()))
-        .and(optional(decimal_digits))
-        .map(|((maybe_minus, numerator_digits), decimals): ((Option<char>, Vec<char>), Option<Vec<char>>)| {
+        .and(digits_before_decimal)
+        .and(optional(char('.').with(digits_after_decimal)))
+        .map(|((maybe_minus, int_digits), decimals): ((Option<char>, Vec<char>), Option<Vec<char>>)| {
             // TODO check length of nums and build it up into an i62 if possible
-            let str: String = numerator_digits.into_iter().collect();
-            let mut numerator = str.parse::<i32>().unwrap();
-
-            if maybe_minus != None {
-                numerator = -numerator;
-            }
+            let int_str: String = int_digits.into_iter().collect();
+            let int_val = int_str.parse::<i64>().unwrap();
 
             match decimals {
+                None => {
+                    if maybe_minus == None {
+                        Expr::Int(int_val as i64)
+                    } else {
+                        Expr::Int(-int_val as i64)
+                    }
+                },
                 Some(nums) => {
-                    panic!("Can't handle decimals yet.");
+                    let decimal_str: String = nums.into_iter().collect();
+                    // calculate numerator and denominator
+                    // e.g. 123.45 == 12345 / 100
+                    let denom = (10 as i64).pow(decimal_str.len() as u32);
+                    let decimal = decimal_str.parse::<u32>().unwrap();
+                    let numerator = (int_val * denom) + (decimal as i64);
+
+                    if maybe_minus == None {
+                        Expr::Ratio(numerator, denom as u64)
+                    } else {
+                        Expr::Ratio(-numerator, denom as u64)
+                    }
                 }
-                None => Expr::Int(numerator as i64)
             }
         })
 }
