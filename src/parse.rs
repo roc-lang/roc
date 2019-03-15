@@ -2,11 +2,13 @@ use expr::Operator;
 use expr::Expr;
 
 use std::char;
+use std::iter;
 
-use combine::parser::char::{char, letter, spaces, digit};
-use combine::parser::repeat::{many};
-use combine::{choice, many1, parser, Parser, optional};
-use combine::error::{ParseError};
+use combine::parser::char::{char, string, letter, alpha_num, spaces, digit, hex_digit, HexDigit};
+use combine::parser::repeat::{many, count_min_max};
+use combine::parser::item::{any, satisfy, satisfy_map, value};
+use combine::{choice, many1, parser, Parser, optional, between, unexpected_any};
+use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
 
 pub enum Problem {
@@ -79,13 +81,80 @@ pub fn string_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    // TODO handle escapes
-    let string_body = many(letter());
-
-    char('"')
-        .with(string_body)
-        .skip(char('"'))
+    between(char('"'), char('"'), many(string_char()))
         .map(|str| Expr::String(str))
+}
+
+fn unicode_code_pt<I>() -> impl Parser<Input = I, Output = char>
+where
+    I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>,
+{
+    // You can put up to 6 hex digits inside \u{...}
+    // e.g. \u{00A0} or \u{101010}
+    // They must be no more than 10FFFF
+    count_min_max::<Vec<char>, HexDigit<I>>(1, 6, hex_digit())
+        .then(|hex_digits| {
+            let hex_str:String = hex_digits.into_iter().collect();
+
+            match u32::from_str_radix(&hex_str, 16) {
+                Ok(code_pt) => {
+                    match char::from_u32(code_pt) {
+                        Some(ch) => value(ch).left(),
+                        None => unexpected_any("Invalid Unicode code point").right()
+                    }
+                },
+                Err(_) => {
+                    unexpected_any("Invalid hex code - Unicode code points must be specified using hexadecimal characters (the numbers 0-9 and letters A-F)").right()
+                }
+            }
+        })
+}
+
+fn string_char<I>() -> impl Parser<Input = I, Output = char>
+where
+    I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>,
+{
+    parser(|input: &mut I| {
+        let (parsed_char, consumed) = try!(any().parse_lazy(input).into());
+        // You can put up to 6 hex digits inside \u{...}
+        // e.g. \u{00A0} or \u{f00f00}
+        let mut unicode_char = char('u').with(between(
+            char('{'), char('}'),
+            unicode_code_pt()
+        ));
+
+        let mut escaped = satisfy_map(|escaped_char| {
+            match escaped_char {
+                '"' => Some('"'),
+                '\\' => Some('\\'),
+                't' => Some('\t'),
+                'n' => Some('\n'),
+                'r' => Some('\r'),
+                _ => None,
+            }
+        });
+
+        match parsed_char {
+            '\\' => {
+                consumed.combine(|_| {
+                    // Try to parse basic backslash-escaped literals
+                    // e.g. \t, \n, \r
+                    escaped.parse_stream(input).or_else(|_|
+                        // If we didn't find any of those, try \u{...}
+                        unicode_char.parse_stream(input)
+                    )
+                })
+            },
+            '"' => {
+                // We should never consume a quote unless
+                // it's prefixed by a backslash
+                Err(Consumed::Empty(I::Error::empty(input.position()).into()))
+            },
+            _ => Ok((parsed_char, consumed)),
+        }
+    })
 }
 
 pub fn number_literal<I>() -> impl Parser<Input = I, Output = Expr>

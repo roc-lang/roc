@@ -29,10 +29,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_string_with_letters() {
+    fn parse_string_without_escape() {
         expect_parsed_str("a", "\"a\"");
         expect_parsed_str("ab", "\"ab\"");
         expect_parsed_str("abc", "\"abc\"");
+        expect_parsed_str("123", "\"123\"");
+        expect_parsed_str("abc123", "\"abc123\"");
+        expect_parsed_str("123abc", "\"123abc\"");
+        expect_parsed_str("123 abc 456 def", "\"123 abc 456 def\"");
+    }
+
+    #[test]
+    fn parse_string_with_special_escapes() {
+        expect_parsed_str("x\\x", "\"x\\\\x\"");
+        expect_parsed_str("x\"x", "\"x\\\"x\"");
+        expect_parsed_str("x\tx", "\"x\\tx\"");
+        expect_parsed_str("x\rx", "\"x\\rx\"");
+        expect_parsed_str("x\nx", "\"x\\nx\"");
+    }
+
+    #[test]
+    fn parse_string_with_unicode_escapes() {
+        expect_parsed_str("x\u{00A0}x", "\"x\\u{00A0}x\"");
+        expect_parsed_str("x\u{101010}x", "\"x\\u{101010}x\"");
     }
 
     // NUMBER LITERALS
