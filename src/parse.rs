@@ -156,7 +156,7 @@ where
             },
             '"' => {
                 // We should never consume a quote unless
-                // it's prefixed by a backslash
+                // it's preceded by a backslash
                 Err(Consumed::Empty(I::Error::empty(input.position()).into()))
             },
             _ => Ok((parsed_char, consumed)),
@@ -197,7 +197,7 @@ where
             },
             '\'' => {
                 // We should never consume a single quote unless
-                // it's prefixed by a backslash
+                // it's preceded by a backslash
                 Err(Consumed::Empty(I::Error::empty(input.position()).into()))
             },
             _ => Ok((parsed_char, consumed)),
