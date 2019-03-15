@@ -23,6 +23,13 @@ mod tests {
         assert_eq!(Ok((String(expected), "")), parse::string_literal().parse(actual_str));
     }
 
+    fn expect_parsed_string_error<'a>(actual_str: &'a str) {
+        assert!(
+            parse::string_literal().parse(actual_str).is_err(),
+            "Expected error"
+        );
+    }
+
     #[test]
     fn parse_empty_string() {
         expect_parsed_str("", "\"\"");
@@ -49,9 +56,61 @@ mod tests {
     }
 
     #[test]
+    fn parse_string_with_single_qoute() {
+        // This shoud NOT be escaped in a string.
+        expect_parsed_str("x'x", "\"x'x\"");
+    }
+
+    #[test]
     fn parse_string_with_unicode_escapes() {
         expect_parsed_str("x\u{00A0}x", "\"x\\u{00A0}x\"");
         expect_parsed_str("x\u{101010}x", "\"x\\u{101010}x\"");
+    }
+
+    // CHAR LITERALS
+
+    fn expect_parsed_char<'a>(expected: char, actual_str: &'a str) {
+        assert_eq!(Ok((Char(expected), "")), parse::char_literal().parse(actual_str));
+    }
+
+    fn expect_parsed_char_error<'a>(actual_str: &'a str) {
+        assert!(
+            parse::char_literal().parse(actual_str).is_err(),
+            "Expected error"
+        );
+    }
+
+    #[test]
+    fn parse_empty_char() {
+       expect_parsed_char_error("''");
+    }
+
+    #[test]
+    fn parse_char_without_escape() {
+        expect_parsed_char('a', "'a'");
+        expect_parsed_char('1', "'1'");
+        expect_parsed_char(' ', "' '");
+    }
+
+    #[test]
+    fn parse_char_with_special_escapes() {
+        expect_parsed_char('\\', "'\\\\'");
+        expect_parsed_char('\'', "'\\''");
+        expect_parsed_char('\t', "'\\t'");
+        expect_parsed_char('\r', "'\\r'");
+        expect_parsed_char('\n', "'\\n'");
+    }
+
+    #[test]
+    fn parse_char_with_double_qoute() {
+        // This shoud NOT be escaped in a char.
+        expect_parsed_char('"', "'\"'");
+    }
+
+    #[test]
+    fn parse_char_with_unicode_escapes() {
+        expect_parsed_char('\u{00A0}', "'\\u{00A0}'");
+        expect_parsed_char('\u{101010}', "'\\u{101010}'");
     }
 
     // NUMBER LITERALS

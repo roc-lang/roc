@@ -81,9 +81,18 @@ pub fn string_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    between(char('"'), char('"'), many(string_char()))
+    between(char('"'), char('"'), many(string_body()))
         .map(|str| Expr::String(str))
 }
+
+pub fn char_literal<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    between(char('\''), char('\''), char_body())
+        .map(|ch| Expr::Char(ch))
+}
+
 
 fn unicode_code_pt<I>() -> impl Parser<Input = I, Output = char>
 where
@@ -93,7 +102,8 @@ where
     // You can put up to 6 hex digits inside \u{...}
     // e.g. \u{00A0} or \u{101010}
     // They must be no more than 10FFFF
-    count_min_max::<Vec<char>, HexDigit<I>>(1, 6, hex_digit())
+    let hex_code_pt =
+        count_min_max::<Vec<char>, HexDigit<I>>(1, 6, hex_digit())
         .then(|hex_digits| {
             let hex_str:String = hex_digits.into_iter().collect();
 
@@ -108,24 +118,21 @@ where
                     unexpected_any("Invalid hex code - Unicode code points must be specified using hexadecimal characters (the numbers 0-9 and letters A-F)").right()
                 }
             }
-        })
+        });
+
+    char('u').with(between(char('{'), char('}'), hex_code_pt))
 }
 
-fn string_char<I>() -> impl Parser<Input = I, Output = char>
+fn string_body<I>() -> impl Parser<Input = I, Output = char>
 where
     I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
     parser(|input: &mut I| {
         let (parsed_char, consumed) = try!(any().parse_lazy(input).into());
-        // You can put up to 6 hex digits inside \u{...}
-        // e.g. \u{00A0} or \u{f00f00}
-        let mut unicode_char = char('u').with(between(
-            char('{'), char('}'),
-            unicode_code_pt()
-        ));
-
         let mut escaped = satisfy_map(|escaped_char| {
+            // NOTE! When modifying this, revisit char_body too!
+            // Their implementations are similar but not the same.
             match escaped_char {
                 '"' => Some('"'),
                 '\\' => Some('\\'),
@@ -143,12 +150,53 @@ where
                     // e.g. \t, \n, \r
                     escaped.parse_stream(input).or_else(|_|
                         // If we didn't find any of those, try \u{...}
-                        unicode_char.parse_stream(input)
+                        unicode_code_pt().parse_stream(input)
                     )
                 })
             },
             '"' => {
                 // We should never consume a quote unless
+                // it's prefixed by a backslash
+                Err(Consumed::Empty(I::Error::empty(input.position()).into()))
+            },
+            _ => Ok((parsed_char, consumed)),
+        }
+    })
+}
+
+fn char_body<I>() -> impl Parser<Input = I, Output = char>
+where
+    I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>,
+{
+    parser(|input: &mut I| {
+        let (parsed_char, consumed) = try!(any().parse_lazy(input).into());
+        let mut escaped = satisfy_map(|escaped_char| {
+            // NOTE! When modifying this, revisit string_body too!
+            // Their implementations are similar but not the same.
+            match escaped_char {
+                '\'' => Some('\''),
+                '\\' => Some('\\'),
+                't' => Some('\t'),
+                'n' => Some('\n'),
+                'r' => Some('\r'),
+                _ => None,
+            }
+        });
+
+        match parsed_char {
+            '\\' => {
+                consumed.combine(|_| {
+                    // Try to parse basic backslash-escaped literals
+                    // e.g. \t, \n, \r
+                    escaped.parse_stream(input).or_else(|_|
+                        // If we didn't find any of those, try \u{...}
+                        unicode_code_pt().parse_stream(input)
+                    )
+                })
+            },
+            '\'' => {
+                // We should never consume a single quote unless
                 // it's prefixed by a backslash
                 Err(Consumed::Empty(I::Error::empty(input.position()).into()))
             },
