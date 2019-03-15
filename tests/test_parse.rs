@@ -1,7 +1,7 @@
 #![feature(box_syntax, box_patterns)]
 
 #[macro_use] extern crate pretty_assertions;
-#[macro_use] extern crate combine;
+extern crate combine;
 
 extern crate roc;
 
@@ -10,9 +10,32 @@ mod tests {
     #![feature(box_syntax, box_patterns)]
 
     use roc::expr::Expr::*;
+    use roc::expr::Expr;
     use roc::expr::Operator::*;
     use roc::parse;
     use combine::{Parser};
+
+    // STRING LITERALS
+
+    fn expect_parsed_str<'a>(expected_str: &'a str, actual_str: &'a str) {
+        let expected = expected_str.to_string();
+
+        assert_eq!(Ok((String(expected), "")), parse::string_literal().parse(actual_str));
+    }
+
+    #[test]
+    fn parse_empty_string() {
+        expect_parsed_str("", "\"\"");
+    }
+
+    #[test]
+    fn parse_string_with_letters() {
+        expect_parsed_str("a", "\"a\"");
+        expect_parsed_str("ab", "\"ab\"");
+        expect_parsed_str("abc", "\"abc\"");
+    }
+
+    // NUMBER LITERALS
 
     #[test]
     fn parse_positive_int() {

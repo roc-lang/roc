@@ -4,6 +4,7 @@ use expr::Expr;
 use std::char;
 
 use combine::parser::char::{char, letter, spaces, digit};
+use combine::parser::repeat::{many};
 use combine::{choice, many1, parser, Parser, optional};
 use combine::error::{ParseError};
 use combine::stream::{Stream};
@@ -72,6 +73,19 @@ where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     char('.').map(|_| Expr::Int(1))
+}
+
+pub fn string_literal<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    // TODO handle escapes
+    let string_body = many(letter());
+
+    char('"')
+        .with(string_body)
+        .skip(char('"'))
+        .map(|str| Expr::String(str))
 }
 
 pub fn number_literal<I>() -> impl Parser<Input = I, Output = Expr>
