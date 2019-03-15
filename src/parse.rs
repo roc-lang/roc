@@ -90,13 +90,15 @@ where I: Stream<Item = char>,
         .and(digits_before_decimal)
         .and(optional(char('.').with(digits_after_decimal)))
         .map(|((maybe_minus, int_digits), decimals): ((Option<char>, Vec<char>), Option<Vec<char>>)| {
-            // TODO check length of nums and build it up into an i62 if possible
+            let is_positive = maybe_minus.is_none();
+
+            // TODO check length of digits and make sure not to overflow
             let int_str: String = int_digits.into_iter().collect();
             let int_val = int_str.parse::<i64>().unwrap();
 
             match decimals {
                 None => {
-                    if maybe_minus == None {
+                    if is_positive {
                         Expr::Int(int_val as i64)
                     } else {
                         Expr::Int(-int_val as i64)
@@ -110,7 +112,7 @@ where I: Stream<Item = char>,
                     let decimal = decimal_str.parse::<u32>().unwrap();
                     let numerator = (int_val * denom) + (decimal as i64);
 
-                    if maybe_minus == None {
+                    if is_positive {
                         Expr::Ratio(numerator, denom as u64)
                     } else {
                         Expr::Ratio(-numerator, denom as u64)
