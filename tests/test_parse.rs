@@ -25,6 +25,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_positive_ratio() {
+        assert_eq!(Ok((Ratio(12345, 100), "")), parse::number_literal().parse("123.45"));
+        assert_eq!(Ok((Ratio(4200, 100), "")), parse::number_literal().parse("42.00"));
+    }
+
+    #[test]
+    fn test_parse_negative_ratio() {
+        assert_eq!(Ok((Ratio(-1234567, 1000), "")), parse::number_literal().parse("-1234.567"));
+        assert_eq!(Ok((Ratio(-1920, 10), "")), parse::number_literal().parse("-192.0"));
+    }
+
+    #[test]
     fn test_parse_single_operator() {
         match parse::expr().parse("1234 + 567") {
             Ok((CallOperator(v1, op, v2), "")) => {
