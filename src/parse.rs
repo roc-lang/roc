@@ -1,15 +1,12 @@
 use expr::Operator;
 use expr::Expr;
 
-use self::Problem::*;
 use std::char;
-use std::string;
 
 use combine::parser::char::{char, letter, spaces, digit};
-use combine::{attempt, between, choice, many1, parser, sep_by, Parser, optional};
-use combine::error::{ParseError, ParseResult};
-use combine::stream::{Stream, Positioned};
-use combine::stream::state::State;
+use combine::{choice, many1, parser, Parser, optional};
+use combine::error::{ParseError};
+use combine::stream::{Stream};
 
 pub enum Problem {
     // Number problems
