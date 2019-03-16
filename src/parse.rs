@@ -11,15 +11,8 @@ use combine::{choice, many1, parser, Parser, optional, between, unexpected_any};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
 
-pub enum Problem {
-    // Number problems
-    DoubleDecimalPoint, NoDigitsBeforeDecimalPoint, DoubleMinusSign
-}
 
-
-pub fn parse(text: &str) -> Result<Expr, Problem> {
-    panic!("TODO");
-}
+pub const ERR_EMPTY_CHAR: &'static str = "EMPTY_CHAR";
 
 pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
@@ -89,7 +82,7 @@ pub fn char_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    between(char('\''), char('\''), char_body())
+    between(char('\''), char('\''), char_body().expected(ERR_EMPTY_CHAR))
         .map(|ch| Expr::Char(ch))
 }
 

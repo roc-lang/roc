@@ -10,10 +10,11 @@ mod tests {
     #![feature(box_syntax, box_patterns)]
 
     use roc::expr::Expr::*;
-    use roc::expr::Expr;
     use roc::expr::Operator::*;
     use roc::parse;
     use combine::{Parser};
+    use combine::stream::state::SourcePosition;
+    use combine::easy;
 
     // STRING LITERALS
 
@@ -26,7 +27,7 @@ mod tests {
     fn expect_parsed_str_error<'a>(actual_str: &'a str) {
         assert!(
             parse::string_literal().parse(actual_str).is_err(),
-            "Expected error"
+            "Expected parsing error"
         );
     }
 
@@ -95,13 +96,29 @@ mod tests {
     fn expect_parsed_char_error<'a>(actual_str: &'a str) {
         assert!(
             parse::char_literal().parse(actual_str).is_err(),
-            "Expected error"
+            "Expected parsing error"
         );
     }
+    
 
     #[test]
     fn parse_empty_char() {
-       expect_parsed_char_error("''");
+        // expect_parsed_char_error("''");
+
+        match parse::char_literal().easy_parse("''") {
+            Ok(_) => panic!("Expected parse error"),
+            Err(err) => {
+                let pos = err.position;
+                let errors = err.errors;
+
+                assert_eq!(errors,
+                    vec![
+                        easy::Error::Unexpected('\''.into()),
+                        easy::Error::Expected(parse::ERR_EMPTY_CHAR.into()),
+                    ]
+                );
+            }
+        };
     }
 
     #[test]
