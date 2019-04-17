@@ -7,13 +7,10 @@ extern crate roc;
 
 #[cfg(test)]
 mod tests {
-    #![feature(box_syntax, box_patterns)]
-
     use roc::expr::Expr::*;
     use roc::expr::Operator::*;
     use roc::parse;
     use combine::{Parser};
-    use combine::stream::state::SourcePosition;
     use combine::easy;
 
     // STRING LITERALS
@@ -108,7 +105,6 @@ mod tests {
         match parse::char_literal().easy_parse("''") {
             Ok(_) => panic!("Expected parse error"),
             Err(err) => {
-                let pos = err.position;
                 let errors = err.errors;
 
                 assert_eq!(errors,
@@ -175,7 +171,7 @@ mod tests {
     }
 
     fn expect_parsed_ratio<'a>(expected_numerator: i64, expected_denominator: u64, actual: &str) {
-        assert_eq!(Ok((Ratio(expected_numerator, expected_denominator), "")), parse::number_literal().parse(actual));
+        assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "")), parse::number_literal().parse(actual));
     }
 
     #[test]
@@ -217,7 +213,7 @@ mod tests {
     #[test]
     fn parse_single_operator() {
         match parse::expr().parse("1234 + 567") {
-            Ok((CallOperator(v1, op, v2), "")) => {
+            Ok((Operator(v1, op, v2), "")) => {
                 assert_eq!(*v1, Int(1234));
                 assert_eq!(op, Plus);
                 assert_eq!(*v2, Int(567));
@@ -228,9 +224,8 @@ mod tests {
 
     #[test]
     fn parse_multiple_operators() {
-        #![feature(box_syntax, box_patterns)]
         match parse::expr().parse("1 + 2 * 3") {
-            Ok((CallOperator(box v1, op1, box CallOperator(box v2, op2, box v3)), "")) => {
+            Ok((Operator(box v1, op1, box Operator(box v2, op2, box v3)), "")) => {
                 assert_eq!(v1, Int(1));
                 assert_eq!(op1, Plus);
                 assert_eq!(v2, Int(2));
