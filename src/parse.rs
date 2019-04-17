@@ -2,11 +2,10 @@ use expr::Operator;
 use expr::Expr;
 
 use std::char;
-use std::iter;
 
-use combine::parser::char::{char, string, letter, alpha_num, spaces, digit, hex_digit, HexDigit};
+use combine::parser::char::{char, spaces, digit, hex_digit, HexDigit};
 use combine::parser::repeat::{many, count_min_max};
-use combine::parser::item::{any, satisfy, satisfy_map, value};
+use combine::parser::item::{any, satisfy_map, value};
 use combine::{choice, many1, parser, Parser, optional, between, unexpected_any};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
@@ -39,13 +38,13 @@ parser! {
             optional(
                 operator()
                     .skip(spaces())
-                    .and(expr()
+                    .and(expr())
             )
-        )).map(|(v1, maybe_op)| {
+        ).map(|(v1, maybe_op)| {
             match maybe_op {
                 None => v1,
                 Some((op, v2)) => {
-                    Expr::CallOperator(Box::new(v1), op, Box::new(v2))
+                    Expr::Operator(Box::new(v1), op, Box::new(v2))
                 },
             }
         })
@@ -60,6 +59,7 @@ where I: Stream<Item = char>,
         char('+').map(|_| Operator::Plus),
         char('-').map(|_| Operator::Minus),
         char('*').map(|_| Operator::Star),
+        char('/').map(|_| Operator::Slash),
     ))
 }
 
@@ -238,98 +238,12 @@ where I: Stream<Item = char>,
                     let numerator = (int_val * denom) + (decimal as i64);
 
                     if is_positive {
-                        Expr::Ratio(numerator, denom as u64)
+                        Expr::Frac(numerator, denom as u64)
                     } else {
-                        Expr::Ratio(-numerator, denom as u64)
+                        Expr::Frac(-numerator, denom as u64)
                     }
                 }
             }
         })
 }
-
-// pub fn parse_expr(state: &mut State) -> Result<Expr, Problem> {
-
-//     let digits = chomp_digits(state);
-
-//     if digits.is_empty() {
-//         Err(Problem::InvalidNumber)
-//     } else {
-//         // TODO store these in a bigint, and handle overflow.
-//         let num = digits.parse::<u32>().unwrap();
-
-//         if decimal_point
-
-
-//         Ok(Expr::Int(num))
-//     }
-// }
-
-// enum Parsed {
-//     Expr(Expr),
-//     Malformed(Problem),
-//     NotFound
-// }
-
-
-// #[inline]
-// fn number_parser() -> {
-//     let has_minus_sign = false;
-//     let decimal_point_index: usize = 0;
-//     let len: usize = 0;
-
-//     for ch in state.text.chars() {
-//         if ch.is_ascii_digit() {
-//             len += 1;
-//         } else if ch == '-' {
-//             if has_minus_sign {
-//                 if len == 1 {
-//                     return Malformed(DoubleMinusSign);
-//                 } else {
-//                     // This second minus sign is a subtraction operator.
-//                     // We've reached the end of the number!
-//                     break;
-//                 }
-//             } else {
-//                 has_minus_sign = true;
-//                 len += 1;
-//             }
-//         } else if ch == '.' {
-//            if len == 0 {
-//                return Malformed(NoDigitsBeforeDecimalPoint);
-//            } else if decimal_point_index != 0 {
-//                return Malformed(DoubleDecimalPoint);
-//            } else {
-//                 // This might be a valid decimal number!
-//                 decimal_point_index = len;
-
-//                 len += 1;
-//            }
-//         }
-//     }
-
-//     state.col += len;
-
-//     if decimal_point_index == 0 {
-//         // This is an integer.
-//         Expr(Expr::Int(parse_int(&state.text[..len])))
-//     } else {
-//         // This is a decimal.
-//         let before_decimal_pt = &state.text[..decimal_point_index];
-//         let after_decimal_pt = &state.text[(decimal_point_index + 1)..];
-
-//         let numerator_str = before_decimal_pt.to_owned();
-//         numerator_str.push_str(after_decimal_pt);
-
-//         let numerator = parse_int(&numerator_str);
-//         let denominator = 10 * after_decimal_pt.len() as u64;
-
-//         Expr(Expr::Ratio(numerator, denominator))
-//     }
-// }
-
-// #[inline]
-// fn parse_int(text: &str) -> i64 {
-//     // TODO parse as BigInt
-//     text.parse::<i64>().unwrap()
-// }
 
