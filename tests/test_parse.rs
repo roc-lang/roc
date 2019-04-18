@@ -236,13 +236,39 @@ mod tests {
         }
     }
 
+    fn expect_parsed_var<'a>(expected_str: &'a str) {
+        let expected = expected_str.to_string();
+
+        assert_eq!(Ok((Var(expected), "")), parse::expr().parse(expected_str));
+    }
+
+    fn expect_parsed_var_error<'a>(actual_str: &'a str) {
+        // TODO someday, this should work! It should parse as a variant.
+        assert!(
+            parse::expr().parse(actual_str).is_err(),
+            "Expected parsing error"
+        );
+    }
+
     #[test]
     fn parse_var() {
-        match parse::expr().parse("foo") {
-            Ok((Var(var_name), "")) => {
-                assert_eq!(var_name, "foo".to_string());
-            },
-            _ => panic!("Expression didn't parse"),
-        }
+        expect_parsed_var("x");
+        expect_parsed_var("x2");
+        expect_parsed_var("foo");
+        expect_parsed_var("foo2furious");
+    }
+
+    #[test]
+    fn parse_invalid_var() {
+        expect_parsed_var_error("5x");
+        expect_parsed_var_error("2foo2furious");
+        expect_parsed_var_error("2Foo2Furious");
+
+        // TODO someday, capitalized vars should parse successfully as variants.
+        // At that point, turn these into variant tests!
+        expect_parsed_var_error("X");
+        expect_parsed_var_error("X2");
+        expect_parsed_var_error("Foo");
+        expect_parsed_var_error("Foo2Furious");
     }
 }
