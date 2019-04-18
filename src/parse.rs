@@ -3,9 +3,9 @@ use expr::Expr;
 
 use std::char;
 
-use combine::parser::char::{char, spaces, digit, hex_digit, HexDigit, alpha_num};
+use combine::parser::char::{char, space, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
-use combine::parser::item::{any, satisfy, satisfy_map, value};
+use combine::parser::item::{any, satisfy, satisfy_map, value, token};
 use combine::{choice, many1, parser, Parser, optional, between, unexpected_any, look_ahead, eof};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
@@ -17,7 +17,6 @@ pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    // TODO change to expr() to reproduce rust compiler bug
     expr_()
 }
 
@@ -28,8 +27,24 @@ parser! {
         where [ I: Stream<Item = char> ]
     {
         choice((
+            between(token('('), token(')'), expr()).and(
+                // Parenthetical expressions can optionally be followed by
+                // whitespace and an expr, meaning this is function application!
+                optional(
+                    many1::<Vec<_>, _>(space())
+                        .with(expr())
+                )
+            ).map(|(expr1, maybe_expr2)|
+                match maybe_expr2 {
+                    None => expr1,
+                    Some(expr2) => {
+                        Expr::Apply(Box::new(expr1), Box::new(expr2))
+                    },
+                }
+            ),
             number_literal(),
-            ident().map(|str| Expr::Var(str)),
+            var(),
+            func(),
         )).skip(spaces()).and(
             // Optionally follow the expression with an operator,
             //
@@ -61,6 +76,23 @@ where I: Stream<Item = char>,
         char('*').map(|_| Operator::Star),
         char('/').map(|_| Operator::Slash),
     ))
+}
+
+pub fn var<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    ident().map(|str| Expr::Var(str))
+}
+
+pub fn func<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    ident()
+        .skip(many1::<Vec<_>, _>(space()))
+        .and(expr())
+        .map(|(str, arg)| Expr::Func(str, Box::new(arg)))
 }
 
 pub fn ident<I>() -> impl Parser<Input = I, Output = String>

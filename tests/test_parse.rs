@@ -236,6 +236,8 @@ mod tests {
         }
     }
 
+    // VAR
+
     fn expect_parsed_var<'a>(expected_str: &'a str) {
         let expected = expected_str.to_string();
 
@@ -271,4 +273,51 @@ mod tests {
         expect_parsed_var_error("Foo");
         expect_parsed_var_error("Foo2Furious");
     }
+
+    // APPLY
+    
+    // TODO write a bunch of parenthetical expression tests - try to repeat
+    // all of the above tests except with parens too!
+    // Also, verify them all with variable paren counts; ((foo)) should work.
+
+    // FUNC
+
+
+    // TODO try it with operators, e.g. foo bar + baz qux
+
+    // fn expect_parsed_func<'a>(expected_str: &'a str) {
+    //     let expected = expected_str.to_string();
+
+    //     assert_eq!(Ok((Var(expected), "")), parse::expr().parse(expected_str));
+    // }
+
+    // fn expect_parsed_func_error<'a>(actual_str: &'a str) {
+    //     // TODO someday, this should work! It should parse as a variant.
+    //     assert!(
+    //         parse::expr().parse(actual_str).is_err(),
+    //         "Expected parsing error"
+    //     );
+    // }
+
+    // #[test]
+    // fn parse_var() {
+    //     expect_parsed_var("x");
+    //     expect_parsed_var("x2");
+    //     expect_parsed_var("foo");
+    //     expect_parsed_var("foo2furious");
+    // }
+
+    // #[test]
+    // fn parse_invalid_var() {
+    //     expect_parsed_var_error("5x");
+    //     expect_parsed_var_error("2foo2furious");
+    //     expect_parsed_var_error("2Foo2Furious");
+
+    //     // TODO someday, capitalized vars should parse successfully as variants.
+    //     // At that point, turn these into variant tests!
+    //     expect_parsed_var_error("X");
+    //     expect_parsed_var_error("X2");
+    //     expect_parsed_var_error("Foo");
+    //     expect_parsed_var_error("Foo2Furious");
+    // }
 }
