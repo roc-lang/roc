@@ -6,7 +6,7 @@ use std::char;
 use combine::parser::char::{char, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
 use combine::parser::item::{any, satisfy, satisfy_map, value};
-use combine::{choice, many1, parser, Parser, optional, between, unexpected_any, look_ahead};
+use combine::{choice, many1, parser, Parser, optional, between, unexpected_any, look_ahead, eof};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
 
@@ -47,7 +47,7 @@ parser! {
                     Expr::Operator(Box::new(v1), op, Box::new(v2))
                 },
             }
-        })
+        }).skip(eof())
     }
 }
 
