@@ -235,4 +235,14 @@ mod tests {
             _ => panic!("Expression didn't parse"),
         }
     }
+
+    #[test]
+    fn parse_var() {
+        match parse::expr().parse("foo") {
+            Ok((Var(var_name), "")) => {
+                assert_eq!(var_name, "foo".to_string());
+            },
+            _ => panic!("Expression didn't parse"),
+        }
+    }
 }
