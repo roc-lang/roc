@@ -3,10 +3,10 @@ use expr::Expr;
 
 use std::char;
 
-use combine::parser::char::{char, spaces, digit, hex_digit, HexDigit};
+use combine::parser::char::{char, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
-use combine::parser::item::{any, satisfy_map, value};
-use combine::{choice, many1, parser, Parser, optional, between, unexpected_any};
+use combine::parser::item::{any, satisfy, satisfy_map, value};
+use combine::{choice, many1, parser, Parser, optional, between, unexpected_any, look_ahead};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
 
@@ -29,7 +29,7 @@ parser! {
     {
         choice((
             number_literal(),
-            ident(),
+            ident().map(|str| Expr::Var(str)),
         )).skip(spaces()).and(
             // Optionally follow the expression with an operator,
             //
@@ -63,11 +63,16 @@ where I: Stream<Item = char>,
     ))
 }
 
-pub fn ident<I>() -> impl Parser<Input = I, Output = Expr>
+pub fn ident<I>() -> impl Parser<Input = I, Output = String>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    char('.').map(|_| Expr::Int(1))
+    // Identifiers must begin with a lowercase letter, but can have any
+    // combination of letters or numbers afterwards.
+    // No underscores, dashes, or apostrophes.
+    look_ahead(satisfy(|first_char:char| first_char.is_lowercase()))
+        .with(many::<Vec<_>, _>(alpha_num()))
+        .map(|chars| chars.into_iter().collect())
 }
 
 pub fn string_literal<I>() -> impl Parser<Input = I, Output = Expr>
