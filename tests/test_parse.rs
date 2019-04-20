@@ -25,7 +25,7 @@ mod tests {
 
     fn expect_parsed_str_error<'a>(actual_str: &'a str) {
         assert!(
-            parse::string_literal().parse(actual_str).is_err(),
+            parse::expr().parse(actual_str).is_err(),
             "Expected parsing error"
         );
     }
@@ -89,12 +89,12 @@ mod tests {
     // CHAR LITERALS
 
     fn expect_parsed_char<'a>(expected: char, actual_str: &'a str) {
-        assert_eq!(Ok((Char(expected), "")), parse::char_literal().parse(actual_str));
+        assert_eq!(Ok((Char(expected), "")), parse::expr().parse(actual_str));
     }
 
     fn expect_parsed_char_error<'a>(actual_str: &'a str) {
         assert!(
-            parse::char_literal().parse(actual_str).is_err(),
+            parse::expr().parse(actual_str).is_err(),
             "Expected parsing error"
         );
     }
@@ -104,7 +104,7 @@ mod tests {
     fn parse_empty_char() {
         // expect_parsed_char_error("''");
 
-        match parse::char_literal().easy_parse("''") {
+        match parse::expr().easy_parse("''") {
             Ok(_) => panic!("Expected parse error"),
             Err(err) => {
                 let errors = err.errors;
@@ -169,11 +169,11 @@ mod tests {
     // NUMBER LITERALS
     
     fn expect_parsed_int<'a>(expected: i64, actual: &str) {
-        assert_eq!(Ok((Int(expected), "")), parse::number_literal().parse(actual));
+        assert_eq!(Ok((Int(expected), "")), parse::expr().parse(actual));
     }
 
     fn expect_parsed_ratio<'a>(expected_numerator: i64, expected_denominator: u64, actual: &str) {
-        assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "")), parse::number_literal().parse(actual));
+        assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "")), parse::expr().parse(actual));
     }
 
     #[test]
@@ -276,13 +276,53 @@ mod tests {
     }
 
     // APPLY
+
+    fn expect_parsed_apply<'a>(parse_str: &'a str, expr1: Expr, expr2: Expr) {
+        assert_eq!(
+            Ok((Apply(Box::new(expr1), Box::new(expr2)), "")),
+            parse::expr().parse(parse_str)
+        );
+    }
+
+    fn expect_parsed_apply_error<'a>(actual_str: &'a str) {
+        assert!(
+            parse::expr().parse(actual_str).is_err(),
+            "Expected parsing error"
+        );
+    }
+
+    #[test]
+    fn parse_apply() {
+        expect_parsed_apply(
+            "(x) y",
+            Var("x".to_string()),
+            Var("y".to_string())
+        );
+
+        expect_parsed_apply(
+            "(x 5) y",
+            Func("x".to_string(), Box::new(Int(5))),
+            Var("y".to_string())
+        );
+
+        expect_parsed_apply(
+            "(x 5) (y 6)",
+            Func("x".to_string(), Box::new(Int(5))),
+            Func("y".to_string(), Box::new(Int(6))),
+        );
+    }
+
+    #[test]
+    fn parse_invalid_apply() {
+        expect_parsed_apply_error("(x 5)y");
+    }
+
     
     // TODO write a bunch of parenthetical expression tests - try to repeat
     // all of the above tests except with parens too!
     // Also, verify them all with variable paren counts; ((foo)) should work.
 
     // FUNC
-
 
     // TODO try it with operators, e.g. foo bar + baz qux
 
@@ -310,5 +350,21 @@ mod tests {
     #[test]
     fn parse_invalid_func() {
         expect_parsed_func_error("1 f");
+    }
+
+    // PARENS
+
+    #[test]
+    fn parse_parens() {
+        expect_parsed_int(1, "(1)");
+        expect_parsed_str("a", "(\"a\")");
+        expect_parsed_func("(f 1)", "f", Int(1));
+        expect_parsed_func("(foo  bar)", "foo", Var("bar".to_string()));
+        expect_parsed_func("(  foo \"hi\"  )", "foo", String("hi".to_string()));
+    }
+
+    #[test]
+    fn parse_invalid_parens_func() {
+        expect_parsed_func_error("(1 f)");
     }
 }

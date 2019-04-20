@@ -5,7 +5,7 @@ use std::char;
 
 use combine::parser::char::{char, space, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
-use combine::parser::item::{any, satisfy, satisfy_map, value, token};
+use combine::parser::item::{any, satisfy, satisfy_map, value};
 use combine::{choice, many1, parser, Parser, optional, between, unexpected_any, look_ahead, eof};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
@@ -17,33 +17,20 @@ pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    expr_()
+    expr_body().skip(eof())
 }
 
 // This macro allows recursive parsers
 parser! {
     #[inline(always)]
-    fn expr_[I]()(I) -> Expr
+    fn expr_body[I]()(I) -> Expr
         where [ I: Stream<Item = char> ]
     {
         choice((
-            between(token('('), token(')'), expr()).and(
-                // Parenthetical expressions can optionally be followed by
-                // whitespace and an expr, meaning this is function application!
-                optional(
-                    many1::<Vec<_>, _>(space())
-                        .with(expr())
-                )
-            ).map(|(expr1, maybe_expr2)|
-                match maybe_expr2 {
-                    None => expr1,
-                    Some(expr2) => {
-                        Expr::Apply(Box::new(expr1), Box::new(expr2))
-                    },
-                }
-            ),
+            parenthetical_expr(),
             string_literal(),
             number_literal(),
+            char_literal(),
             func_or_var(),
         )).skip(spaces()).and(
             // Optionally follow the expression with an operator,
@@ -53,7 +40,7 @@ parser! {
             optional(
                 operator()
                     .skip(spaces())
-                    .and(expr())
+                    .and(expr_body())
             )
         ).map(|(v1, maybe_op)| {
             match maybe_op {
@@ -62,8 +49,36 @@ parser! {
                     Expr::Operator(Box::new(v1), op, Box::new(v2))
                 },
             }
-        }).skip(eof())
+         }
+    )
     }
+}
+
+pub fn parenthetical_expr<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    between(char('('), char(')'), 
+            // NOTE: It's critical to use expr_body() instead of expr() here!
+            //
+            // expr() must check for eof() at the end, and it's impossible to have
+            // an eof() followed by a ')' character!
+            spaces().with(expr_body()).skip(spaces())
+        ).and(
+        // Parenthetical expressions can optionally be followed by
+        // whitespace and an expr, meaning this is function application!
+        optional(
+            many1::<Vec<_>, _>(space())
+                .with(expr_body())
+        )
+    ).map(|(expr1, maybe_expr2)|
+        match maybe_expr2 {
+            None => expr1,
+            Some(expr2) => {
+                Expr::Apply(Box::new(expr1), Box::new(expr2))
+            },
+        }
+    )
 }
 
 pub fn operator<I>() -> impl Parser<Input = I, Output = Operator>
@@ -85,7 +100,7 @@ where I: Stream<Item = char>,
     ident()
         .and(optional(
             many1::<Vec<_>, _>(space())
-                .with(expr())
+                .with(expr_body())
         )).map(|(str, opt_arg)|
             match opt_arg {
                 Some(arg) => Expr::Func(str, Box::new(arg)),
@@ -98,6 +113,8 @@ pub fn ident<I>() -> impl Parser<Input = I, Output = String>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
+    // TODO fail if this is a reserved keyword like "if"
+
     // Identifiers must begin with a lowercase letter, but can have any
     // combination of letters or numbers afterwards.
     // No underscores, dashes, or apostrophes.
