@@ -44,8 +44,7 @@ parser! {
             ),
             string_literal(),
             number_literal(),
-            var(),
-            func(),
+            func_or_var(),
         )).skip(spaces()).and(
             // Optionally follow the expression with an operator,
             //
@@ -79,21 +78,20 @@ where I: Stream<Item = char>,
     ))
 }
 
-pub fn var<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>
-{
-    ident().map(|str| Expr::Var(str))
-}
-
-pub fn func<I>() -> impl Parser<Input = I, Output = Expr>
+pub fn func_or_var<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     ident()
-        .skip(many1::<Vec<_>, _>(space()))
-        .and(expr())
-        .map(|(str, arg)| Expr::Func(str, Box::new(arg)))
+        .and(optional(
+            many1::<Vec<_>, _>(space())
+                .with(expr())
+        )).map(|(str, opt_arg)|
+            match opt_arg {
+                Some(arg) => Expr::Func(str, Box::new(arg)),
+                None => Expr::Var(str),
+            }
+        )
 }
 
 pub fn ident<I>() -> impl Parser<Input = I, Output = String>

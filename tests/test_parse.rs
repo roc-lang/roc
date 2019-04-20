@@ -8,6 +8,7 @@ extern crate roc;
 #[cfg(test)]
 mod tests {
     use roc::expr::Expr::*;
+    use roc::expr::Expr;
     use roc::expr::Operator::*;
     use roc::parse;
     use combine::{Parser};
@@ -246,7 +247,6 @@ mod tests {
     }
 
     fn expect_parsed_var_error<'a>(actual_str: &'a str) {
-        // TODO someday, this should work! It should parse as a variant.
         assert!(
             parse::expr().parse(actual_str).is_err(),
             "Expected parsing error"
@@ -286,39 +286,29 @@ mod tests {
 
     // TODO try it with operators, e.g. foo bar + baz qux
 
-    // fn expect_parsed_func<'a>(expected_str: &'a str) {
-    //     let expected = expected_str.to_string();
+    fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, expr: Expr) {
+        assert_eq!(
+            Ok((Func(func_str.to_string(), Box::new(expr)), "")), 
+            parse::expr().parse(parse_str)
+        );
+    }
 
-    //     assert_eq!(Ok((Var(expected), "")), parse::expr().parse(expected_str));
-    // }
+    fn expect_parsed_func_error<'a>(actual_str: &'a str) {
+        assert!(
+            parse::expr().parse(actual_str).is_err(),
+            "Expected parsing error"
+        );
+    }
 
-    // fn expect_parsed_func_error<'a>(actual_str: &'a str) {
-    //     // TODO someday, this should work! It should parse as a variant.
-    //     assert!(
-    //         parse::expr().parse(actual_str).is_err(),
-    //         "Expected parsing error"
-    //     );
-    // }
+    #[test]
+    fn parse_func() {
+        expect_parsed_func("f 1", "f", Int(1));
+        expect_parsed_func("foo  bar", "foo", Var("bar".to_string()));
+        expect_parsed_func("foo \"hi\"", "foo", String("hi".to_string()));
+    }
 
-    // #[test]
-    // fn parse_var() {
-    //     expect_parsed_var("x");
-    //     expect_parsed_var("x2");
-    //     expect_parsed_var("foo");
-    //     expect_parsed_var("foo2furious");
-    // }
-
-    // #[test]
-    // fn parse_invalid_var() {
-    //     expect_parsed_var_error("5x");
-    //     expect_parsed_var_error("2foo2furious");
-    //     expect_parsed_var_error("2Foo2Furious");
-
-    //     // TODO someday, capitalized vars should parse successfully as variants.
-    //     // At that point, turn these into variant tests!
-    //     expect_parsed_var_error("X");
-    //     expect_parsed_var_error("X2");
-    //     expect_parsed_var_error("Foo");
-    //     expect_parsed_var_error("Foo2Furious");
-    // }
+    #[test]
+    fn parse_invalid_func() {
+        expect_parsed_func_error("1 f");
+    }
 }
