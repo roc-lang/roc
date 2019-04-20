@@ -42,8 +42,8 @@ parser! {
                     .skip(spaces())
                     .and(expr_body())
             )
-        ).map(|(v1, maybe_op)| {
-            match maybe_op {
+        ).skip(spaces()).map(|(v1, opt_op)| {
+            match opt_op {
                 None => v1,
                 Some((op, v2)) => {
                     Expr::Operator(Box::new(v1), op, Box::new(v2))
