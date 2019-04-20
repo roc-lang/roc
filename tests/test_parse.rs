@@ -310,6 +310,12 @@ mod tests {
             Func("x".to_string(), Box::new(Int(5))),
             Func("y".to_string(), Box::new(Int(6))),
         );
+
+        expect_parsed_apply(
+            "(5) (6)",
+            Int(5),
+            Int(6)
+        );
     }
 
     #[test]
@@ -357,7 +363,9 @@ mod tests {
     #[test]
     fn parse_parens() {
         expect_parsed_int(1, "(1)");
+        expect_parsed_int(-2, "((-2))");
         expect_parsed_str("a", "(\"a\")");
+        expect_parsed_str("abc", "((\"abc\"))");
         expect_parsed_func("(f 1)", "f", Int(1));
         expect_parsed_func("(foo  bar)", "foo", Var("bar".to_string()));
         expect_parsed_func("(  foo \"hi\"  )", "foo", String("hi".to_string()));
@@ -366,5 +374,7 @@ mod tests {
     #[test]
     fn parse_invalid_parens_func() {
         expect_parsed_func_error("(1 f)");
+        expect_parsed_func_error("(1 f");
+        expect_parsed_func_error("(f 1");
     }
 }
