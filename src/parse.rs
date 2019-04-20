@@ -49,8 +49,7 @@ parser! {
                     Expr::Operator(Box::new(v1), op, Box::new(v2))
                 },
             }
-         }
-    )
+        })
     }
 }
 
@@ -71,8 +70,8 @@ where I: Stream<Item = char>,
             many1::<Vec<_>, _>(space())
                 .with(expr_body())
         )
-    ).map(|(expr1, maybe_expr2)|
-        match maybe_expr2 {
+    ).map(|(expr1, opt_expr2)|
+        match opt_expr2 {
             None => expr1,
             Some(expr2) => {
                 Expr::Apply(Box::new(expr1), Box::new(expr2))
@@ -267,8 +266,8 @@ where I: Stream<Item = char>,
     optional(char('-'))
         .and(digits_before_decimal)
         .and(optional(char('.').with(digits_after_decimal)))
-        .map(|((maybe_minus, int_digits), decimals): ((Option<char>, Vec<char>), Option<Vec<char>>)| {
-            let is_positive = maybe_minus.is_none();
+        .map(|((opt_minus, int_digits), decimals): ((Option<char>, Vec<char>), Option<Vec<char>>)| {
+            let is_positive = opt_minus.is_none();
 
             // TODO check length of digits and make sure not to overflow
             let int_str: String = int_digits.into_iter().collect();
