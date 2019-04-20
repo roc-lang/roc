@@ -16,9 +16,10 @@ mod tests {
     // STRING LITERALS
 
     fn expect_parsed_str<'a>(expected_str: &'a str, actual_str: &'a str) {
-        let expected = expected_str.to_string();
-
-        assert_eq!(Ok((String(expected), "")), parse::string_literal().parse(actual_str));
+        assert_eq!(
+            Ok((String(expected_str.to_string()), "")),
+            parse::expr().parse(actual_str)
+        );
     }
 
     fn expect_parsed_str_error<'a>(actual_str: &'a str) {

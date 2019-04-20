@@ -42,6 +42,7 @@ parser! {
                     },
                 }
             ),
+            string_literal(),
             number_literal(),
             var(),
             func(),
