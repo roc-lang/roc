@@ -219,6 +219,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_single_operator_with_var() {
+        assert_eq!(
+            parse::expr().parse("x + 1"),
+            Ok((Operator(
+                Box::new(Var("x".to_string())),
+                Plus,
+                Box::new(Int(1))
+            ), ""))
+        );
+    }
+
+    #[test]
     fn parse_single_operator() {
         match parse::expr().parse("1234 + 567") {
             Ok((Operator(v1, op, v2), "")) => {
@@ -383,6 +395,18 @@ mod tests {
         expect_parsed_func("(f 1)", "f", Int(1));
         expect_parsed_func("(foo  bar)", "foo", Var("bar".to_string()));
         expect_parsed_func("(  foo \"hi\"  )", "foo", String("hi".to_string()));
+    }
+
+    #[test]
+    fn parse_operators_with_parens() {
+        match parse::expr().parse("(1234 + 567)") {
+            Ok((Operator(v1, op, v2), "")) => {
+                assert_eq!(*v1, Int(1234));
+                assert_eq!(op, Plus);
+                assert_eq!(*v2, Int(567));
+            },
+            _ => panic!("Expression didn't parse"),
+        }
     }
 
     #[test]

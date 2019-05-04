@@ -110,8 +110,7 @@ where I: Stream<Item = char>,
 {
     ident()
         .and(optional(
-            many1::<Vec<_>, _>(space())
-                .with(expr_body())
+            attempt(whitespace().with(expr_body()))
         )).map(|pair|
             match pair {
                 ( Ok(str), Some(arg) ) => Expr::Func(str, Box::new(arg)),
