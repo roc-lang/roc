@@ -13,6 +13,8 @@ pub enum Expr {
     Func(String, Box<Expr>),
     Apply(Box<Expr>, Box<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
+
+    SyntaxProblem(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

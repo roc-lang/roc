@@ -5,8 +5,8 @@ use std::char;
 
 use combine::parser::char::{char, space, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
-use combine::parser::item::{any, satisfy, satisfy_map, value};
-use combine::{choice, many1, parser, Parser, optional, between, unexpected_any, look_ahead};
+use combine::parser::item::{any, satisfy_map, value};
+use combine::{choice, many1, parser, Parser, optional, between, unexpected_any};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
 
@@ -40,7 +40,7 @@ parser! {
             optional(
                 operator()
                     .skip(spaces())
-                    .and(expr_body())
+                    .and(expr())
             )
         ).skip(spaces()).map(|(v1, opt_op)| {
             match opt_op {
@@ -58,17 +58,13 @@ where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('('), char(')'), 
-            // NOTE: It's critical to use expr_body() instead of expr() here!
-            //
-            // expr() must check for eof() at the end, and it's impossible to have
-            // an eof() followed by a ')' character!
-            spaces().with(expr_body()).skip(spaces())
+            spaces().with(expr()).skip(spaces())
         ).and(
         // Parenthetical expressions can optionally be followed by
         // whitespace and an expr, meaning this is function application!
         optional(
             many1::<Vec<_>, _>(space())
-                .with(expr_body())
+                .with(expr())
         )
     ).map(|(expr1, opt_expr2)|
         match opt_expr2 {
@@ -99,27 +95,43 @@ where I: Stream<Item = char>,
     ident()
         .and(optional(
             many1::<Vec<_>, _>(space())
-                .with(expr_body())
-        )).map(|(str, opt_arg)|
-            match opt_arg {
-                Some(arg) => Expr::Func(str, Box::new(arg)),
-                None => Expr::Var(str),
+                .with(expr())
+        )).map(|pair|
+            match pair {
+                ( Ok(str), Some(arg) ) => Expr::Func(str, Box::new(arg)),
+                ( Ok(str), None ) => Expr::Var(str),
+                ( Err(_ident_problem), _ ) => Expr::SyntaxProblem("TODO put _ident_problem here".to_owned())
             }
         )
 }
 
-pub fn ident<I>() -> impl Parser<Input = I, Output = String>
+pub enum IdentProblem {
+    InvalidFirstChar(String),
+    ReservedKeyword(String),
+}
+
+pub fn ident<I>() -> impl Parser<Input = I, Output = Result<String, IdentProblem>>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    // TODO fail if this is a reserved keyword like "if"
-
     // Identifiers must begin with a lowercase letter, but can have any
     // combination of letters or numbers afterwards.
     // No underscores, dashes, or apostrophes.
-    look_ahead(satisfy(|first_char:char| first_char.is_lowercase()))
-        .with(many::<Vec<_>, _>(alpha_num()))
-        .map(|chars| chars.into_iter().collect())
+    many::<Vec<_>, _>(alpha_num())
+        .map(|chars: Vec<char>| {
+            let valid_start_char = chars[0].is_lowercase();
+            let ident_str:String = chars.into_iter().collect();
+
+             if valid_start_char {
+                 if ident_str == "if" {
+                    Err(IdentProblem::ReservedKeyword(ident_str.to_owned()))
+                 } else {
+                    Ok(ident_str)
+                 }
+             } else {
+                Err(IdentProblem::ReservedKeyword(ident_str.to_owned()))
+             }
+        })
 }
 
 pub fn string_literal<I>() -> impl Parser<Input = I, Output = Expr>

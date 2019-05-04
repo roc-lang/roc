@@ -428,12 +428,12 @@ mod tests {
 
         assert_eq!(
             // TODO why does this fail?!
-            parse::expr().parse("(5) + 123"),
+            parse::expr().parse("(5) + 1998"),
             Ok((
                 Operator(
                     Box::new(Int(5)),
                     Plus,
-                    Box::new(Int(123))
+                    Box::new(Int(1998))
                 ),
                 "")
             )
