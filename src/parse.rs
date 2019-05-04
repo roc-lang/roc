@@ -7,7 +7,7 @@ use combine::parser::char::{char, space, spaces, digit, hex_digit, HexDigit, alp
 use combine::parser::repeat::{many, count_min_max};
 use combine::parser::item::{any, satisfy_map, value};
 use combine::parser::combinator::{look_ahead};
-use combine::{choice, eof, many1, parser, Parser, optional, between, unexpected_any};
+use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
 
@@ -80,8 +80,7 @@ where I: Stream<Item = char>,
         // Parenthetical expressions can optionally be followed by
         // whitespace and an expr, meaning this is function application!
         optional(
-            many1::<Vec<_>, _>(space())
-                .with(expr_body())
+            attempt(whitespace().with(expr_body()))
         )
     ).map(|(expr1, opt_expr2)|
         match opt_expr2 {

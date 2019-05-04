@@ -441,13 +441,24 @@ mod tests {
         );
 
         assert_eq!(
-            // TODO why does this fail?!
-            parse::expr().parse("(5) + 1998"),
+            parse::expr().parse("12 + 34"),
             Ok((
                 Operator(
-                    Box::new(Int(5)),
+                    Box::new(Int(12)),
                     Plus,
-                    Box::new(Int(1998))
+                    Box::new(Int(34))
+                ),
+                "")
+            )
+        );
+
+        assert_eq!(
+            parse::expr().parse("(51) + 19"),
+            Ok((
+                Operator(
+                    Box::new(Int(51)),
+                    Plus,
+                    Box::new(Int(19))
                 ),
                 "")
             )
