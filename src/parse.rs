@@ -6,7 +6,7 @@ use std::char;
 use combine::parser::char::{char, space, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
 use combine::parser::item::{any, satisfy, satisfy_map, value};
-use combine::{choice, many1, parser, Parser, optional, between, unexpected_any, look_ahead, eof};
+use combine::{choice, many1, parser, Parser, optional, between, unexpected_any, look_ahead};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
 
@@ -17,7 +17,7 @@ pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    expr_body().skip(eof())
+    expr_body()
 }
 
 // This macro allows recursive parsers

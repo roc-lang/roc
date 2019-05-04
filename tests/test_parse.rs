@@ -11,21 +11,30 @@ mod tests {
     use roc::expr::Expr;
     use roc::expr::Operator::*;
     use roc::parse;
-    use combine::{Parser};
+    use combine::{Parser, eof};
+    use combine::error::{ParseError};
+    use combine::stream::{Stream};
     use combine::easy;
+
+    fn standalone_expr<I>() -> impl Parser<Input = I, Output = Expr>
+    where I: Stream<Item = char>,
+        I::Error: ParseError<I::Item, I::Range, I::Position>
+    {
+        parse::expr().skip(eof())
+    }
 
     // STRING LITERALS
 
     fn expect_parsed_str<'a>(expected_str: &'a str, actual_str: &'a str) {
         assert_eq!(
             Ok((String(expected_str.to_string()), "")),
-            parse::expr().parse(actual_str)
+            standalone_expr().parse(actual_str)
         );
     }
 
     fn expect_parsed_str_error<'a>(actual_str: &'a str) {
         assert!(
-            parse::expr().parse(actual_str).is_err(),
+            standalone_expr().parse(actual_str).is_err()
             "Expected parsing error"
         );
     }
@@ -89,12 +98,12 @@ mod tests {
     // CHAR LITERALS
 
     fn expect_parsed_char<'a>(expected: char, actual_str: &'a str) {
-        assert_eq!(Ok((Char(expected), "")), parse::expr().parse(actual_str));
+        assert_eq!(Ok((Char(expected), "")), standalone_expr().parse(actual_str));
     }
 
     fn expect_parsed_char_error<'a>(actual_str: &'a str) {
         assert!(
-            parse::expr().parse(actual_str).is_err(),
+            standalone_expr().parse(actual_str).is_err(),
             "Expected parsing error"
         );
     }
@@ -102,9 +111,7 @@ mod tests {
 
     #[test]
     fn parse_empty_char() {
-        // expect_parsed_char_error("''");
-
-        match parse::expr().easy_parse("''") {
+        match standalone_expr().easy_parse("''") {
             Ok(_) => panic!("Expected parse error"),
             Err(err) => {
                 let errors = err.errors;
@@ -169,11 +176,11 @@ mod tests {
     // NUMBER LITERALS
     
     fn expect_parsed_int<'a>(expected: i64, actual: &str) {
-        assert_eq!(Ok((Int(expected), "")), parse::expr().parse(actual));
+        assert_eq!(Ok((Int(expected), "")), standalone_expr().parse(actual));
     }
 
     fn expect_parsed_ratio<'a>(expected_numerator: i64, expected_denominator: u64, actual: &str) {
-        assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "")), parse::expr().parse(actual));
+        assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "")), standalone_expr().parse(actual));
     }
 
     #[test]
@@ -376,5 +383,72 @@ mod tests {
         expect_parsed_func_error("(1 f)");
         expect_parsed_func_error("(1 f");
         expect_parsed_func_error("(f 1");
+    }
+
+    // COMPLEX EXPRESSIONS
+
+    #[test]
+    fn parse_complex_expressions() {
+        // expect_parsed_apply(
+        //     "(x 5) (y + (f 6))",
+        //     Func("x".to_string(), Box::new(Int(5))),
+        //     Operator(
+        //         Box::new(Var("y".to_string())),
+        //         Plus,
+        //         Box::new(Func("f".to_string(), Box::new(Int(6)))),
+        //     )
+        // );
+        assert_eq!(
+            parse::expr().parse("(x 5)"),
+            Ok((
+                Func("x".to_string(), Box::new(Int(5))),
+                "")
+            )
+        );
+        
+        assert_eq!(
+            parse::expr().parse("(5)"),
+            Ok((
+                Int(5),
+                "")
+            )
+        );
+
+        assert_eq!(
+            parse::expr().parse("6 + (685)"),
+            Ok((
+                Operator(
+                    Box::new(Int(6)),
+                    Plus,
+                    Box::new(Int(685))
+                ),
+                "")
+            )
+        );
+
+        assert_eq!(
+            // TODO why does this fail?!
+            parse::expr().parse("(5) + 123"),
+            Ok((
+                Operator(
+                    Box::new(Int(5)),
+                    Plus,
+                    Box::new(Int(123))
+                ),
+                "")
+            )
+        );
+
+        assert_eq!(
+            parse::expr().parse("(x 5) + 123"),
+            Ok((
+                Operator(
+                    Box::new(Func("x".to_string(), Box::new(Int(5)))),
+                    Plus,
+                    Box::new(Int(123))
+                ),
+                "")
+            )
+        );
     }
 }
