@@ -475,5 +475,23 @@ mod tests {
                 "")
             )
         );
+
+        assert_eq!(
+            parse::expr().parse("(x 5) + (2 * y)"),
+            Ok((
+                Operator(
+                    Box::new(Func("x".to_string(), Box::new(Int(5)))),
+                    Plus,
+                    Box::new(
+                        Operator(
+                            Box::new(Int(2)),
+                            Star,
+                            Box::new(Var("y".to_string()))
+                        )
+                    )
+                ),
+                "")
+            )
+        );
     }
 }
