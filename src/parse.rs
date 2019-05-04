@@ -117,7 +117,7 @@ where I: Stream<Item = char>,
     // Identifiers must begin with a lowercase letter, but can have any
     // combination of letters or numbers afterwards.
     // No underscores, dashes, or apostrophes.
-    many::<Vec<_>, _>(alpha_num())
+    many1::<Vec<_>, _>(alpha_num())
         .map(|chars: Vec<char>| {
             let valid_start_char = chars[0].is_lowercase();
             let ident_str:String = chars.into_iter().collect();
