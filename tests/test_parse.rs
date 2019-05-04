@@ -395,15 +395,16 @@ mod tests {
 
     #[test]
     fn parse_complex_expressions() {
-        // expect_parsed_apply(
-        //     "(x 5) (y + (f 6))",
-        //     Func("x".to_string(), Box::new(Int(5))),
-        //     Operator(
-        //         Box::new(Var("y".to_string())),
-        //         Plus,
-        //         Box::new(Func("f".to_string(), Box::new(Int(6)))),
-        //     )
-        // );
+        expect_parsed_apply(
+            "(x 5) (y + (f 6))",
+            Func("x".to_string(), Box::new(Int(5))),
+            Operator(
+                Box::new(Var("y".to_string())),
+                Plus,
+                Box::new(Func("f".to_string(), Box::new(Int(6)))),
+            )
+        );
+
         assert_eq!(
             parse::expr().parse("(x 5)"),
             Ok((
