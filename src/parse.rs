@@ -6,7 +6,8 @@ use std::char;
 use combine::parser::char::{char, space, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
 use combine::parser::item::{any, satisfy_map, value};
-use combine::{choice, many1, parser, Parser, optional, between, unexpected_any};
+use combine::parser::combinator::{look_ahead};
+use combine::{choice, eof, many1, parser, Parser, optional, between, unexpected_any};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
 
@@ -17,7 +18,23 @@ pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    expr_body()
+    expr_body().skip(whitespace_or_eof())
+}
+
+fn whitespace_or_eof<I>() -> impl Parser<Input = I, Output = ()>
+where I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    choice((
+        whitespace(),
+        eof().with(value(()))
+    ))
+}
+
+fn whitespace<I>() -> impl Parser<Input = I, Output = ()>
+where I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    // TODO we discard this Vec, so revise this to not allocate one
+    many1::<Vec<_>, _>(space()).with(value(()))
 }
 
 // This macro allows recursive parsers
@@ -40,7 +57,7 @@ parser! {
             optional(
                 operator()
                     .skip(spaces())
-                    .and(expr())
+                    .and(expr_body())
             )
         ).skip(spaces()).map(|(v1, opt_op)| {
             match opt_op {
@@ -58,13 +75,13 @@ where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('('), char(')'), 
-            spaces().with(expr()).skip(spaces())
+            spaces().with(expr_body()).skip(spaces())
         ).and(
         // Parenthetical expressions can optionally be followed by
         // whitespace and an expr, meaning this is function application!
         optional(
             many1::<Vec<_>, _>(space())
-                .with(expr())
+                .with(expr_body())
         )
     ).map(|(expr1, opt_expr2)|
         match opt_expr2 {
@@ -95,7 +112,7 @@ where I: Stream<Item = char>,
     ident()
         .and(optional(
             many1::<Vec<_>, _>(space())
-                .with(expr())
+                .with(expr_body())
         )).map(|pair|
             match pair {
                 ( Ok(str), Some(arg) ) => Expr::Func(str, Box::new(arg)),
@@ -272,41 +289,55 @@ where I: Stream<Item = char>,
 {
     // Digits before the decimal point can be space-separated
     // e.g. one million can be written as 1 000 000 
-    let digits_before_decimal = many1::<Vec<_>, _>(digit().skip(optional(char(' '))));
-    let digits_after_decimal =  many1::<Vec<_>, _>(digit());
+    let digits_before_decimal = many1::<Vec<_>, _>(alpha_num().skip(optional(char(' '))));
+    let digits_after_decimal =  many1::<Vec<_>, _>(alpha_num());
 
     optional(char('-'))
+        // Do this lookahead to decide if we should parse this as a number.
+        // This matters because once we commit to parsing it as a number,
+        // we may discover non-digit chars, indicating this is actually an
+        // invalid identifier. (e.g. "523foo" looks like a number, but turns
+        // out to be an invalid identifier on closer inspection.)
+        .and(look_ahead(digit()))
         .and(digits_before_decimal)
         .and(optional(char('.').with(digits_after_decimal)))
-        .map(|((opt_minus, int_digits), decimals): ((Option<char>, Vec<char>), Option<Vec<char>>)| {
+        .map(|(((opt_minus, _), int_digits), decimals): (((Option<char>, _), Vec<char>), Option<Vec<char>>)| {
             let is_positive = opt_minus.is_none();
 
             // TODO check length of digits and make sure not to overflow
             let int_str: String = int_digits.into_iter().collect();
-            let int_val = int_str.parse::<i64>().unwrap();
 
-            match decimals {
-                None => {
+            match ( int_str.parse::<i64>(), decimals ) {
+                (Ok(int_val), None) => {
                     if is_positive {
                         Expr::Int(int_val as i64)
                     } else {
                         Expr::Int(-int_val as i64)
                     }
                 },
-                Some(nums) => {
+                (Ok(int_val), Some(nums)) => {
                     let decimal_str: String = nums.into_iter().collect();
                     // calculate numerator and denominator
                     // e.g. 123.45 == 12345 / 100
                     let denom = (10 as i64).pow(decimal_str.len() as u32);
-                    let decimal = decimal_str.parse::<u32>().unwrap();
-                    let numerator = (int_val * denom) + (decimal as i64);
 
-                    if is_positive {
-                        Expr::Frac(numerator, denom as u64)
-                    } else {
-                        Expr::Frac(-numerator, denom as u64)
+                    match decimal_str.parse::<u32>() {
+                        Ok(decimal) => {
+                            let numerator = (int_val * denom) + (decimal as i64);
+
+                            if is_positive {
+                                Expr::Frac(numerator, denom as u64)
+                            } else {
+                                Expr::Frac(-numerator, denom as u64)
+                            }
+                        },
+                        Err(_) => {
+                            Expr::SyntaxProblem("TODO Non-digit chars after decimal point in number literal".to_owned())
+                        }
                     }
-                }
+                },
+                (Err(_), _) =>
+                    Expr::SyntaxProblem("TODO looked like a number but was actually malformed ident".to_owned())
             }
         })
 }

@@ -107,7 +107,6 @@ mod tests {
             "Expected parsing error"
         );
     }
-    
 
     #[test]
     fn parse_empty_char() {
@@ -254,11 +253,13 @@ mod tests {
     }
 
     fn expect_parsed_var_error<'a>(actual_str: &'a str) {
-        assert!(
-            parse::expr().parse(actual_str).is_err(),
-            "Expected parsing error"
-        );
+        assert_eq!(Ok((SyntaxProblem("TODO looked like a number but was actually malformed ident".to_owned()), "")), parse::expr().parse(actual_str));
     }
+
+    fn expect_parsed_capitalizedvar_error<'a>(actual_str: &'a str) {
+        assert_eq!(Ok((SyntaxProblem("TODO put _ident_problem here".to_owned()), "")), parse::expr().parse(actual_str));
+    }
+
 
     #[test]
     fn parse_var() {
@@ -276,10 +277,10 @@ mod tests {
 
         // TODO someday, capitalized vars should parse successfully as variants.
         // At that point, turn these into variant tests!
-        expect_parsed_var_error("X");
-        expect_parsed_var_error("X2");
-        expect_parsed_var_error("Foo");
-        expect_parsed_var_error("Foo2Furious");
+        expect_parsed_capitalizedvar_error("X");
+        expect_parsed_capitalizedvar_error("X2");
+        expect_parsed_capitalizedvar_error("Foo");
+        expect_parsed_capitalizedvar_error("Foo2Furious");
     }
 
     // APPLY
@@ -346,12 +347,17 @@ mod tests {
         );
     }
 
+    fn expect_parsed_func_syntax_problem<'a>(actual_str: &'a str) {
+        assert_eq!(Ok((SyntaxProblem("TODO looked like a number but was actually malformed ident".to_owned()), "")), parse::expr().parse(actual_str));
+    }
+
     fn expect_parsed_func_error<'a>(actual_str: &'a str) {
         assert!(
             parse::expr().parse(actual_str).is_err(),
             "Expected parsing error"
         );
     }
+
 
     #[test]
     fn parse_func() {
@@ -362,7 +368,8 @@ mod tests {
 
     #[test]
     fn parse_invalid_func() {
-        expect_parsed_func_error("1 f");
+        expect_parsed_func_syntax_problem("1 f");
+        expect_parsed_func_syntax_problem("(1 f)");
     }
 
     // PARENS
@@ -380,7 +387,6 @@ mod tests {
 
     #[test]
     fn parse_invalid_parens_func() {
-        expect_parsed_func_error("(1 f)");
         expect_parsed_func_error("(1 f");
         expect_parsed_func_error("(f 1");
     }
@@ -410,6 +416,14 @@ mod tests {
             parse::expr().parse("(5)"),
             Ok((
                 Int(5),
+                "")
+            )
+        );
+
+        assert_eq!(
+            parse::expr().parse("((1905))"),
+            Ok((
+                Int(1905),
                 "")
             )
         );
