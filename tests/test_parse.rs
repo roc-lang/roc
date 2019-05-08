@@ -415,6 +415,40 @@ mod tests {
         expect_parsed_func_error("(f 1");
     }
 
+    // IF
+
+    #[test]
+    fn parse_if_space_separated_number() {
+        assert_eq!(
+            parse::expr().parse("if 12 34 5 then 5 4 32 1 else 1 3 37"),
+            Ok(
+                (
+                    If(
+                        Box::new(Int(12345)),
+                        Box::new(Int(54321)),
+                        Box::new(Int(1337))
+                    ),
+                "")
+            )
+        );
+    }
+
+    #[test]
+    fn parse_if() {
+        assert_eq!(
+            parse::expr().parse("if foo then 1 else 2"),
+            Ok(
+                (
+                    If(
+                        Box::new(Var("foo".to_string())),
+                        Box::new(Int(1)),
+                        Box::new(Int(2))
+                    ),
+                "")
+            )
+        );
+    }
+
     // COMPLEX EXPRESSIONS
 
     #[test]

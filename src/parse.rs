@@ -3,10 +3,10 @@ use expr::Expr;
 
 use std::char;
 
-use combine::parser::char::{char, space, spaces, digit, hex_digit, HexDigit, alpha_num};
+use combine::parser::char::{char, string, space, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
 use combine::parser::item::{any, satisfy_map, value};
-use combine::parser::combinator::{look_ahead};
+use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream};
@@ -25,12 +25,12 @@ fn whitespace_or_eof<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
     choice((
-        whitespace(),
+        spaces1(),
         eof().with(value(()))
     ))
 }
 
-fn whitespace<I>() -> impl Parser<Input = I, Output = ()>
+fn spaces1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
     // TODO we discard this Vec, so revise this to not allocate one
@@ -48,26 +48,51 @@ parser! {
             string_literal(),
             number_literal(),
             char_literal(),
+            if_expr(),
             func_or_var(),
-        )).skip(spaces()).and(
+        ))
+        .and(
             // Optionally follow the expression with an operator,
             //
             // e.g. In the expression (1 + 2), the subexpression 1
             // is followed by the operator + and another subexpression, 2
             optional(
-                operator()
-                    .skip(spaces())
-                    .and(expr_body())
+                attempt(
+                    spaces()
+                        .with(operator())
+                        .skip(spaces())
+                        .and(expr_body())
+                        .skip(spaces())
+                )
             )
-        ).skip(spaces()).map(|(v1, opt_op)| {
+        ).map(|(expr1, opt_op)| {
             match opt_op {
-                None => v1,
-                Some((op, v2)) => {
-                    Expr::Operator(Box::new(v1), op, Box::new(v2))
+                None => expr1,
+                Some((op, expr2)) => {
+                    Expr::Operator(Box::new(expr1), op, Box::new(expr2))
                 },
             }
         })
     }
+}
+
+pub fn if_expr<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    string("if").with(spaces1())
+        .with(expr_body()).skip(spaces1())
+        .skip(string("then")).skip(spaces1())
+        .and(expr_body()).skip(spaces1())
+        .skip(string("else")).skip(spaces1())
+        .and(expr_body())
+        .map(|((conditional, then_branch), else_branch)|
+            Expr::If(
+                Box::new(conditional),
+                Box::new(then_branch),
+                Box::new(else_branch)
+            )
+        )
 }
 
 pub fn parenthetical_expr<I>() -> impl Parser<Input = I, Output = Expr>
@@ -80,7 +105,12 @@ where I: Stream<Item = char>,
         // Parenthetical expressions can optionally be followed by
         // whitespace and an expr, meaning this is function application!
         optional(
-            attempt(whitespace().with(expr_body()))
+            attempt(
+                spaces1()
+                    // Keywords like "then" and "else" are not function application!
+                    .skip(not_followed_by(choice((string("then"), string("else")))))
+                    .with(expr_body())
+            )
         )
     ).map(|(expr1, opt_expr2)|
         match opt_expr2 {
@@ -110,7 +140,11 @@ where I: Stream<Item = char>,
 {
     ident()
         .and(optional(
-            attempt(whitespace().with(expr_body()))
+            attempt(
+                spaces1()
+                .skip(not_followed_by(choice((string("then"), string("else")))))
+                .with(expr_body())
+            )
         )).map(|pair|
             match pair {
                 ( Ok(str), Some(arg) ) => Expr::Func(str, Box::new(arg)),
@@ -285,10 +319,24 @@ pub fn number_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    // Digits before the decimal point can be space-separated
-    // e.g. one million can be written as 1 000 000 
-    let digits_before_decimal = many1::<Vec<_>, _>(alpha_num().skip(optional(char(' '))));
+    // We expect these to be digits, but read any alphanumeric characters
+    // because it could turn out they're malformed identifiers which
+    // happen to begin with a number. We'll check for that at the end.
     let digits_after_decimal =  many1::<Vec<_>, _>(alpha_num());
+
+    // Digits before the decimal point can be space-separated
+    // e.g. one million can be written as 1 000 000
+    let digits_before_decimal = many1::<Vec<_>, _>(
+        alpha_num().skip(optional(
+                attempt(
+                    char(' ').skip(
+                        // Don't mistake keywords like `then` and `else` for
+                        // space-separated digits!
+                        not_followed_by(choice((string("then"), string("else"))))
+                    )
+                )
+        ))
+    );
 
     optional(char('-'))
         // Do this lookahead to decide if we should parse this as a number.

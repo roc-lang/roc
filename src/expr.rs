@@ -14,6 +14,7 @@ pub enum Expr {
     Apply(Box<Expr>, Box<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
 
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
     SyntaxProblem(String),
 }
 
