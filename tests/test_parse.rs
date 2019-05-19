@@ -1,5 +1,3 @@
-#![feature(box_syntax, box_patterns)]
-
 #[macro_use] extern crate pretty_assertions;
 extern crate combine;
 
@@ -173,7 +171,7 @@ mod tests {
     }
 
     // NUMBER LITERALS
-    
+
     fn expect_parsed_int<'a>(expected: i64, actual: &str) {
         assert_eq!(Ok((Int(expected), "")), standalone_expr().parse(actual));
     }
@@ -244,16 +242,13 @@ mod tests {
 
     #[test]
     fn parse_multiple_operators() {
-        match parse::expr().parse("1 + 2 * 3") {
-            Ok((Operator(box v1, op1, box Operator(box v2, op2, box v3)), "")) => {
-                assert_eq!(v1, Int(1));
-                assert_eq!(op1, Plus);
-                assert_eq!(v2, Int(2));
-                assert_eq!(op2, Star);
-                assert_eq!(v3, Int(3));
-            },
-            _ => panic!("Expression didn't parse"),
-        }
+        assert_eq!(parse::expr().parse("1 + 2 * 3"),
+            Ok((Operator(
+                Box::new(Int(1)),
+                Plus,
+                Box::new(Operator(Box::new(Int(2)), Star, Box::new(Int(3))))
+            ), ""))
+        );
     }
 
     // VAR
@@ -343,7 +338,7 @@ mod tests {
         expect_parsed_apply_error("(x 5)y");
     }
 
-    
+
     // TODO write a bunch of parenthetical expression tests - try to repeat
     // all of the above tests except with parens too!
     // Also, verify them all with variable paren counts; ((foo)) should work.
@@ -354,7 +349,7 @@ mod tests {
 
     fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, expr: Expr) {
         assert_eq!(
-            Ok((Func(func_str.to_string(), Box::new(expr)), "")), 
+            Ok((Func(func_str.to_string(), Box::new(expr)), "")),
             parse::expr().parse(parse_str)
         );
     }
@@ -470,7 +465,7 @@ mod tests {
                 "")
             )
         );
-        
+
         assert_eq!(
             parse::expr().parse("(5)"),
             Ok((

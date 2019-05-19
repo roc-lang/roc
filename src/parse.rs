@@ -99,7 +99,7 @@ pub fn parenthetical_expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    between(char('('), char(')'), 
+    between(char('('), char(')'),
             spaces().with(expr_body()).skip(spaces())
         ).and(
         // Parenthetical expressions can optionally be followed by
