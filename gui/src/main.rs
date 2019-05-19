@@ -31,6 +31,8 @@ use gfx_backend_dx12 as back;
 use gfx_backend_metal as back;
 #[cfg(feature = "vulkan")]
 use gfx_backend_vulkan as back;
+
+// TODO Find a way to make Vim ALE happy without resorting to setting a default backend
 #[cfg(feature = "default")]
 use gfx_backend_vulkan as back;
 
@@ -56,22 +58,21 @@ pub struct HalState {
 impl HalState {
     /// Creates a new, fully initialized HalState.
     pub fn new(window: &Window) -> Result<Self, &'static str> {
-        // Create An Instance
         let instance = back::Instance::create(WINDOW_TITLE, 1);
-
-        // Create A Surface
         let mut surface = instance.create_surface(window);
 
-        // Select An Adapter
         let adapter = instance
             .enumerate_adapters()
             .into_iter()
-            .find(|a| {
-                a.queue_families
+            .find(|available_adapter| {
+                available_adapter.queue_families
                     .iter()
-                    .any(|qf| qf.supports_graphics() && surface.supports_queue_family(qf))
+                    .any(|queue_family|
+                         queue_family.supports_graphics()
+                            && surface.supports_queue_family(queue_family)
+                    )
             })
-            .ok_or("Couldn't find a graphical Adapter!")?;
+            .ok_or("Couldn't find a graphical adapter!")?;
 
         // Open A Device and take out a QueueGroup
         let (device, queue_group) = {
@@ -212,7 +213,7 @@ impl HalState {
 
         // Create The ImageViews
         let image_views: Vec<_> =
-            back_images 
+            back_images
                 .into_iter()
                 .map(|image| unsafe {
                     device
@@ -495,7 +496,7 @@ fn main() {
             error!("Rendering Error: {:?}", e);
             winit::ControlFlow::Break
         } else {
-            local_state.update_from_input(inputs);   
+            local_state.update_from_input(inputs);
             winit::ControlFlow::Continue
         }
     });
