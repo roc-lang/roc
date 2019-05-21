@@ -9,25 +9,30 @@ mod tests {
     use roc::expr::Expr;
     use roc::expr::Operator::*;
     use roc::parse;
+    use roc::parse_state::{IndentablePosition};
     use combine::{Parser, eof};
     use combine::error::{ParseError, StringStreamError};
     use combine::stream::{Stream};
     use combine::easy;
-    use combine::stream::state::{State, SourcePosition};
+    use combine::stream::state::{State};
 
     fn standalone_expr<I>() -> impl Parser<Input = I, Output = Expr>
-    where I: Stream<Item = char, Position = SourcePosition>,
+    where I: Stream<Item = char, Position = IndentablePosition>,
         I::Error: ParseError<I::Item, I::Range, I::Position>
     {
-        parse::expr().skip(eof()).map(|located| located.value)
+        parse::expr().skip(eof())
     }
 
     fn parse_standalone(actual_str: &str) -> Result<(Expr, &str), StringStreamError>{
-        standalone_expr().parse(State::new(actual_str)).map(|(expr, state)| (expr, state.input))
+        let parse_state = State::with_positioner(actual_str, IndentablePosition::default());
+
+        standalone_expr().parse(parse_state).map(|(expr, state)| (expr, state.input))
     }
 
-    fn easy_parse_standalone(actual_str: &str) -> Result<(Expr, &str), easy::Errors<char, &str, SourcePosition>> {
-        standalone_expr().easy_parse(State::new(actual_str)).map(|(expr, state)| (expr, state.input))
+    fn easy_parse_standalone(actual_str: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
+        let parse_state = State::with_positioner(actual_str, IndentablePosition::default());
+
+        standalone_expr().easy_parse(parse_state).map(|(expr, state)| (expr, state.input))
     }
 
     // STRING LITERALS
@@ -41,7 +46,7 @@ mod tests {
 
     fn expect_parsed_str_error<'a>(actual_str: &'a str) {
         assert!(
-            parse_standalone(actual_str).is_err()
+            parse_standalone(actual_str).is_err(),
             "Expected parsing error"
         );
     }

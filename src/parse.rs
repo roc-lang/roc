@@ -2,58 +2,44 @@ use expr::Operator;
 use expr::Expr;
 
 use std::char;
+use parse_state::{IndentablePosition};
 
 use combine::parser::char::{char, string, space, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max};
 use combine::parser::item::{any, satisfy_map, value, position};
 use combine::parser::combinator::{look_ahead, not_followed_by};
-use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, token};
+use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any};
 use combine::error::{Consumed, ParseError};
-use combine::stream::{Stream, RangeStreamOnce, Positioned};
-use combine::stream::state::{State, SourcePosition};
+use combine::stream::{Stream, Positioned};
 
 
 pub const ERR_EMPTY_CHAR: &'static str = "EMPTY_CHAR";
 
-pub struct Located<T> {
-    pub start: ( i32, i32 ),
-    pub value: T,
-    pub end: ( i32, i32 ),
-}
-
-pub fn expr<I>() -> impl Parser<Input = I, Output = Located<Expr>>
-where I: Stream<Item = char, Position = SourcePosition>,
+pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    position().and(expr_body().skip(whitespace_or_eof())).and(position())
-        .map(|((start, expr), end): ((SourcePosition, Expr), SourcePosition)| {
-            Located {
-                start: ( start.line, start.column ),
-                value: expr,
-                end: ( end.line, end.column ),
-            }
-        })
+    expr_body().skip(whitespace_or_eof())
 }
 
-
 fn row<I>() -> impl Parser<Input = I, Output = i32>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> ,
     I: Positioned
 {
-    position().map(|pos: SourcePosition| (pos.line))
+    position().map(|pos: IndentablePosition| (pos.row))
 }
 
 fn col<I>() -> impl Parser<Input = I, Output = i32>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> ,
     I: Positioned
 {
-    position().map(|pos: SourcePosition| (pos.column))
+    position().map(|pos: IndentablePosition| (pos.column))
 }
 
 fn whitespace_or_eof<I>() -> impl Parser<Input = I, Output = ()>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
     choice((
         spaces1(),
@@ -62,7 +48,7 @@ where I: Stream<Item = char, Position = SourcePosition>,
 }
 
 fn spaces1<I>() -> impl Parser<Input = I, Output = ()>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
     // TODO we discard this Vec, so revise this to not allocate one
     many1::<Vec<_>, _>(space()).with(value(()))
@@ -72,7 +58,7 @@ where I: Stream<Item = char, Position = SourcePosition>,
 parser! {
     #[inline(always)]
     fn expr_body[I]()(I) -> Expr
-        where [ I: Stream<Item = char, Position = SourcePosition> ]
+        where [ I: Stream<Item = char, Position = IndentablePosition> ]
     {
         choice((
             parenthetical_expr(),
@@ -112,7 +98,7 @@ parser! {
 // 2.
 
 pub fn if_expr<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     string("if").with(spaces1())
@@ -131,7 +117,7 @@ where I: Stream<Item = char, Position = SourcePosition>,
 }
 
 pub fn parenthetical_expr<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('('), char(')'),
@@ -158,7 +144,7 @@ where I: Stream<Item = char, Position = SourcePosition>,
 }
 
 pub fn operator<I>() -> impl Parser<Input = I, Output = Operator>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     choice((
@@ -170,7 +156,7 @@ where I: Stream<Item = char, Position = SourcePosition>,
 }
 
 pub fn func_or_var<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     ident()
@@ -195,7 +181,7 @@ pub enum IdentProblem {
 }
 
 pub fn ident<I>() -> impl Parser<Input = I, Output = Result<String, IdentProblem>>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     // Identifiers must begin with a lowercase letter, but can have any
@@ -219,7 +205,7 @@ where I: Stream<Item = char, Position = SourcePosition>,
 }
 
 pub fn string_literal<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('"'), char('"'), many(string_body()))
@@ -227,7 +213,7 @@ where I: Stream<Item = char, Position = SourcePosition>,
 }
 
 pub fn char_literal<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('\''), char('\''), char_body().expected(ERR_EMPTY_CHAR))
@@ -237,7 +223,7 @@ where I: Stream<Item = char, Position = SourcePosition>,
 
 fn unicode_code_pt<I>() -> impl Parser<Input = I, Output = char>
 where
-    I: Stream<Item = char, Position = SourcePosition>,
+    I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
     // You can put up to 6 hex digits inside \u{...}
@@ -270,7 +256,7 @@ where
 
 fn string_body<I>() -> impl Parser<Input = I, Output = char>
 where
-    I: Stream<Item = char, Position = SourcePosition>,
+    I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
     parser(|input: &mut I| {
@@ -311,7 +297,7 @@ where
 
 fn char_body<I>() -> impl Parser<Input = I, Output = char>
 where
-    I: Stream<Item = char, Position = SourcePosition>,
+    I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
     parser(|input: &mut I| {
@@ -351,7 +337,7 @@ where
 }
 
 pub fn number_literal<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char, Position = SourcePosition>,
+where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     // We expect these to be digits, but read any alphanumeric characters
