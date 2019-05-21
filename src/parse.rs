@@ -66,6 +66,7 @@ parser! {
             number_literal(),
             char_literal(),
             if_expr(),
+            let_expr(),
             func_or_var(),
         ))
         .and(
@@ -153,6 +154,25 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         char('*').map(|_| Operator::Star),
         char('/').map(|_| Operator::Slash),
     ))
+}
+
+pub fn let_expr<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    ident()
+        .skip(spaces())
+        .skip(char('='))
+        .skip(spaces())
+        .and(expr_body())
+        // TODO check for indent in this expr, then parse a second expr post-outdent
+        .and(expr_body())
+        .map(|((var_name, var_expr), in_expr)| {
+            match var_name {
+                Ok(str) => Expr::Let(str, Box::new(var_expr), Box::new(in_expr)),
+                Err(_ident_problem) => Expr::SyntaxProblem("TODO put _ident_problem here".to_owned())
+            }
+        })
 }
 
 pub fn func_or_var<I>() -> impl Parser<Input = I, Output = Expr>

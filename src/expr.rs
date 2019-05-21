@@ -8,6 +8,7 @@ pub enum Expr {
     Char(char),
 
     Var(String),
+    Let(String, Box<Expr>, Box<Expr>),
 
     // Functions
     Func(String, Box<Expr>),
