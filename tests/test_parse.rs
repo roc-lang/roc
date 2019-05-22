@@ -269,6 +269,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_operators_with_parens() {
+        assert_eq!(parse_standalone("(1 + 2)"),
+            Ok((Operator(
+                Box::new(Int(1)),
+                Plus,
+                Box::new(Int(2))
+            ), ""))
+        );
+
+        assert_eq!(parse_standalone("(1 - 2)"),
+            Ok((Operator(
+                Box::new(Int(1)),
+                Minus,
+                Box::new(Int(2))
+            ), ""))
+        );
+
+        assert_eq!(parse_standalone("(1 + 2 * 3)"),
+            Ok((Operator(
+                Box::new(Int(1)),
+                Plus,
+                Box::new(Operator(Box::new(Int(2)), Star, Box::new(Int(3))))
+            ), ""))
+        );
+
+        assert_eq!(parse_standalone("1 + (2 * 3)"),
+            Ok((Operator(
+                Box::new(Int(1)),
+                Plus,
+                Box::new(Operator(Box::new(Int(2)), Star, Box::new(Int(3))))
+            ), ""))
+        );
+
+        assert_eq!(parse_standalone("(1 + 2) * 3"),
+            Ok((Operator(
+                Box::new(Operator(Box::new(Int(1)), Plus, Box::new(Int(2)))),
+                Star,
+                Box::new(Int(3)),
+            ), ""))
+        );
+    }
+
+
     // VAR
 
     fn expect_parsed_var<'a>(expected_str: &'a str) {
@@ -417,18 +461,6 @@ mod tests {
         expect_parsed_func("(f 1)", "f", Int(1));
         expect_parsed_func("(foo  bar)", "foo", Var("bar".to_string()));
         expect_parsed_func("(  foo \"hi\"  )", "foo", String("hi".to_string()));
-    }
-
-    #[test]
-    fn parse_operators_with_parens() {
-        match parse_standalone("(1234 + 567)") {
-            Ok((Operator(v1, op, v2), "")) => {
-                assert_eq!(*v1, Int(1234));
-                assert_eq!(op, Plus);
-                assert_eq!(*v2, Int(567));
-            },
-            _ => panic!("Expression didn't parse"),
-        }
     }
 
     #[test]
@@ -603,7 +635,7 @@ mod tests {
     fn parse_let_with_operator() {
         assert_eq!(
             // let x = 5 + 10 in -20
-            parse_standalone("x = 5 + 10\n-20"),
+            parse_standalone("x = (5 + 10)\n-20"),
             Ok((
                 Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
                 "")
