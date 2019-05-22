@@ -16,7 +16,7 @@ use combine::stream::state::{Positioner, RangePositioner};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct IndentablePosition {
     /// Current line of the input
-    pub row: i32,
+    pub line: i32,
     /// Current column of the input
     pub column: i32,
 
@@ -32,14 +32,14 @@ clone_resetable! { () IndentablePosition }
 
 impl Default for IndentablePosition {
     fn default() -> Self {
-        IndentablePosition { row: 1, column: 1, indent_col: 1, is_indenting: true }
+        IndentablePosition { line: 1, column: 1, indent_col: 1, is_indenting: true }
     }
 }
 
 impl fmt::Display for IndentablePosition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "row: {}, column: {}, indent_col: {}, is_indenting: {}",
-            self.row, self.column, self.indent_col, self.is_indenting)
+        write!(f, "line: {}, column: {}, indent_col: {}, is_indenting: {}",
+            self.line, self.column, self.indent_col, self.is_indenting)
     }
 }
 
@@ -62,7 +62,7 @@ impl Positioner<char> for IndentablePosition {
         match *item {
             '\n' => {
                 self.column = 1;
-                self.row += 1;
+                self.line += 1;
                 self.indent_col = 1;
                 self.is_indenting = true;
             },

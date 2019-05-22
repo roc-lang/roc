@@ -11,7 +11,7 @@ mod tests {
     use roc::parse;
     use roc::parse_state::{IndentablePosition};
     use combine::{Parser, eof};
-    use combine::error::{ParseError, StringStreamError};
+    use combine::error::{ParseError};
     use combine::stream::{Stream};
     use combine::easy;
     use combine::stream::state::{State};
@@ -233,14 +233,17 @@ mod tests {
     #[test]
     fn parse_single_operator_with_var() {
         assert_eq!(
-            parse_standalone("x + 1"),
+            // It's important that this isn't mistaken for 
+            // a declaration like (x = 1)
+            parse_standalone("x == 1"),
             Ok((Operator(
                 Box::new(Var("x".to_string())),
-                Plus,
+                Equals,
                 Box::new(Int(1))
             ), ""))
         );
     }
+
 
     #[test]
     fn parse_single_operator() {
@@ -250,6 +253,7 @@ mod tests {
                 assert_eq!(op, Plus);
                 assert_eq!(*v2, Int(567));
             },
+
             _ => panic!("Expression didn't parse"),
         }
     }
@@ -575,7 +579,73 @@ mod tests {
     // LET
 
     #[test]
-    fn parse_let() {
+    fn parse_let_returning_number() {
+        assert_eq!(
+            // let x = 5 in -10
+            parse_standalone("x = 5\n-10"),
+            Ok((
+                Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
+                "")
+            )
+        );
+
+        assert_eq!(
+            // let x = 5 in 10
+            parse_standalone("x=5\n-10"),
+            Ok((
+                Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
+                "")
+            )
+        );
+    }
+
+    #[test]
+    fn parse_let_with_operator() {
+        assert_eq!(
+            // let x = 5 + 10 in -20
+            parse_standalone("x = 5 + 10\n-20"),
+            Ok((
+                Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
+                "")
+            )
+        );
+
+        assert_eq!(
+            // let x = 5 + 10 in -20
+            parse_standalone("x=5\n    +10\n-20"),
+            Ok((
+                Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
+                "")
+            )
+        );
+    }
+
+    #[test]
+    fn parse_invalid_let_returning_number() {
+        assert!(
+            parse_standalone("x=5\n    -10").is_err(),
+            "Expected parsing error"
+        );
+    }
+
+    #[test]
+    fn parse_nested_let() {
+        assert_eq!(
+            // let x = 5 in let y = 12 in 3
+            parse_standalone("x = 5\ny = 12\n3"),
+            Ok((
+                Let("x".to_string(), Box::new(Int(5)), 
+                    Box::new(
+                        Let("y".to_string(), Box::new(Int(12)), 
+                            Box::new(Int(3))
+                        ))),
+                "")
+            )
+        );
+    }
+
+    #[test]
+    fn parse_let_returning_var() {
         assert_eq!(
             parse_standalone("x=5\nx"),
             Ok((
@@ -587,12 +657,9 @@ mod tests {
 
     #[test]
     fn parse_bad_equals_indent_let() {
-        assert_eq!(
-            parse_standalone("  x=\n5\n\n5"),
-            Ok((
-                Let("x".to_string(), Box::new(Int(5)), Box::new(Var("x".to_string()))),
-                "")
-            )
+        assert!(
+            parse_standalone("  x=\n5\n\n5").is_err(),
+            "Expected parsing error"
         );
     }
 }

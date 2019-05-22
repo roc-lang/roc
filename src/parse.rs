@@ -5,10 +5,10 @@ use std::char;
 use parse_state::{IndentablePosition};
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
-use combine::parser::repeat::{many, count_min_max, skip_until};
+use combine::parser::repeat::{many, count_min_max};
 use combine::parser::item::{any, satisfy_map, value, position};
 use combine::parser::combinator::{look_ahead, not_followed_by};
-use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected, unexpected_any};
+use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream, Positioned};
 
@@ -45,6 +45,12 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     many::<Vec<_>, _>(choice((char(' '), char('\n')))).with(value(()))
 }
 
+fn whitespace1<I>() -> impl Parser<Input = I, Output = ()>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    many1::<Vec<_>, _>(choice((char(' '), char('\n')))).with(value(()))
+}
+
 
 fn spaces1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
@@ -71,8 +77,8 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 fn indented_space<I>(min_indent: i32) -> impl Parser<Input = I, Output = char>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    indentation().then(move |indent| {
-        if indent >= min_indent {
+    position().then(move |pos: IndentablePosition| {
+        if pos.is_indenting || pos.indent_col >= min_indent {
             choice((char(' '), char('\n'))).left()
         } else {
             unexpected_any("bad indentation on let-expression").right()
@@ -95,8 +101,8 @@ parser! {
             number_literal(),
             char_literal(),
             if_expr(min_indent),
-            func_or_var(min_indent),
             let_expr(min_indent),
+            func_or_var(min_indent),
         ))
         .and(
             // Optionally follow the expression with an operator,
@@ -174,6 +180,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     choice((
+        string("==").map(|_| Operator::Equals),
         char('+').map(|_| Operator::Plus),
         char('-').map(|_| Operator::Minus),
         char('*').map(|_| Operator::Star),
@@ -185,30 +192,32 @@ pub fn let_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    ident().and(indentation())
+    attempt(
+        ident().and(indentation()).message("malformed identifier inside declaration")
+            .skip(whitespace()).message("whitespace after identifier")
+            .and(
+                char('=').with(indentation())
+                    // If the "=" after the identifier turns out to be
+                    // either "==" or "=>" then this is not a declaration!
+                    .skip(not_followed_by(choice((char('='), char('>')))))
+            )
+        )
         .skip(whitespace())
-        .and(char('=').with(indentation()))
-        .skip(whitespace())
-        .then(|((var_name, original_indent), equals_sign_indent)| {
-            panic!("original_indent {}, equals_sign_indent {}", original_indent, equals_sign_indent);
-            if equals_sign_indent < original_indent /* `<` because '=' should be same indent or greater */ {
+        .then(move |((var_name, original_indent), equals_sign_indent)| {
+            if original_indent < min_indent {
+                unexpected_any("this declaration is outdented too far").left()
+            } else if equals_sign_indent < original_indent /* `<` because '=' should be same indent or greater */ {
                 unexpected_any("the = in this declaration seems outdented").left()
             } else {
                 expr_body(original_indent + 1 /* declaration body must be indented relative to original decl */)
-                    // .skip(
-                    //     skip_until(indentation().then(move |final_expr_indent| {
-                    //         // The final expr must be back at *exactly* the original indentation.
-                    //         if final_expr_indent == original_indent {
-                    //             value(()).left()
-                    //         } else {
-                    //             // This just means we haven't found the final expr yet.
-                    //             unexpected("this declaration is missing its return expression").right()
-                    //         }
-                    //     }))
-                    // )
-                    .and(expr_body(original_indent))
-                .map(move |(var_expr, in_expr)| {
-                    Expr::Let(var_name.to_owned(), Box::new(var_expr), Box::new(in_expr))
+                    .skip(whitespace1())
+                    .and(expr_body(original_indent).and(indentation()))
+                .then(move |(var_expr, (in_expr, in_expr_indent))| {
+                    if in_expr_indent != original_indent {
+                        unexpected_any("the return expression was indented differently from the original declaration").left()
+                    } else {
+                        value(Expr::Let(var_name.to_owned(), Box::new(var_expr), Box::new(in_expr))).right()
+                    }
                 }).right()
             }
         })
@@ -219,7 +228,6 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     ident()
-        .skip(not_followed_by(attempt(spaces().with(char('=')))))
         .and(optional(
             attempt(
                 indented_spaces1(min_indent)
@@ -247,13 +255,13 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             let ident_str:String = chars.into_iter().collect();
 
             if valid_start_char {
-                if ident_str == "if" {
-                    unexpected_any("Reserved keyword `if`").left()
-                } else {
-                    value(ident_str).right()
+                match ident_str.as_str() {
+                    "if" => unexpected_any("Reserved keyword `if`").left(),
+                    "then" => unexpected_any("Reserved keyword `then`").left(),
+                    _ => value(ident_str).right()
                 }
             } else {
-                unexpected_any("Starting character").left()
+                unexpected_any("First character in an identifier that was not a lowercase letter").left()
             }
         })
 }
@@ -453,12 +461,12 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                             }
                         },
                         Err(_) => {
-                            unexpected_any("TODO Non-digit chars after decimal point in number literal").left()
+                            unexpected_any("non-digit characters after decimal point in a number literal").left()
                         }
                     }
                 },
                 (Err(_), _) =>
-                    unexpected_any("TODO looked like a number but was actually malformed ident").left()
+                    unexpected_any("looked like a number but was actually malformed ident").left()
             }
         })
 }

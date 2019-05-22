@@ -20,5 +20,5 @@ pub enum Expr {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Operator {
-    Plus, Minus, Star, Slash, DoubleSlash,
+    Plus, Minus, Star, Slash, DoubleSlash, Equals,
 }
