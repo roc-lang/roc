@@ -23,10 +23,10 @@ mod tests {
         parse::expr().skip(eof())
     }
 
-    fn parse_standalone(actual_str: &str) -> Result<(Expr, &str), StringStreamError>{
+    fn parse_standalone(actual_str: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>>{
         let parse_state = State::with_positioner(actual_str, IndentablePosition::default());
 
-        standalone_expr().parse(parse_state).map(|(expr, state)| (expr, state.input))
+        standalone_expr().easy_parse(parse_state).map(|(expr, state)| (expr, state.input))
     }
 
     fn easy_parse_standalone(actual_str: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
@@ -567,6 +567,30 @@ mod tests {
                         )
                     )
                 ),
+                "")
+            )
+        );
+    }
+
+    // LET
+
+    #[test]
+    fn parse_let() {
+        assert_eq!(
+            parse_standalone("x=5\nx"),
+            Ok((
+                Let("x".to_string(), Box::new(Int(5)), Box::new(Var("x".to_string()))),
+                "")
+            )
+        );
+    }
+
+    #[test]
+    fn parse_bad_equals_indent_let() {
+        assert_eq!(
+            parse_standalone("  x=\n5\n\n5"),
+            Ok((
+                Let("x".to_string(), Box::new(Int(5)), Box::new(Var("x".to_string()))),
                 "")
             )
         );

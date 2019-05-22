@@ -4,7 +4,7 @@ use expr::Expr;
 use std::char;
 use parse_state::{IndentablePosition};
 
-use combine::parser::char::{char, string, space, digit, hex_digit, HexDigit, alpha_num};
+use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max, skip_until};
 use combine::parser::item::{any, satisfy_map, value, position};
 use combine::parser::combinator::{look_ahead, not_followed_by};
@@ -19,7 +19,7 @@ pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    expr_body(0).skip(whitespace_or_eof())
+    spaces().with(expr_body(0)).skip(whitespace_or_eof())
 }
 
 fn indentation<I>() -> impl Parser<Input = I, Output = i32>
@@ -39,12 +39,19 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     ))
 }
 
+fn whitespace<I>() -> impl Parser<Input = I, Output = ()>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    many::<Vec<_>, _>(choice((char(' '), char('\n')))).with(value(()))
+}
+
+
 fn spaces1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
     // TODO we immediately discard this Vec, so revise this to not use many1 (and thus
     // not allocate one in the first place) - maybe use skip_until and not_followed_by?
-    many1::<Vec<_>, _>(space()).with(value(()))
+    many1::<Vec<_>, _>(choice((char(' '), char('\n')))).with(value(()))
 }
 
 fn indented_spaces<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
@@ -179,25 +186,31 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     ident().and(indentation())
-        .skip(indented_spaces(min_indent))
-        .skip(char('='))
-        .skip(indented_spaces(min_indent))
-        .then(|(var_name, original_indent)| {
-            expr_body(original_indent + 1 /* the declaration body must be indented */)
-                .skip(
-                    skip_until(indentation().then(move |final_expr_indent| {
-                        // The final expr must be back at *exactly* the original indentation.
-                        if final_expr_indent == original_indent {
-                            value(()).left()
-                        } else {
-                            unexpected("bad indentation on let-expression").right()
-                        }
-                    }))
-                )
-                .and(expr_body(original_indent))
-            .map(move |(var_expr, in_expr)| {
-                Expr::Let(var_name.to_owned(), Box::new(var_expr), Box::new(in_expr))
-            })
+        .skip(whitespace())
+        .and(char('=').with(indentation()))
+        .skip(whitespace())
+        .then(|((var_name, original_indent), equals_sign_indent)| {
+            panic!("original_indent {}, equals_sign_indent {}", original_indent, equals_sign_indent);
+            if equals_sign_indent < original_indent /* `<` because '=' should be same indent or greater */ {
+                unexpected_any("the = in this declaration seems outdented").left()
+            } else {
+                expr_body(original_indent + 1 /* declaration body must be indented relative to original decl */)
+                    // .skip(
+                    //     skip_until(indentation().then(move |final_expr_indent| {
+                    //         // The final expr must be back at *exactly* the original indentation.
+                    //         if final_expr_indent == original_indent {
+                    //             value(()).left()
+                    //         } else {
+                    //             // This just means we haven't found the final expr yet.
+                    //             unexpected("this declaration is missing its return expression").right()
+                    //         }
+                    //     }))
+                    // )
+                    .and(expr_body(original_indent))
+                .map(move |(var_expr, in_expr)| {
+                    Expr::Let(var_name.to_owned(), Box::new(var_expr), Box::new(in_expr))
+                }).right()
+            }
         })
 }
 
@@ -206,10 +219,11 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     ident()
+        .skip(not_followed_by(attempt(spaces().with(char('=')))))
         .and(optional(
             attempt(
                 indented_spaces1(min_indent)
-                .skip(not_followed_by(choice((string("then"), string("else")))))
+                .skip(not_followed_by(choice((string("then"), string("else"), string("=")))))
                 .with(expr_body(min_indent))
             )
         )).map(|(name, opt_arg)|
