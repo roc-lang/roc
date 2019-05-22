@@ -1,5 +1,5 @@
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
     Int(i64),
@@ -16,7 +16,6 @@ pub enum Expr {
     Operator(Box<Expr>, Operator, Box<Expr>),
 
     If(Box<Expr>, Box<Expr>, Box<Expr>),
-    SyntaxProblem(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

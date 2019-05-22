@@ -274,11 +274,17 @@ mod tests {
     }
 
     fn expect_parsed_var_error<'a>(actual_str: &'a str) {
-        assert_eq!(Ok((SyntaxProblem("TODO looked like a number but was actually malformed ident".to_owned()), "")), parse_standalone(actual_str));
+        assert!(
+            parse_standalone(actual_str).is_err(),
+            "Expected parsing error"
+        );
     }
 
     fn expect_parsed_capitalizedvar_error<'a>(actual_str: &'a str) {
-        assert_eq!(Ok((SyntaxProblem("TODO put _ident_problem here".to_owned()), "")), parse_standalone(actual_str));
+        assert!(
+            parse_standalone(actual_str).is_err(),
+            "Expected parsing error"
+        );
     }
 
 
@@ -369,7 +375,10 @@ mod tests {
     }
 
     fn expect_parsed_func_syntax_problem<'a>(actual_str: &'a str) {
-        assert_eq!(Ok((SyntaxProblem("TODO looked like a number but was actually malformed ident".to_owned()), "")), parse_standalone(actual_str));
+        assert!(
+            parse_standalone(actual_str).is_err(),
+            "Expected parsing error"
+        );
     }
 
     fn expect_parsed_func_error<'a>(actual_str: &'a str) {

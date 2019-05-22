@@ -4,11 +4,11 @@ use expr::Expr;
 use std::char;
 use parse_state::{IndentablePosition};
 
-use combine::parser::char::{char, string, space, spaces, digit, hex_digit, HexDigit, alpha_num};
-use combine::parser::repeat::{many, count_min_max};
+use combine::parser::char::{char, string, space, digit, hex_digit, HexDigit, alpha_num};
+use combine::parser::repeat::{many, count_min_max, skip_until};
 use combine::parser::item::{any, satisfy_map, value, position};
 use combine::parser::combinator::{look_ahead, not_followed_by};
-use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any};
+use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected, unexpected_any};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream, Positioned};
 
@@ -19,23 +19,15 @@ pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    expr_body().skip(whitespace_or_eof())
+    expr_body(0).skip(whitespace_or_eof())
 }
 
-fn row<I>() -> impl Parser<Input = I, Output = i32>
+fn indentation<I>() -> impl Parser<Input = I, Output = i32>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> ,
     I: Positioned
 {
-    position().map(|pos: IndentablePosition| (pos.row))
-}
-
-fn col<I>() -> impl Parser<Input = I, Output = i32>
-where I: Stream<Item = char, Position = IndentablePosition>,
-    I::Error: ParseError<I::Item, I::Range, I::Position> ,
-    I: Positioned
-{
-    position().map(|pos: IndentablePosition| (pos.column))
+    position().map(|pos: IndentablePosition| (pos.indent_col))
 }
 
 fn whitespace_or_eof<I>() -> impl Parser<Input = I, Output = ()>
@@ -50,24 +42,54 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 fn spaces1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    // TODO we discard this Vec, so revise this to not allocate one
+    // TODO we immediately discard this Vec, so revise this to not use many1 (and thus
+    // not allocate one in the first place) - maybe use skip_until and not_followed_by?
     many1::<Vec<_>, _>(space()).with(value(()))
+}
+
+fn indented_spaces<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    many::<Vec<_>, _>(indented_space(min_indent)).with(value(()))
+}
+
+fn indented_spaces1<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    // TODO we immediately discard this Vec, so revise this to not use many1 (and thus
+    // not allocate one in the first place)
+    many1::<Vec<_>, _>(indented_space(min_indent)).with(value(()))
+}
+
+fn indented_space<I>(min_indent: i32) -> impl Parser<Input = I, Output = char>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    indentation().then(move |indent| {
+        if indent >= min_indent {
+            choice((char(' '), char('\n'))).left()
+        } else {
+            unexpected_any("bad indentation on let-expression").right()
+        }
+    })
 }
 
 // This macro allows recursive parsers
 parser! {
     #[inline(always)]
-    fn expr_body[I]()(I) -> Expr
+    fn expr_body[I](min_indent_ref: i32)(I) -> Expr
         where [ I: Stream<Item = char, Position = IndentablePosition> ]
     {
+        // TODO figure out why min_indent_ref has the type &mut i32
+        let min_indent = *min_indent_ref;
+
         choice((
-            parenthetical_expr(),
+            parenthetical_expr(min_indent),
             string_literal(),
             number_literal(),
             char_literal(),
-            if_expr(),
-            let_expr(),
-            func_or_var(),
+            if_expr(min_indent),
+            func_or_var(min_indent),
+            let_expr(min_indent),
         ))
         .and(
             // Optionally follow the expression with an operator,
@@ -76,11 +98,11 @@ parser! {
             // is followed by the operator + and another subexpression, 2
             optional(
                 attempt(
-                    spaces()
+                    indented_spaces(min_indent)
                         .with(operator())
-                        .skip(spaces())
-                        .and(expr_body())
-                        .skip(spaces())
+                        .skip(indented_spaces(min_indent))
+                        .and(expr_body(min_indent))
+                        .skip(indented_spaces(min_indent))
                 )
             )
         ).map(|(expr1, opt_op)| {
@@ -94,20 +116,16 @@ parser! {
     }
 }
 
-// GOAL: add indentation sensitivity
-// 1. Track row and col
-// 2.
-
-pub fn if_expr<I>() -> impl Parser<Input = I, Output = Expr>
+pub fn if_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    string("if").with(spaces1())
-        .with(expr_body()).skip(spaces1())
-        .skip(string("then")).skip(spaces1())
-        .and(expr_body()).skip(spaces1())
-        .skip(string("else")).skip(spaces1())
-        .and(expr_body())
+    string("if").with(indented_spaces1(min_indent))
+        .with(expr_body(min_indent)).skip(indented_spaces1(min_indent))
+        .skip(string("then")).skip(indented_spaces1(min_indent))
+        .and(expr_body(min_indent)).skip(indented_spaces1(min_indent))
+        .skip(string("else")).skip(indented_spaces1(min_indent))
+        .and(expr_body(min_indent))
         .map(|((conditional, then_branch), else_branch)|
             Expr::If(
                 Box::new(conditional),
@@ -117,21 +135,21 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         )
 }
 
-pub fn parenthetical_expr<I>() -> impl Parser<Input = I, Output = Expr>
+pub fn parenthetical_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('('), char(')'),
-            spaces().with(expr_body()).skip(spaces())
+            indented_spaces(min_indent).with(expr_body(min_indent)).skip(indented_spaces(min_indent))
         ).and(
         // Parenthetical expressions can optionally be followed by
         // whitespace and an expr, meaning this is function application!
         optional(
             attempt(
-                spaces1()
+                indented_spaces1(min_indent)
                     // Keywords like "then" and "else" are not function application!
                     .skip(not_followed_by(choice((string("then"), string("else")))))
-                    .with(expr_body())
+                    .with(expr_body(min_indent))
             )
         )
     ).map(|(expr1, opt_expr2)|
@@ -156,51 +174,53 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     ))
 }
 
-pub fn let_expr<I>() -> impl Parser<Input = I, Output = Expr>
+pub fn let_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    ident()
-        .skip(spaces())
+    ident().and(indentation())
+        .skip(indented_spaces(min_indent))
         .skip(char('='))
-        .skip(spaces())
-        .and(expr_body())
-        // TODO check for indent in this expr, then parse a second expr post-outdent
-        .and(expr_body())
-        .map(|((var_name, var_expr), in_expr)| {
-            match var_name {
-                Ok(str) => Expr::Let(str, Box::new(var_expr), Box::new(in_expr)),
-                Err(_ident_problem) => Expr::SyntaxProblem("TODO put _ident_problem here".to_owned())
-            }
+        .skip(indented_spaces(min_indent))
+        .then(|(var_name, original_indent)| {
+            expr_body(original_indent + 1 /* the declaration body must be indented */)
+                .skip(
+                    skip_until(indentation().then(move |final_expr_indent| {
+                        // The final expr must be back at *exactly* the original indentation.
+                        if final_expr_indent == original_indent {
+                            value(()).left()
+                        } else {
+                            unexpected("bad indentation on let-expression").right()
+                        }
+                    }))
+                )
+                .and(expr_body(original_indent))
+            .map(move |(var_expr, in_expr)| {
+                Expr::Let(var_name.to_owned(), Box::new(var_expr), Box::new(in_expr))
+            })
         })
 }
 
-pub fn func_or_var<I>() -> impl Parser<Input = I, Output = Expr>
+pub fn func_or_var<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     ident()
         .and(optional(
             attempt(
-                spaces1()
+                indented_spaces1(min_indent)
                 .skip(not_followed_by(choice((string("then"), string("else")))))
-                .with(expr_body())
+                .with(expr_body(min_indent))
             )
-        )).map(|pair|
-            match pair {
-                ( Ok(str), Some(arg) ) => Expr::Func(str, Box::new(arg)),
-                ( Ok(str), None ) => Expr::Var(str),
-                ( Err(_ident_problem), _ ) => Expr::SyntaxProblem("TODO put _ident_problem here".to_owned())
+        )).map(|(name, opt_arg)|
+            match opt_arg {
+                Some(arg) => Expr::Func(name, Box::new(arg)),
+                None => Expr::Var(name),
             }
         )
 }
 
-pub enum IdentProblem {
-    InvalidFirstChar(String),
-    ReservedKeyword(String),
-}
-
-pub fn ident<I>() -> impl Parser<Input = I, Output = Result<String, IdentProblem>>
+pub fn ident<I>() -> impl Parser<Input = I, Output = String>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
@@ -208,19 +228,19 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // combination of letters or numbers afterwards.
     // No underscores, dashes, or apostrophes.
     many1::<Vec<_>, _>(alpha_num())
-        .map(|chars: Vec<char>| {
+        .then(|chars: Vec<char>| {
             let valid_start_char = chars[0].is_lowercase();
             let ident_str:String = chars.into_iter().collect();
 
-             if valid_start_char {
-                 if ident_str == "if" {
-                    Err(IdentProblem::ReservedKeyword(ident_str.to_owned()))
-                 } else {
-                    Ok(ident_str)
-                 }
-             } else {
-                Err(IdentProblem::ReservedKeyword(ident_str.to_owned()))
-             }
+            if valid_start_char {
+                if ident_str == "if" {
+                    unexpected_any("Reserved keyword `if`").left()
+                } else {
+                    value(ident_str).right()
+                }
+            } else {
+                unexpected_any("Starting character").left()
+            }
         })
 }
 
@@ -388,7 +408,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         .and(look_ahead(digit()))
         .and(digits_before_decimal)
         .and(optional(char('.').with(digits_after_decimal)))
-        .map(|(((opt_minus, _), int_digits), decimals): (((Option<char>, _), Vec<char>), Option<Vec<char>>)| {
+        .then(|(((opt_minus, _), int_digits), decimals): (((Option<char>, _), Vec<char>), Option<Vec<char>>)| {
             let is_positive = opt_minus.is_none();
 
             // TODO check length of digits and make sure not to overflow
@@ -397,9 +417,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             match ( int_str.parse::<i64>(), decimals ) {
                 (Ok(int_val), None) => {
                     if is_positive {
-                        Expr::Int(int_val as i64)
+                        value(Expr::Int(int_val as i64)).right()
                     } else {
-                        Expr::Int(-int_val as i64)
+                        value(Expr::Int(-int_val as i64)).right()
                     }
                 },
                 (Ok(int_val), Some(nums)) => {
@@ -413,18 +433,18 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                             let numerator = (int_val * denom) + (decimal as i64);
 
                             if is_positive {
-                                Expr::Frac(numerator, denom as u64)
+                                value(Expr::Frac(numerator, denom as u64)).right()
                             } else {
-                                Expr::Frac(-numerator, denom as u64)
+                                value(Expr::Frac(-numerator, denom as u64)).right()
                             }
                         },
                         Err(_) => {
-                            Expr::SyntaxProblem("TODO Non-digit chars after decimal point in number literal".to_owned())
+                            unexpected_any("TODO Non-digit chars after decimal point in number literal").left()
                         }
                     }
                 },
                 (Err(_), _) =>
-                    Expr::SyntaxProblem("TODO looked like a number but was actually malformed ident".to_owned())
+                    unexpected_any("TODO looked like a number but was actually malformed ident").left()
             }
         })
 }
