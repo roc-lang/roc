@@ -691,6 +691,29 @@ mod tests {
                 "")
             )
         );
+
+        assert_eq!(
+            // let x = 5 in let y = 12 in 3
+            parse_standalone("x = 5 - -3\ny = 12 + 7\n3 * -5"),
+            Ok((
+                Let(Identifier("x".to_string()),
+                    Box::new(
+                        Operator(
+                            Box::new(Int(5)), Minus, Box::new(Int(-3))
+                        )
+                    ),
+                    Box::new(
+                        Let(Identifier("y".to_string()),
+                            Box::new(Operator(
+                                Box::new(Int(12)), Plus, Box::new(Int(7))
+                            )),
+                            Box::new(Operator(
+                                Box::new(Int(3)), Star, Box::new(Int(-5))
+                            )),
+                        ))),
+                "")
+            )
+        );
     }
 
     #[test]
