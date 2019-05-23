@@ -15,6 +15,7 @@ pub enum Expr {
     Func(String, Box<Expr>),
     Apply(Box<Expr>, Box<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
+    Closure(Vec<Pattern>, Box<Expr>),
 
     If(Box<Expr>, Box<Expr>, Box<Expr>),
 }
