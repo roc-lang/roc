@@ -635,18 +635,33 @@ mod tests {
     fn parse_let_with_operator() {
         assert_eq!(
             // let x = 5 + 10 in -20
-            parse_standalone("x = (5 + 10)\n-20"),
+            parse_standalone("x =(5 + 10)\n-20"),
             Ok((
-                Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
+                Let("x".to_string(), 
+                    Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
+                    Box::new(Int(-20))),
                 "")
             )
         );
 
         assert_eq!(
             // let x = 5 + 10 in -20
-            parse_standalone("x=5\n    +10\n-20"),
+            parse_standalone("x=  5  +  10\n-20"),
             Ok((
-                Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
+                Let("x".to_string(), 
+                    Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
+                    Box::new(Int(-20))),
+                "")
+            )
+        );
+
+        assert_eq!(
+            // let x = 5 + 10 in -20
+            parse_standalone("x=5\n    + 10\n-20"),
+            Ok((
+                Let("x".to_string(), 
+                    Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
+                    Box::new(Int(-20))),
                 "")
             )
         );

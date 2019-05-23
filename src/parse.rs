@@ -8,7 +8,7 @@ use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, al
 use combine::parser::repeat::{many, count_min_max};
 use combine::parser::item::{any, satisfy_map, value, position};
 use combine::parser::combinator::{look_ahead, not_followed_by};
-use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any};
+use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream, Positioned};
 
@@ -74,16 +74,36 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     many1::<Vec<_>, _>(indented_space(min_indent)).with(value(()))
 }
 
-fn indented_space<I>(min_indent: i32) -> impl Parser<Input = I, Output = char>
+fn indented_space<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    position().then(move |pos: IndentablePosition| {
-        if pos.is_indenting || pos.indent_col >= min_indent {
-            choice((char(' '), char('\n'))).left()
-        } else {
-            unexpected_any("bad indentation on let-expression").right()
-        }
-    })
+        choice((
+            char(' ').with(value(())),
+            // If we hit a newline, it must be followed by:
+            // * Any number of blank lines (which contain only spaces)
+            // * At least min_indent spaces, or else eof()
+            char('\n')
+                .skip(
+                    // TODO we immediately discard this Vec, ...
+                    many::<Vec<_>, _>(
+                        char('\n').skip(many::<Vec<_>, _>(char(' ')))
+                    )
+                )
+                .skip(
+                    choice((
+                        // TODO we immediately discard this Vec, ...
+                        many1::<Vec<_>, _>(char(' ')).then(move |chars| {
+                            if chars.len() < min_indent as usize {
+                                unexpected("outdent").left()
+                            } else {
+                                value(()).right()
+                            }
+                        }),
+                        eof().with(value(()))
+                    ))
+                )
+                .with(value(()))
+        ))
 }
 
 // This macro allows recursive parsers
@@ -107,15 +127,15 @@ parser! {
         .and(
             // Optionally follow the expression with an operator,
             //
-            // e.g. In the expression (1 + 2), the subexpression 1
-            // is followed by the operator + and another subexpression, 2
+            // e.g. In the expression (1 + 2), the subexpression 1 is
+            // followed by the operator + and another subexpression, 2
             optional(
                 attempt(
                     indented_spaces(min_indent)
                         .with(operator())
+                        .skip(whitespace())
                         .skip(indented_spaces(min_indent))
                         .and(expr_body(min_indent))
-                        .skip(indented_spaces(min_indent))
                 )
             )
         ).map(|(expr1, opt_op)| {
