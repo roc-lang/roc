@@ -8,7 +8,8 @@ pub enum Expr {
     Char(char),
 
     Var(String),
-    Let(String, Box<Expr>, Box<Expr>),
+    Let(Pattern, Box<Expr>, Box<Expr>),
+    Pattern(Pattern),
 
     // Functions
     Func(String, Box<Expr>),
@@ -17,6 +18,13 @@ pub enum Expr {
 
     If(Box<Expr>, Box<Expr>, Box<Expr>),
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pattern {
+    Identifier(String),
+    Underscore
+}
+
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Operator {

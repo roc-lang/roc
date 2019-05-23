@@ -6,7 +6,8 @@ extern crate roc;
 #[cfg(test)]
 mod tests {
     use roc::expr::Expr::*;
-    use roc::expr::Expr;
+    use roc::expr::Pattern::*;
+    use roc::expr::{Expr};
     use roc::expr::Operator::*;
     use roc::parse;
     use roc::parse_state::{IndentablePosition};
@@ -616,7 +617,7 @@ mod tests {
             // let x = 5 in -10
             parse_standalone("x = 5\n-10"),
             Ok((
-                Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
+                Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Int(-10))),
                 "")
             )
         );
@@ -625,7 +626,7 @@ mod tests {
             // let x = 5 in 10
             parse_standalone("x=5\n-10"),
             Ok((
-                Let("x".to_string(), Box::new(Int(5)), Box::new(Int(-10))),
+                Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Int(-10))),
                 "")
             )
         );
@@ -637,7 +638,7 @@ mod tests {
             // let x = 5 + 10 in -20
             parse_standalone("x =(5 + 10)\n-20"),
             Ok((
-                Let("x".to_string(), 
+                Let(Identifier("x".to_string()),
                     Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
                     Box::new(Int(-20))),
                 "")
@@ -648,7 +649,7 @@ mod tests {
             // let x = 5 + 10 in -20
             parse_standalone("x=  5  +  10\n-20"),
             Ok((
-                Let("x".to_string(), 
+                Let(Identifier("x".to_string()),
                     Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
                     Box::new(Int(-20))),
                 "")
@@ -659,7 +660,7 @@ mod tests {
             // let x = 5 + 10 in -20
             parse_standalone("x=5\n    + 10\n-20"),
             Ok((
-                Let("x".to_string(), 
+                Let(Identifier("x".to_string()),
                     Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
                     Box::new(Int(-20))),
                 "")
@@ -681,9 +682,10 @@ mod tests {
             // let x = 5 in let y = 12 in 3
             parse_standalone("x = 5\ny = 12\n3"),
             Ok((
-                Let("x".to_string(), Box::new(Int(5)), 
+                Let(Identifier("x".to_string()),
+                    Box::new(Int(5)),
                     Box::new(
-                        Let("y".to_string(), Box::new(Int(12)), 
+                        Let(Identifier("y".to_string()), Box::new(Int(12)),
                             Box::new(Int(3))
                         ))),
                 "")
@@ -696,7 +698,7 @@ mod tests {
         assert_eq!(
             parse_standalone("x=5\nx"),
             Ok((
-                Let("x".to_string(), Box::new(Int(5)), Box::new(Var("x".to_string()))),
+                Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Var("x".to_string()))),
                 "")
             )
         );
