@@ -363,7 +363,7 @@ mod tests {
 
     fn expect_parsed_apply<'a>(parse_str: &'a str, expr1: Expr, expr2: Expr) {
         assert_eq!(
-            Ok((Apply(Box::new(expr1), Box::new(expr2)), "")),
+            Ok((Apply(Box::new((expr1, expr2))), "")),
             parse_standalone(parse_str)
         );
     }

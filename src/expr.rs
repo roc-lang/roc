@@ -13,7 +13,7 @@ pub enum Expr {
 
     // Functions
     Func(String, Box<Expr>),
-    Apply(Box<Expr>, Box<Expr>),
+    Apply(Box<(Expr, Expr)>),
     Operator(Box<Expr>, Operator, Box<Expr>),
     Closure(Vec<Pattern>, Box<Expr>),
 

@@ -190,7 +190,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         match opt_expr2 {
             None => expr1,
             Some(expr2) => {
-                Expr::Apply(Box::new(expr1), Box::new(expr2))
+                Expr::Apply(Box::new((expr1, expr2)))
             },
         }
     )
