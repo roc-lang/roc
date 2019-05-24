@@ -118,6 +118,8 @@ parser! {
 
         choice((
             parenthetical_expr(min_indent),
+            string("True").with(value(Expr::Bool(true))),
+            string("False").with(value(Expr::Bool(false))),
             string_literal(),
             number_literal(),
             char_literal(),
@@ -314,7 +316,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('"'), char('"'), many(string_body()))
-        .map(|str| Expr::String(str))
+        .map(|str| Expr::Str(str))
 }
 
 pub fn char_literal<I>() -> impl Parser<Input = I, Output = Expr>

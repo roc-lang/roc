@@ -4,12 +4,12 @@ pub enum Expr {
     // Literals
     Int(i64),
     Frac(i64, u64),
-    String(String),
+    Str(String),
     Char(char),
+    Bool(bool),
 
     Var(String),
     Let(Pattern, Box<Expr>, Box<Expr>),
-    Pattern(Pattern),
 
     // Functions
     Func(String, Box<Expr>),
