@@ -9,4 +9,6 @@ pub mod parse_state;
 #[cfg(feature = "persistent")]
 extern crate dogged;
 
+extern crate im_rc;
+
 #[macro_use] extern crate combine;
