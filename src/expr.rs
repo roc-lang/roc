@@ -18,7 +18,15 @@ pub enum Expr {
     Closure(Vec<Pattern>, Box<Expr>),
 
     If(Box<Expr>, Box<Expr>, Box<Expr>),
+    Error(Problem),
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Problem {
+    UnrecognizedVarName(String),
+    TypeMismatch(String),
+}
+
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
