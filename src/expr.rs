@@ -25,6 +25,7 @@ pub enum Expr {
 pub enum Problem {
     UnrecognizedVarName(String),
     TypeMismatch(String),
+    ReassignedVarName(String),
 }
 
 

@@ -3,28 +3,35 @@ use expr::Expr::*;
 use expr::Problem::*;
 use expr::Pattern::*;
 use expr::Operator::*;
+use std::rc::Rc;
 use im_rc::hashmap::HashMap;
 
 pub fn eval(expr: Expr) -> Expr {
     scoped_eval(expr, &HashMap::new())
 }
 
-pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Expr>) -> Expr {
+pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
     match expr {
         // Primitives need no further evaluation
         Error(_) | Int(_) | Str(_) | Frac(_, _) | Char(_) | Bool(_) | Closure(_, _) => expr,
 
+        // Resolve variable names
         Var(name) => match vars.get(&name) {
-            Some(resolved) => resolved.clone(),
+            Some(resolved) => (*Rc::clone(resolved)).clone(),
             None => Error(UnrecognizedVarName(name))
         }
 
         Let(Identifier(name), definition, in_expr) => {
-            let mut new_vars = (*vars).clone();
-                
-            new_vars.insert(name, *definition);
+            if vars.contains_key(&name) {
+                Error(ReassignedVarName(name))
+            } else {
+                // Create a new scope containing the new declaration.
+                let mut new_vars = (*vars).clone();
+                new_vars.insert(name, Rc::new(scoped_eval(*definition, vars)));
 
-            scoped_eval(*in_expr, &new_vars)
+                // Evaluate in_expr with that new scope's variables.
+                scoped_eval(*in_expr, &new_vars)
+            }
         },
 
         Let(Underscore, definition, in_expr) => {
@@ -37,7 +44,7 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Expr>) -> Expr {
 
         Func(name, arg) => {
             let func_expr = match vars.get(&name) {
-                Some(resolved) => resolved.clone(),
+                Some(resolved) => (*Rc::clone(resolved)).clone(),
                 None => Error(UnrecognizedVarName(name))
             };
 
