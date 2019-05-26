@@ -414,8 +414,6 @@ mod tests {
 
     // FUNC
 
-    // TODO try it with operators, e.g. foo bar + baz qux
-
     fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, expr: Expr) {
         assert_eq!(
             Ok((Func(func_str.to_string(), vec![expr]), "")),
@@ -444,6 +442,27 @@ mod tests {
         expect_parsed_func("foo  bar", "foo", Var("bar".to_string()));
         expect_parsed_func("foo \"hi\"", "foo", Str("hi".to_string()));
     }
+
+    #[test]
+    fn parse_func_with_operator() {
+        assert_eq!(
+            parse_standalone("f 5 + 6"),
+            Ok(
+                (
+                    Operator(
+                        Box::new(
+                            Func("f".to_string(),
+                                vec![Int(5)],
+                            )
+                        ),
+                        Plus,
+                        Box::new(Int(6))
+                    ),
+                "")
+            )
+        );
+    }
+
 
     #[test]
     fn parse_invalid_func() {

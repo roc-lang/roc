@@ -107,10 +107,19 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         ))
 }
 
-// This macro allows recursive parsers
+/// This is separate from expr_body for the sake of function application,
+/// so it can stop parsing when it reaches an operator (since they have
+/// higher precedence.)
+fn expr_body_without_operators<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    expr_body_without_operators_(min_indent)
+}
+
 parser! {
     #[inline(always)]
-    fn expr_body[I](min_indent_ref: i32)(I) -> Expr
+    fn expr_body_without_operators_[I](min_indent_ref: i32)(I) -> Expr
         where [ I: Stream<Item = char, Position = IndentablePosition> ]
     {
         // TODO figure out why min_indent_ref has the type &mut i32
@@ -127,6 +136,27 @@ parser! {
             let_expr(min_indent),
             func_or_var(min_indent),
         ))
+    }
+}
+
+
+fn expr_body<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    expr_body_(min_indent)
+}
+
+// This macro allows recursive parsers
+parser! {
+    #[inline(always)]
+    fn expr_body_[I](min_indent_ref: i32)(I) -> Expr
+        where [ I: Stream<Item = char, Position = IndentablePosition> ]
+    {
+        // TODO figure out why min_indent_ref has the type &mut i32
+        let min_indent = *min_indent_ref;
+
+        expr_body_without_operators(min_indent)
         .and(
             // Optionally follow the expression with an operator,
             //
@@ -202,7 +232,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 attempt(
                     // Keywords like "then" and "else" are not function application!
                     not_followed_by(choice((string("then"), string("else"))))
-                        .with(expr_body(min_indent))
+                        // Don't parse operators because they have a higher
+                        // precedence than function application. If we see one,
+                        // we're done!
+                        .with(expr_body_without_operators(min_indent))
                         .skip(indented_whitespaces(min_indent))
                 ),
                 char(',')
