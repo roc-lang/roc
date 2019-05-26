@@ -414,9 +414,9 @@ mod tests {
 
     // FUNC
 
-    fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, expr: Expr) {
+    fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, args: Vec<Expr>) {
         assert_eq!(
-            Ok((Func(func_str.to_string(), vec![expr]), "")),
+            Ok((Func(func_str.to_string(), args), "")),
             parse_standalone(parse_str)
         );
     }
@@ -437,10 +437,17 @@ mod tests {
 
 
     #[test]
-    fn parse_func() {
-        expect_parsed_func("f 1", "f", Int(1));
-        expect_parsed_func("foo  bar", "foo", Var("bar".to_string()));
-        expect_parsed_func("foo \"hi\"", "foo", Str("hi".to_string()));
+    fn parse_single_arg_func() {
+        expect_parsed_func("f 1", "f", vec![Int(1)]);
+        expect_parsed_func("foo  bar", "foo", vec![Var("bar".to_string())]);
+        expect_parsed_func("foo \"hi\"", "foo", vec![Str("hi".to_string())]);
+    }
+
+    #[test]
+    fn parse_multi_arg_func() {
+        expect_parsed_func("f 1,  23,  456", "f", vec![Int(1), Int(23), Int(456)]);
+        expect_parsed_func("foo  bar, 'z'", "foo", vec![Var("bar".to_string()), Char('z')]);
+        expect_parsed_func("foo \"hi\", 1, blah", "foo", vec![Str("hi".to_string()), Int(1), Var("blah".to_string())]);
     }
 
     #[test]
@@ -498,9 +505,9 @@ mod tests {
         expect_parsed_int(-2, "((-2))");
         expect_parsed_str("a", "(\"a\")");
         expect_parsed_str("abc", "((\"abc\"))");
-        expect_parsed_func("(f 1)", "f", Int(1));
-        expect_parsed_func("(foo  bar)", "foo", Var("bar".to_string()));
-        expect_parsed_func("(  foo \"hi\"  )", "foo", Str("hi".to_string()));
+        expect_parsed_func("(f 1)", "f", vec![Int(1)]);
+        expect_parsed_func("(foo  bar)", "foo", vec![Var("bar".to_string())]);
+        expect_parsed_func("(  foo \"hi\"  )", "foo", vec![Str("hi".to_string())]);
     }
 
     #[test]
