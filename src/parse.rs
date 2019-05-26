@@ -5,7 +5,7 @@ use std::char;
 use parse_state::{IndentablePosition};
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
-use combine::parser::repeat::{many, count_min_max};
+use combine::parser::repeat::{many, count_min_max, sep_by1};
 use combine::parser::item::{any, satisfy_map, value, position};
 use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
@@ -177,26 +177,40 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 {
     between(char('('), char(')'),
             indented_whitespaces(min_indent).with(expr_body(min_indent)).skip(indented_whitespaces(min_indent))
-        ).and(
+    ).and(
         // Parenthetical expressions can optionally be followed by
-        // whitespace and an expr, meaning this is function application!
-        optional(
-            attempt(
-                indented_whitespaces1(min_indent)
-                    // Keywords like "then" and "else" are not function application!
-                    .skip(not_followed_by(choice((string("then"), string("else")))))
-                    .with(expr_body(min_indent))
-            )
-        )
-    ).map(|(expr1, opt_expr2)|
-        match opt_expr2 {
-            None => expr1,
-            Some(expr2) => {
-                Expr::Apply(Box::new((expr1, expr2)))
-            },
+        // whitespace and one or more comma-separated expressions,
+        // meaning this is function application!
+        optional(attempt(function_application(min_indent)))
+    ).map(|(expr, opt_args): (Expr, Option<Vec<Expr>>)|
+        match opt_args {
+            None => expr,
+            Some(args) => Expr::Apply(Box::new(expr), args)
         }
     )
 }
+
+pub fn function_application<I>(min_indent: i32) -> impl Parser<Input = I, Output = Vec<Expr>>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    indented_whitespaces1(min_indent)
+        // TODO figure out how to refactor out comma_separated()
+        // which takes a Parser<T> and returns a Parser<Optional<T>>
+        .with(
+            sep_by1(
+                attempt(
+                    // Keywords like "then" and "else" are not function application!
+                    not_followed_by(choice((string("then"), string("else"))))
+                        .with(expr_body(min_indent))
+                        .skip(indented_whitespaces(min_indent))
+                ),
+                char(',')
+                    .skip(indented_whitespaces(min_indent))
+            )
+        )
+}
+
 
 pub fn operator<I>() -> impl Parser<Input = I, Output = Operator>
 where I: Stream<Item = char, Position = IndentablePosition>,
@@ -250,17 +264,13 @@ pub fn func_or_var<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    ident()
-        .and(optional(
-            attempt(
-                indented_whitespaces1(min_indent)
-                .skip(not_followed_by(choice((string("then"), string("else"), string("=")))))
-                .with(expr_body(min_indent))
-            )
-        )).map(|(name, opt_arg)|
-            match opt_arg {
-                Some(arg) => Expr::Func(name, Box::new(arg)),
+    ident().and(optional(attempt(function_application(min_indent))))
+        .map(|(name, opt_args): (String, Option<Vec<Expr>>)|
+            // Use optional(sep_by1()) over sep_by() to avoid
+            // allocating a Vec in the common case where this is a var
+            match opt_args {
                 None => Expr::Var(name),
+                Some(args) => Expr::Func(name, args)
             }
         )
 }

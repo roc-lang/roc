@@ -40,7 +40,7 @@ mod tests {
 
     fn expect_parsed_str<'a>(expected_str: &'a str, actual_str: &'a str) {
         assert_eq!(
-            Ok((String(expected_str.to_string()), "")),
+            Ok((Str(expected_str.to_string()), "")),
             parse_standalone(actual_str)
         );
     }
@@ -304,7 +304,7 @@ mod tests {
             ), ""))
         );
 
-        assert_eq!(parse_standalone("(1 + 2) * 3"),
+        assert_eq!(parse_standalone("(1 + 2)  * 3"),
             Ok((Operator(
                 Box::new(Operator(Box::new(Int(1)), Plus, Box::new(Int(2)))),
                 Star,
@@ -363,7 +363,7 @@ mod tests {
 
     fn expect_parsed_apply<'a>(parse_str: &'a str, expr1: Expr, expr2: Expr) {
         assert_eq!(
-            Ok((Apply(Box::new((expr1, expr2))), "")),
+            Ok((Apply(Box::new(expr1), vec![expr2]), "")),
             parse_standalone(parse_str)
         );
     }
@@ -385,14 +385,14 @@ mod tests {
 
         expect_parsed_apply(
             "(x 5) y",
-            Func("x".to_string(), Box::new(Int(5))),
+            Func("x".to_string(), vec![Int(5)]),
             Var("y".to_string())
         );
 
         expect_parsed_apply(
             "(x 5) (y 6)",
-            Func("x".to_string(), Box::new(Int(5))),
-            Func("y".to_string(), Box::new(Int(6))),
+            Func("x".to_string(), vec![Int(5)]),
+            Func("y".to_string(), vec![Int(6)]),
         );
 
         expect_parsed_apply(
@@ -418,7 +418,7 @@ mod tests {
 
     fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, expr: Expr) {
         assert_eq!(
-            Ok((Func(func_str.to_string(), Box::new(expr)), "")),
+            Ok((Func(func_str.to_string(), vec![expr]), "")),
             parse_standalone(parse_str)
         );
     }
@@ -442,7 +442,7 @@ mod tests {
     fn parse_func() {
         expect_parsed_func("f 1", "f", Int(1));
         expect_parsed_func("foo  bar", "foo", Var("bar".to_string()));
-        expect_parsed_func("foo \"hi\"", "foo", String("hi".to_string()));
+        expect_parsed_func("foo \"hi\"", "foo", Str("hi".to_string()));
     }
 
     #[test]
@@ -461,7 +461,7 @@ mod tests {
         expect_parsed_str("abc", "((\"abc\"))");
         expect_parsed_func("(f 1)", "f", Int(1));
         expect_parsed_func("(foo  bar)", "foo", Var("bar".to_string()));
-        expect_parsed_func("(  foo \"hi\"  )", "foo", String("hi".to_string()));
+        expect_parsed_func("(  foo \"hi\"  )", "foo", Str("hi".to_string()));
     }
 
     #[test]
@@ -510,18 +510,18 @@ mod tests {
     fn parse_complex_expressions() {
         expect_parsed_apply(
             "(x 5) (y + (f 6))",
-            Func("x".to_string(), Box::new(Int(5))),
+            Func("x".to_string(), vec![Int(5)]),
             Operator(
                 Box::new(Var("y".to_string())),
                 Plus,
-                Box::new(Func("f".to_string(), Box::new(Int(6)))),
+                Box::new(Func("f".to_string(), vec![Int(6)])),
             )
         );
 
         assert_eq!(
             parse_standalone("(x 5)"),
             Ok((
-                Func("x".to_string(), Box::new(Int(5))),
+                Func("x".to_string(), vec![Int(5)]),
                 "")
             )
         );
@@ -582,7 +582,7 @@ mod tests {
             parse_standalone("(x 5) + 123"),
             Ok((
                 Operator(
-                    Box::new(Func("x".to_string(), Box::new(Int(5)))),
+                    Box::new(Func("x".to_string(), vec![Int(5)])),
                     Plus,
                     Box::new(Int(123))
                 ),
@@ -594,7 +594,7 @@ mod tests {
             parse_standalone("(x 5) + (2 * y)"),
             Ok((
                 Operator(
-                    Box::new(Func("x".to_string(), Box::new(Int(5)))),
+                    Box::new(Func("x".to_string(), vec![Int(5)])),
                     Plus,
                     Box::new(
                         Operator(

@@ -27,6 +27,11 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
             } else {
                 // Create a new scope containing the new declaration.
                 let mut new_vars = (*vars).clone();
+                // TODO traverse definition searching for Closure exprs. If we
+                //      find any, traverse their bodies and resolve as many Var
+                //      and Func exprs as we can using current vars map. (If we
+                //      don't find the value in the vars map, np - keep going.)
+                //      In this way, we have inlined "closing over" those vars!
                 new_vars.insert(name, Rc::new(scoped_eval(*definition, vars)));
 
                 // Evaluate in_expr with that new scope's variables.
@@ -38,25 +43,43 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
             // Faithfully eval this, but discard its result.
             scoped_eval(*definition, vars);
 
-            // Actually use this.
+            // Actually use this part.
             scoped_eval(*in_expr, vars)
         },
 
-        Func(name, arg) => {
+        Func(name, args) => {
             let func_expr = match vars.get(&name) {
                 Some(resolved) => (*Rc::clone(resolved)).clone(),
                 None => Error(UnrecognizedVarName(name))
             };
 
-            scoped_eval(Apply(Box::new((func_expr, *arg))), vars)
+            scoped_eval(Apply(Box::new(func_expr), args), vars)
         },
 
-        Apply(boxed_tuple) => {
-            match *boxed_tuple {
-                // (Closure(args, definition), arg) => {
-                //     panic!("TODO apply arg to closure");
-                // },
-                _ => { panic!("Type mismatch: trying to call a non-function!"); }
+        Apply(func_expr, args) => {
+            match *func_expr.clone() {
+                Closure(arg_patterns, body) => {
+                    if arg_patterns.len() == args.len() {
+                        // Create a new scope for the function to use.
+                        let mut new_vars = (*vars).clone();
+
+                        for index in 0..arg_patterns.len() {
+                            match arg_patterns.get(index).unwrap() {
+                                Underscore => (),
+                                Identifier(name) => {
+                                    let new_val = scoped_eval((*args.get(index).unwrap()).clone(), vars);
+
+                                    new_vars.insert(name.clone(), Rc::new(new_val));
+                                }
+                            }
+                        }
+
+                        scoped_eval(*body, &new_vars)
+                    } else {
+                        Error(WrongArity(arg_patterns.len() as u32, args.len() as u32))
+                    }
+                },
+                _ => Error(TypeMismatch("Tried to call a non-function.".to_string()))
             }
         },
 

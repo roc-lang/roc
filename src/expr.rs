@@ -12,8 +12,8 @@ pub enum Expr {
     Let(Pattern, Box<Expr>, Box<Expr>),
 
     // Functions
-    Func(String, Box<Expr>),
-    Apply(Box<(Expr, Expr)>),
+    Func(String, Vec<Expr>),
+    Apply(Box<Expr>, Vec<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
     Closure(Vec<Pattern>, Box<Expr>),
 
@@ -26,6 +26,7 @@ pub enum Problem {
     UnrecognizedVarName(String),
     TypeMismatch(String),
     ReassignedVarName(String),
+    WrongArity(u32 /* Expected */, u32 /* Provided */),
 }
 
 
