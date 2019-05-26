@@ -5,7 +5,7 @@ use std::char;
 use parse_state::{IndentablePosition};
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
-use combine::parser::repeat::{many, count_min_max, sep_by1};
+use combine::parser::repeat::{many, count_min_max, sep_by1, skip_many, skip_many1};
 use combine::parser::item::{any, satisfy_map, value, position};
 use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
@@ -19,7 +19,7 @@ pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    spaces().with(expr_body(0)).skip(whitespace_or_eof())
+    spaces().with(expr_body(1)).skip(whitespace_or_eof())
 }
 
 fn indentation<I>() -> impl Parser<Input = I, Output = i32>
@@ -48,30 +48,26 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 fn whitespace1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    many1::<Vec<_>, _>(choice((char(' '), char('\n')))).with(value(()))
+    skip_many1(choice((char(' '), char('\n')))).with(value(()))
 }
 
 
 fn spaces1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    // TODO we immediately discard this Vec, so revise this to not use many1 (and thus
-    // not allocate one in the first place) - maybe use skip_until and not_followed_by?
-    many1::<Vec<_>, _>(choice((char(' '), char('\n')))).with(value(()))
+    skip_many1(choice((char(' '), char('\n')))).with(value(()))
 }
 
 fn indented_whitespaces<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    many::<Vec<_>, _>(indented_whitespace(min_indent)).with(value(()))
+    skip_many(indented_whitespace(min_indent)).with(value(()))
 }
 
 fn indented_whitespaces1<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    // TODO we immediately discard this Vec, so revise this to not use many1 (and thus
-    // not allocate one in the first place)
-    many1::<Vec<_>, _>(indented_whitespace(min_indent)).with(value(()))
+    skip_many1(indented_whitespace(min_indent)).with(value(()))
 }
 
 fn indented_whitespace<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
@@ -84,15 +80,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             // - Any number of blank lines (which contain only spaces)
             // - At least min_indent spaces, or else eof()
             char('\n')
-                .skip(
-                    // TODO we immediately discard this Vec, ...
-                    many::<Vec<_>, _>(
-                        char('\n').skip(many::<Vec<_>, _>(char(' ')))
-                    )
-                )
+                .skip(skip_many(char('\n').skip(skip_many(char(' ')))))
                 .skip(
                     choice((
-                        // TODO we immediately discard this Vec, ...
                         many1::<Vec<_>, _>(char(' ')).then(move |chars| {
                             if chars.len() < min_indent as usize {
                                 unexpected("outdent").left()
