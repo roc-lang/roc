@@ -463,6 +463,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_func_with_operator_and_multiple_args() {
+        assert_eq!(
+            parse_standalone("f 1, 2, 3 + 6"),
+            Ok(
+                (
+                    Operator(
+                        Box::new(
+                            Func("f".to_string(),
+                                vec![Int(1), Int(2), Int(3)],
+                            )
+                        ),
+                        Plus,
+                        Box::new(Int(6))
+                    ),
+                "")
+            )
+        );
+    }
+
 
     #[test]
     fn parse_invalid_func() {
