@@ -95,7 +95,7 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
             match eval(*condition) {
                 Bool(true) => eval(*if_true),
                 Bool(false) => eval(*if_false),
-                _ => { panic!("Type mismatch on if condition."); }
+                _ => Error(TypeMismatch("non-Bool used in `if` condition".to_string()))
             }
         }
     }
@@ -118,8 +118,8 @@ fn eval_operator(left_expr: &Expr, op: &Operator, right_expr: &Expr) -> Expr {
         (Char(left), Equals, Char(right)) => Bool(left == right),
         (Frac(_, _), Equals, Frac(_, _)) => panic!("Don't know how to == on Fracs yet"),
 
-        (_, Equals, _) => panic!("Tried to == two expressions with different types"),
-        
+        (_, Equals, _) => Error(TypeMismatch("tried to use == on two values with incompatible types".to_string())),
+
         // Plus
         (Int(left_num), Plus, Int(right_num)) => Int(left_num + right_num),
         (Frac(_, _), Plus, Frac(_, _)) => panic!("Don't know how to add fracs yet"),
