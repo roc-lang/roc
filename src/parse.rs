@@ -130,6 +130,7 @@ parser! {
             number_literal(),
             char_literal(),
             if_expr(min_indent),
+            closure(min_indent),
             let_expr(min_indent),
             func_or_var(min_indent),
         ))
@@ -311,7 +312,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 {
     // TODO patterns must be separated by commas!
     between(char('|'), char('|'), many1::<Vec<_>, _>(pattern()))
-        .and(expr_body(min_indent))
+        .and(whitespace1().with(expr_body(min_indent)))
         .map(|(patterns, closure_body)| {
             Expr::Closure(patterns, Box::new(closure_body))
         })
