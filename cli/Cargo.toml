@@ -1,0 +1,13 @@
+[package]
+name = "roc-cli"
+version = "0.1.0"
+authors = ["Richard Feldman <richard.t.feldman@gmail.com>"]
+repository = "https://github.com/rtfeldman/roc"
+readme = "README.md"
+keywords = ["roc", "gui"]
+edition = "2018"
+description = "A CLI for Roc"
+license = "Apache-2.0"
+
+[dependencies]
+roc = { path = "../", version = "0.1.0" }
