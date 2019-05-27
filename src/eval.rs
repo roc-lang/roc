@@ -92,9 +92,9 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
         ,
 
         If(condition, if_true, if_false) => {
-            match eval(*condition) {
-                Bool(true) => eval(*if_true),
-                Bool(false) => eval(*if_false),
+            match scoped_eval(*condition, vars) {
+                Bool(true) => scoped_eval(*if_true, vars),
+                Bool(false) => scoped_eval(*if_false, vars),
                 _ => Error(TypeMismatch("non-Bool used in `if` condition".to_string()))
             }
         }
