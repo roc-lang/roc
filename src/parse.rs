@@ -311,7 +311,11 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     // TODO patterns must be separated by commas!
-    between(char('|'), char('|'), many1::<Vec<_>, _>(pattern()))
+    between(char('|'), char('|'),
+            sep_by1(
+                pattern(),
+                char(',').skip(indented_whitespaces(min_indent))
+            ))
         .and(whitespace1().with(expr_body(min_indent)))
         .map(|(patterns, closure_body)| {
             Expr::Closure(patterns, Box::new(closure_body))
