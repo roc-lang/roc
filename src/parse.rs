@@ -11,9 +11,16 @@ use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
 use combine::error::{Consumed, ParseError};
 use combine::stream::{Stream, Positioned};
-
+use combine::stream::state::{State};
 
 pub const ERR_EMPTY_CHAR: &'static str = "EMPTY_CHAR";
+
+pub fn parse_string(string: &str) -> Result<Expr, combine::easy::Errors<char, &str, IndentablePosition>> {
+    let parse_state = State::with_positioner(string, IndentablePosition::default());
+
+    expr().skip(eof()).easy_parse(parse_state).map(|( expr, _ )| expr)
+}
+
 
 pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
