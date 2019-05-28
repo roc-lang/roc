@@ -27,16 +27,15 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
             } else {
                 // Create a new scope containing the new declaration.
                 let mut new_vars = (*vars).clone();
-                // TODO traverse definition searching for Closure exprs. If we
-                //      find any, traverse their bodies and resolve as many Var
-                //      and Func exprs as we can using current vars map. (If we
-                //      don't find the value in the vars map, np - keep going.)
-                //      In this way, we have inlined "closing over" those vars!
                 new_vars.insert(name, Rc::new(scoped_eval(*definition, vars)));
 
                 // Evaluate in_expr with that new scope's variables.
                 scoped_eval(*in_expr, &new_vars)
             }
+        },
+
+        Let(Variant(name, patterns), definition, in_expr) => {
+            panic!("Pattern matching on variants is not yet supported!");
         },
 
         Let(Underscore, definition, in_expr) => {
@@ -56,6 +55,18 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
             scoped_eval(Apply(Box::new(func_expr), args), vars)
         },
 
+        ApplyVariant(_, None) => expr, // This is all we do - for now...
+
+        ApplyVariant(name, Some(args)) => {
+            let mut evaluated_args = Vec::with_capacity(args.len());
+
+            for arg in args {
+                evaluated_args.push(scoped_eval(arg, vars))
+            }
+
+            ApplyVariant(name, Some(evaluated_args))
+        }
+
         Apply(func_expr, args) => {
             match *func_expr.clone() {
                 Closure(arg_patterns, body) => {
@@ -67,6 +78,11 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
                             match arg_patterns.get(index).unwrap() {
                                 Underscore => (),
                                 Identifier(name) => {
+                                    let new_val = scoped_eval((*args.get(index).unwrap()).clone(), vars);
+
+                                    new_vars.insert(name.clone(), Rc::new(new_val));
+                                }
+                                Variant(name, patterns) => {
                                     let new_val = scoped_eval((*args.get(index).unwrap()).clone(), vars);
 
                                     new_vars.insert(name.clone(), Rc::new(new_val));

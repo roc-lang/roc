@@ -21,7 +21,6 @@ pub fn parse_string(string: &str) -> Result<Expr, combine::easy::Errors<char, &s
     expr().skip(eof()).easy_parse(parse_state).map(|( expr, _ )| expr)
 }
 
-
 pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
@@ -132,6 +131,7 @@ parser! {
             if_expr(min_indent),
             closure(min_indent),
             let_expr(min_indent),
+            apply_variant(min_indent),
             func_or_var(min_indent),
         ))
     }
@@ -261,7 +261,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     attempt(
-        pattern().and(indentation())
+        pattern(min_indent).and(indentation())
             .skip(whitespace())
             .and(
                 char('=').with(indentation())
@@ -313,7 +313,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // TODO patterns must be separated by commas!
     between(char('|'), char('|'),
             sep_by1(
-                pattern(),
+                pattern(min_indent),
                 char(',').skip(indented_whitespaces(min_indent))
             ))
         .and(whitespace1().with(expr_body(min_indent)))
@@ -322,14 +322,69 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         })
 }
 
-pub fn pattern<I>() -> impl Parser<Input = I, Output = Pattern>
+parser! {
+    #[inline(always)]
+    fn pattern[I](min_indent_ref: i32)(I) -> Pattern
+        where [ I: Stream<Item = char, Position = IndentablePosition> ]
+    {
+        let min_indent = *min_indent_ref;
+
+        choice((
+            char('_').map(|_| Pattern::Underscore),
+            ident().map(|name| Pattern::Identifier(name)),
+            match_variant(min_indent)
+        ))
+    }
+}
+
+pub fn apply_variant<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    choice((
-        char('_').map(|_| Pattern::Underscore),
-        ident().map(|name| Pattern::Identifier(name))
-    ))
+    variant_name()
+        .and(optional(attempt(function_application(min_indent))))
+        .map(|(name, opt_args): (String, Option<Vec<Expr>>)|
+            // Use optional(sep_by1()) over sep_by() to avoid
+            // allocating a Vec in case the variant is empty
+            Expr::ApplyVariant(name, opt_args)
+        )
+}
+
+pub fn match_variant<I>(min_indent: i32) -> impl Parser<Input = I, Output = Pattern>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    variant_name()
+        .and(optional(attempt(
+            sep_by1(
+                pattern(min_indent),
+                char(',').skip(indented_whitespaces(min_indent))
+        ))))
+        .map(|(name, opt_args): (String, Option<Vec<Pattern>>)|
+            // Use optional(sep_by1()) over sep_by() to avoid
+            // allocating a Vec in case the variant is empty
+            Pattern::Variant(name, opt_args)
+        )
+}
+
+
+pub fn variant_name<I>() -> impl Parser<Input = I, Output = String>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    // Variants must begin with an uppercase letter, but can have any
+    // combination of letters or numbers afterwards.
+    // No underscores, dashes, or apostrophes.
+    many1::<Vec<_>, _>(alpha_num())
+        .then(|chars: Vec<char>| {
+            let valid_start_char = chars[0].is_uppercase();
+
+            if valid_start_char {
+                value(chars.into_iter().collect()).right()
+            } else {
+                unexpected_any("First character in an identifier that was not a lowercase letter").left()
+            }
+        })
 }
 
 pub fn ident<I>() -> impl Parser<Input = I, Output = String>
@@ -342,9 +397,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     many1::<Vec<_>, _>(alpha_num())
         .then(|chars: Vec<char>| {
             let valid_start_char = chars[0].is_lowercase();
-            let ident_str:String = chars.into_iter().collect();
 
             if valid_start_char {
+                let ident_str:String = chars.into_iter().collect();
+
                 match ident_str.as_str() {
                     "if" => unexpected_any("Reserved keyword `if`").left(),
                     "then" => unexpected_any("Reserved keyword `then`").left(),

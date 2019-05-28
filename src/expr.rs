@@ -19,6 +19,10 @@ pub enum Expr {
     Operator(Box<Expr>, Operator, Box<Expr>),
     Closure(Vec<Pattern>, Box<Expr>),
 
+    // Sum Types
+    ApplyVariant(String, Option<Vec<Expr>>),
+
+
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Error(Problem),
 }
@@ -80,6 +84,7 @@ pub enum Problem {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(String),
+    Variant(String, Option<Vec<Pattern>>),
     Underscore
 }
 
