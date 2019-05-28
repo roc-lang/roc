@@ -1,4 +1,5 @@
-use expr::{Expr, Operator};
+use expr;
+use expr::{Expr, Operator, Pattern};
 use expr::Expr::*;
 use expr::Problem::*;
 use expr::Pattern::*;
@@ -70,29 +71,9 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
         Apply(func_expr, args) => {
             match *func_expr.clone() {
                 Closure(arg_patterns, body) => {
-                    if arg_patterns.len() == args.len() {
-                        // Create a new scope for the function to use.
-                        let mut new_vars = (*vars).clone();
-
-                        for index in 0..arg_patterns.len() {
-                            match arg_patterns.get(index).unwrap() {
-                                Underscore => (),
-                                Identifier(name) => {
-                                    let new_val = scoped_eval((*args.get(index).unwrap()).clone(), vars);
-
-                                    new_vars.insert(name.clone(), Rc::new(new_val));
-                                }
-                                Variant(name, patterns) => {
-                                    let new_val = scoped_eval((*args.get(index).unwrap()).clone(), vars);
-
-                                    new_vars.insert(name.clone(), Rc::new(new_val));
-                                }
-                            }
-                        }
-
-                        scoped_eval(*body, &new_vars)
-                    } else {
-                        Error(WrongArity(arg_patterns.len() as u32, args.len() as u32))
+                    match eval_closure(args, arg_patterns, vars) {
+                        Ok(new_vars) => scoped_eval(*body, &new_vars),
+                        Err(problem) => Error(problem)
                     }
                 },
                 _ => Error(TypeMismatch("Tried to call a non-function.".to_string()))
@@ -114,6 +95,23 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
                 _ => Error(TypeMismatch("non-Bool used in `if` condition".to_string()))
             }
         }
+    }
+}
+
+fn eval_closure(args: Vec<Expr>, arg_patterns: Vec<Pattern>, vars: &HashMap<String, Rc<Expr>>)
+    -> Result<HashMap<String, Rc<Expr>>, expr::Problem>
+{
+    if arg_patterns.len() == args.len() {
+        // Create a new scope for the function to use.
+        let mut new_vars = (*vars).clone();
+
+        for ( arg, pattern ) in args.into_iter().zip(arg_patterns) {
+            pattern_match(arg, pattern, &mut new_vars)?;
+        }
+
+        Ok(new_vars)
+    } else {
+        Err(WrongArity(arg_patterns.len() as u32, args.len() as u32))
     }
 }
 
@@ -185,6 +183,62 @@ fn eval_operator(left_expr: &Expr, op: &Operator, right_expr: &Expr) -> Expr {
         (Frac(_, _), DoubleSlash, Int(_)) => panic!("Tried to integer-divide Frac by Int"),
 
         (_, DoubleSlash, _) => panic!("Tried to integer-divide non-numbers"),
+    }
+}
+
+fn pattern_match(expr: Expr, pattern: Pattern, vars: &mut HashMap<String, Rc<Expr>>) -> Result<(), expr::Problem> {
+    match pattern {
+        Identifier(name) => {
+            let new_val = scoped_eval(expr, vars);
+
+            vars.insert(name, Rc::new(new_val));
+
+            Ok(())
+        },
+        Underscore => {
+            // Underscore matches anything, and records no new vars.
+            Ok(())
+        },
+        Variant(expected_variant_name, opt_contents) => {
+            match expr {
+                ApplyVariant(variant_name, opt_expected_patterns) => {
+                    if expected_variant_name != variant_name {
+                        return Err(TypeMismatch(format!("Wanted a `{}` variant, but was given a `{}` variant.", expected_variant_name, variant_name)));
+                    }
+
+                    match (opt_expected_patterns, opt_contents) {
+                        ( Some(contents), Some(patterns) ) => {
+                            if contents.len() == patterns.len() {
+                                // Recursively pattern match
+                                for ( arg, pattern ) in contents.into_iter().zip(patterns) {
+                                    pattern_match(arg, pattern, vars)?;
+                                }
+
+                                Ok(())
+                            } else {
+                                Err(WrongArity(patterns.len() as u32, contents.len() as u32))
+                            }
+                        },
+                        ( None, None ) => {
+                            // It's the variant we expected, but it has no values in it,
+                            // so we don't insert anything into vars.
+                            Ok(())
+                        },
+                        ( None, Some(patterns) ) => {
+                            // It's the variant we expected, but the arity is wrong.
+                            Err(WrongArity(0, patterns.len() as u32))
+                        },
+                        ( Some(contents), None ) => {
+                            // It's the variant we expected, but the arity is wrong.
+                            Err(WrongArity(contents.len() as u32, 0))
+                        },
+                    }
+                },
+                _ => {
+                    Err(TypeMismatch(format!("Wanted to destructure a `{}` variant, but was given a non-variant.", expected_variant_name)))
+                }
+            }
+        }
     }
 }
 
