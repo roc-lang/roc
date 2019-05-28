@@ -22,8 +22,11 @@ pub enum Expr {
     // Sum Types
     ApplyVariant(String, Option<Vec<Expr>>),
 
-
+    // Conditionals
     If(Box<Expr>, Box<Expr>, Box<Expr>),
+    Match(Box<Expr>, Vec<(Pattern, Box<Expr>)>),
+
+    // Error
     Error(Problem),
 }
 

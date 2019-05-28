@@ -80,13 +80,19 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
             }
         },
 
-        Operator(left_arg, op, right_arg) => 
+        Operator(left_arg, op, right_arg) => {
             eval_operator(
                 &scoped_eval(*left_arg, vars),
                 &op,
                 &scoped_eval(*right_arg, vars)
             )
-        ,
+        },
+
+        Match(condition, branches) => {
+            match scoped_eval(*condition, vars) {
+                _ => { panic!("TODO implement eval for match-expressions"); }
+            }
+        },
 
         If(condition, if_true, if_false) => {
             match scoped_eval(*condition, vars) {

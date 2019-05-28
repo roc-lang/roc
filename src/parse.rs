@@ -129,6 +129,7 @@ parser! {
             number_literal(),
             char_literal(),
             if_expr(min_indent),
+            match_expr(min_indent),
             closure(min_indent),
             let_expr(min_indent),
             apply_variant(min_indent),
@@ -184,7 +185,7 @@ pub fn if_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    string("if").with(indented_whitespaces1(min_indent))
+    string("if").skip(indented_whitespaces1(min_indent))
         .with(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
         .skip(string("then")).skip(indented_whitespaces1(min_indent))
         .and(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
@@ -196,6 +197,30 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 Box::new(then_branch),
                 Box::new(else_branch)
             )
+        )
+}
+
+pub fn match_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    string("match").skip(indented_whitespaces1(min_indent))
+        .with(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
+        .and(
+            many::<Vec<_>, _>(
+                string("when").skip(indented_whitespaces1(min_indent))
+                    .with(pattern(min_indent)).skip(indented_whitespaces1(min_indent))
+                    .skip(string("then")).skip(indented_whitespaces1(min_indent))
+                    .and(expr_body(min_indent).map(|expr| Box::new(expr)))
+            )
+        )
+        .map(|(conditional, branches)|
+            if branches.is_empty() {
+                // TODO handle this more gracefully
+                panic!("encountered match-expression with no branches!")
+            } else {
+                Expr::Match(Box::new(conditional), branches)
+            }
         )
 }
 
@@ -229,7 +254,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             sep_by1(
                 attempt(
                     // Keywords like "then" and "else" are not function application!
-                    not_followed_by(choice((string("then"), string("else"))))
+                    not_followed_by(choice((string("then"), string("else"), string("when"))))
                         // Don't parse operators because they have a higher
                         // precedence than function application. If we see one,
                         // we're done!
@@ -404,6 +429,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 match ident_str.as_str() {
                     "if" => unexpected_any("Reserved keyword `if`").left(),
                     "then" => unexpected_any("Reserved keyword `then`").left(),
+                    "else" => unexpected_any("Reserved keyword `else`").left(),
+                    "match" => unexpected_any("Reserved keyword `match`").left(),
+                    "when" => unexpected_any("Reserved keyword `when`").left(),
                     _ => value(ident_str).right()
                 }
             } else {
@@ -561,7 +589,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                     char(' ').skip(
                         // Don't mistake keywords like `then` and `else` for
                         // space-separated digits!
-                        not_followed_by(choice((string("then"), string("else"))))
+                        not_followed_by(choice((string("then"), string("else"), string("when"))))
                     )
                 )
         ))
