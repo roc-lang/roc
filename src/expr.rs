@@ -1,5 +1,6 @@
 use std::fmt;
 use self::Expr::*;
+use im_rc::vector::Vector;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
@@ -14,17 +15,17 @@ pub enum Expr {
     Let(Pattern, Box<Expr>, Box<Expr>),
 
     // Functions
-    Func(String, Vec<Expr>),
-    Apply(Box<Expr>, Vec<Expr>),
+    Func(String, Vector<Expr>),
+    Apply(Box<Expr>, Vector<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
-    Closure(Vec<Pattern>, Box<Expr>),
+    Closure(Vector<Pattern>, Box<Expr>),
 
     // Sum Types
-    ApplyVariant(String, Option<Vec<Expr>>),
+    ApplyVariant(String, Option<Vector<Expr>>),
 
     // Conditionals
     If(Box<Expr>, Box<Expr>, Box<Expr>),
-    Match(Box<Expr>, Vec<(Pattern, Box<Expr>)>),
+    Match(Box<Expr>, Vector<(Pattern, Box<Expr>)>),
 
     // Error
     Error(Problem),
@@ -88,7 +89,7 @@ pub enum Problem {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(String),
-    Variant(String, Option<Vec<Pattern>>),
+    Variant(String, Option<Vector<Pattern>>),
     Underscore
 }
 

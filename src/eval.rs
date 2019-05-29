@@ -6,7 +6,7 @@ use expr::Pattern::*;
 use expr::Operator::*;
 use std::rc::Rc;
 use im_rc::hashmap::HashMap;
-use self::Evaluated::*;
+use im_rc::vector::Vector;
 
 pub fn eval(expr: Expr) -> Evaluated {
     scoped_eval(expr, &HashMap::new())
@@ -18,7 +18,8 @@ pub fn from_evaluated(Evaluated(expr): Evaluated) -> Expr {
 }
 
 /// Wrapper indicating the expression has been evaluated
-pub enum Evaluated { Evaluated(Expr) }
+#[derive(Clone)]
+pub struct Evaluated(Expr);
 
 type Scope = HashMap<String, Rc<Evaluated>>;
 
@@ -34,13 +35,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
 
         // Resolve variable names
         Var(name) => match vars.get(&name) {
-            Some(resolved) => {
-                let Evaluated(ref evaluated_expr) = **resolved;
-
-                // TODO is there any way to  avoid this clone? (Do we care,
-                // once this is a canonical expression with Rc instead of Box?
-                Evaluated(evaluated_expr.clone())
-            },
+            Some(resolved) => (**resolved).clone(),
             None => problem(UnrecognizedVarName(name))
         }
 
@@ -73,13 +68,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
 
         Func(name, args) => {
             let func_expr = match vars.get(&name) {
-                Some(resolved) => {
-                    let Evaluated(ref evaluated_expr) = **resolved;
-
-                    // TODO is there any way to  avoid this clone? (Do we care,
-                    // once this is a canonical expression with Rc instead of Box?
-                    Evaluated(evaluated_expr.clone())
-                },
+                Some(resolved) => (**resolved).clone(),
                 None => problem(UnrecognizedVarName(name))
             };
 
@@ -121,7 +110,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
 }
 
 #[inline(always)]
-fn eval_apply(expr: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
+fn eval_apply(expr: Evaluated, args: Vector<Expr>, vars: &Scope) -> Evaluated {
     match expr {
         Evaluated(Closure(arg_patterns, body)) => {
             let evaluated_args =
@@ -139,7 +128,7 @@ fn eval_apply(expr: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
 }
 
 #[inline(always)]
-fn eval_closure(args: Vec<Evaluated>, arg_patterns: Vec<Pattern>, vars: &Scope)
+fn eval_closure(args: Vector<Evaluated>, arg_patterns: Vector<Pattern>, vars: &Scope)
     -> Result<Scope, expr::Problem>
 {
     if arg_patterns.len() == args.len() {
@@ -230,17 +219,11 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
 }
 
 #[inline(always)]
-fn eval_match (condition: Evaluated, branches: Vec<(Pattern, Box<Expr>)>, vars: &Scope) -> Evaluated {
-    let Evaluated(ref evaluated_expr) = condition;
-
+fn eval_match (condition: Evaluated, branches: Vector<(Pattern, Box<Expr>)>, vars: &Scope) -> Evaluated {
     for (pattern, definition) in branches {
         let mut branch_vars = vars.clone();
 
-        // TODO is there any way to  avoid this clone? (Do we care,
-        // once this is a canonical expression with Rc instead of Box?
-        let cloned_expr = Evaluated(evaluated_expr.clone());
-
-        if pattern_match(cloned_expr, pattern, &mut branch_vars).is_ok() {
+        if pattern_match(condition.clone(), pattern, &mut branch_vars).is_ok() {
             return scoped_eval(*definition, &branch_vars);
         }
     }

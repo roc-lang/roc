@@ -1,6 +1,8 @@
 #[macro_use] extern crate pretty_assertions;
 extern crate combine;
 
+#[macro_use] extern crate im_rc;
+
 extern crate roc;
 
 #[cfg(test)]
@@ -16,6 +18,7 @@ mod parse_tests {
     use combine::stream::{Stream};
     use combine::easy;
     use combine::stream::state::{State};
+    use im_rc::vector::Vector;
 
     fn standalone_expr<I>() -> impl Parser<Input = I, Output = Expr>
     where I: Stream<Item = char, Position = IndentablePosition>,
@@ -234,7 +237,7 @@ mod parse_tests {
     #[test]
     fn single_operator_with_var() {
         assert_eq!(
-            // It's important that this isn't mistaken for 
+            // It's important that this isn't mistaken for
             // a declaration like (x = 1)
             parse_standalone("x == 1"),
             Ok((Operator(
@@ -329,14 +332,6 @@ mod parse_tests {
         );
     }
 
-    fn expect_parsed_capitalizedvar_error<'a>(actual_str: &'a str) {
-        assert!(
-            parse_standalone(actual_str).is_err(),
-            "Expected parsing error"
-        );
-    }
-
-
     #[test]
     fn basic_var() {
         expect_parsed_var("x");
@@ -356,7 +351,7 @@ mod parse_tests {
 
     fn expect_parsed_apply<'a>(parse_str: &'a str, expr1: Expr, expr2: Expr) {
         assert_eq!(
-            Ok((Apply(Box::new(expr1), vec![expr2]), "")),
+            Ok((Apply(Box::new(expr1), vector![expr2]), "")),
             parse_standalone(parse_str)
         );
     }
@@ -378,14 +373,14 @@ mod parse_tests {
 
         expect_parsed_apply(
             "(x 5) y",
-            Func("x".to_string(), vec![Int(5)]),
+            Func("x".to_string(), vector![Int(5)]),
             Var("y".to_string())
         );
 
         expect_parsed_apply(
             "(x 5) (y 6)",
-            Func("x".to_string(), vec![Int(5)]),
-            Func("y".to_string(), vec![Int(6)]),
+            Func("x".to_string(), vector![Int(5)]),
+            Func("y".to_string(), vector![Int(6)]),
         );
 
         expect_parsed_apply(
@@ -407,7 +402,7 @@ mod parse_tests {
 
     // FUNC
 
-    fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, args: Vec<Expr>) {
+    fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, args: Vector<Expr>) {
         assert_eq!(
             Ok((Func(func_str.to_string(), args), "")),
             parse_standalone(parse_str)
@@ -431,23 +426,23 @@ mod parse_tests {
 
     #[test]
     fn single_arg_func() {
-        expect_parsed_func("f 1", "f", vec![Int(1)]);
-        expect_parsed_func("foo  bar", "foo", vec![Var("bar".to_string())]);
-        expect_parsed_func("foo \"hi\"", "foo", vec![Str("hi".to_string())]);
+        expect_parsed_func("f 1", "f", vector![Int(1)]);
+        expect_parsed_func("foo  bar", "foo", vector![Var("bar".to_string())]);
+        expect_parsed_func("foo \"hi\"", "foo", vector![Str("hi".to_string())]);
     }
 
     #[test]
     fn multi_arg_func() {
-        expect_parsed_func("f 1,  23,  456", "f", vec![Int(1), Int(23), Int(456)]);
-        expect_parsed_func("foo  bar, 'z'", "foo", vec![Var("bar".to_string()), Char('z')]);
-        expect_parsed_func("foo \"hi\", 1, blah", "foo", vec![Str("hi".to_string()), Int(1), Var("blah".to_string())]);
+        expect_parsed_func("f 1,  23,  456", "f", vector![Int(1), Int(23), Int(456)]);
+        expect_parsed_func("foo  bar, 'z'", "foo", vector![Var("bar".to_string()), Char('z')]);
+        expect_parsed_func("foo \"hi\", 1, blah", "foo", vector![Str("hi".to_string()), Int(1), Var("blah".to_string())]);
     }
 
     #[test]
     fn multiline_func() {
-        expect_parsed_func("f\n 1", "f", vec![Int(1)]);
-        expect_parsed_func("foo  bar,\n 'z'", "foo", vec![Var("bar".to_string()), Char('z')]);
-        expect_parsed_func("foo \"hi\",\n 1,\n blah", "foo", vec![Str("hi".to_string()), Int(1), Var("blah".to_string())]);
+        expect_parsed_func("f\n 1", "f", vector![Int(1)]);
+        expect_parsed_func("foo  bar,\n 'z'", "foo", vector![Var("bar".to_string()), Char('z')]);
+        expect_parsed_func("foo \"hi\",\n 1,\n blah", "foo", vector![Str("hi".to_string()), Int(1), Var("blah".to_string())]);
     }
 
     #[test]
@@ -459,7 +454,7 @@ mod parse_tests {
                     Operator(
                         Box::new(
                             Func("f".to_string(),
-                                vec![Int(5)],
+                                vector![Int(5)],
                             )
                         ),
                         Plus,
@@ -479,7 +474,7 @@ mod parse_tests {
                     Operator(
                         Box::new(
                             Func("f".to_string(),
-                                vec![Int(1), Int(2), Int(3)],
+                                vector![Int(1), Int(2), Int(3)],
                             )
                         ),
                         Plus,
@@ -505,9 +500,9 @@ mod parse_tests {
         expect_parsed_int(-2, "((-2))");
         expect_parsed_str("a", "(\"a\")");
         expect_parsed_str("abc", "((\"abc\"))");
-        expect_parsed_func("(f 1)", "f", vec![Int(1)]);
-        expect_parsed_func("(foo  bar)", "foo", vec![Var("bar".to_string())]);
-        expect_parsed_func("(  foo \"hi\"  )", "foo", vec![Str("hi".to_string())]);
+        expect_parsed_func("(f 1)", "f", vector![Int(1)]);
+        expect_parsed_func("(foo  bar)", "foo", vector![Var("bar".to_string())]);
+        expect_parsed_func("(  foo \"hi\"  )", "foo", vector![Str("hi".to_string())]);
     }
 
     #[test]
@@ -572,18 +567,18 @@ mod parse_tests {
     fn complex_expressions() {
         expect_parsed_apply(
             "(x 5) (y + (f 6))",
-            Func("x".to_string(), vec![Int(5)]),
+            Func("x".to_string(), vector![Int(5)]),
             Operator(
                 Box::new(Var("y".to_string())),
                 Plus,
-                Box::new(Func("f".to_string(), vec![Int(6)])),
+                Box::new(Func("f".to_string(), vector![Int(6)])),
             )
         );
 
         assert_eq!(
             parse_standalone("(x 5)"),
             Ok((
-                Func("x".to_string(), vec![Int(5)]),
+                Func("x".to_string(), vector![Int(5)]),
                 "")
             )
         );
@@ -644,7 +639,7 @@ mod parse_tests {
             parse_standalone("(x 5) + 123"),
             Ok((
                 Operator(
-                    Box::new(Func("x".to_string(), vec![Int(5)])),
+                    Box::new(Func("x".to_string(), vector![Int(5)])),
                     Plus,
                     Box::new(Int(123))
                 ),
@@ -656,7 +651,7 @@ mod parse_tests {
             parse_standalone("(x 5) + (2 * y)"),
             Ok((
                 Operator(
-                    Box::new(Func("x".to_string(), vec![Int(5)])),
+                    Box::new(Func("x".to_string(), vector![Int(5)])),
                     Plus,
                     Box::new(
                         Operator(
