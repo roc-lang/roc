@@ -138,7 +138,6 @@ parser! {
     }
 }
 
-
 fn expr_body<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>

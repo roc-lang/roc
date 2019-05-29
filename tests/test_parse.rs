@@ -444,6 +444,13 @@ mod parse_tests {
     }
 
     #[test]
+    fn multiline_func() {
+        expect_parsed_func("f\n 1", "f", vec![Int(1)]);
+        expect_parsed_func("foo  bar,\n 'z'", "foo", vec![Var("bar".to_string()), Char('z')]);
+        expect_parsed_func("foo \"hi\",\n 1,\n blah", "foo", vec![Str("hi".to_string()), Int(1), Var("blah".to_string())]);
+    }
+
+    #[test]
     fn func_with_operator() {
         assert_eq!(
             parse_standalone("f 5 + 6"),
