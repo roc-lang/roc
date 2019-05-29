@@ -7,31 +7,31 @@ use expr::Operator::*;
 use std::rc::Rc;
 use im_rc::hashmap::HashMap;
 
-pub fn eval(expr: Expr) -> Expr {
+pub fn eval(expr: &Expr) -> Expr {
     scoped_eval(expr, &HashMap::new())
 }
 
-pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
+pub fn scoped_eval(expr: &Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
     match expr {
         // Primitives need no further evaluation
-        Error(_) | Int(_) | Str(_) | Frac(_, _) | Char(_) | Bool(_) | Closure(_, _) => expr,
+        Error(_) | Int(_) | Str(_) | Frac(_, _) | Char(_) | Bool(_) | Closure(_, _) => *expr,
 
         // Resolve variable names
-        Var(name) => match vars.get(&name) {
+        Var(name) => match vars.get(name) {
             Some(resolved) => (*Rc::clone(resolved)).clone(),
-            None => Error(UnrecognizedVarName(name))
+            None => Error(UnrecognizedVarName(*name))
         }
 
         Let(Identifier(name), definition, in_expr) => {
-            if vars.contains_key(&name) {
-                Error(ReassignedVarName(name))
+            if vars.contains_key(name) {
+                Error(ReassignedVarName(*name))
             } else {
                 // Create a new scope containing the new declaration.
                 let mut new_vars = (*vars).clone();
-                new_vars.insert(name, Rc::new(scoped_eval(*definition, vars)));
+                new_vars.insert(*name, Rc::new(scoped_eval(definition, vars)));
 
                 // Evaluate in_expr with that new scope's variables.
-                scoped_eval(*in_expr, &new_vars)
+                scoped_eval(in_expr, &new_vars)
             }
         },
 
@@ -41,22 +41,22 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
 
         Let(Underscore, definition, in_expr) => {
             // Faithfully eval this, but discard its result.
-            scoped_eval(*definition, vars);
+            scoped_eval(definition, vars);
 
             // Actually use this part.
-            scoped_eval(*in_expr, vars)
+            scoped_eval(in_expr, vars)
         },
 
         Func(name, args) => {
-            let func_expr = match vars.get(&name) {
+            let func_expr = match vars.get(name) {
                 Some(resolved) => (*Rc::clone(resolved)).clone(),
-                None => Error(UnrecognizedVarName(name))
+                None => Error(UnrecognizedVarName(*name))
             };
 
-            scoped_eval(Apply(Box::new(func_expr), args), vars)
+            eval_apply(func_expr, *args, vars)
         },
 
-        ApplyVariant(_, None) => expr, // This is all we do - for now...
+        ApplyVariant(_, None) => *expr, // This is all we do - for now...
 
         ApplyVariant(name, Some(args)) => {
             let mut evaluated_args = Vec::with_capacity(args.len());
@@ -65,45 +65,51 @@ pub fn scoped_eval(expr: Expr, vars: &HashMap<String, Rc<Expr>>) -> Expr {
                 evaluated_args.push(scoped_eval(arg, vars))
             }
 
-            ApplyVariant(name, Some(evaluated_args))
+            ApplyVariant(*name, Some(evaluated_args))
         }
 
         Apply(func_expr, args) => {
-            match *func_expr.clone() {
-                Closure(arg_patterns, body) => {
-                    match eval_closure(args, arg_patterns, vars) {
-                        Ok(new_vars) => scoped_eval(*body, &new_vars),
-                        Err(problem) => Error(problem)
-                    }
-                },
-                _ => Error(TypeMismatch("Tried to call a non-function.".to_string()))
-            }
+            eval_apply(**func_expr, *args, vars)
         },
 
         Operator(left_arg, op, right_arg) => {
             eval_operator(
-                &scoped_eval(*left_arg, vars),
+                &scoped_eval(left_arg, vars),
                 &op,
-                &scoped_eval(*right_arg, vars)
+                &scoped_eval(right_arg, vars)
             )
         },
 
         Match(condition, branches) => {
-            match scoped_eval(*condition, vars) {
+            match scoped_eval(condition, vars) {
                 _ => { panic!("TODO implement eval for match-expressions"); }
             }
         },
 
         If(condition, if_true, if_false) => {
-            match scoped_eval(*condition, vars) {
-                Bool(true) => scoped_eval(*if_true, vars),
-                Bool(false) => scoped_eval(*if_false, vars),
+            match scoped_eval(condition, vars) {
+                Bool(true) => scoped_eval(if_true, vars),
+                Bool(false) => scoped_eval(if_false, vars),
                 _ => Error(TypeMismatch("non-Bool used in `if` condition".to_string()))
             }
         }
     }
 }
 
+#[inline(always)]
+fn eval_apply(expr: Expr, args: Vec<Expr>, vars: &HashMap<String, Rc<Expr>>) -> Expr {
+    match expr {
+        Closure(arg_patterns, body) => {
+            match eval_closure(args, arg_patterns, vars) {
+                Ok(new_vars) => scoped_eval(&*body, &new_vars),
+                Err(problem) => Error(problem)
+            }
+        },
+        _ => Error(TypeMismatch("Tried to call a non-function.".to_string()))
+    }
+}
+
+#[inline(always)]
 fn eval_closure(args: Vec<Expr>, arg_patterns: Vec<Pattern>, vars: &HashMap<String, Rc<Expr>>)
     -> Result<HashMap<String, Rc<Expr>>, expr::Problem>
 {
@@ -112,7 +118,7 @@ fn eval_closure(args: Vec<Expr>, arg_patterns: Vec<Pattern>, vars: &HashMap<Stri
         let mut new_vars = (*vars).clone();
 
         for ( arg, pattern ) in args.into_iter().zip(arg_patterns) {
-            pattern_match(arg, pattern, &mut new_vars)?;
+            pattern_match(&arg, pattern, &mut new_vars)?;
         }
 
         Ok(new_vars)
@@ -121,6 +127,7 @@ fn eval_closure(args: Vec<Expr>, arg_patterns: Vec<Pattern>, vars: &HashMap<Stri
     }
 }
 
+#[inline(always)]
 fn eval_operator(left_expr: &Expr, op: &Operator, right_expr: &Expr) -> Expr {
     match (left_expr, op, right_expr) {
         // Error
@@ -192,7 +199,20 @@ fn eval_operator(left_expr: &Expr, op: &Operator, right_expr: &Expr) -> Expr {
     }
 }
 
-fn pattern_match(expr: Expr, pattern: Pattern, vars: &mut HashMap<String, Rc<Expr>>) -> Result<(), expr::Problem> {
+#[inline(always)]
+fn eval_match(condition: &Expr, branches: Vec<(Pattern, Box<Expr>)>, vars: HashMap<String, Rc<Expr>>) -> Expr {
+    for (pattern, expr) in branches {
+        let mut branch_vars = vars.clone();
+
+        if pattern_match(&condition, pattern, &mut branch_vars).is_ok() {
+            return scoped_eval(&*expr, &branch_vars);
+        }
+    }
+
+    Error(NoBranchesMatched)
+}
+
+fn pattern_match(expr: &Expr, pattern: Pattern, vars: &mut HashMap<String, Rc<Expr>>) -> Result<(), expr::Problem> {
     match pattern {
         Identifier(name) => {
             let new_val = scoped_eval(expr, vars);
@@ -206,7 +226,7 @@ fn pattern_match(expr: Expr, pattern: Pattern, vars: &mut HashMap<String, Rc<Exp
             Ok(())
         },
         Variant(expected_variant_name, opt_contents) => {
-            match expr {
+            match *expr {
                 ApplyVariant(variant_name, opt_expected_patterns) => {
                     if expected_variant_name != variant_name {
                         return Err(TypeMismatch(format!("Wanted a `{}` variant, but was given a `{}` variant.", expected_variant_name, variant_name)));
@@ -217,7 +237,7 @@ fn pattern_match(expr: Expr, pattern: Pattern, vars: &mut HashMap<String, Rc<Exp
                             if contents.len() == patterns.len() {
                                 // Recursively pattern match
                                 for ( arg, pattern ) in contents.into_iter().zip(patterns) {
-                                    pattern_match(arg, pattern, vars)?;
+                                    pattern_match(&arg, pattern, vars)?;
                                 }
 
                                 Ok(())

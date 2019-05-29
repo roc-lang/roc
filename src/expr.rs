@@ -82,6 +82,7 @@ pub enum Problem {
     TypeMismatch(String),
     ReassignedVarName(String),
     WrongArity(u32 /* Expected */, u32 /* Provided */),
+    NoBranchesMatched,
 }
 
 #[derive(Clone, Debug, PartialEq)]
