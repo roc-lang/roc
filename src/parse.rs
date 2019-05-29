@@ -1,8 +1,6 @@
 use expr::Operator;
 use expr::{Expr, Pattern};
 
-use im_rc::vector::Vector;
-
 use std::char;
 use parse_state::{IndentablePosition};
 
@@ -50,7 +48,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 fn whitespace<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    many::<Vector<_>, _>(choice((char(' '), char('\n')))).with(value(()))
+    many::<Vec<_>, _>(choice((char(' '), char('\n')))).with(value(()))
 }
 
 fn whitespace1<I>() -> impl Parser<Input = I, Output = ()>
@@ -91,7 +89,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 .skip(skip_many(char('\n').skip(skip_many(char(' ')))))
                 .skip(
                     choice((
-                        many1::<Vector<_>, _>(char(' ')).then(move |chars| {
+                        many1::<Vec<_>, _>(char(' ')).then(move |chars| {
                             if chars.len() < min_indent as usize {
                                 unexpected("outdent").left()
                             } else {
@@ -208,7 +206,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     string("match").skip(indented_whitespaces1(min_indent))
         .with(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
         .and(
-            many::<Vector<_>, _>(
+            many::<Vec<_>, _>(
                 string("when").skip(indented_whitespaces1(min_indent))
                     .with(pattern(min_indent)).skip(indented_whitespaces1(min_indent))
                     .skip(string("then")).skip(indented_whitespaces1(min_indent))
@@ -236,7 +234,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         // whitespace and one or more comma-separated expressions,
         // meaning this is function application!
         optional(attempt(function_application(min_indent)))
-    ).map(|(expr, opt_args): (Expr, Option<Vector<Expr>>)|
+    ).map(|(expr, opt_args): (Expr, Option<Vec<Expr>>)|
         match opt_args {
             None => expr,
             Some(args) => Expr::Apply(Box::new(expr), args)
@@ -244,7 +242,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     )
 }
 
-pub fn function_application<I>(min_indent: i32) -> impl Parser<Input = I, Output = Vector<Expr>>
+pub fn function_application<I>(min_indent: i32) -> impl Parser<Input = I, Output = Vec<Expr>>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
@@ -322,9 +320,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     ident().and(optional(attempt(function_application(min_indent))))
-        .map(|(name, opt_args): (String, Option<Vector<Expr>>)|
+        .map(|(name, opt_args): (String, Option<Vec<Expr>>)|
             // Use optional(sep_by1()) over sep_by() to avoid
-            // allocating a Vector in the common case where this is a var
+            // allocating a Vec in the common case where this is a var
             match opt_args {
                 None => Expr::Var(name),
                 Some(args) => Expr::Func(name, args)
@@ -369,9 +367,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 {
     attempt(variant_name())
         .and(optional(attempt(function_application(min_indent))))
-        .map(|(name, opt_args): (String, Option<Vector<Expr>>)|
+        .map(|(name, opt_args): (String, Option<Vec<Expr>>)|
             // Use optional(sep_by1()) over sep_by() to avoid
-            // allocating a Vector in case the variant is empty
+            // allocating a Vec in case the variant is empty
             Expr::ApplyVariant(name, opt_args)
         )
 }
@@ -386,9 +384,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 pattern(min_indent),
                 char(',').skip(indented_whitespaces(min_indent))
         ))))
-        .map(|(name, opt_args): (String, Option<Vector<Pattern>>)|
+        .map(|(name, opt_args): (String, Option<Vec<Pattern>>)|
             // Use optional(sep_by1()) over sep_by() to avoid
-            // allocating a Vector in case the variant is empty
+            // allocating a Vec in case the variant is empty
             Pattern::Variant(name, opt_args)
         )
 }
@@ -401,7 +399,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // combination of letters or numbers afterwards.
     // No underscores, dashes, or apostrophes.
     look_ahead(satisfy(|ch: char| ch.is_uppercase()))
-        .with(many1::<Vector<_>, _>(alpha_num()))
+        .with(many1::<Vec<_>, _>(alpha_num()))
         .map(|chars| chars.into_iter().collect())
 }
 
@@ -412,8 +410,8 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // Identifiers must begin with a lowercase letter, but can have any
     // combination of letters or numbers afterwards.
     // No underscores, dashes, or apostrophes.
-    many1::<Vector<_>, _>(alpha_num())
-        .then(|chars: Vector<char>| {
+    many1::<Vec<_>, _>(alpha_num())
+        .then(|chars: Vec<char>| {
             let valid_start_char = chars[0].is_lowercase();
 
             if valid_start_char {
@@ -459,7 +457,7 @@ where
     // e.g. \u{00A0} or \u{101010}
     // They must be no more than 10FFFF
     let hex_code_pt =
-        count_min_max::<Vector<char>, HexDigit<I>>(1, 6, hex_digit())
+        count_min_max::<Vec<char>, HexDigit<I>>(1, 6, hex_digit())
         .then(|hex_digits| {
             let hex_str:String = hex_digits.into_iter().collect();
 
@@ -572,11 +570,11 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // We expect these to be digits, but read any alphanumeric characters
     // because it could turn out they're malformed identifiers which
     // happen to begin with a number. We'll check for that at the end.
-    let digits_after_decimal =  many1::<Vector<_>, _>(alpha_num());
+    let digits_after_decimal =  many1::<Vec<_>, _>(alpha_num());
 
     // Digits before the decimal point can be space-separated
     // e.g. one million can be written as 1 000 000
-    let digits_before_decimal = many1::<Vector<_>, _>(
+    let digits_before_decimal = many1::<Vec<_>, _>(
         alpha_num().skip(optional(
                 attempt(
                     char(' ').skip(
@@ -597,7 +595,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         .and(look_ahead(digit()))
         .and(digits_before_decimal)
         .and(optional(char('.').with(digits_after_decimal)))
-        .then(|(((opt_minus, _), int_digits), decimals): (((Option<char>, _), Vector<char>), Option<Vector<char>>)| {
+        .then(|(((opt_minus, _), int_digits), decimals): (((Option<char>, _), Vec<char>), Option<Vec<char>>)| {
             let is_positive = opt_minus.is_none();
 
             // TODO check length of digits and make sure not to overflow
