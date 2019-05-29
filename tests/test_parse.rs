@@ -338,7 +338,7 @@ mod parse_tests {
 
 
     #[test]
-    fn var() {
+    fn basic_var() {
         expect_parsed_var("x");
         expect_parsed_var("x2");
         expect_parsed_var("foo");
@@ -350,13 +350,6 @@ mod parse_tests {
         expect_parsed_var_error("5x");
         expect_parsed_var_error("2foo2furious");
         expect_parsed_var_error("2Foo2Furious");
-
-        // TODO someday, capitalized vars should parse successfully as variants.
-        // At that point, turn these into variant tests!
-        expect_parsed_capitalizedvar_error("X");
-        expect_parsed_capitalizedvar_error("X2");
-        expect_parsed_capitalizedvar_error("Foo");
-        expect_parsed_capitalizedvar_error("Foo2Furious");
     }
 
     // APPLY

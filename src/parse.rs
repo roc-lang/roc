@@ -6,7 +6,7 @@ use parse_state::{IndentablePosition};
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max, sep_by1, skip_many, skip_many1};
-use combine::parser::item::{any, satisfy_map, value, position};
+use combine::parser::item::{any, satisfy_map, value, position, satisfy};
 use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
 use combine::error::{Consumed, ParseError};
@@ -366,7 +366,7 @@ pub fn apply_variant<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    variant_name()
+    attempt(variant_name())
         .and(optional(attempt(function_application(min_indent))))
         .map(|(name, opt_args): (String, Option<Vec<Expr>>)|
             // Use optional(sep_by1()) over sep_by() to avoid
@@ -379,7 +379,7 @@ pub fn match_variant<I>(min_indent: i32) -> impl Parser<Input = I, Output = Patt
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    variant_name()
+    attempt(variant_name())
         .and(optional(attempt(
             sep_by1(
                 pattern(min_indent),
@@ -392,7 +392,6 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         )
 }
 
-
 pub fn variant_name<I>() -> impl Parser<Input = I, Output = String>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
@@ -400,16 +399,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // Variants must begin with an uppercase letter, but can have any
     // combination of letters or numbers afterwards.
     // No underscores, dashes, or apostrophes.
-    many1::<Vec<_>, _>(alpha_num())
-        .then(|chars: Vec<char>| {
-            let valid_start_char = chars[0].is_uppercase();
-
-            if valid_start_char {
-                value(chars.into_iter().collect()).right()
-            } else {
-                unexpected_any("First character in an identifier that was not a lowercase letter").left()
-            }
-        })
+    look_ahead(satisfy(|ch: char| ch.is_uppercase()))
+        .with(many1::<Vec<_>, _>(alpha_num()))
+        .map(|chars| chars.into_iter().collect())
 }
 
 pub fn ident<I>() -> impl Parser<Input = I, Output = String>
