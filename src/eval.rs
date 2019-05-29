@@ -93,12 +93,6 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             )
         },
 
-        Match(condition, branches) => {
-            match scoped_eval(*condition, vars) {
-                _ => { panic!("TODO implement eval for match-expressions"); }
-            }
-        },
-
         If(condition, if_true, if_false) => {
             match scoped_eval(*condition, vars) {
                 Evaluated(Bool(true)) => scoped_eval(*if_true, vars),
