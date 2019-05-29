@@ -12,4 +12,5 @@ extern crate dogged;
 
 extern crate im_rc;
 
+extern crate smallvec;
 #[macro_use] extern crate combine;

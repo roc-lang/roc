@@ -3,6 +3,7 @@ use expr::{Expr, Pattern};
 
 use std::char;
 use parse_state::{IndentablePosition};
+use smallvec::SmallVec;
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
 use combine::parser::repeat::{many, count_min_max, sep_by1, skip_many, skip_many1};
@@ -206,7 +207,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     string("match").skip(indented_whitespaces1(min_indent))
         .with(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
         .and(
-            many::<Vec<_>, _>(
+            many::<SmallVec<_>, _>(
                 string("when").skip(indented_whitespaces1(min_indent))
                     .with(pattern(min_indent)).skip(indented_whitespaces1(min_indent))
                     .skip(string("then")).skip(indented_whitespaces1(min_indent))

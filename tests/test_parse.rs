@@ -1,4 +1,5 @@
 #[macro_use] extern crate pretty_assertions;
+#[macro_use] extern crate smallvec;
 extern crate combine;
 
 extern crate roc;
@@ -234,7 +235,7 @@ mod parse_tests {
     #[test]
     fn single_operator_with_var() {
         assert_eq!(
-            // It's important that this isn't mistaken for 
+            // It's important that this isn't mistaken for
             // a declaration like (x = 1)
             parse_standalone("x == 1"),
             Ok((Operator(

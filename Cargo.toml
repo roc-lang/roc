@@ -9,6 +9,7 @@ log = "0.4"
 petgraph = { version = "0.4.5", optional = true }
 combine = "3.8.1"
 im-rc = "13.0.0"
+smallvec = "0.6.9"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

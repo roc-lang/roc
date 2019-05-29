@@ -1,5 +1,6 @@
 use std::fmt;
 use self::Expr::*;
+use smallvec::SmallVec;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
@@ -17,14 +18,14 @@ pub enum Expr {
     Func(String, Vec<Expr>),
     Apply(Box<Expr>, Vec<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
-    Closure(Vec<Pattern>, Box<Expr>),
+    Closure(SmallVec<[Pattern; 4]>, Box<Expr>),
 
     // Sum Types
     ApplyVariant(String, Option<Vec<Expr>>),
 
     // Conditionals
     If(Box<Expr>, Box<Expr>, Box<Expr>),
-    Match(Box<Expr>, Vec<(Pattern, Box<Expr>)>),
+    Match(Box<Expr>, SmallVec<[(Pattern, Box<Expr>); 4]>),
 
     // Error
     Error(Problem),

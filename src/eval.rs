@@ -7,6 +7,7 @@ use expr::Operator::*;
 use std::rc::Rc;
 use im_rc::hashmap::HashMap;
 use self::Evaluated::*;
+use smallvec::SmallVec;
 
 pub fn eval(expr: Expr) -> Evaluated {
     scoped_eval(expr, &HashMap::new())
@@ -133,7 +134,7 @@ fn eval_apply(expr: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
 }
 
 #[inline(always)]
-fn eval_closure(args: Vec<Evaluated>, arg_patterns: Vec<Pattern>, vars: &Scope)
+fn eval_closure(args: Vec<Evaluated>, arg_patterns: SmallVec<[Pattern; 4]>, vars: &Scope)
     -> Result<Scope, expr::Problem>
 {
     if arg_patterns.len() == args.len() {
@@ -224,7 +225,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
 }
 
 #[inline(always)]
-fn eval_match (condition: Evaluated, branches: Vec<(Pattern, Box<Expr>)>, vars: &Scope) -> Evaluated {
+fn eval_match (condition: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 4]>, vars: &Scope) -> Evaluated {
     let Evaluated(ref evaluated_expr) = condition;
 
     for (pattern, definition) in branches {
