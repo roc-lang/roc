@@ -5,9 +5,15 @@ extern crate roc;
 
 #[cfg(test)]
 mod eval_tests {
+    use roc::expr::{Expr};
     use roc::expr::Expr::*;
     use roc::expr::Operator::*;
-    use roc::eval::eval;
+
+    fn eval(expr: Expr) -> Expr {
+        roc::eval::from_evaluated(
+            roc::eval::eval(expr)
+        )
+    }
 
     #[test]
     fn one_plus_one() {
