@@ -562,6 +562,17 @@ mod parse_tests {
     // COMPLEX EXPRESSIONS
 
     #[test]
+    fn nested_let_variant() {
+        assert_eq!(
+            parse_standalone("one = Foo 1\ntwo = Bar\n\none"),
+            Ok((
+                    Int(1),
+                ""
+            ))
+        );
+    }
+
+    #[test]
     fn complex_expressions() {
         expect_parsed_apply(
             "(x 5) (y + (f 6))",
