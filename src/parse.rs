@@ -123,7 +123,9 @@ parser! {
         let min_indent = *min_indent_ref;
 
         choice((
+            closure(min_indent),
             parenthetical_expr(min_indent),
+            string("{}").with(value(Expr::EmptyRecord)),
             string("True").with(value(Expr::Bool(true))),
             string("False").with(value(Expr::Bool(false))),
             string_literal(),
@@ -131,7 +133,6 @@ parser! {
             char_literal(),
             if_expr(min_indent),
             match_expr(min_indent),
-            closure(min_indent),
             let_expr(min_indent),
             apply_variant(min_indent),
             func_or_var(min_indent),
@@ -204,7 +205,7 @@ pub fn match_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    string("match").skip(indented_whitespaces1(min_indent))
+    string("case").skip(indented_whitespaces1(min_indent))
         .with(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
         .and(
             many::<SmallVec<_>, _>(
@@ -219,7 +220,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 // TODO handle this more gracefully
                 panic!("encountered match-expression with no branches!")
             } else {
-                Expr::Match(Box::new(conditional), branches)
+                Expr::Case(Box::new(conditional), branches)
             }
         )
 }
@@ -336,15 +337,20 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     // TODO patterns must be separated by commas!
-    between(char('|'), char('|'),
+    attempt(
+        between(char('('), char(')'),
             sep_by1(
                 pattern(min_indent),
                 char(',').skip(indented_whitespaces(min_indent))
             ))
-        .and(whitespace1().with(expr_body(min_indent)))
-        .map(|(patterns, closure_body)| {
-            Expr::Closure(patterns, Box::new(closure_body))
-        })
+        .skip(indented_whitespaces1(min_indent))
+        .skip(string("->"))
+        .skip(indented_whitespaces1(min_indent))
+    )
+    .and(expr_body(min_indent))
+    .map(|(patterns, closure_body)| {
+        Expr::Closure(patterns, Box::new(closure_body))
+    })
 }
 
 parser! {
@@ -356,6 +362,7 @@ parser! {
 
         choice((
             char('_').map(|_| Pattern::Underscore),
+            string("{}").map(|_| Pattern::EmptyRecord),
             ident().map(|name| Pattern::Identifier(name)),
             match_variant(min_indent)
         ))
@@ -420,7 +427,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                     "if" => unexpected_any("Reserved keyword `if`").left(),
                     "then" => unexpected_any("Reserved keyword `then`").left(),
                     "else" => unexpected_any("Reserved keyword `else`").left(),
-                    "match" => unexpected_any("Reserved keyword `match`").left(),
+                    "case" => unexpected_any("Reserved keyword `case`").left(),
                     "when" => unexpected_any("Reserved keyword `when`").left(),
                     _ => value(ident_str).right()
                 }

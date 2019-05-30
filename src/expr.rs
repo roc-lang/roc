@@ -23,9 +23,12 @@ pub enum Expr {
     // Sum Types
     ApplyVariant(String, Option<Vec<Expr>>),
 
+    // Product Types
+    EmptyRecord,
+
     // Conditionals
     If(Box<Expr>, Box<Expr>, Box<Expr>),
-    Match(Box<Expr>, SmallVec<[(Pattern, Box<Expr>); 4]>),
+    Case(Box<Expr>, SmallVec<[(Pattern, Box<Expr>); 4]>),
 
     // Error
     Error(Problem),
@@ -104,6 +107,7 @@ pub enum Problem {
 pub enum Pattern {
     Identifier(String),
     Variant(String, Option<Vec<Pattern>>),
+    EmptyRecord,
     Underscore
 }
 

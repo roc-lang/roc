@@ -31,7 +31,7 @@ fn problem(prob: Problem) -> Evaluated {
 pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
     match expr {
         // Primitives need no further evaluation
-        Error(_) | Int(_) | Str(_) | Frac(_, _) | Char(_) | Bool(_) | Closure(_, _) => Evaluated(expr),
+        Error(_) | Int(_) | Str(_) | Frac(_, _) | Char(_) | Bool(_) | Closure(_, _) | Expr::EmptyRecord => Evaluated(expr),
 
         // Resolve variable names
         Var(name) => match vars.get(&name) {
@@ -72,6 +72,14 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             scoped_eval(*in_expr, vars)
         },
 
+        Let(Pattern::EmptyRecord, definition, in_expr) => {
+            // Faithfully eval this, but discard its result.
+            scoped_eval(*definition, &vars);
+
+            // Actually use this part.
+            scoped_eval(*in_expr, vars)
+        },
+
         Func(name, args) => {
             let func_expr = match vars.get(&name) {
                 Some(resolved) => {
@@ -93,8 +101,8 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             eval_apply(scoped_eval(*func_expr, vars), args, vars)
         },
 
-        Match(condition, branches) => {
-            eval_match(scoped_eval(*condition, vars), branches, vars)
+        Case(condition, branches) => {
+            eval_case(scoped_eval(*condition, vars), branches, vars)
         },
 
         Operator(left_arg, op, right_arg) => {
@@ -225,7 +233,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
 }
 
 #[inline(always)]
-fn eval_match (condition: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 4]>, vars: &Scope) -> Evaluated {
+fn eval_case (condition: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 4]>, vars: &Scope) -> Evaluated {
     let Evaluated(ref evaluated_expr) = condition;
 
     for (pattern, definition) in branches {
@@ -253,6 +261,14 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
         Underscore => {
             // Underscore matches anything, and records no new vars.
             Ok(())
+        },
+        Pattern::EmptyRecord => {
+            match evaluated {
+                Evaluated(Expr::EmptyRecord) => Ok(()),
+                Evaluated(expr) => Err(TypeMismatch(
+                    format!("Wanted a `{}`, but was given `{}`.", "{}", expr)
+                ))
+            }
         },
         Variant(pattern_variant_name, opt_pattern_contents) => {
             match evaluated {
