@@ -35,12 +35,12 @@ impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             // PRIMITIVES
-            Int(num) => write!(f, "{} : Int", *num),
+            Int(num) => write!(f, "{}", *num),
             Frac(numerator, denominator) => {
                 if *denominator == 10 {
-                    write!(f, "{} : Frac", (*numerator as f64 / 10.0))
+                    write!(f, "{}", (*numerator as f64 / 10.0))
                 } else {
-                    write!(f, "{}/{} : Frac", numerator, denominator)
+                    write!(f, "{}/{}", numerator, denominator)
                 }
             },
             Str(string) => {
@@ -52,12 +52,26 @@ impl fmt::Display for Expr {
                         .replace("\n", "\\n")
                         .replace("\r", "\\r");
 
-                write!(f, "\"{}\" : String", escaped_str)
+                write!(f, "\"{}\"", escaped_str)
             },
-            Char(ch) => write!(f, "'{}' : Char", *ch),
-            Bool(true) => write!(f, "True : Bool"),
-            Bool(false) => write!(f, "False : Bool"),
+            Char(ch) => write!(f, "'{}'", *ch),
+            Bool(true) => write!(f, "True"),
+            Bool(false) => write!(f, "False"),
             Closure(args, _) => write!(f, "<{}-argument function>", args.len()),
+            ApplyVariant(name, opt_exprs) => {
+                match opt_exprs {
+                    None => write!(f, "{}", name),
+                    Some(exprs) => {
+                        let contents =
+                            exprs.into_iter()
+                                .map(|expr| format!(" {}", expr))
+                                .collect::<Vec<_>>()
+                                .join(",");
+
+                        write!(f, "{}{}", name, contents)
+                    }
+                }
+            },
 
             // ERRORS
             Error(Problem::UnrecognizedVarName(name)) => write!(f, "NAMING ERROR: Unrecognized var name `{}`", name),
