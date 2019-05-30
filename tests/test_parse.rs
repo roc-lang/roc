@@ -1,5 +1,5 @@
 #[macro_use] extern crate pretty_assertions;
-#[macro_use] extern crate smallvec;
+extern crate smallvec;
 extern crate combine;
 
 extern crate roc;
@@ -329,14 +329,6 @@ mod parse_tests {
             "Expected parsing error"
         );
     }
-
-    fn expect_parsed_capitalizedvar_error<'a>(actual_str: &'a str) {
-        assert!(
-            parse_standalone(actual_str).is_err(),
-            "Expected parsing error"
-        );
-    }
-
 
     #[test]
     fn basic_var() {

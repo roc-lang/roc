@@ -55,26 +55,26 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 fn whitespace1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    skip_many1(choice((char(' '), char('\n')))).with(value(()))
+    skip_many1(choice((char(' '), char('\n'))))
 }
 
 
 fn spaces1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    skip_many1(choice((char(' '), char('\n')))).with(value(()))
+    skip_many1(choice((char(' '), char('\n'))))
 }
 
 fn indented_whitespaces<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    skip_many(indented_whitespace(min_indent)).with(value(()))
+    skip_many(indented_whitespace(min_indent))
 }
 
 fn indented_whitespaces1<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    skip_many1(indented_whitespace(min_indent)).with(value(()))
+    skip_many1(indented_whitespace(min_indent))
 }
 
 fn indented_whitespace<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
@@ -369,8 +369,6 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     attempt(variant_name())
         .and(optional(attempt(function_application(min_indent))))
         .map(|(name, opt_args): (String, Option<Vec<Expr>>)|
-            // Use optional(sep_by1()) over sep_by() to avoid
-            // allocating a Vec in case the variant is empty
             Expr::ApplyVariant(name, opt_args)
         )
 }
