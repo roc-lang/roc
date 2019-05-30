@@ -44,13 +44,13 @@ fallback = |task, onFailure|
 
         when Echo str, cont, prevOnFailure then
             Echo str
-                (|{}| fallback (cont {}), onFailure)
-                (|ioErr| fallback (prevOnFailure ioErr), onFailure)
+                (|{}| -> fallback (cont {}), onFailure)
+                (|ioErr| -> fallback (prevOnFailure ioErr), onFailure)
 
         when Read cont, prevOnFailure then
             Read
-                (|str| fallback (cont str), onFailure)
-                (|ioErr| fallback (prevOnFailure ioErr), onFailure)
+                (|str| -> fallback (cont str), onFailure)
+                (|ioErr| -> fallback (prevOnFailure ioErr), onFailure)
 
 
 demo =
@@ -59,5 +59,46 @@ demo =
     await (echo "Enter last name"), |{}|
     await read, |lastName|
     echo "Your name is: \(firstName) \(lastName)"
+
+
+demo =
+    await (echo "Enter first name"), |{}| ->
+    await read, |firstName| ->
+    await (echo "Enter last name"), |{}| ->
+    await read, |lastName| ->
+    echo "Your name is: \(firstName) \(lastName)"
+
+
+demo =
+    await (echo "Enter first name"), ({}) ->
+    await read, (firstName) ->
+    await (echo "Enter last name"), ({}) ->
+    await read, (lastName) ->
+    echo "Your name is: \(firstName) \(lastName)"
+
+
+demo =
+    await (echo "Enter first name"), |{} ->
+    await read, |firstName ->
+    await (echo "Enter last name"), |{} ->
+    await read, |lastName ->
+    echo "Your name is: \(firstName) \(lastName)"
+
+
+demo =
+    await (echo "Enter first name"), {} ->
+    await read, firstName ->
+    await (echo "Enter last name"), {} ->
+    await read, lastName ->
+    echo "Your name is: \(firstName) \(lastName)"
+
+
+demo =
+    await (echo "Enter first name"), \{} ->
+    await read, \firstName ->
+    await (echo "Enter last name"), \{} ->
+    await read, \lastName ->
+    echo "Your name is: \(firstName) \(lastName)"
+
 
 demo
