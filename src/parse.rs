@@ -1,5 +1,5 @@
 use expr::Operator;
-use expr::{Expr, Pattern};
+use expr::{Expr, Pattern, Ident};
 
 use std::char;
 use parse_state::{IndentablePosition};

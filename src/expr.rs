@@ -11,11 +11,11 @@ pub enum Expr {
     Char(char),
     Bool(bool),
 
-    Var(String),
+    Var(Ident),
     Let(Pattern, Box<Expr>, Box<Expr>),
 
     // Functions
-    Func(String, Vec<Expr>),
+    Func(Ident, Vec<Expr>),
     Apply(Box<Expr>, Vec<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
     Closure(SmallVec<[Pattern; 4]>, Box<Expr>),
@@ -33,6 +33,8 @@ pub enum Expr {
     // Error
     Error(Problem),
 }
+
+type Ident = String;
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
