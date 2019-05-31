@@ -79,6 +79,18 @@ mod parse_tests {
     }
 
     #[test]
+    fn string_with_interpolation() {
+        assert_eq!(
+            parse_standalone("x=5\nx"),
+            Ok((
+                Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Var("x".to_string()))),
+                "")
+            )
+        );
+    }
+
+
+    #[test]
     fn string_with_single_qoute() {
         // This shoud NOT be escaped in a string.
         expect_parsed_str("x'x", "\"x'x\"");
