@@ -31,7 +31,7 @@ fn problem(prob: Problem) -> Evaluated {
 pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
     match expr {
         // Primitives need no further evaluation
-        Error(_) | Int(_) | Str(_) | Frac(_, _) | Char(_) | Bool(_) | Closure(_, _) | Expr::EmptyRecord => Evaluated(expr),
+        Error(_) | Int(_) | EmptyStr | Str(_) | InterpolatedStr(_, _) | Frac(_, _) | Char(_) | Bool(_) | Closure(_, _) | Expr::EmptyRecord => Evaluated(expr),
 
         // Resolve variable names
         Var(name) => match vars.get(&name) {

@@ -7,7 +7,9 @@ pub enum Expr {
     // Literals
     Int(i64),
     Frac(i64, u64),
+    EmptyStr,
     Str(String),
+    InterpolatedStr(Vec<(String, Ident)>, String),
     Char(char),
     Bool(bool),
 
@@ -34,7 +36,7 @@ pub enum Expr {
     Error(Problem),
 }
 
-type Ident = String;
+pub type Ident = String;
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
