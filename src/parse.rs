@@ -6,7 +6,7 @@ use parse_state::{IndentablePosition};
 use smallvec::SmallVec;
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
-use combine::parser::repeat::{many, count_min_max, sep_by1, skip_many, skip_many1};
+use combine::parser::repeat::{take_until, many, count_min_max, sep_by1, skip_many, skip_many1};
 use combine::parser::item::{any, satisfy_map, value, position, satisfy};
 use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
@@ -441,12 +441,39 @@ pub fn string_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    char('"').with(
-        choice((
-            char('"').with(value(Expr::EmptyStr)),
-            string_body()
-        ))
+    between(char('"'), char('"'),
+        many::<Vec<(Ident, String)>, _>(
+            choice((
+                // Handle the edge cases where the interpolation happens
+                // to be at the very beginning of the string literal,
+                // or immediately following the previous interpolation.
+                attempt(string("\\(").with(value("".to_string())))
+                    .and(ident().skip(char(')'))),
+
+                // Parse a bunch of non-interpolated characters until we hit \(
+                many1::<Vec<char>, _>(string_body())
+                    .map(|chars: Vec<char>| chars.into_iter().collect::<String>())
+                    .and(choice((
+                        attempt(char('\\')).with(between(value('('), value(')'), ident())),
+                        // If we never encountered \( then we hit the end of
+                        // the string literal. Use empty Ident here because
+                        // we're going to pop this Ident off the array anyhow.
+                        value("".to_string())
+                    ))),
+            ))
     )
+    .map(|mut pairs| {
+        match pairs.len() {
+            0 => Expr::EmptyStr,
+            1 => Expr::Str(pairs.pop().unwrap().0),
+            _ => {
+                // Discard the final Ident; we stuck an empty string in there anyway.
+                let (trailing_str, _) = pairs.pop().unwrap();
+
+                Expr::InterpolatedStr(pairs, trailing_str)
+            }
+        }
+    }))
 }
 
 pub fn char_literal<I>() -> impl Parser<Input = I, Output = Expr>
@@ -491,71 +518,55 @@ where
     char('u').with(between(char('{'), char('}'), hex_code_pt))
 }
 
-fn string_body<I>() -> impl Parser<Input = I, Output = Expr>
+fn string_body<I>() -> impl Parser<Input = I, Output = char>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
     parser(|input: &mut I| {
-        let mut interpolated_pairs_so_far:Option<Vec<(Ident, String)>> = None;
-        let mut current_string:String = String::new();
+        let (parsed_char, consumed) = try!(any().parse_lazy(input).into());
+        let mut escaped = satisfy_map(|escaped_char| {
+            // NOTE! When modifying this, revisit char_body too!
+            // Their implementations are similar but not the same.
+            match escaped_char {
+                '"' => Some('"'),
+                '\\' => Some('\\'),
+                't' => Some('\t'),
+                'n' => Some('\n'),
+                'r' => Some('\r'),
+                _ => None,
+            }
+        });
 
-        loop {
-            let (parsed_char, consumed) = try!(any().parse_lazy(input).into());
-
-            match parsed_char {
-                '"' => {
-                    // An unescaped " means we've reached the end of the string!
-                    match interpolated_pairs_so_far {
-                        Some(pairs) => {
-                            return Ok((Expr::InterpolatedStr(pairs, current_string), consumed));
-                        },
-                        None => {
-                            return Ok((Expr::Str(current_string), consumed));
-                        }
-                    };
-                },
-                '\\' => {
-                    choice((
-                        unicode_code_pt(),
-                        satisfy_map(|escaped_char| {
-                            // Try to parse basic backslash-escaped literals
-                            // e.g. \t, \n, \r
-                            //
-                            // NOTE! When modifying this, revisit char_body too!
-                            // Their implementations are similar but not the same.
-                            match escaped_char {
-                                '"' => Some('"'),
-                                '\\' => Some('\\'),
-                                't' => Some('\t'),
-                                'n' => Some('\n'),
-                                'r' => Some('\r'),
-                                _ => None,
-                            }
-                        }),
-                    )).parse_stream(input).map(|(escaped_char, _)| {
-                        current_string.push(escaped_char);
-                    }).or_else(|_|
-                        // If we didn't find any of those, try \(...)
-                        between(char('('), char(')'), ident())
-                            .parse_stream(input)
-                            .map(|(variable, _)| {
-                                let pair = (variable, current_string.clone());
-
-                                current_string = String::new();
-
-                                match interpolated_pairs_so_far {
-                                    None => {
-                                        interpolated_pairs_so_far = Some(vec![pair]);
-                                    },
-                                    Some(mut pairs) => {
-                                        pairs.push(pair);
-                                    }
-                                };
-                            })
-                    )?;
-                },
-                _ => ()
+        match parsed_char {
+            '\\' => {
+                consumed.combine(|_| {
+                    // Try to parse basic backslash-escaped literals
+                    // e.g. \t, \n, \r
+                    escaped.parse_stream(input).or_else(|_|
+                        // If we didn't find any of those, try \u{...}
+                        unicode_code_pt().parse_stream(input)
+                    )
+                })
+            },
+            '"' => {
+                // Never consume a double quote unless it was preceded by a
+                // backslash. This means we're at the end of the string literal!
+                Err(Consumed::Empty(I::Error::empty(input.position()).into()))
+            },
+            _ => {
+                // If we see two backslashes followed by a '(', that is not
+                // string interpolation, because the backslash was escaped!
+                // Fortunately, at this point we already know we're not looking
+                // at a \ char, so all we need to do is check for \( as the
+                // next two chars to see if we're done.
+                if look_ahead(string("\\(")).parse_stream(input).is_ok() {
+                    // If we found \( then we've reached the end of the
+                    // non-interpolated string body and it's time to exit!
+                    Err(Consumed::Empty(I::Error::empty(input.position()).into()))
+                } else {
+                    Ok((parsed_char, consumed))
+                }
             }
         }
     })

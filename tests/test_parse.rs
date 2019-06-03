@@ -55,7 +55,10 @@ mod parse_tests {
 
     #[test]
     fn empty_string() {
-        expect_parsed_str("", "\"\"");
+        assert_eq!(
+            Ok((EmptyStr, "")),
+            parse_standalone("\"\"")
+        );
     }
 
     #[test]
