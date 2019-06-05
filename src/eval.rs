@@ -60,7 +60,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             }
         },
 
-        Let(Variant(name, patterns), definition, in_expr) => {
+        Let(Variant(_name, _patterns), _definition, _in_expr) => {
             panic!("Pattern matching on variants is not yet supported!");
         },
 
@@ -212,7 +212,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
         (_, _, Error(prob)) => problem(prob.clone()),
 
         // Equals
-        (left, Equals, right) => Evaluated(eq(left_expr, right_expr)),
+        (_, Equals, _) => Evaluated(eq(left_expr, right_expr)),
 
         // Plus
         (Int(left_num), Plus, Int(right_num)) => Evaluated(Int(left_num + right_num)),
