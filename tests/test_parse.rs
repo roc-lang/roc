@@ -82,11 +82,29 @@ mod parse_tests {
     }
 
     #[test]
+    fn string_with_escaped_interpolation() {
+        assert_eq!(
+            // This should NOT be string interpolation, because of the \\
+            parse_standalone("\"abcd\\\\(efg)hij\""),
+            Ok((
+                Str("abcd\\(efg)hij".to_string()),
+                ""
+            ))
+        );
+    }
+
+    #[test]
     fn string_with_interpolation() {
         assert_eq!(
-            parse_standalone("\"foo\\(bar)baz"),
+            parse_standalone("\"abcd\\(efg)hij\""),
             Ok((
-                Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Var("x".to_string()))),
+                InterpolatedStr(
+                    vec![
+                        ("abcd".to_string(), "".to_string()),
+                        ("".to_string(), "efg".to_string())
+                    ],
+                    "hij".to_string()
+                ),
                 "")
             )
         );
@@ -748,7 +766,6 @@ mod parse_tests {
             ))
         )
     }
-
 
     #[test]
     fn let_returning_number() {

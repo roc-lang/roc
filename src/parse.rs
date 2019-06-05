@@ -447,14 +447,15 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 // Handle the edge cases where the interpolation happens
                 // to be at the very beginning of the string literal,
                 // or immediately following the previous interpolation.
-                attempt(string("\\(").with(value("".to_string())))
+                attempt(string("\\("))
+                    .with(value("".to_string()))
                     .and(ident().skip(char(')'))),
 
                 // Parse a bunch of non-interpolated characters until we hit \(
                 many1::<Vec<char>, _>(string_body())
                     .map(|chars: Vec<char>| chars.into_iter().collect::<String>())
                     .and(choice((
-                        attempt(char('\\')).with(between(value('('), value(')'), ident())),
+                        (between(value('('), value(')'), ident())),
                         // If we never encountered \( then we hit the end of
                         // the string literal. Use empty Ident here because
                         // we're going to pop this Ident off the array anyhow.
@@ -540,34 +541,27 @@ where
 
         match parsed_char {
             '\\' => {
-                consumed.combine(|_| {
-                    // Try to parse basic backslash-escaped literals
-                    // e.g. \t, \n, \r
-                    escaped.parse_stream(input).or_else(|_|
-                        // If we didn't find any of those, try \u{...}
-                        unicode_code_pt().parse_stream(input)
-                    )
-                })
+                if look_ahead(char('(')).parse_stream(input).is_ok() {
+                    // If we hit a \( then we're doing string interpolation.
+                    // Bail out after consuming the backslash!
+                    Err(Consumed::Empty(I::Error::empty(input.position()).into()))
+                } else {
+                    consumed.combine(|_| {
+                        // Try to parse basic backslash-escaped literals
+                        // e.g. \t, \n, \r
+                        escaped.parse_stream(input).or_else(|_|
+                            // If we didn't find any of those, try \u{...}
+                            unicode_code_pt().parse_stream(input)
+                        )
+                    })
+                }
             },
             '"' => {
                 // Never consume a double quote unless it was preceded by a
                 // backslash. This means we're at the end of the string literal!
                 Err(Consumed::Empty(I::Error::empty(input.position()).into()))
             },
-            _ => {
-                // If we see two backslashes followed by a '(', that is not
-                // string interpolation, because the backslash was escaped!
-                // Fortunately, at this point we already know we're not looking
-                // at a \ char, so all we need to do is check for \( as the
-                // next two chars to see if we're done.
-                if look_ahead(string("\\(")).parse_stream(input).is_ok() {
-                    // If we found \( then we've reached the end of the
-                    // non-interpolated string body and it's time to exit!
-                    Err(Consumed::Empty(I::Error::empty(input.position()).into()))
-                } else {
-                    Ok((parsed_char, consumed))
-                }
-            }
+            _ => Ok((parsed_char, consumed))
         }
     })
 }
