@@ -11,7 +11,6 @@ pub enum Expr {
     Str(String),
     InterpolatedStr(Vec<(String, Ident)>, String),
     Char(char),
-    Bool(bool),
 
     Var(Ident),
     Let(Pattern, Box<Expr>, Box<Expr>),
@@ -62,8 +61,6 @@ impl fmt::Display for Expr {
                 write!(f, "\"{}\"", escaped_str)
             },
             Char(ch) => write!(f, "'{}'", *ch),
-            Bool(true) => write!(f, "True"),
-            Bool(false) => write!(f, "False"),
             Closure(args, _) => write!(f, "<{}-argument function>", args.len()),
             ApplyVariant(name, opt_exprs) => {
                 match opt_exprs {

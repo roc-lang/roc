@@ -27,7 +27,7 @@ mod eval_tests {
     fn if_else() {
         assert_eq!(
             eval(
-                If(Box::new(Bool(true)),
+                If(Box::new(ApplyVariant("True".to_string(), None)),
                     Box::new(Operator(Box::new(Int(1)), Plus, Box::new(Int(2)))),
                     Box::new(Operator(Box::new(Int(4)), Plus, Box::new(Int(5))))
                 )
@@ -37,7 +37,7 @@ mod eval_tests {
 
         assert_eq!(
             eval(
-                If(Box::new(Bool(false)),
+                If(Box::new(ApplyVariant("False".to_string(), None)),
                     Box::new(Operator(Box::new(Int(1)), Plus, Box::new(Int(2)))),
                     Box::new(Operator(Box::new(Int(4)), Plus, Box::new(Int(5))))
                 )

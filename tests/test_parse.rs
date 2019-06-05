@@ -84,7 +84,7 @@ mod parse_tests {
     #[test]
     fn string_with_interpolation() {
         assert_eq!(
-            parse_standalone("x=5\nx"),
+            parse_standalone("\"foo\\(bar)baz"),
             Ok((
                 Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Var("x".to_string()))),
                 "")
@@ -574,14 +574,61 @@ mod parse_tests {
         );
     }
 
+    // VARIANT
+
+    #[test]
+    fn basic_variant() {
+        assert_eq!(
+            parse_standalone("Abc"),
+            Ok((
+                ApplyVariant("Abc".to_string(), None),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn variant_regression() {
+        // Somehow parsing the variant "Abc" worked but "Foo" failed (?!)
+        assert_eq!(
+            parse_standalone("F"),
+            Ok((
+                ApplyVariant("F".to_string(), None),
+                ""
+            ))
+        );
+    }
+
+
+
     // COMPLEX EXPRESSIONS
 
     #[test]
     fn nested_let_variant() {
         assert_eq!(
-            parse_standalone("one = Foo 1\ntwo = Bar\n\none"),
+            parse_standalone("one = Abc\n\ntwo = Bar\n\none"),
             Ok((
-                    Int(1),
+                Let(
+                    Identifier(
+                        "one".to_string()
+                    ),
+                    Box::new(ApplyVariant(
+                        "Abc".to_string(),
+                        None
+                    )),
+                    Box::new(Let(
+                        Identifier(
+                            "two".to_string()
+                        ),
+                        Box::new(ApplyVariant(
+                            "Bar".to_string(),
+                            None
+                        )),
+                        Box::new(Var(
+                            "one".to_string()
+                        ))
+                    ))
+                ),
                 ""
             ))
         );

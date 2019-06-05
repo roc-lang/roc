@@ -6,7 +6,7 @@ use parse_state::{IndentablePosition};
 use smallvec::SmallVec;
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
-use combine::parser::repeat::{take_until, many, count_min_max, sep_by1, skip_many, skip_many1};
+use combine::parser::repeat::{many, count_min_max, sep_by1, skip_many, skip_many1};
 use combine::parser::item::{any, satisfy_map, value, position, satisfy};
 use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
@@ -84,13 +84,17 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             char(' ').with(value(())),
             // If we hit a newline, it must be followed by:
             //
-            // - Any number of blank lines (which contain only spaces)
+            // - Any number of blank lines (which may contain only spaces)
             // - At least min_indent spaces, or else eof()
             char('\n')
-                .skip(skip_many(char('\n').skip(skip_many(char(' ')))))
+                .skip(
+                    skip_many(
+                        char('\n').skip(skip_many(char(' ')))
+                    )
+                )
                 .skip(
                     choice((
-                        many1::<Vec<_>, _>(char(' ')).then(move |chars| {
+                        many::<Vec<_>, _>(char(' ')).then(move |chars| {
                             if chars.len() < min_indent as usize {
                                 unexpected("outdent").left()
                             } else {
@@ -126,8 +130,6 @@ parser! {
             closure(min_indent),
             parenthetical_expr(min_indent),
             string("{}").with(value(Expr::EmptyRecord)),
-            string("True").with(value(Expr::Bool(true))),
-            string("False").with(value(Expr::Bool(false))),
             string_literal(),
             number_literal(),
             char_literal(),
@@ -230,7 +232,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('('), char(')'),
-            indented_whitespaces(min_indent).with(expr_body(min_indent)).skip(indented_whitespaces(min_indent))
+        indented_whitespaces(min_indent).with(expr_body(min_indent)).skip(indented_whitespaces(min_indent))
     ).and(
         // Parenthetical expressions can optionally be followed by
         // whitespace and one or more comma-separated expressions,
@@ -249,14 +251,12 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     indented_whitespaces1(min_indent)
-        // TODO figure out how to refactor out comma_separated()
-        // which takes a Parser<T> and returns a Parser<Optional<T>>
         .with(
             sep_by1(
                 attempt(
                     // Keywords like "then" and "else" are not function application!
                     not_followed_by(choice((string("then"), string("else"), string("when"))))
-                        // Don't parse operators because they have a higher
+                        // Don't parse operators, because they have a higher
                         // precedence than function application. If we see one,
                         // we're done!
                         .with(expr_body_without_operators(min_indent))
@@ -681,7 +681,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                     }
                 },
                 (Err(_), _) =>
-                    unexpected_any("looked like a number but was actually malformed ident").left()
+                    unexpected_any("looked like a number but was actually malformed identifier").left()
             }
         })
 }

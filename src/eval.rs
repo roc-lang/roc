@@ -31,7 +31,7 @@ fn problem(prob: Problem) -> Evaluated {
 pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
     match expr {
         // Primitives need no further evaluation
-        Error(_) | Int(_) | EmptyStr | Str(_) | InterpolatedStr(_, _) | Frac(_, _) | Char(_) | Bool(_) | Closure(_, _) | Expr::EmptyRecord => Evaluated(expr),
+        Error(_) | Int(_) | EmptyStr | Str(_) | InterpolatedStr(_, _) | Frac(_, _) | Char(_) | Closure(_, _) | Expr::EmptyRecord => Evaluated(expr),
 
         // Resolve variable names
         Var(name) => match vars.get(&name) {
@@ -115,8 +115,13 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
 
         If(condition, if_true, if_false) => {
             match scoped_eval(*condition, vars) {
-                Evaluated(Bool(true)) => scoped_eval(*if_true, vars),
-                Evaluated(Bool(false)) => scoped_eval(*if_false, vars),
+                Evaluated(ApplyVariant(variant_name, None)) => {
+                    match variant_name.as_str() {
+                        "True" => scoped_eval(*if_true, vars),
+                        "False" => scoped_eval(*if_false, vars),
+                        _ => problem(TypeMismatch("non-Bool used in `if` condition".to_string()))
+                    }
+                },
                 _ => problem(TypeMismatch("non-Bool used in `if` condition".to_string()))
             }
         }
@@ -159,6 +164,45 @@ fn eval_closure(args: Vec<Evaluated>, arg_patterns: SmallVec<[Pattern; 4]>, vars
     }
 }
 
+fn bool_variant(is_true: bool) -> Expr {
+    if is_true {
+        ApplyVariant("True".to_string(), None)
+    } else {
+        ApplyVariant("False".to_string(), None)
+    }
+}
+
+fn eq(expr1: &Expr, expr2: &Expr) -> Expr {
+    match (expr1, expr2) {
+        // All functions are defined as equal
+        (Closure(_, _), Closure(_, _)) => bool_variant(true),
+
+
+        (ApplyVariant(left, None), ApplyVariant(right, None)) => {
+            bool_variant(left == right)
+        },
+
+        (ApplyVariant(left, Some(left_args)), ApplyVariant(right, Some(right_args))) => {
+            bool_variant(left == right && left_args.len() == right_args.len())
+        },
+
+        (ApplyVariant(_, None), ApplyVariant(_, Some(_))) => {
+            bool_variant(false)
+        },
+
+        (ApplyVariant(_, Some(_)), ApplyVariant(_, None)) => {
+            bool_variant(false)
+        },
+
+        (Int(left), Int(right)) => bool_variant(left == right),
+        (Str(left), Str(right)) => bool_variant(left == right),
+        (Char(left), Char(right)) => bool_variant(left == right),
+        (Frac(_, _), Frac(_, _)) => panic!("Don't know how to == on Fracs yet"),
+
+        (_, _) => Error(TypeMismatch("tried to use == on two values with incompatible types".to_string())),
+    }
+}
+
 #[inline(always)]
 fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right_expr): &Evaluated) -> Evaluated {
     // TODO in the future, replace these with named function calls to stdlib
@@ -168,17 +212,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
         (_, _, Error(prob)) => problem(prob.clone()),
 
         // Equals
-
-        // All functions are defined as equal
-        (Closure(_, _), Equals, Closure(_, _)) => Evaluated(Bool(true)),
-
-        (Bool(left), Equals, Bool(right)) => Evaluated(Bool(left == right)),
-        (Int(left), Equals, Int(right)) => Evaluated(Bool(left == right)),
-        (Str(left), Equals, Str(right)) => Evaluated(Bool(left == right)),
-        (Char(left), Equals, Char(right)) => Evaluated(Bool(left == right)),
-        (Frac(_, _), Equals, Frac(_, _)) => panic!("Don't know how to == on Fracs yet"),
-
-        (_, Equals, _) => problem(TypeMismatch("tried to use == on two values with incompatible types".to_string())),
+        (left, Equals, right) => Evaluated(eq(left_expr, right_expr)),
 
         // Plus
         (Int(left_num), Plus, Int(right_num)) => Evaluated(Int(left_num + right_num)),
