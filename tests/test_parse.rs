@@ -600,7 +600,6 @@ mod parse_tests {
     }
 
 
-
     // COMPLEX EXPRESSIONS
 
     #[test]
@@ -738,6 +737,18 @@ mod parse_tests {
     }
 
     // LET
+
+    #[test]
+    fn let_with_function_application() {
+        assert_eq!(
+            parse_standalone("abc =\n  y z\n\nabc"),
+            Ok((
+                Str(" ".to_string()),
+                ""
+            ))
+        )
+    }
+
 
     #[test]
     fn let_returning_number() {
