@@ -31,7 +31,7 @@ fn problem(prob: Problem) -> Evaluated {
 pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
     match expr {
         // Primitives need no further evaluation
-        Error(_) | Int(_) | EmptyStr | Str(_) | InterpolatedStr(_, _) | Frac(_, _) | Char(_) | Closure(_, _) | Expr::EmptyRecord => Evaluated(expr),
+        Error(_) | Int(_) | EmptyStr | Str(_) | Frac(_, _) | Char(_) | Closure(_, _) | Expr::EmptyRecord => Evaluated(expr),
 
         // Resolve variable names
         Var(name) => match vars.get(&name) {
@@ -43,7 +43,32 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
                 Evaluated(evaluated_expr.clone())
             },
             None => problem(UnrecognizedVarName(name))
-        }
+        },
+
+        InterpolatedStr(pairs, trailing_str) => {
+            let mut output = String::new();
+
+            for (string, var_name) in pairs.into_iter() {
+                match vars.get(&var_name) {
+                    Some(resolved) => {
+                        match **resolved {
+                            Evaluated(Str(ref var_string)) => {
+                                output.push_str(string.as_str());
+                                output.push_str(var_string.as_str());
+                            },
+                            _ => {
+                                return problem(TypeMismatch(var_name));
+                            }
+                        }
+                    },
+                    None => { return problem(UnrecognizedVarName(var_name)); }
+                }
+            }
+
+            output.push_str(trailing_str.as_str());
+
+            Evaluated(Str(output))
+        },
 
         Let(Identifier(name), definition, in_expr) => {
             if vars.contains_key(&name) {
