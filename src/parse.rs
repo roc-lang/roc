@@ -127,6 +127,7 @@ parser! {
         let min_indent = *min_indent_ref;
 
         choice((
+            enclosed_closure(min_indent),
             closure(min_indent),
             parenthetical_expr(min_indent),
             string("{}").with(value(Expr::EmptyRecord)),
@@ -332,11 +333,38 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         )
 }
 
+/// Closure *without* parens around the args
+///
+/// e.g. (x, y -> stuff) as opposed to (x, y) -> stuff
+pub fn enclosed_closure<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    attempt(
+        char('(')
+            .with(
+                sep_by1(
+                    pattern(min_indent),
+                    char(',').skip(indented_whitespaces(min_indent))
+                ))
+            .skip(indented_whitespaces1(min_indent))
+            .skip(string("->"))
+            .skip(indented_whitespaces1(min_indent))
+    )
+    .and(expr_body(min_indent))
+    .skip(char(')'))
+    .map(|(patterns, closure_body)| {
+        Expr::Closure(patterns, Box::new(closure_body))
+    })
+}
+
+/// Closure with parens around the args
+///
+/// e.g. (x, y) -> stuff as opposde to (x, y -> stuff)
 pub fn closure<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    // TODO patterns must be separated by commas!
     attempt(
         between(char('('), char(')'),
             sep_by1(
