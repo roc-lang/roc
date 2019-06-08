@@ -759,9 +759,24 @@ mod test_parse {
     #[test]
     fn let_with_function_application() {
         assert_eq!(
-            parse_standalone("abc =\n  y z\n\nabc"),
+            parse_standalone("abc =\n  y 1\n\nabc"),
             Ok((
-                Str(" ".to_string()),
+                Let(
+                    Identifier(
+                        "abc".to_string()
+                    ),
+                    Box::new(Func(
+                        "y".to_string(),
+                        vec![
+                            Int(
+                                1
+                            )
+                        ]
+                    )),
+                    Box::new(Var(
+                        "abc".to_string()
+                    ))
+                ),
                 ""
             ))
         )

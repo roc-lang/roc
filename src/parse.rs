@@ -251,19 +251,22 @@ pub fn function_application<I>(min_indent: i32) -> impl Parser<Input = I, Output
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    indented_whitespaces1(min_indent)
-        .with(
-            sep_by1(
-                attempt(
-                    // Keywords like "then" and "else" are not function application!
-                    not_followed_by(choice((string("then"), string("else"), string("when"))))
-                        // Don't parse operators, because they have a higher
-                        // precedence than function application. If we see one,
-                        // we're done!
-                        .with(expr_body_without_operators(min_indent))
-                        .skip(indented_whitespaces(min_indent))
+     indented_whitespaces1(min_indent)
+         .with(
+             sep_by1(
+                 attempt(
+                     // Keywords like "then" and "else" are not function application!
+                     not_followed_by(choice((string("then"), string("else"), string("when"))))
+                         // Don't parse operators, because they have a higher
+                         // precedence than function application. If we see one,
+                         // we're done!
+                         .with(expr_body_without_operators(min_indent))
                 ),
-                char(',')
+                // Need to put the skip with an attmept() on the comma,
+                // because we should only consume these spaces iff there's
+                // a comma. Otherwise we mess up indentation checking!
+                attempt(skip_many(indented_whitespaces(min_indent)))
+                    .skip(char(','))
                     .skip(indented_whitespaces(min_indent))
             )
         )
@@ -323,13 +326,14 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     ident().and(optional(attempt(function_application(min_indent))))
-        .map(|(name, opt_args): (String, Option<Vec<Expr>>)|
+        .map(|(name, opt_args): (String, Option<Vec<Expr>>)| {
             // Use optional(sep_by1()) over sep_by() to avoid
             // allocating a Vec in the common case where this is a var
             match opt_args {
                 None => Expr::Var(name),
                 Some(args) => Expr::Func(name, args)
             }
+        }
         )
 }
 
