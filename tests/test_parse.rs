@@ -5,7 +5,7 @@ extern crate combine;
 extern crate roc;
 
 #[cfg(test)]
-mod parse_tests {
+mod test_parse {
     use roc::expr::Expr::*;
     use roc::expr::Pattern::*;
     use roc::expr::{Expr};

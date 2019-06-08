@@ -4,7 +4,7 @@ extern crate combine;
 extern crate roc;
 
 #[cfg(test)]
-mod eval_tests {
+mod test_eval {
     use roc::expr::{Expr};
     use roc::expr::Expr::*;
     use roc::expr::Operator::*;
