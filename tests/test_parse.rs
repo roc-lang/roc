@@ -533,7 +533,11 @@ mod test_parse {
         expect_parsed_str("abc", "((\"abc\"))");
         expect_parsed_func("(f 1)", "f", vec![Int(1)]);
         expect_parsed_func("(foo  bar)", "foo", vec![Var("bar".to_string())]);
-        expect_parsed_func("(a \"x\"  )", "a", vec![Str("x".to_string())]);
+    }
+
+    #[test]
+    fn parens_with_spaces() {
+        expect_parsed_func("(a \"x\" )", "a", vec![Str("x".to_string())]);
         expect_parsed_func("(  b \"y\")", "b", vec![Str("y".to_string())]);
         expect_parsed_func("(  c \"z\"  )", "c", vec![Str("z".to_string())]);
     }
