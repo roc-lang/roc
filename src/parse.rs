@@ -233,12 +233,16 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('('), char(')'),
-        indented_whitespaces(min_indent).with(expr_body(min_indent)).skip(indented_whitespaces(min_indent))
+        indented_whitespaces(min_indent)
+            .with(expr_body(min_indent))
+            .skip(indented_whitespaces(min_indent))
     ).and(
         // Parenthetical expressions can optionally be followed by
         // whitespace and one or more comma-separated expressions,
         // meaning this is function application!
-        optional(attempt(function_application(min_indent)))
+        optional(
+            attempt(apply_args(min_indent))
+        )
     ).map(|(expr, opt_args): (Expr, Option<Vec<Expr>>)|
         match opt_args {
             None => expr,
@@ -247,31 +251,39 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     )
 }
 
-pub fn function_application<I>(min_indent: i32) -> impl Parser<Input = I, Output = Vec<Expr>>
+fn function_arg<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
+    where I: Stream<Item = char, Position = IndentablePosition>,
+        I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    not_followed_by(choice((string("then"), string("else"), string("when"))))
+        // Don't parse operators, because they have a higher
+        // precedence than function application. If we see one,
+        // we're done!
+        .with(expr_body_without_operators(min_indent))
+}
+
+pub fn apply_args<I>(min_indent: i32) -> impl Parser<Input = I, Output = Vec<Expr>>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-     indented_whitespaces1(min_indent)
-         .with(
-             sep_by1(
-                 attempt(
-                     // Keywords like "then" and "else" are not function application!
-                     not_followed_by(choice((string("then"), string("else"), string("when"))))
-                         // Don't parse operators, because they have a higher
-                         // precedence than function application. If we see one,
-                         // we're done!
-                         .with(expr_body_without_operators(min_indent))
-                ),
-                // Need to put the skip with an attmept() on the comma,
-                // because we should only consume these spaces iff there's
-                // a comma. Otherwise we mess up indentation checking!
-                attempt(skip_many(indented_whitespaces(min_indent)))
-                    .skip(char(','))
-                    .skip(indented_whitespaces(min_indent))
+    // Function application always begins with whitespace.
+    indented_whitespaces1(min_indent)
+        .with(
+            // Arguments are comma-separated.
+            sep_by1(
+                    choice((
+                        attempt(indented_whitespaces1(min_indent))
+                            .with(function_arg(min_indent)),
+                        function_arg(min_indent),
+                    ))
+                ,
+                // Only consume these spaces if there's a comma after them.
+                // Otherwise we consume too much and mess up indentation checking!
+                attempt(indented_whitespaces(min_indent))
+                    .skip(char(',')),
             )
         )
 }
-
 
 pub fn operator<I>() -> impl Parser<Input = I, Output = Operator>
 where I: Stream<Item = char, Position = IndentablePosition>,
@@ -325,7 +337,7 @@ pub fn func_or_var<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    ident().and(optional(attempt(function_application(min_indent))))
+    ident().and(optional(attempt(apply_args(min_indent))))
         .map(|(name, opt_args): (String, Option<Vec<Expr>>)| {
             // Use optional(sep_by1()) over sep_by() to avoid
             // allocating a Vec in the common case where this is a var
@@ -406,7 +418,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     attempt(variant_name())
-        .and(optional(attempt(function_application(min_indent))))
+        .and(optional(attempt(apply_args(min_indent))))
         .map(|(name, opt_args): (String, Option<Vec<Expr>>)|
             Expr::ApplyVariant(name, opt_args)
         )
