@@ -404,14 +404,14 @@ mod test_parse {
 
         expect_parsed_apply(
             "(x 5) y",
-            Func("x".to_string(), vec![Int(5)]),
+            CallByName("x".to_string(), vec![Int(5)]),
             Var("y".to_string())
         );
 
         expect_parsed_apply(
             "(x 5) (y 6)",
-            Func("x".to_string(), vec![Int(5)]),
-            Func("y".to_string(), vec![Int(6)]),
+            CallByName("x".to_string(), vec![Int(5)]),
+            CallByName("y".to_string(), vec![Int(6)]),
         );
 
         expect_parsed_apply(
@@ -435,7 +435,7 @@ mod test_parse {
 
     fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, args: Vec<Expr>) {
         assert_eq!(
-            Ok((Func(func_str.to_string(), args), "")),
+            Ok((CallByName(func_str.to_string(), args), "")),
             parse_standalone(parse_str)
         );
     }
@@ -484,7 +484,7 @@ mod test_parse {
                 (
                     Operator(
                         Box::new(
-                            Func("f".to_string(),
+                            CallByName("f".to_string(),
                                 vec![Int(5)],
                             )
                         ),
@@ -504,7 +504,7 @@ mod test_parse {
                 (
                     Operator(
                         Box::new(
-                            Func("f".to_string(),
+                            CallByName("f".to_string(),
                                 vec![Int(1), Int(2), Int(3)],
                             )
                         ),
@@ -638,8 +638,8 @@ mod test_parse {
                 Case(
                     Box::new(Int(0)),
                     smallvec![
-                        ( Integer(2), Box::new(Func("foo".to_string(), vec![Int(9)])) ),
-                        ( Integer(1), Box::new(Func("bar".to_string(), vec![Int(8)])) ),
+                        ( Integer(2), Box::new(CallByName("foo".to_string(), vec![Int(9)])) ),
+                        ( Integer(1), Box::new(CallByName("bar".to_string(), vec![Int(8)])) ),
                     ]
                 ),
                 ""
@@ -784,18 +784,18 @@ mod test_parse {
     fn complex_expressions() {
         expect_parsed_apply(
             "(x 5) (y + (f 6))",
-            Func("x".to_string(), vec![Int(5)]),
+            CallByName("x".to_string(), vec![Int(5)]),
             Operator(
                 Box::new(Var("y".to_string())),
                 Plus,
-                Box::new(Func("f".to_string(), vec![Int(6)])),
+                Box::new(CallByName("f".to_string(), vec![Int(6)])),
             )
         );
 
         assert_eq!(
             parse_standalone("(x 5)"),
             Ok((
-                Func("x".to_string(), vec![Int(5)]),
+                CallByName("x".to_string(), vec![Int(5)]),
                 "")
             )
         );
@@ -856,7 +856,7 @@ mod test_parse {
             parse_standalone("(x 5) + 123"),
             Ok((
                 Operator(
-                    Box::new(Func("x".to_string(), vec![Int(5)])),
+                    Box::new(CallByName("x".to_string(), vec![Int(5)])),
                     Plus,
                     Box::new(Int(123))
                 ),
@@ -868,7 +868,7 @@ mod test_parse {
             parse_standalone("(x 5) + (2 * y)"),
             Ok((
                 Operator(
-                    Box::new(Func("x".to_string(), vec![Int(5)])),
+                    Box::new(CallByName("x".to_string(), vec![Int(5)])),
                     Plus,
                     Box::new(
                         Operator(
@@ -894,7 +894,7 @@ mod test_parse {
                     Identifier(
                         "abc".to_string()
                     ),
-                    Box::new(Func(
+                    Box::new(CallByName(
                         "y".to_string(),
                         vec![
                             Int(
@@ -1046,7 +1046,7 @@ mod test_parse {
                     Identifier("f".to_string()),
                     Box::new(Closure(
                         smallvec![Identifier("x".to_string())],
-                        Box::new(Func("c".to_string(), vec![Int(1)]))
+                        Box::new(CallByName("c".to_string(), vec![Int(1)]))
                     )),
                     Box::new(Var("f".to_string()))
                 ),

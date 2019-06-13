@@ -16,7 +16,7 @@ pub enum Expr {
     Assign(Pattern, Box<Expr>, Box<Expr>),
 
     // Functions
-    Func(Ident, Vec<Expr>),
+    CallByName(Ident, Vec<Expr>),
     Apply(Box<Expr>, Vec<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
     Closure(SmallVec<[Pattern; 2]>, Box<Expr>),

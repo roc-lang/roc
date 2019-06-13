@@ -113,7 +113,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             scoped_eval(*in_expr, vars)
         },
 
-        Func(name, args) => {
+        CallByName(name, args) => {
             let func_expr = match vars.get(&name) {
                 Some(resolved) => {
                     let Evaluated(ref evaluated_expr) = **resolved;

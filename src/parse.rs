@@ -352,7 +352,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             // allocating a Vec in the common case where this is a var
             match opt_args {
                 None => Expr::Var(name),
-                Some(args) => Expr::Func(name, args)
+                Some(args) => Expr::CallByName(name, args)
             }
         })
 }

@@ -32,7 +32,7 @@ For example, parsing will transalte this string:
 
 ...into this `Expr`:
 
-    Func("not", vec!["foo", "bar"])
+    CallByName("not", vec!["foo", "bar"])
 
 Now we may know that `not` takes a `Bool` and returns another `Bool`, but the parser doesn't know that.
 
