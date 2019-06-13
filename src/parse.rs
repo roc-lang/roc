@@ -135,7 +135,7 @@ parser! {
             number_literal(),
             char_literal(),
             if_expr(min_indent),
-            match_expr(min_indent),
+            case_expr(min_indent),
             let_expr(min_indent),
             apply_variant(min_indent),
             func_or_var(min_indent),
@@ -204,7 +204,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         )
 }
 
-pub fn match_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
+pub fn case_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
@@ -221,7 +221,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         .map(|(conditional, branches)|
             if branches.is_empty() {
                 // TODO handle this more gracefully
-                panic!("encountered match-expression with no branches!")
+                panic!("encountered case-expression with no branches!")
             } else {
                 Expr::Case(Box::new(conditional), branches)
             }
