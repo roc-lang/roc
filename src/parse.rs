@@ -410,9 +410,9 @@ parser! {
         choice((
             char('_').map(|_| Pattern::Underscore),
             string("{}").map(|_| Pattern::EmptyRecord),
-            ident().map(|name| Pattern::Identifier(name)),
             match_variant(min_indent),
-            number_pattern(),
+            number_pattern(), // This goes before ident() so number literals aren't mistaken for malformed idents.
+            ident().map(|name| Pattern::Identifier(name)),
         ))
     }
 }
