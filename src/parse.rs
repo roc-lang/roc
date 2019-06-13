@@ -132,7 +132,7 @@ parser! {
             parenthetical_expr(min_indent),
             string("{}").with(value(Expr::EmptyRecord)),
             string_literal(),
-            number_literal(Expr::Int, Expr::Frac),
+            number_literal(),
             char_literal(),
             if_expr(min_indent),
             case_expr(min_indent),
@@ -654,7 +654,7 @@ where
     })
 }
 
-pub fn number_literal<I, T: Clone>(wrap_int: impl FnOnce(i64) -> T, wrap_frac: impl FnOnce(i64, u64) -> T) -> impl Parser<Input = I, Output = T>
+pub fn number_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
@@ -695,9 +695,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             match ( int_str.parse::<i64>(), decimals ) {
                 (Ok(int_val), None) => {
                     if is_positive {
-                        value(wrap_int(int_val as i64)).right()
+                        value(Expr::Int(int_val as i64)).right()
                     } else {
-                        value(wrap_int(-int_val as i64)).right()
+                        value(Expr::Int(-int_val as i64)).right()
                     }
                 },
                 (Ok(int_val), Some(nums)) => {
@@ -711,9 +711,9 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                             let numerator = (int_val * denom) + (decimal as i64);
 
                             if is_positive {
-                                value(wrap_frac(numerator, denom as u64)).right()
+                                value(Expr::Frac(numerator, denom as u64)).right()
                             } else {
-                                value(wrap_frac(-numerator, denom as u64)).right()
+                                value(Expr::Frac(-numerator, denom as u64)).right()
                             }
                         },
                         Err(_) => {
