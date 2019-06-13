@@ -7,11 +7,11 @@ fail = (val) ->
 
 
 echo = (str) ->
-  Echo str, succeed, fail
+  Echo fail, succeed, str
 
 
 readInput =
-  Read succeed, fail
+  Read fail, succeed
 
 
 map = (convert, task) ->
@@ -28,28 +28,30 @@ after = (task, cont) ->
   case task
     when Success val then cont val
     when Failure val then Failure val
-    when Echo str, prevCont, onFailure then
-      Echo str,
+    when Echo onFailure, prevCont, str then
+      Echo
+        (ioErr -> after (onFailure ioErr), cont),
         ({} -> after (prevCont {}), cont),
-        (ioErr -> after (onFailure ioErr), cont)
-    when Read prevCont, onFailure then
+        str
+    when Read onFailure, prevCont then
       Read
-        (str -> after (prevCont str), cont),
-        (ioErr -> after (onFailure ioErr), cont)
+        (ioErr -> after (onFailure ioErr), cont),
+        (str -> after (prevCont str), cont)
 
 
 fallback = (task, onFailure) ->
   case task
     when Success val then Success val
     when Failure val then onFailure val
-    when Echo str, cont, prevOnFailure then
-      Echo str
+    when Echo prevOnFailure, cont, str then
+      Echo
+        (ioErr -> fallback (prevOnFailure ioErr), onFailure),
         ({} -> fallback (cont {}), onFailure),
-        (ioErr -> fallback (prevOnFailure ioErr), onFailure)
-    when Read cont, prevOnFailure then
+        str
+    when Read prevOnFailure, cont then
       Read
-        (str -> fallback (cont str), onFailure),
-        (ioErr -> fallback (prevOnFailure ioErr), onFailure)
+        (ioErr -> fallback (prevOnFailure ioErr), onFailure),
+        (str -> fallback (cont str), onFailure)
 
 
 demo =

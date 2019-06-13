@@ -16,34 +16,47 @@ fn main() -> std::io::Result<()> {
 
     let expr = parse::parse_string(contents.as_str()).unwrap();
 
+    eval_task(expr)
+}
+
+fn eval_task(expr: Expr) -> std::io::Result<()> {
     match from_evaluated(eval(expr)) {
         Error(problem) => {
-            println!("\n\u{001B}[4mruntime error\u{001B}[24m\n\n{:?}\n", problem)
+            println!("\n\u{001B}[4mruntime error\u{001B}[24m\n\n{:?}\n", problem);
+
+            Ok(())
         },
-        ApplyVariant(name, Some(exprs)) => {
+        ApplyVariant(name, Some(mut exprs)) => {
             match name.as_str() {
                 "Echo" => {
-                    let payload = exprs.first().unwrap().clone();
+                    let payload = exprs.pop().unwrap();
+                    let next_expr = exprs.pop().unwrap();
 
                     println!("{}", payload);
+
+                    eval_task(Apply(Box::new(next_expr), vec![EmptyRecord]))
                 },
                 "Read" => {
                     let mut input = String::new();
                     io::stdin().read_line(&mut input)?;
 
                     println!("[debug] You said: {}", input);
+
+                    Ok(())
                 },
                 _ => {
                     display_expr(ApplyVariant(name, Some(exprs)));
+
+                    Ok(())
                 }
             }
         },
         output => {
             display_expr(output);
-        }
-    };
 
-    Ok(())
+            Ok(())
+        }
+    }
 }
 
 fn display_expr(expr: Expr) {

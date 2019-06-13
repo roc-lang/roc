@@ -176,8 +176,8 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
 }
 
 #[inline(always)]
-fn eval_apply(expr: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
-    match expr {
+fn eval_apply(evaluated: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
+    match evaluated {
         Evaluated(Closure(arg_patterns, body)) => {
             let evaluated_args =
                 args.into_iter()
@@ -189,7 +189,9 @@ fn eval_apply(expr: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
                 Err(prob) => problem(prob)
             }
         },
-        _ => problem(TypeMismatch("Tried to call a non-function.".to_string()))
+        Evaluated(expr) => {
+            problem(TypeMismatch(format!("Tried to call a non-function: {}", expr)))
+        }
     }
 }
 
