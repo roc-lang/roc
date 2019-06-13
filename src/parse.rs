@@ -434,9 +434,12 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 {
     attempt(variant_name())
         .and(optional(attempt(
-            sep_by1(
-                pattern(min_indent),
-                char(',').skip(indented_whitespaces(min_indent))
+            indented_whitespaces(min_indent)
+            .with(
+                sep_by1(
+                    pattern(min_indent),
+                    char(',').skip(indented_whitespaces(min_indent))
+                )
         ))))
         .map(|(name, opt_args): (String, Option<Vec<Pattern>>)|
             // Use optional(sep_by1()) over sep_by() to avoid
