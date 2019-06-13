@@ -548,6 +548,40 @@ mod test_parse {
         expect_parsed_func_error("(f 1");
     }
 
+    // CASE
+
+    #[test]
+    fn one_branch_case() {
+        assert_eq!(
+            parse_standalone("case 1 when x then 2"),
+            Ok((
+                Case(
+                    Box::new(Int(1)),
+                    smallvec![(Identifier("x".to_string()), Box::new(Int(2)))]
+                ),
+                ""
+            ))
+        );
+    }
+
+
+    #[test]
+    fn two_branch_case() {
+        assert_eq!(
+            parse_standalone("case 1 when x then 2 when y then 3"),
+            Ok((
+                Case(
+                    Box::new(Int(1)),
+                    smallvec![
+                        (Identifier("x".to_string()), Box::new(Int(2))),
+                        (Identifier("y".to_string()), Box::new(Int(3)))
+                    ]
+                ),
+                ""
+            ))
+        );
+    }
+
     // IF
 
     #[test]
