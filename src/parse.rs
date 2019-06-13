@@ -286,8 +286,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 ,
                 // Only consume these spaces if there's a comma after them.
                 // Otherwise we consume too much and mess up indentation checking!
-                attempt(indented_whitespaces(min_indent))
-                    .skip(char(',')),
+                attempt(
+                    indented_whitespaces(min_indent)
+                        .skip(char(','))
+                ),
             )
         )
 }
