@@ -557,7 +557,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Int(1)),
-                    smallvec![(Identifier("x".to_string()), Box::new(Int(2)))]
+                    smallvec![( Identifier("x".to_string()), Box::new(Int(2)) )]
                 ),
                 ""
             ))
@@ -573,8 +573,40 @@ mod test_parse {
                 Case(
                     Box::new(Int(1)),
                     smallvec![
-                        (Identifier("x".to_string()), Box::new(Int(2))),
-                        (Identifier("y".to_string()), Box::new(Int(3)))
+                        ( Identifier("x".to_string()), Box::new(Int(2)) ),
+                        ( Identifier("y".to_string()), Box::new(Int(3)) )
+                    ]
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn case_with_number_pattern() {
+        assert_eq!(
+            parse_standalone("case 1 when 2 then 3"),
+            Ok((
+                Case(
+                    Box::new(Int(1)),
+                    smallvec![
+                        ( Integer(2), Box::new(Int(3)) ),
+                    ]
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn case_with_variant() {
+        assert_eq!(
+            parse_standalone("case 1 when Foo then 3"),
+            Ok((
+                Case(
+                    Box::new(Int(1)),
+                    smallvec![
+                        ( Variant("Foo".to_string(), None), Box::new(Int(3)) ),
                     ]
                 ),
                 ""
