@@ -712,6 +712,29 @@ mod test_parse {
     }
 
     #[test]
+    fn variant_with_one_arg() {
+        assert_eq!(
+            parse_standalone("Bbc 1"),
+            Ok((
+                ApplyVariant("Bbc".to_string(), Some(vec![Int(1)])),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn variant_with_two_args() {
+        assert_eq!(
+            parse_standalone("Bbc 1, 2"),
+            Ok((
+                ApplyVariant("Bbc".to_string(), Some(vec![Int(1), Int(2)])),
+                ""
+            ))
+        );
+    }
+
+
+    #[test]
     fn variant_regression() {
         // Somehow parsing the variant "Abc" worked but "Foo" failed (?!)
         assert_eq!(
