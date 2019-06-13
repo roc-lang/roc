@@ -13,7 +13,7 @@ pub enum Expr {
     Char(char),
 
     Var(Ident),
-    Let(Pattern, Box<Expr>, Box<Expr>),
+    Assign(Pattern, Box<Expr>, Box<Expr>),
 
     // Functions
     Func(Ident, Vec<Expr>),

@@ -28,9 +28,9 @@ mod test_eval {
     fn string_interpolation() {
         assert_eq!(
             eval(
-                Let(Identifier("foo".to_string()), Box::new(Str("one".to_string())),
-                Box::new(Let(Identifier("bar".to_string()), Box::new(Str("two".to_string())),
-                Box::new(Let(Identifier("baz".to_string()), Box::new(Str("three".to_string())),
+                Assign(Identifier("foo".to_string()), Box::new(Str("one".to_string())),
+                Box::new(Assign(Identifier("bar".to_string()), Box::new(Str("two".to_string())),
+                Box::new(Assign(Identifier("baz".to_string()), Box::new(Str("three".to_string())),
                     Box::new(InterpolatedStr(
                         // "hi_\(foo)_\(bar)_\(baz)_string!"
                         vec![

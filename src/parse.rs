@@ -335,7 +335,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                     if in_expr_indent != original_indent {
                         unexpected_any("the return expression was indented differently from the original declaration").left()
                     } else {
-                        value(Expr::Let(var_pattern.to_owned(), Box::new(var_expr), Box::new(in_expr))).right()
+                        value(Expr::Assign(var_pattern.to_owned(), Box::new(var_expr), Box::new(in_expr))).right()
                     }
                 }).right()
             }

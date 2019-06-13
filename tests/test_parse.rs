@@ -754,7 +754,7 @@ mod test_parse {
         assert_eq!(
             parse_standalone("one = Abc\n\ntwo = Bar\n\none"),
             Ok((
-                Let(
+                Assign(
                     Identifier(
                         "one".to_string()
                     ),
@@ -762,7 +762,7 @@ mod test_parse {
                         "Abc".to_string(),
                         None
                     )),
-                    Box::new(Let(
+                    Box::new(Assign(
                         Identifier(
                             "two".to_string()
                         ),
@@ -883,14 +883,14 @@ mod test_parse {
         );
     }
 
-    // LET
+    // ASSIGN
 
     #[test]
     fn let_with_function_application() {
         assert_eq!(
             parse_standalone("abc =\n  y 1\n\nabc"),
             Ok((
-                Let(
+                Assign(
                     Identifier(
                         "abc".to_string()
                     ),
@@ -917,7 +917,7 @@ mod test_parse {
             // let x = 5 in -10
             parse_standalone("x = 5\n-10"),
             Ok((
-                Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Int(-10))),
+                Assign(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Int(-10))),
                 "")
             )
         );
@@ -926,7 +926,7 @@ mod test_parse {
             // let x = 5 in 10
             parse_standalone("x=5\n-10"),
             Ok((
-                Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Int(-10))),
+                Assign(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Int(-10))),
                 "")
             )
         );
@@ -938,7 +938,7 @@ mod test_parse {
             // let x = 5 + 10 in -20
             parse_standalone("x =(5 + 10)\n-20"),
             Ok((
-                Let(Identifier("x".to_string()),
+                Assign(Identifier("x".to_string()),
                     Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
                     Box::new(Int(-20))),
                 "")
@@ -949,7 +949,7 @@ mod test_parse {
             // let x = 5 + 10 in -20
             parse_standalone("x=  5  +  10\n-20"),
             Ok((
-                Let(Identifier("x".to_string()),
+                Assign(Identifier("x".to_string()),
                     Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
                     Box::new(Int(-20))),
                 "")
@@ -960,7 +960,7 @@ mod test_parse {
             // let x = 5 + 10 in -20
             parse_standalone("x=5\n    + 10\n-20"),
             Ok((
-                Let(Identifier("x".to_string()),
+                Assign(Identifier("x".to_string()),
                     Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
                     Box::new(Int(-20))),
                 "")
@@ -982,10 +982,10 @@ mod test_parse {
             // let x = 5 in let y = 12 in 3
             parse_standalone("x = 5\ny = 12\n3"),
             Ok((
-                Let(Identifier("x".to_string()),
+                Assign(Identifier("x".to_string()),
                     Box::new(Int(5)),
                     Box::new(
-                        Let(Identifier("y".to_string()), Box::new(Int(12)),
+                        Assign(Identifier("y".to_string()), Box::new(Int(12)),
                             Box::new(Int(3))
                         ))),
                 "")
@@ -996,14 +996,14 @@ mod test_parse {
             // let x = 5 in let y = 12 in 3
             parse_standalone("x = 5 - -3\ny = 12 + 7\n3 * -5"),
             Ok((
-                Let(Identifier("x".to_string()),
+                Assign(Identifier("x".to_string()),
                     Box::new(
                         Operator(
                             Box::new(Int(5)), Minus, Box::new(Int(-3))
                         )
                     ),
                     Box::new(
-                        Let(Identifier("y".to_string()),
+                        Assign(Identifier("y".to_string()),
                             Box::new(Operator(
                                 Box::new(Int(12)), Plus, Box::new(Int(7))
                             )),
@@ -1021,7 +1021,7 @@ mod test_parse {
         assert_eq!(
             parse_standalone("x=5\nx"),
             Ok((
-                Let(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Var("x".to_string()))),
+                Assign(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Var("x".to_string()))),
                 "")
             )
         );
@@ -1042,7 +1042,7 @@ mod test_parse {
         assert_eq!(
             parse_standalone("f = (x) -> c 1\n\nf"),
             Ok((
-                Let(
+                Assign(
                     Identifier("f".to_string()),
                     Box::new(Closure(
                         smallvec![Identifier("x".to_string())],

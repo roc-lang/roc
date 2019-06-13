@@ -70,7 +70,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             Evaluated(Str(output))
         },
 
-        Let(Identifier(name), definition, in_expr) => {
+        Assign(Identifier(name), definition, in_expr) => {
             if vars.contains_key(&name) {
                 problem(ReassignedVarName(name))
             } else {
@@ -85,19 +85,19 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             }
         },
 
-        Let(Integer(_), _, _) => {
+        Assign(Integer(_), _, _) => {
             panic!("You cannot assign integers to other values!");
         },
 
-        Let(Fraction(_, _), _, _) => {
+        Assign(Fraction(_, _), _, _) => {
             panic!("You cannot assign fractions to other values!");
         },
 
-        Let(Variant(_name, _patterns), _definition, _in_expr) => {
+        Assign(Variant(_name, _patterns), _definition, _in_expr) => {
             panic!("Pattern matching on variants is not yet supported!");
         },
 
-        Let(Underscore, definition, in_expr) => {
+        Assign(Underscore, definition, in_expr) => {
             // Faithfully eval this, but discard its result.
             scoped_eval(*definition, &vars);
 
@@ -105,7 +105,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             scoped_eval(*in_expr, vars)
         },
 
-        Let(Pattern::EmptyRecord, definition, in_expr) => {
+        Assign(Pattern::EmptyRecord, definition, in_expr) => {
             // Faithfully eval this, but discard its result.
             scoped_eval(*definition, &vars);
 
