@@ -189,7 +189,7 @@ pub fn if_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    string("if").skip(indented_whitespaces1(min_indent))
+    attempt(string("if").skip(indented_whitespaces1(min_indent)))
         .with(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
         .skip(string("then")).skip(indented_whitespaces1(min_indent))
         .and(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
