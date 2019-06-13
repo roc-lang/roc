@@ -85,6 +85,14 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             }
         },
 
+        Let(Integer(_), _, _) => {
+            panic!("You cannot assign integers to other values!");
+        },
+
+        Let(Fraction(_, _), _, _) => {
+            panic!("You cannot assign fractions to other values!");
+        },
+
         Let(Variant(_name, _patterns), _definition, _in_expr) => {
             panic!("Pattern matching on variants is not yet supported!");
         },
@@ -329,6 +337,35 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
                 ))
             }
         },
+
+        Integer(pattern_num) => {
+            match evaluated {
+                Evaluated(Expr::Int(evaluated_num)) => {
+                    if pattern_num == evaluated_num {
+                        Ok(())
+                    } else {
+                        Err(Problem::NotEqual)
+                    }
+                },
+
+                Evaluated(expr) => Err(TypeMismatch(
+                    format!("Wanted a `{}`, but was given `{}`.", "{}", expr)
+                ))
+            }
+        },
+
+        Fraction(_pattern_numerator, _pattern_denominator) => {
+            match evaluated {
+                Evaluated(Expr::Frac(_evaluated_numerator, _evaluated_denominator)) => {
+                    panic!("Can't handle pattern matching on fracs yet.");
+                },
+
+                Evaluated(expr) => Err(TypeMismatch(
+                    format!("Wanted a `{}`, but was given `{}`.", "{}", expr)
+                ))
+            }
+        }
+
         Variant(pattern_variant_name, opt_pattern_contents) => {
             match evaluated {
                 Evaluated(ApplyVariant(applied_variant_name, opt_applied_contents)) => {

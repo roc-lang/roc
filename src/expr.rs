@@ -101,6 +101,7 @@ pub enum Problem {
     TypeMismatch(String),
     ReassignedVarName(String),
     WrongArity(u32 /* Expected */, u32 /* Provided */),
+    NotEqual, // Used when (for example) a string literal pattern match fails
     NoBranchesMatched,
 }
 
@@ -108,6 +109,8 @@ pub enum Problem {
 pub enum Pattern {
     Identifier(String),
     Variant(String, Option<Vec<Pattern>>),
+    Integer(i64),
+    Fraction(i64, u64),
     EmptyRecord,
     Underscore
 }

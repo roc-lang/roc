@@ -411,7 +411,8 @@ parser! {
             char('_').map(|_| Pattern::Underscore),
             string("{}").map(|_| Pattern::EmptyRecord),
             ident().map(|name| Pattern::Identifier(name)),
-            match_variant(min_indent)
+            match_variant(min_indent),
+            number_pattern(),
         ))
     }
 }
@@ -727,3 +728,79 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         })
 }
 
+/// TODO find a way to remove the code duplication between this and number_literal
+/// without sacrificing performance. I attempted to do this in 0062e83d03d389f0f07e33e1e7929e77825d774f
+/// but couldn't figure out how to address the resulting compiler error, which was:
+/// "cannot move out of captured outer variable in an `FnMut` closure"
+pub fn number_pattern<I>() -> impl Parser<Input = I, Output = Pattern>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    // We expect these to be digits, but read any alphanumeric characters
+    // because it could turn out they're malformed identifiers which
+    // happen to begin with a number. We'll check for that at the end.
+    let digits_after_decimal =  many1::<Vec<_>, _>(alpha_num());
+
+    // Digits before the decimal point can be space-separated
+    // e.g. one million can be written as 1 000 000
+    let digits_before_decimal = many1::<Vec<_>, _>(
+        alpha_num().skip(optional(
+                attempt(
+                    char(' ').skip(
+                        // Don't mistake keywords like `then` and `else` for
+                        // space-separated digits!
+                        not_followed_by(choice((string("then"), string("else"), string("when"))))
+                    )
+                )
+        ))
+    );
+
+    optional(char('-'))
+        // Do this lookahead to decide if we should parse this as a number.
+        // This matters because once we commit to parsing it as a number,
+        // we may discover non-digit chars, indicating this is actually an
+        // invalid identifier. (e.g. "523foo" looks like a number, but turns
+        // out to be an invalid identifier on closer inspection.)
+        .and(look_ahead(digit()))
+        .and(digits_before_decimal)
+        .and(optional(char('.').with(digits_after_decimal)))
+        .then(|(((opt_minus, _), int_digits), decimals): (((Option<char>, _), Vec<char>), Option<Vec<char>>)| {
+            let is_positive = opt_minus.is_none();
+
+            // TODO check length of digits and make sure not to overflow
+            let int_str: String = int_digits.into_iter().collect();
+
+            match ( int_str.parse::<i64>(), decimals ) {
+                (Ok(int_val), None) => {
+                    if is_positive {
+                        value(Pattern::Integer(int_val as i64)).right()
+                    } else {
+                        value(Pattern::Integer(-int_val as i64)).right()
+                    }
+                },
+                (Ok(int_val), Some(nums)) => {
+                    let decimal_str: String = nums.into_iter().collect();
+                    // calculate numerator and denominator
+                    // e.g. 123.45 == 12345 / 100
+                    let denom = (10 as i64).pow(decimal_str.len() as u32);
+
+                    match decimal_str.parse::<u32>() {
+                        Ok(decimal) => {
+                            let numerator = (int_val * denom) + (decimal as i64);
+
+                            if is_positive {
+                                value(Pattern::Fraction(numerator, denom as u64)).right()
+                            } else {
+                                value(Pattern::Fraction(-numerator, denom as u64)).right()
+                            }
+                        },
+                        Err(_) => {
+                            unexpected_any("non-digit characters after decimal point in a number literal").left()
+                        }
+                    }
+                },
+                (Err(_), _) =>
+                    unexpected_any("looked like a number but was actually malformed identifier").left()
+            }
+        })
+}
