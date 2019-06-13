@@ -678,7 +678,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         ))
     );
 
-    optional(char('-'))
+    optional(attempt(char('-')))
         // Do this lookahead to decide if we should parse this as a number.
         // This matters because once we commit to parsing it as a number,
         // we may discover non-digit chars, indicating this is actually an
@@ -755,7 +755,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         ))
     );
 
-    optional(char('-'))
+    optional(attempt(char('-')))
         // Do this lookahead to decide if we should parse this as a number.
         // This matters because once we commit to parsing it as a number,
         // we may discover non-digit chars, indicating this is actually an
