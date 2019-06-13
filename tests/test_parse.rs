@@ -599,7 +599,7 @@ mod test_parse {
     }
 
     #[test]
-    fn case_with_variant() {
+    fn case_with_empty_variant() {
         assert_eq!(
             parse_standalone("case 1 when Foo then 3"),
             Ok((
@@ -607,6 +607,22 @@ mod test_parse {
                     Box::new(Int(1)),
                     smallvec![
                         ( Variant("Foo".to_string(), None), Box::new(Int(3)) ),
+                    ]
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn case_with_nonempty_variant() {
+        assert_eq!(
+            parse_standalone("case 1 when Foo x then 3"),
+            Ok((
+                Case(
+                    Box::new(Int(1)),
+                    smallvec![
+                        ( Variant("Foo".to_string(), Some(vec![Identifier("x".to_string())])), Box::new(Int(3)) ),
                     ]
                 ),
                 ""
