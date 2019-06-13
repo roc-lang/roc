@@ -208,7 +208,7 @@ pub fn case_expr<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    string("case").skip(indented_whitespaces1(min_indent))
+    attempt(string("case").skip(indented_whitespaces1(min_indent)))
         .with(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
         .and(
             many::<SmallVec<_>, _>(
