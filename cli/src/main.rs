@@ -4,8 +4,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use roc::expr::Expr::*;
 use roc::expr::Expr;
-use roc::eval::eval;
-use roc::eval::from_evaluated;
+use roc::eval::{eval, from_evaluated};
 use roc::parse;
 use std::io;
 
@@ -21,10 +20,12 @@ fn main() -> std::io::Result<()> {
         Error(problem) => {
             println!("\n\u{001B}[4mruntime error\u{001B}[24m\n\n{:?}\n", problem)
         },
-        ApplyVariant(name, payload) => {
+        ApplyVariant(name, Some(exprs)) => {
             match name.as_str() {
                 "Echo" => {
-                    println!("{}", payload.unwrap().first().unwrap());
+                    let payload = exprs.first().unwrap().clone();
+
+                    println!("{}", payload);
                 },
                 "Read" => {
                     let mut input = String::new();
@@ -33,7 +34,7 @@ fn main() -> std::io::Result<()> {
                     println!("[debug] You said: {}", input);
                 },
                 _ => {
-                    display_expr(ApplyVariant(name, payload));
+                    display_expr(ApplyVariant(name, Some(exprs)));
                 }
             }
         },

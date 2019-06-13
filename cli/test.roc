@@ -28,12 +28,10 @@ after = (task, cont) ->
   case task
     when Success val then cont val
     when Failure val then Failure val
-
     when Echo str, prevCont, onFailure then
       Echo str,
         ({} -> after (prevCont {}), cont),
         (ioErr -> after (onFailure ioErr), cont)
-
     when Read prevCont, onFailure then
       Read
         (str -> after (prevCont str), cont),
@@ -44,12 +42,10 @@ fallback = (task, onFailure) ->
   case task
     when Success val then Success val
     when Failure val then onFailure val
-
     when Echo str, cont, prevOnFailure then
       Echo str
         ({} -> fallback (cont {}), onFailure),
         (ioErr -> fallback (prevOnFailure ioErr), onFailure)
-
     when Read cont, prevOnFailure then
       Read
         (str -> fallback (cont str), onFailure),

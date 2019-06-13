@@ -128,7 +128,21 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             eval_apply(func_expr, args, vars)
         },
 
-        ApplyVariant(_, _) => Evaluated(expr), // This is all we do - for now...
+        ApplyVariant(_, None) => Evaluated(expr), // This is all we do - for now...
+        ApplyVariant(name, Some(exprs)) => {
+            Evaluated(
+                ApplyVariant(
+                    name,
+                    Some(
+                        exprs.into_iter().map(|arg| {
+                            let Evaluated(final_expr) = scoped_eval(arg, vars);
+
+                            final_expr
+                        }).collect()
+                    )
+                )
+            )
+        }
 
         Apply(func_expr, args) => {
             eval_apply(scoped_eval(*func_expr, vars), args, vars)
