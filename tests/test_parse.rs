@@ -733,7 +733,6 @@ mod test_parse {
         );
     }
 
-
     #[test]
     fn variant_regression() {
         // Somehow parsing the variant "Abc" worked but "Foo" failed (?!)
@@ -1050,6 +1049,18 @@ mod test_parse {
                     )),
                     Box::new(Var("f".to_string()))
                 ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn regression_on_passing_arguments_named_i() {
+        // This was broken because if-expressions were greedily consuming 'i' characters for "if"
+        assert_eq!(
+            parse_standalone("x i"),
+            Ok((
+                CallByName("x".to_string(), vec![Var("i".to_string())]),
                 ""
             ))
         );
