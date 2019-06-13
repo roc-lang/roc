@@ -630,6 +630,24 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn case_with_two_branches_and_function_call() {
+        assert_eq!(
+            parse_standalone("case 0 when 2 then foo 9 when 1 then bar 8"),
+            Ok((
+                Case(
+                    Box::new(Int(0)),
+                    smallvec![
+                        ( Integer(2), Box::new(Func("foo".to_string(), vec![Int(9)])) ),
+                        ( Integer(1), Box::new(Func("bar".to_string(), vec![Int(8)])) ),
+                    ]
+                ),
+                ""
+            ))
+        );
+    }
+
+
     // IF
 
     #[test]
