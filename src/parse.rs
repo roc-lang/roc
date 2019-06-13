@@ -254,15 +254,15 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     )
 }
 
+#[inline(always)]
 fn function_arg<I>(min_indent: i32) -> impl Parser<Input = I, Output = Expr>
     where I: Stream<Item = char, Position = IndentablePosition>,
         I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    not_followed_by(choice((string("then"), string("else"), string("when"))))
-        // Don't parse operators, because they have a higher
-        // precedence than function application. If we see one,
-        // we're done!
-        .with(expr_body_without_operators(min_indent))
+    // Don't parse operators, because they have a higher
+    // precedence than function application. If we see one,
+    // we're done!
+    expr_body_without_operators(min_indent)
 }
 
 pub fn apply_args<I>(min_indent: i32) -> impl Parser<Input = I, Output = Vec<Expr>>
@@ -271,6 +271,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 {
     // Function application always begins with whitespace.
     indented_whitespaces1(min_indent)
+        .skip(
+            // If there's a reserved keyword next, this isn't function application after all!
+            not_followed_by(choice((string("then"), string("else"), string("when"))))
+        )
         .with(
             // Arguments are comma-separated.
             sep_by1(
@@ -348,8 +352,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 None => Expr::Var(name),
                 Some(args) => Expr::Func(name, args)
             }
-        }
-        )
+        })
 }
 
 /// Closure *without* parens around the args
