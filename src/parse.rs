@@ -209,13 +209,16 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     attempt(string("case").skip(indented_whitespaces1(min_indent)))
-        .with(expr_body(min_indent)).skip(indented_whitespaces1(min_indent))
+        .with(expr_body(min_indent))
         .and(
             many::<SmallVec<_>, _>(
-                string("when").skip(indented_whitespaces1(min_indent))
-                    .with(pattern(min_indent)).skip(indented_whitespaces1(min_indent))
-                    .skip(string("then")).skip(indented_whitespaces1(min_indent))
-                    .and(expr_body(min_indent).map(|expr| Box::new(expr)))
+                attempt(
+                    skip_many(indented_whitespaces1(min_indent))
+                        .with(string("when").skip(indented_whitespaces1(min_indent)))
+                )
+                .with(pattern(min_indent)).skip(indented_whitespaces1(min_indent))
+                .skip(string("then")).skip(indented_whitespaces1(min_indent))
+                .and(expr_body(min_indent).map(|expr| Box::new(expr)))
             )
         )
         .map(|(conditional, branches)|
