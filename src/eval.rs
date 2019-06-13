@@ -172,7 +172,7 @@ fn eval_apply(expr: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
 }
 
 #[inline(always)]
-fn eval_closure(args: Vec<Evaluated>, arg_patterns: SmallVec<[Pattern; 4]>, vars: &Scope)
+fn eval_closure(args: Vec<Evaluated>, arg_patterns: SmallVec<[Pattern; 2]>, vars: &Scope)
     -> Result<Scope, expr::Problem>
 {
     if arg_patterns.len() == args.len() {
@@ -292,7 +292,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
 }
 
 #[inline(always)]
-fn eval_case (condition: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 4]>, vars: &Scope) -> Evaluated {
+fn eval_case (condition: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 2]>, vars: &Scope) -> Evaluated {
     let Evaluated(ref evaluated_expr) = condition;
 
     for (pattern, definition) in branches {

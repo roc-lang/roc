@@ -19,7 +19,7 @@ pub enum Expr {
     Func(Ident, Vec<Expr>),
     Apply(Box<Expr>, Vec<Expr>),
     Operator(Box<Expr>, Operator, Box<Expr>),
-    Closure(SmallVec<[Pattern; 4]>, Box<Expr>),
+    Closure(SmallVec<[Pattern; 2]>, Box<Expr>),
 
     // Sum Types
     ApplyVariant(String, Option<Vec<Expr>>),
@@ -29,7 +29,7 @@ pub enum Expr {
 
     // Conditionals
     If(Box<Expr>, Box<Expr>, Box<Expr>),
-    Case(Box<Expr>, SmallVec<[(Pattern, Box<Expr>); 4]>),
+    Case(Box<Expr>, SmallVec<[(Pattern, Box<Expr>); 2]>),
 
     // Error
     Error(Problem),
