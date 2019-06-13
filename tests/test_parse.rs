@@ -1,5 +1,5 @@
 #[macro_use] extern crate pretty_assertions;
-extern crate smallvec;
+#[macro_use] extern crate smallvec;
 extern crate combine;
 
 extern crate roc;
@@ -909,6 +909,26 @@ mod test_parse {
         assert!(
             parse_standalone("  x=\n5\n\n5").is_err(),
             "Expected parsing error"
+        );
+    }
+
+
+    #[test]
+    fn regression_on_calling_function_named_c() {
+        // This was broken because case-expressions were greedily consuming 'c' characters for "case"
+        assert_eq!(
+            parse_standalone("f = (x) -> c 1\n\nf"),
+            Ok((
+                Let(
+                    Identifier("f".to_string()),
+                    Box::new(Closure(
+                        smallvec![Identifier("x".to_string())],
+                        Box::new(Func("c".to_string(), vec![Int(1)]))
+                    )),
+                    Box::new(Var("f".to_string()))
+                ),
+                ""
+            ))
         );
     }
 }
