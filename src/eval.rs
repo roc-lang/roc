@@ -114,20 +114,12 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             panic!("Pattern matching on variants is not yet supported!");
         },
 
-        Expr::Assign(Underscore, definition, in_expr) => {
-            // Faithfully eval this, but discard its result.
-            scoped_eval(*definition, &vars);
-
-            // Actually use this part.
-            scoped_eval(*in_expr, vars)
+        Expr::Assign(Underscore, _definition, _in_expr) => {
+            panic!("Cannot assign to the _ pattern!");
         },
 
-        Expr::Assign(Pattern::EmptyRecordLiteral, definition, in_expr) => {
-            // Faithfully eval this, but discard its result.
-            scoped_eval(*definition, &vars);
-
-            // Actually use this part.
-            scoped_eval(*in_expr, vars)
+        Expr::Assign(Pattern::EmptyRecordLiteral, _definition, _in_expr) => {
+            panic!("Cannot assign to the {} pattern!");
         },
 
         Expr::CallByName(name, args) => {
