@@ -574,7 +574,6 @@ mod test_parse {
         );
     }
 
-
     #[test]
     fn two_branch_case() {
         assert_eq!(
@@ -585,6 +584,22 @@ mod test_parse {
                     smallvec![
                         ( Identifier("x".to_string()), Box::new(Int(2)) ),
                         ( Identifier("y".to_string()), Box::new(Int(3)) )
+                    ]
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn case_with_two_newlines() {
+        assert_eq!(
+            parse_standalone("case a\n\n  when b then 1"),
+            Ok((
+                Case(
+                    Box::new(Var("a".to_string())),
+                    smallvec![
+                        ( Identifier("b".to_string()), Box::new(Int(1)) ),
                     ]
                 ),
                 ""
