@@ -29,27 +29,35 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
         ApplyVariant(name, Some(mut vals)) => {
             match name.as_str() {
                 "Echo" => {
-                    let string_to_echo = match vals.pop() {
+                    // Extract the string from the Echo variant.
+                    let string_to_be_displayed = match vals.pop() {
                         Some(Str(payload)) => payload,
                         Some(EvalError(err)) => { panic!("RUNTIME ERROR in Echo: {}", format!("{}", err)); },
                         Some(val) => { panic!("TYPE MISMATCH in Echo: {}", format!("{}", val)); },
                         None => { panic!("TYPE MISMATCH in Echo: None"); }
                     };
 
+                    // Print the string to the console, since that's what Echo does!
+                    println!("{}", string_to_be_displayed);
+
+                    // Continue with the callback.
                     let callback = vals.pop().unwrap();
-                    println!("{}", string_to_echo);
 
                     process_task(call(callback, vec![Expr::EmptyRecord]))
                 },
                 "Read" => {
-                    let callback = vals.pop().unwrap();
+                    // Read a line from from stdin, since that's what Read does!
                     let mut input = String::new();
 
                     io::stdin().read_line(&mut input)?;
 
+                    // Continue with the callback.
+                    let callback = vals.pop().unwrap();
+
                     process_task(call(callback, vec![Expr::Str(input.trim().to_string())]))
                 },
                 _ => {
+                    // We don't recognize this variant, so display it and exit.
                     display_val(ApplyVariant(name, Some(vals)));
 
                     Ok(())
@@ -57,6 +65,7 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
             }
         },
         output => {
+            // We don't recognize this value, so display it and exit.
             display_val(output);
 
             Ok(())
