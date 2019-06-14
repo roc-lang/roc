@@ -214,7 +214,7 @@ fn eval_closure(args: Vec<Evaluated>, arg_patterns: SmallVec<[Pattern; 2]>, vars
         let mut new_vars = vars.clone();
 
         for ( arg, pattern ) in args.into_iter().zip(arg_patterns) {
-            pattern_match(arg, pattern, &mut new_vars)?;
+            pattern_match(&arg, &pattern, &mut new_vars)?;
         }
 
         Ok(new_vars)
@@ -325,10 +325,7 @@ fn eval_case (evaluated: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 2]
     for (pattern, definition) in branches {
         let mut branch_vars = vars.clone();
 
-        // TODO can we avoid doing this clone somehow?
-        let clone = evaluated.clone();
-
-        if pattern_match(clone, pattern, &mut branch_vars).is_ok() {
+        if pattern_match(&evaluated, &pattern, &mut branch_vars).is_ok() {
             return scoped_eval(*definition, &branch_vars);
         }
     }
@@ -336,10 +333,10 @@ fn eval_case (evaluated: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 2]
     EvalError(NoBranchesMatched)
 }
 
-fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Result<(), Problem> {
+fn pattern_match(evaluated: &Evaluated, pattern: &Pattern, vars: &mut Scope) -> Result<(), Problem> {
     match pattern {
         Identifier(name) => {
-            vars.insert(name, Rc::new(evaluated));
+            vars.insert(name.clone(), Rc::new(evaluated.clone()));
 
             Ok(())
         },
@@ -359,7 +356,7 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
         Integer(pattern_num) => {
             match evaluated {
                 Int(evaluated_num) => {
-                    if pattern_num == evaluated_num {
+                    if *pattern_num == *evaluated_num {
                         Ok(())
                     } else {
                         Err(Problem::NotEqual)
@@ -387,7 +384,7 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
         Variant(pattern_variant_name, opt_pattern_contents) => {
             match evaluated {
                 ApplyVariant(applied_variant_name, opt_applied_contents) => {
-                    if *pattern_variant_name != applied_variant_name {
+                    if *pattern_variant_name != *applied_variant_name {
                         return Err(TypeMismatch(
                                 format!("Wanted a `{}` variant, but was given a `{}` variant.",
                                         pattern_variant_name,
@@ -398,7 +395,7 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
                     }
 
                     match (opt_pattern_contents, opt_applied_contents) {
-                        ( Some(pattern_contents), Some(applied_contents) ) => {
+                        ( Some(ref pattern_contents), Some(applied_contents) ) => {
                             if pattern_contents.len() == applied_contents.len() {
                                 // Recursively pattern match
                                 for ( pattern_val, applied_val ) in pattern_contents.into_iter().zip(applied_contents) {
