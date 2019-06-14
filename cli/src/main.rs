@@ -56,6 +56,10 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
 
                     process_task(call(callback, vec![Expr::Str(input.trim().to_string())]))
                 },
+                "Success" => {
+                    // We finished all our tasks. Great! No need to print anything.
+                    Ok(())
+                },
                 _ => {
                     // We don't recognize this variant, so display it and exit.
                     display_val(ApplyVariant(name, Some(vals)));
