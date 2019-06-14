@@ -26,7 +26,7 @@ pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    spaces().with(expr_body(1)).skip(whitespace_or_eof())
+    spaces().with(expr_body(0)).skip(whitespace_or_eof())
 }
 
 fn indentation<I>() -> impl Parser<Input = I, Output = i32>
