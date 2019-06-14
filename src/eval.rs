@@ -58,7 +58,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
 
         // Resolve variable names
         Expr::Var(name) => match vars.get(&name) {
-            Some(resolved) => (**resolved).clone(),
+            Some(resolved) => *Rc::clone(resolved),
             None => EvalError(UnrecognizedVarName(name))
         },
 
