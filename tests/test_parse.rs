@@ -592,6 +592,23 @@ mod test_parse {
     }
 
     #[test]
+    fn two_branch_case_with_two_newlines() {
+        assert_eq!(
+            parse_standalone("case a\n\n  when b then 1\n\n  when\n    c then 2"),
+            Ok((
+                Case(
+                    Box::new(Var("a".to_string())),
+                    smallvec![
+                        ( Identifier("b".to_string()), Box::new(Int(1)) ),
+                        ( Identifier("c".to_string()), Box::new(Int(2)) ),
+                    ]
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
     fn case_with_two_newlines() {
         assert_eq!(
             parse_standalone("case a\n\n  when b then 1"),
