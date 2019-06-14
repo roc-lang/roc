@@ -511,7 +511,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 many1::<Vec<char>, _>(string_body())
                     .map(|chars: Vec<char>| chars.into_iter().collect::<String>())
                     .and(choice((
-                        (between(value('('), value(')'), ident())),
+                        attempt(string("\\(").with(ident().skip(char(')')))),
                         // If we never encountered \( then we hit the end of
                         // the string literal. Use empty Ident here because
                         // we're going to pop this Ident off the array anyhow.
@@ -520,14 +520,25 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             ))
     )
     .map(|mut pairs| {
-        match pairs.len() {
-            0 => Expr::EmptyStr,
-            1 => Expr::Str(pairs.pop().unwrap().0),
-            _ => {
-                // Discard the final Ident; we stuck an empty string in there anyway.
-                let (trailing_str, _) = pairs.pop().unwrap();
+        match pairs.pop() {
+            None => Expr::EmptyStr,
+            Some(( trailing_str, name )) => {
+                if name.is_empty() {
+                    if pairs.is_empty() {
+                        // We didn't find any interpolation at all. This is a string literal!
+                        Expr::Str(trailing_str.to_string())
+                    } else {
+                        Expr::InterpolatedStr(pairs, trailing_str.to_string())
+                    }
+                } else {
+                    // This is an interpolated string where the interpolation
+                    // happened to occur at the very end of the literal.
 
-                Expr::InterpolatedStr(pairs, trailing_str)
+                    // Put the tuple back.
+                    pairs.push(( trailing_str, name ));
+
+                    Expr::InterpolatedStr(pairs, "".to_string())
+                }
             }
         }
     }))
