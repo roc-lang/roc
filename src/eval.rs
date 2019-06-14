@@ -478,20 +478,29 @@ impl fmt::Display for Evaluated {
             },
 
             // ERRORS
-            EvalError(Problem::UnrecognizedVarName(name)) => write!(f, "NAMING ERROR: Unrecognized var name `{}`", name),
-            EvalError(Problem::NoBranchesMatched) => write!(f, "No branches matched in this case-expression"),
-            EvalError(Problem::TypeMismatch(info)) => write!(f, "TYPE ERROR: {}", info),
-            EvalError(Problem::ReassignedVarName(name)) => write!(f, "REASSIGNED CONSTANT: {}", name),
-            EvalError(Problem::WrongArity(expected_arity, provided_arity)) => {
-                if provided_arity > expected_arity {
-                  write!(f, "TOO MANY ARGUMENTS: needed {} arguments, but got {}", expected_arity, provided_arity)
-                } else {
-                  write!(f, "MISSING ARGUMENTS: needed {} arguments, but got {}", expected_arity, provided_arity)
-                }
-            }
+            EvalError(problem) => write!(f, "ERROR: {}", format!("{}", problem)),
 
             // UNFORMATTED
             _ => write!(f, "<partially evaluated expression>")
+        }
+    }
+}
+
+impl fmt::Display for Problem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Problem::UnrecognizedVarName(name) => write!(f, "Unrecognized var name `{}`", name),
+            Problem::NoBranchesMatched => write!(f, "No branches matched in this case-expression"),
+            Problem::TypeMismatch(info) => write!(f, "Type Mismatch - {}", info),
+            Problem::ReassignedVarName(name) => write!(f, "Reassigned constant - {}", name),
+            Problem::NotEqual => write!(f, "Pattern match on literal value failed; the branch wasn't equal."),
+            Problem::WrongArity(expected_arity, provided_arity) => {
+                if provided_arity > expected_arity {
+                  write!(f, "Too many arguments! Needed {} arguments, but got {}", expected_arity, provided_arity)
+                } else {
+                  write!(f, "Missing arguments! Needed {} arguments, but got {}", expected_arity, provided_arity)
+                }
+            }
         }
     }
 }

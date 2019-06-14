@@ -29,10 +29,15 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
         ApplyVariant(name, Some(mut vals)) => {
             match name.as_str() {
                 "Echo" => {
-                    let payload = vals.pop().unwrap();
-                    let callback = vals.pop().unwrap();
+                    let string_to_echo = match vals.pop() {
+                        Some(Str(payload)) => payload,
+                        Some(EvalError(err)) => { panic!("RUNTIME ERROR in Echo: {}", format!("{}", err)); },
+                        Some(val) => { panic!("TYPE MISMATCH in Echo: {}", format!("{}", val)); },
+                        None => { panic!("TYPE MISMATCH in Echo: None"); }
+                    };
 
-                    println!("{}", payload);
+                    let callback = vals.pop().unwrap();
+                    println!("{}", string_to_echo);
 
                     process_task(call(callback, vec![Expr::EmptyRecord]))
                 },
