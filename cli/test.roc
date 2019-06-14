@@ -55,11 +55,11 @@ fallback = (task, onFailure) ->
 
 
 demo =
-  after (echo "Enter first name"), ({}) ->
+  after (echo "What is your first name?"), ({}) ->
     after readInput, (firstName) ->
-      after (echo "Enter last name"), ({}) ->
+      after (echo "Hi, \(firstName)! What is your last name?"), ({}) ->
         after readInput, (lastName) ->
-          echo "Your name is: \(lastName)"
+          echo "Your full name is: \(firstName) \(lastName)"
 
 
 demo
