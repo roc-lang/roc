@@ -9,7 +9,7 @@ use self::Evaluated::*;
 use self::Problem::*;
 
 pub fn eval(expr: Expr) -> Evaluated {
-    scoped_eval(expr, HashMap::new())
+    scoped_eval(expr, &HashMap::new())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,7 +46,7 @@ pub enum Problem {
 
 type Scope = HashMap<String, Rc<Evaluated>>;
 
-pub fn scoped_eval(expr: Expr, vars: Scope) -> Evaluated {
+pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
     match expr {
         Expr::Int(num) => Int(num),
         Expr::EmptyStr => EmptyStr,
@@ -98,7 +98,7 @@ pub fn scoped_eval(expr: Expr, vars: Scope) -> Evaluated {
                 new_vars.insert(name, Rc::new(evaluated_defn));
 
                 // Evaluate in_expr with that new scope's variables.
-                scoped_eval(*in_expr, new_vars)
+                scoped_eval(*in_expr, &new_vars)
             }
         },
 
@@ -136,28 +136,28 @@ pub fn scoped_eval(expr: Expr, vars: Scope) -> Evaluated {
         Expr::ApplyVariant(name, Some(exprs)) => {
             ApplyVariant(
                 name,
-                Some(exprs.into_iter().map(|arg| scoped_eval(arg, vars.clone())).collect())
+                Some(exprs.into_iter().map(|arg| scoped_eval(arg, vars)).collect())
             )
         }
 
         Expr::Apply(func_expr, args) => {
-            eval_apply(scoped_eval(*func_expr, vars.clone()), args, vars)
+            eval_apply(scoped_eval(*func_expr, vars), args, vars)
         },
 
         Expr::Case(condition, branches) => {
-            eval_case(scoped_eval(*condition, vars.clone()), branches, vars)
+            eval_case(scoped_eval(*condition, vars), branches, vars)
         },
 
         Expr::Operator(left_arg, op, right_arg) => {
             eval_operator(
-                &scoped_eval(*left_arg, vars.clone()),
+                &scoped_eval(*left_arg, vars),
                 op,
                 &scoped_eval(*right_arg, vars)
             )
         },
 
         Expr::If(condition, if_true, if_false) => {
-            match scoped_eval(*condition, vars.clone()) {
+            match scoped_eval(*condition, vars) {
                 ApplyVariant(variant_name, None) => {
                     match variant_name.as_str() {
                         "True" => scoped_eval(*if_true, vars),
@@ -173,21 +173,21 @@ pub fn scoped_eval(expr: Expr, vars: Scope) -> Evaluated {
 
 #[inline(always)]
 pub fn call(evaluated: Evaluated, args: Vec<Expr>) -> Evaluated {
-    eval_apply(evaluated, args, HashMap::new())
+    eval_apply(evaluated, args, &HashMap::new())
 }
 
 #[inline(always)]
-fn eval_apply(evaluated: Evaluated, args: Vec<Expr>, vars: Scope) -> Evaluated {
+fn eval_apply(evaluated: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
     match evaluated {
         Closure(arg_patterns, body, closure_vars) => {
             let combined_vars = vars.clone().union(closure_vars);
             let evaluated_args =
                 args.into_iter()
-                    .map(|arg| scoped_eval(arg, combined_vars.clone()))
+                    .map(|arg| scoped_eval(arg, &combined_vars))
                     .collect();
 
             match eval_closure(evaluated_args, arg_patterns, &combined_vars) {
-                Ok(new_vars) => scoped_eval(*body, new_vars),
+                Ok(new_vars) => scoped_eval(*body, &new_vars),
                 Err(prob) => EvalError(prob)
             }
         },
@@ -313,12 +313,12 @@ fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) ->
 }
 
 #[inline(always)]
-fn eval_case (evaluated: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 2]>, vars: Scope) -> Evaluated {
+fn eval_case (evaluated: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 2]>, vars: &Scope) -> Evaluated {
     for (pattern, definition) in branches {
         let mut branch_vars = vars.clone();
 
         if pattern_match(&evaluated, &pattern, &mut branch_vars).is_ok() {
-            return scoped_eval(*definition, branch_vars);
+            return scoped_eval(*definition, &branch_vars);
         }
     }
 
