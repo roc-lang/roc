@@ -89,10 +89,14 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             char('\n')
                 .skip(
                     skip_many(
-                        attempt(
-                            char('\n').skip(skip_many(char(' ')))
-                                .skip(not_followed_by(char('\n')))
-                        )
+                        char('\n')
+                            .skip(
+                                optional(
+                                    attempt(
+                                        skip_many(char(' ')).skip(look_ahead(char('\n')))
+                                    )
+                                )
+                            )
                     )
                 )
                 .skip(
@@ -273,17 +277,20 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     // Function application always begins with whitespace.
-    indented_whitespaces1(min_indent)
-        .skip(
-            // If there's a reserved keyword next, this isn't function application after all!
-            not_followed_by(choice((string("then"), string("else"), string("when"))))
-        )
+    attempt(
+        indented_whitespaces1(min_indent)
+            .skip(
+                // If there's a reserved keyword next, this isn't function application after all!
+                not_followed_by(choice((string("then"), string("else"), string("when"))))
+            )
+    )
         .with(
             // Arguments are comma-separated.
             sep_by1(
                     choice((
                         attempt(indented_whitespaces1(min_indent))
                             .with(function_arg(min_indent)),
+
                         function_arg(min_indent),
                     ))
                 ,

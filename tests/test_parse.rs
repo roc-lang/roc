@@ -611,14 +611,18 @@ mod test_parse {
     #[test]
     fn multi_newline_case_regression() {
         assert_eq!(
-            parse_standalone("after =\n  case task\n    when Success val then cont val\n\n    when Failure val then Failure val"),
+            parse_standalone("a =\n  case x\n   when b then 1\n\n   when c then 2\na"),
             Ok((
-                Case(
-                    Box::new(Var("a".to_string())),
-                    smallvec![
-                        ( Identifier("b".to_string()), Box::new(Int(1)) ),
-                        ( Identifier("c".to_string()), Box::new(Int(2)) ),
-                    ]
+                Assign(
+                    Identifier("a".to_string()),
+                    Box::new(Case(
+                        Box::new(Var("x".to_string())),
+                        smallvec![
+                            ( Identifier("b".to_string()), Box::new(Int(1)) ),
+                            ( Identifier("c".to_string()), Box::new(Int(2)) ),
+                        ]
+                    )),
+                    Box::new(Var("a".to_string()))
                 ),
                 ""
             ))
