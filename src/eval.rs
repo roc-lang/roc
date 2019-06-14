@@ -1,78 +1,95 @@
-use expr;
-use expr::{Expr, Operator, Pattern, Problem};
-use expr::Expr::*;
-use expr::Problem::*;
+use expr::{Expr, Operator, Pattern, Ident};
 use expr::Pattern::*;
 use expr::Operator::*;
 use std::rc::Rc;
+use std::fmt;
 use im_rc::hashmap::HashMap;
-use self::Evaluated::*;
 use smallvec::SmallVec;
+use self::Evaluated::*;
+use self::Problem::*;
 
 pub fn eval(expr: Expr) -> Evaluated {
     scoped_eval(expr, &HashMap::new())
 }
 
-#[inline(always)]
-pub fn from_evaluated(Evaluated(expr): Evaluated) -> Expr {
-    expr
+#[derive(Clone, Debug, PartialEq)]
+pub enum Evaluated {
+    // Literals
+    Int(i64),
+    Frac(i64, u64),
+    EmptyStr,
+    Str(String),
+    InterpolatedStr(Vec<(String, Ident)>, String),
+    Char(char),
+    Closure(SmallVec<[Pattern; 2]>, Box<Expr>, Scope),
+
+    // Sum Types
+    ApplyVariant(String, Option<Vec<Evaluated>>),
+
+    // Product Types
+    EmptyRecord,
+
+    // Errors
+    EvalError(Problem)
 }
 
-/// Wrapper indicating the expression has been evaluated
-pub enum Evaluated { Evaluated(Expr) }
+#[derive(Clone, Debug, PartialEq)]
+pub enum Problem {
+    UnrecognizedVarName(String),
+    TypeMismatch(String),
+    ReassignedVarName(String),
+    WrongArity(u32 /* Expected */, u32 /* Provided */),
+    NotEqual, // Used when (for example) a string literal pattern match fails
+    NoBranchesMatched,
+}
+
 
 type Scope = HashMap<String, Rc<Evaluated>>;
 
-#[inline(always)]
-fn problem(prob: Problem) -> Evaluated {
-    Evaluated(Error(prob))
-}
-
 pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
     match expr {
-        // Primitives need no further evaluation
-        Error(_) | Int(_) | EmptyStr | Str(_) | Frac(_, _) | Char(_) | Closure(_, _) | Expr::EmptyRecord => Evaluated(expr),
+        Expr::Int(num) => Int(num),
+        Expr::EmptyStr => EmptyStr,
+        Expr::Str(string) => Str(string),
+        Expr::Frac(numerator, denominator) => Frac(numerator, denominator),
+        Expr::Char(ch) => Char(ch),
+        Expr::Closure(args, body) => Closure(args, body, vars.clone()),
+        Expr::EmptyRecord => EmptyRecord,
 
         // Resolve variable names
-        Var(name) => match vars.get(&name) {
-            Some(resolved) => {
-                let Evaluated(ref evaluated_expr) = **resolved;
-
-                // TODO is there any way to  avoid this clone? (Do we care,
-                // once this is a canonical expression with Rc instead of Box?
-                Evaluated(evaluated_expr.clone())
-            },
-            None => problem(UnrecognizedVarName(name))
+        Expr::Var(name) => match vars.get(&name) {
+            Some(resolved) => (**resolved).clone(),
+            None => EvalError(UnrecognizedVarName(name))
         },
 
-        InterpolatedStr(pairs, trailing_str) => {
+        Expr::InterpolatedStr(pairs, trailing_str) => {
             let mut output = String::new();
 
             for (string, var_name) in pairs.into_iter() {
                 match vars.get(&var_name) {
                     Some(resolved) => {
                         match **resolved {
-                            Evaluated(Str(ref var_string)) => {
+                            Str(ref var_string) => {
                                 output.push_str(string.as_str());
                                 output.push_str(var_string.as_str());
                             },
                             _ => {
-                                return problem(TypeMismatch(var_name));
+                                return EvalError(TypeMismatch(var_name));
                             }
                         }
                     },
-                    None => { return problem(UnrecognizedVarName(var_name)); }
+                    None => { return EvalError(UnrecognizedVarName(var_name)); }
                 }
             }
 
             output.push_str(trailing_str.as_str());
 
-            Evaluated(Str(output))
+            Str(output)
         },
 
-        Assign(Identifier(name), definition, in_expr) => {
+        Expr::Assign(Identifier(name), definition, in_expr) => {
             if vars.contains_key(&name) {
-                problem(ReassignedVarName(name))
+                EvalError(ReassignedVarName(name))
             } else {
                 // Create a new scope containing the new declaration.
                 let mut new_vars = vars.clone();
@@ -85,19 +102,19 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             }
         },
 
-        Assign(Integer(_), _, _) => {
+        Expr::Assign(Integer(_), _, _) => {
             panic!("You cannot assign integers to other values!");
         },
 
-        Assign(Fraction(_, _), _, _) => {
+        Expr::Assign(Fraction(_, _), _, _) => {
             panic!("You cannot assign fractions to other values!");
         },
 
-        Assign(Variant(_name, _patterns), _definition, _in_expr) => {
+        Expr::Assign(Variant(_name, _patterns), _definition, _in_expr) => {
             panic!("Pattern matching on variants is not yet supported!");
         },
 
-        Assign(Underscore, definition, in_expr) => {
+        Expr::Assign(Underscore, definition, in_expr) => {
             // Faithfully eval this, but discard its result.
             scoped_eval(*definition, &vars);
 
@@ -105,7 +122,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             scoped_eval(*in_expr, vars)
         },
 
-        Assign(Pattern::EmptyRecord, definition, in_expr) => {
+        Expr::Assign(Pattern::EmptyRecordLiteral, definition, in_expr) => {
             // Faithfully eval this, but discard its result.
             scoped_eval(*definition, &vars);
 
@@ -113,46 +130,33 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             scoped_eval(*in_expr, vars)
         },
 
-        CallByName(name, args) => {
+        Expr::CallByName(name, args) => {
             let func_expr = match vars.get(&name) {
-                Some(resolved) => {
-                    let Evaluated(ref evaluated_expr) = **resolved;
-
-                    // TODO is there any way to  avoid this clone? (Do we care,
-                    // once this is a canonical expression with Rc instead of Box?
-                    Evaluated(evaluated_expr.clone())
-                },
-                None => problem(UnrecognizedVarName(name))
+                Some(resolved) => (**resolved).clone(),
+                None => EvalError(UnrecognizedVarName(name))
             };
 
             eval_apply(func_expr, args, vars)
         },
 
-        ApplyVariant(_, None) => Evaluated(expr), // This is all we do - for now...
-        ApplyVariant(name, Some(exprs)) => {
-            Evaluated(
-                ApplyVariant(
-                    name,
-                    Some(
-                        exprs.into_iter().map(|arg| {
-                            let Evaluated(final_expr) = scoped_eval(arg, vars);
+        Expr::ApplyVariant(name, None) => ApplyVariant(name, None),
 
-                            final_expr
-                        }).collect()
-                    )
-                )
+        Expr::ApplyVariant(name, Some(exprs)) => {
+            ApplyVariant(
+                name,
+                Some(exprs.into_iter().map(|arg| scoped_eval(arg, vars)).collect())
             )
         }
 
-        Apply(func_expr, args) => {
+        Expr::Apply(func_expr, args) => {
             eval_apply(scoped_eval(*func_expr, vars), args, vars)
         },
 
-        Case(condition, branches) => {
+        Expr::Case(condition, branches) => {
             eval_case(scoped_eval(*condition, vars), branches, vars)
         },
 
-        Operator(left_arg, op, right_arg) => {
+        Expr::Operator(left_arg, op, right_arg) => {
             eval_operator(
                 &scoped_eval(*left_arg, vars),
                 op,
@@ -160,44 +164,50 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             )
         },
 
-        If(condition, if_true, if_false) => {
+        Expr::If(condition, if_true, if_false) => {
             match scoped_eval(*condition, vars) {
-                Evaluated(ApplyVariant(variant_name, None)) => {
+                ApplyVariant(variant_name, None) => {
                     match variant_name.as_str() {
                         "True" => scoped_eval(*if_true, vars),
                         "False" => scoped_eval(*if_false, vars),
-                        _ => problem(TypeMismatch("non-Bool used in `if` condition".to_string()))
+                        _ => EvalError(TypeMismatch("non-Bool used in `if` condition".to_string()))
                     }
                 },
-                _ => problem(TypeMismatch("non-Bool used in `if` condition".to_string()))
+                _ => EvalError(TypeMismatch("non-Bool used in `if` condition".to_string()))
             }
         }
     }
 }
 
 #[inline(always)]
+pub fn call(evaluated: Evaluated, args: Vec<Expr>) -> Evaluated {
+    eval_apply(evaluated, args, &HashMap::new())
+}
+
+#[inline(always)]
 fn eval_apply(evaluated: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated {
     match evaluated {
-        Evaluated(Closure(arg_patterns, body)) => {
+        Closure(arg_patterns, body, closure_vars) => {
+            let combined_vars = vars.clone().union(closure_vars);
             let evaluated_args =
                 args.into_iter()
-                    .map(|arg| scoped_eval(arg, vars))
+                    .map(|arg| scoped_eval(arg, &combined_vars))
                     .collect();
 
-            match eval_closure(evaluated_args, arg_patterns, vars) {
+            match eval_closure(evaluated_args, arg_patterns, &combined_vars) {
                 Ok(new_vars) => scoped_eval(*body, &new_vars),
-                Err(prob) => problem(prob)
+                Err(prob) => EvalError(prob)
             }
         },
-        Evaluated(expr) => {
-            problem(TypeMismatch(format!("Tried to call a non-function: {}", expr)))
+        expr => {
+            EvalError(TypeMismatch(format!("Tried to call a non-function: {}", expr)))
         }
     }
 }
 
 #[inline(always)]
 fn eval_closure(args: Vec<Evaluated>, arg_patterns: SmallVec<[Pattern; 2]>, vars: &Scope)
-    -> Result<Scope, expr::Problem>
+    -> Result<Scope, Problem>
 {
     if arg_patterns.len() == args.len() {
         // Create a new scope for the function to use.
@@ -213,7 +223,7 @@ fn eval_closure(args: Vec<Evaluated>, arg_patterns: SmallVec<[Pattern; 2]>, vars
     }
 }
 
-fn bool_variant(is_true: bool) -> Expr {
+fn bool_variant(is_true: bool) -> Evaluated {
     if is_true {
         ApplyVariant("True".to_string(), None)
     } else {
@@ -221,11 +231,10 @@ fn bool_variant(is_true: bool) -> Expr {
     }
 }
 
-fn eq(expr1: &Expr, expr2: &Expr) -> Expr {
-    match (expr1, expr2) {
+fn eq(evaluated1: &Evaluated, evaluated2: &Evaluated) -> Evaluated {
+    match (evaluated1, evaluated2) {
         // All functions are defined as equal
-        (Closure(_, _), Closure(_, _)) => bool_variant(true),
-
+        (Closure(_, _, _), Closure(_, _, _)) => bool_variant(true),
 
         (ApplyVariant(left, None), ApplyVariant(right, None)) => {
             bool_variant(left == right)
@@ -248,23 +257,19 @@ fn eq(expr1: &Expr, expr2: &Expr) -> Expr {
         (Char(left), Char(right)) => bool_variant(left == right),
         (Frac(_, _), Frac(_, _)) => panic!("Don't know how to == on Fracs yet"),
 
-        (_, _) => Error(TypeMismatch("tried to use == on two values with incompatible types".to_string())),
+        (_, _) => EvalError(TypeMismatch("tried to use == on two values with incompatible types".to_string())),
     }
 }
 
 #[inline(always)]
-fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right_expr): &Evaluated) -> Evaluated {
+fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) -> Evaluated {
     // TODO in the future, replace these with named function calls to stdlib
     match (left_expr, op, right_expr) {
-        // Error
-        (Error(prob), _, _) => problem(prob.clone()),
-        (_, _, Error(prob)) => problem(prob.clone()),
-
         // Equals
-        (_, Equals, _) => Evaluated(eq(left_expr, right_expr)),
+        (_, Equals, _) => eq(left_expr, right_expr),
 
         // Plus
-        (Int(left_num), Plus, Int(right_num)) => Evaluated(Int(left_num + right_num)),
+        (Int(left_num), Plus, Int(right_num)) => Int(left_num + right_num),
         (Frac(_, _), Plus, Frac(_, _)) => panic!("Don't know how to add fracs yet"),
 
         (Int(_), Plus, Frac(_, _)) => panic!("Tried to add Int and Frac"),
@@ -274,7 +279,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
         (_, Plus, _) => panic!("Tried to add non-numbers"),
 
         // Star
-        (Int(left_num), Star, Int(right_num)) => Evaluated(Int(left_num * right_num)),
+        (Int(left_num), Star, Int(right_num)) => Int(left_num * right_num),
         (Frac(_, _), Star, Frac(_, _)) => panic!("Don't know how to multiply fracs yet"),
 
         (Int(_), Star, Frac(_, _)) => panic!("Tried to multiply Int and Frac"),
@@ -284,7 +289,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
         (_, Star, _) => panic!("Tried to multiply non-numbers"),
 
         // Minus
-        (Int(left_num), Minus, Int(right_num)) => Evaluated(Int(left_num - right_num)),
+        (Int(left_num), Minus, Int(right_num)) => Int(left_num - right_num),
         (Frac(_, _), Minus, Frac(_, _)) => panic!("Don't know how to subtract fracs yet"),
 
         (Int(_), Minus, Frac(_, _)) => panic!("Tried to subtract Frac from Int"),
@@ -294,7 +299,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
         (_, Minus, _) => panic!("Tried to subtract non-numbers"),
 
         // Slash
-        (Int(left_num), Slash, Int(right_num)) => Evaluated(Int(left_num / right_num)),
+        (Int(left_num), Slash, Int(right_num)) => Int(left_num / right_num),
         (Frac(_, _), Slash, Frac(_, _)) => panic!("Don't know how to divide fracs yet"),
 
         (Int(_), Slash, Frac(_, _)) => panic!("Tried to divide Int by Frac"),
@@ -304,7 +309,7 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
         (_, Slash, _) => panic!("Tried to divide non-numbers"),
 
         // DoubleSlash
-        (Int(left_num), DoubleSlash, Int(right_num)) => Evaluated(Int(left_num / right_num)),
+        (Int(left_num), DoubleSlash, Int(right_num)) => Int(left_num / right_num),
         (Frac(_, _), DoubleSlash, Frac(_, _)) => panic!("Tried to do integer division on fracs"),
 
         (Int(_), DoubleSlash, Frac(_, _)) => panic!("Tried to integer-divide Int by Frac"),
@@ -316,25 +321,22 @@ fn eval_operator(Evaluated(left_expr): &Evaluated, op: Operator, Evaluated(right
 }
 
 #[inline(always)]
-fn eval_case (condition: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 2]>, vars: &Scope) -> Evaluated {
-    let Evaluated(ref evaluated_expr) = condition;
-
+fn eval_case (evaluated: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 2]>, vars: &Scope) -> Evaluated {
     for (pattern, definition) in branches {
         let mut branch_vars = vars.clone();
 
-        // TODO is there any way to  avoid this clone? (Do we care,
-        // once this is a canonical expression with Rc instead of Box?
-        let cloned_expr = Evaluated(evaluated_expr.clone());
+        // TODO can we avoid doing this clone somehow?
+        let clone = evaluated.clone();
 
-        if pattern_match(cloned_expr, pattern, &mut branch_vars).is_ok() {
+        if pattern_match(clone, pattern, &mut branch_vars).is_ok() {
             return scoped_eval(*definition, &branch_vars);
         }
     }
 
-    problem(NoBranchesMatched)
+    EvalError(NoBranchesMatched)
 }
 
-fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Result<(), expr::Problem> {
+fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Result<(), Problem> {
     match pattern {
         Identifier(name) => {
             vars.insert(name, Rc::new(evaluated));
@@ -345,10 +347,10 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
             // Underscore matches anything, and records no new vars.
             Ok(())
         },
-        Pattern::EmptyRecord => {
+        EmptyRecordLiteral => {
             match evaluated {
-                Evaluated(Expr::EmptyRecord) => Ok(()),
-                Evaluated(expr) => Err(TypeMismatch(
+                EmptyRecord => Ok(()),
+                expr => Err(TypeMismatch(
                     format!("Wanted a `{}`, but was given `{}`.", "{}", expr)
                 ))
             }
@@ -356,7 +358,7 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
 
         Integer(pattern_num) => {
             match evaluated {
-                Evaluated(Expr::Int(evaluated_num)) => {
+                Int(evaluated_num) => {
                     if pattern_num == evaluated_num {
                         Ok(())
                     } else {
@@ -364,7 +366,7 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
                     }
                 },
 
-                Evaluated(expr) => Err(TypeMismatch(
+                expr => Err(TypeMismatch(
                     format!("Wanted a `{}`, but was given `{}`.", "{}", expr)
                 ))
             }
@@ -372,11 +374,11 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
 
         Fraction(_pattern_numerator, _pattern_denominator) => {
             match evaluated {
-                Evaluated(Expr::Frac(_evaluated_numerator, _evaluated_denominator)) => {
+                Frac(_evaluated_numerator, _evaluated_denominator) => {
                     panic!("Can't handle pattern matching on fracs yet.");
                 },
 
-                Evaluated(expr) => Err(TypeMismatch(
+                expr => Err(TypeMismatch(
                     format!("Wanted a `{}`, but was given `{}`.", "{}", expr)
                 ))
             }
@@ -384,7 +386,7 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
 
         Variant(pattern_variant_name, opt_pattern_contents) => {
             match evaluated {
-                Evaluated(ApplyVariant(applied_variant_name, opt_applied_contents)) => {
+                ApplyVariant(applied_variant_name, opt_applied_contents) => {
                     if *pattern_variant_name != applied_variant_name {
                         return Err(TypeMismatch(
                                 format!("Wanted a `{}` variant, but was given a `{}` variant.",
@@ -400,12 +402,7 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
                             if pattern_contents.len() == applied_contents.len() {
                                 // Recursively pattern match
                                 for ( pattern_val, applied_val ) in pattern_contents.into_iter().zip(applied_contents) {
-                                    let evaluated_applied_val =
-                                        // We know this was already evaluated
-                                        // because we are matching on Evaluated(ApplyVariant)
-                                        Evaluated(applied_val);
-
-                                    pattern_match(evaluated_applied_val, pattern_val, vars)?;
+                                    pattern_match(applied_val, pattern_val, vars)?;
                                 }
 
                                 Ok(())
@@ -440,3 +437,61 @@ fn pattern_match(evaluated: Evaluated, pattern: Pattern, vars: &mut Scope) -> Re
     }
 }
 
+impl fmt::Display for Evaluated {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            // PRIMITIVES
+            Int(num) => write!(f, "{}", *num),
+            Frac(numerator, denominator) => {
+                if *denominator == 10 {
+                    write!(f, "{}", (*numerator as f64 / 10.0))
+                } else {
+                    write!(f, "{}/{}", numerator, denominator)
+                }
+            },
+            Str(string) => {
+                let escaped_str =
+                    (*string)
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\t", "\\t")
+                        .replace("\n", "\\n")
+                        .replace("\r", "\\r");
+
+                write!(f, "\"{}\"", escaped_str)
+            },
+            Char(ch) => write!(f, "'{}'", *ch),
+            Closure(args, _, _) => write!(f, "<{}-argument function>", args.len()),
+            ApplyVariant(name, opt_exprs) => {
+                match opt_exprs {
+                    None => write!(f, "{}", name),
+                    Some(exprs) => {
+                        let contents =
+                            exprs.into_iter()
+                                .map(|expr| format!(" {}", expr))
+                                .collect::<Vec<_>>()
+                                .join(",");
+
+                        write!(f, "{}{}", name, contents)
+                    }
+                }
+            },
+
+            // ERRORS
+            EvalError(Problem::UnrecognizedVarName(name)) => write!(f, "NAMING ERROR: Unrecognized var name `{}`", name),
+            EvalError(Problem::NoBranchesMatched) => write!(f, "No branches matched in this case-expression"),
+            EvalError(Problem::TypeMismatch(info)) => write!(f, "TYPE ERROR: {}", info),
+            EvalError(Problem::ReassignedVarName(name)) => write!(f, "REASSIGNED CONSTANT: {}", name),
+            EvalError(Problem::WrongArity(expected_arity, provided_arity)) => {
+                if provided_arity > expected_arity {
+                  write!(f, "TOO MANY ARGUMENTS: needed {} arguments, but got {}", expected_arity, provided_arity)
+                } else {
+                  write!(f, "MISSING ARGUMENTS: needed {} arguments, but got {}", expected_arity, provided_arity)
+                }
+            }
+
+            // UNFORMATTED
+            _ => write!(f, "<partially evaluated expression>")
+        }
+    }
+}

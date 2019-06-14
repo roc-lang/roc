@@ -59,9 +59,7 @@ demo =
     after readInput, (firstName) ->
       after (echo "Enter last name"), ({}) ->
         after readInput, (lastName) ->
-          fullName = "\(firstName) \(lastName)"
-
-          echo "Your name is: \(fullName)"
+          echo "Your name is: \(lastName)"
 
 
 demo

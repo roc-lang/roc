@@ -5,22 +5,17 @@ extern crate roc;
 
 #[cfg(test)]
 mod test_eval {
-    use roc::expr::{Expr};
-    use roc::expr::Expr::*;
     use roc::expr::Operator::*;
     use roc::expr::Pattern::*;
-
-    fn eval(expr: Expr) -> Expr {
-        roc::eval::from_evaluated(
-            roc::eval::eval(expr)
-        )
-    }
+    use roc::expr::Expr::*;
+    use roc::eval::eval;
+    use roc::eval::Evaluated;
 
     #[test]
     fn one_plus_one() {
         assert_eq!(
             eval(Operator(Box::new(Int(1)), Plus, Box::new(Int(1)))),
-            Int(2)
+            Evaluated::Int(2)
         );
     }
 
@@ -42,7 +37,7 @@ mod test_eval {
                     ))
                 )))))
             ),
-            Str("hi_one_two_three_string!".to_string())
+            Evaluated::Str("hi_one_two_three_string!".to_string())
         );
     }
 
@@ -55,7 +50,7 @@ mod test_eval {
                     Box::new(Operator(Box::new(Int(4)), Plus, Box::new(Int(5))))
                 )
             ),
-            Int(3)
+            Evaluated::Int(3)
         );
 
         assert_eq!(
@@ -65,7 +60,7 @@ mod test_eval {
                     Box::new(Operator(Box::new(Int(4)), Plus, Box::new(Int(5))))
                 )
             ),
-            Int(9)
+            Evaluated::Int(9)
         );
     }
 }
