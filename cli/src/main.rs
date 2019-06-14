@@ -47,7 +47,7 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
 
                     io::stdin().read_line(&mut input)?;
 
-                    process_task(call(callback, vec![Expr::Str(input)]))
+                    process_task(call(callback, vec![Expr::Str(input.trim().to_string())]))
                 },
                 _ => {
                     display_val(ApplyVariant(name, Some(vals)));
