@@ -94,22 +94,32 @@ mod test_parse {
     }
 
     #[test]
-    fn string_with_interpolation() {
+    fn string_with_interpolation_at_end() {
         assert_eq!(
-            parse_standalone("\"abcd\\(efg)hij\""),
+            parse_standalone("\"abcd\\(efg)\""),
             Ok((
                 InterpolatedStr(
-                    vec![
-                        ("abcd".to_string(), "".to_string()),
-                        ("".to_string(), "efg".to_string())
-                    ],
-                    "hij".to_string()
+                    vec![("abcd".to_string(), "efg".to_string())],
+                    "".to_string()
                 ),
                 "")
             )
         );
     }
 
+    #[test]
+    fn string_with_interpolation() {
+        assert_eq!(
+            parse_standalone("\"abcd\\(efg)hij\""),
+            Ok((
+                InterpolatedStr(
+                    vec![("abcd".to_string(), "efg".to_string())],
+                    "hij".to_string()
+                ),
+                "")
+            )
+        );
+    }
 
     #[test]
     fn string_with_single_qoute() {
