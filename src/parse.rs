@@ -89,7 +89,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             char('\n')
                 .skip(
                     skip_many(
-                        char('\n').skip(skip_many(char(' ')))
+                        attempt(
+                            char('\n').skip(skip_many(char(' ')))
+                                .skip(not_followed_by(char('\n')))
+                        )
                     )
                 )
                 .skip(
