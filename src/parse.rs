@@ -74,7 +74,13 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // This uses skip_until to make sure we don't bother saving anything
     // until we hit the closing ###, and then uses skip(string("###"))
     // to actually consume the closing ###.
-    attempt(string("###"))
+    attempt(
+        // 4+ consecutive '#' characters is *not* considered a
+        // block comment. It's for "drawing horizontal lines" like so:
+        // ###########################################################
+        string("###")
+            .skip(satisfy(|c| c != '#'))
+    )
         .with(skip_until(attempt(string("###"))))
         .skip(string("###"))
 }

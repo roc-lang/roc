@@ -777,6 +777,23 @@ mod test_parse {
         );
     }
 
+
+    #[test]
+    fn horizontal_line_comment() {
+        assert_eq!(
+            parse_standalone("if 12 34 5 then ##### Heading #####\n  5 4 32 1 #whee!\n  else 1 3 37"),
+            Ok(
+                (
+                    If(
+                        Box::new(Int(12345)),
+                        Box::new(Int(54321)),
+                        Box::new(Int(1337))
+                    ),
+                "")
+            )
+        );
+    }
+
     // BLOCK COMMENT
 
     #[test]
