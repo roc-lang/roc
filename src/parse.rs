@@ -5,7 +5,7 @@ use std::char;
 use parse_state::{IndentablePosition};
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
-use combine::parser::repeat::{many, count_min_max, sep_by1, skip_many, skip_many1};
+use combine::parser::repeat::{many, count_min_max, sep_by1, skip_many, skip_many1, skip_until};
 use combine::parser::item::{any, satisfy_map, value, position, satisfy};
 use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
@@ -51,10 +51,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     choice((
         char(' ').with(value(())),
         char('\n').with(value(())),
+        block_comment(),
         inline_comment()
     ))
 }
-
 
 fn whitespace<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
@@ -66,6 +66,17 @@ fn whitespace1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
     skip_many1(skipped_whitespace_char())
+}
+
+fn block_comment<I>() -> impl Parser<Input = I, Output = ()>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    // This uses skip_until to make sure we don't bother saving anything
+    // until we hit the closing ###, and then uses skip(string("###"))
+    // to actually consume the closing ###.
+    attempt(string("###"))
+        .with(skip_until(attempt(string("###"))))
+        .skip(string("###"))
 }
 
 fn inline_comment<I>() -> impl Parser<Input = I, Output = ()>
@@ -93,6 +104,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
         choice((
             char(' ').with(value(())),
+            block_comment(),
             inline_comment(),
             // If we hit a newline, it must be followed by:
             //
