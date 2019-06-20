@@ -1,3 +1,15 @@
+Example exposes [ program ]
+
+program =
+  after (echo "What is your first name?"), ({}) ->
+    after readInput, (firstName) ->
+      after (echo "Hi, \(firstName)! What is your last name?"), ({}) ->
+        after readInput, (lastName) ->
+          echo "Your full name is: \(firstName) \(lastName)"
+
+
+# In the future, everything below here will be in a platform.
+
 succeed = (val) ->
   Success val
 
@@ -53,13 +65,3 @@ fallback = (task, onFailure) ->
         (ioErr -> fallback (prevOnFailure ioErr), onFailure),
         (str -> fallback (cont str), onFailure)
 
-
-demo =
-  after (echo "What is your first name?"), ({}) ->
-    after readInput, (firstName) ->
-      after (echo "Hi, \(firstName)! What is your last name?"), ({}) ->
-        after readInput, (lastName) ->
-          echo "Your full name is: \(firstName) \(lastName)"
-
-
-demo
