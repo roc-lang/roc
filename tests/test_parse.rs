@@ -709,7 +709,6 @@ mod test_parse {
         );
     }
 
-
     // IF
 
     #[test]
@@ -759,6 +758,25 @@ mod test_parse {
             )
         );
     }
+
+    // INLINE COMMENT
+
+    #[test]
+    fn inline_comment() {
+        assert_eq!(
+            parse_standalone("if 12 34 5 then # blah blah\n  5 4 32 1 #whee!\n  else 1 3 37"),
+            Ok(
+                (
+                    If(
+                        Box::new(Int(12345)),
+                        Box::new(Int(54321)),
+                        Box::new(Int(1337))
+                    ),
+                "")
+            )
+        );
+    }
+
 
     // VARIANT
 
