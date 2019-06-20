@@ -777,6 +777,23 @@ mod test_parse {
         );
     }
 
+    // BLOCK COMMENT
+
+    #[test]
+    fn block_comment() {
+        assert_eq!(
+            parse_standalone("if 12 34 5### blah\n\nblah etc\nwhee #comment ###then\n  5 4 32 1\n  else 1 3 37"),
+            Ok(
+                (
+                    If(
+                        Box::new(Int(12345)),
+                        Box::new(Int(54321)),
+                        Box::new(Int(1337))
+                    ),
+                "")
+            )
+        );
+    }
 
     // VARIANT
 
