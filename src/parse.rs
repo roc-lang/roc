@@ -40,47 +40,60 @@ fn whitespace_or_eof<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
     choice((
-        spaces1(),
+        whitespace1(),
         eof().with(value(()))
     ))
 }
 
+fn skipped_whitespace_char<I>() -> impl Parser<Input = I, Output = ()>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position> {
+    choice((
+        char(' ').with(value(())),
+        char('\n').with(value(())),
+        inline_comment()
+    ))
+}
+
+
 fn whitespace<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    many::<Vec<_>, _>(choice((char(' '), char('\n')))).with(value(()))
+    skip_many(skipped_whitespace_char())
 }
 
 fn whitespace1<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    skip_many1(choice((char(' '), char('\n'))))
+    skip_many1(skipped_whitespace_char())
 }
 
-
-fn spaces1<I>() -> impl Parser<Input = I, Output = ()>
+fn inline_comment<I>() -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    skip_many1(choice((char(' '), char('\n'))))
+    char('#')
+        .skip(skip_many(satisfy(|c| c != '\n')))
+        .with(value(()))
 }
 
 fn indented_whitespaces<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    skip_many(indented_whitespace(min_indent))
+    skip_many(skipped_indented_whitespace_char(min_indent))
 }
 
 fn indented_whitespaces1<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
-    skip_many1(indented_whitespace(min_indent))
+    skip_many1(skipped_indented_whitespace_char(min_indent))
 }
 
-fn indented_whitespace<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
+fn skipped_indented_whitespace_char<I>(min_indent: i32) -> impl Parser<Input = I, Output = ()>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> {
         choice((
             char(' ').with(value(())),
+            inline_comment(),
             // If we hit a newline, it must be followed by:
             //
             // - Any number of blank lines (which may contain only spaces)
