@@ -4,7 +4,6 @@ use expr::Operator::*;
 use std::rc::Rc;
 use std::fmt;
 use im_rc::hashmap::HashMap;
-use smallvec::SmallVec;
 use self::Evaluated::*;
 use self::Problem::*;
 
@@ -21,7 +20,7 @@ pub enum Evaluated {
     Str(String),
     InterpolatedStr(Vec<(String, Ident)>, String),
     Char(char),
-    Closure(SmallVec<[Pattern; 2]>, Box<Expr>, Scope),
+    Closure(Vec<Pattern>, Box<Expr>, Scope),
 
     // Sum Types
     ApplyVariant(String, Option<Vec<Evaluated>>),
@@ -198,7 +197,7 @@ fn eval_apply(evaluated: Evaluated, args: Vec<Expr>, vars: &Scope) -> Evaluated 
 }
 
 #[inline(always)]
-fn eval_closure(args: Vec<Evaluated>, arg_patterns: SmallVec<[Pattern; 2]>, vars: &Scope)
+fn eval_closure(args: Vec<Evaluated>, arg_patterns: Vec<Pattern>, vars: &Scope)
     -> Result<Scope, Problem>
 {
     if arg_patterns.len() == args.len() {
@@ -313,7 +312,7 @@ fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) ->
 }
 
 #[inline(always)]
-fn eval_case (evaluated: Evaluated, branches: SmallVec<[(Pattern, Box<Expr>); 2]>, vars: &Scope) -> Evaluated {
+fn eval_case (evaluated: Evaluated, branches: Vec<(Pattern, Box<Expr>)>, vars: &Scope) -> Evaluated {
     for (pattern, definition) in branches {
         let mut branch_vars = vars.clone();
 

@@ -1,5 +1,4 @@
 #[macro_use] extern crate pretty_assertions;
-#[macro_use] extern crate smallvec;
 extern crate combine;
 
 extern crate roc;
@@ -567,7 +566,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Int(1)),
-                    smallvec![( Identifier("x".to_string()), Box::new(Int(2)) )]
+                    vec![( Identifier("x".to_string()), Box::new(Int(2)) )]
                 ),
                 ""
             ))
@@ -581,7 +580,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Int(1)),
-                    smallvec![
+                    vec![
                         ( Identifier("x".to_string()), Box::new(Int(2)) ),
                         ( Identifier("y".to_string()), Box::new(Int(3)) )
                     ]
@@ -598,7 +597,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Var("a".to_string())),
-                    smallvec![
+                    vec![
                         ( Identifier("b".to_string()), Box::new(Int(1)) ),
                         ( Identifier("c".to_string()), Box::new(Int(2)) ),
                     ]
@@ -617,7 +616,7 @@ mod test_parse {
                     Identifier("a".to_string()),
                     Box::new(Case(
                         Box::new(Var("x".to_string())),
-                        smallvec![
+                        vec![
                             ( Identifier("b".to_string()), Box::new(Int(1)) ),
                             ( Identifier("c".to_string()), Box::new(Int(2)) ),
                         ]
@@ -636,7 +635,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Var("a".to_string())),
-                    smallvec![
+                    vec![
                         ( Identifier("b".to_string()), Box::new(Int(1)) ),
                     ]
                 ),
@@ -652,7 +651,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Int(1)),
-                    smallvec![
+                    vec![
                         ( Integer(2), Box::new(Int(3)) ),
                     ]
                 ),
@@ -668,7 +667,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Int(1)),
-                    smallvec![
+                    vec![
                         ( Variant("Foo".to_string(), None), Box::new(Int(3)) ),
                     ]
                 ),
@@ -684,7 +683,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Int(1)),
-                    smallvec![
+                    vec![
                         ( Variant("Foo".to_string(), Some(vec![Identifier("x".to_string())])), Box::new(Int(3)) ),
                     ]
                 ),
@@ -700,7 +699,7 @@ mod test_parse {
             Ok((
                 Case(
                     Box::new(Int(0)),
-                    smallvec![
+                    vec![
                         ( Integer(2), Box::new(CallByName("foo".to_string(), vec![Int(9)])) ),
                         ( Integer(1), Box::new(CallByName("bar".to_string(), vec![Int(8)])) ),
                     ]
@@ -1107,7 +1106,7 @@ mod test_parse {
                 Assign(
                     Identifier("f".to_string()),
                     Box::new(Closure(
-                        smallvec![Identifier("x".to_string())],
+                        vec![Identifier("x".to_string())],
                         Box::new(CallByName("c".to_string(), vec![Int(1)]))
                     )),
                     Box::new(Var("f".to_string()))
