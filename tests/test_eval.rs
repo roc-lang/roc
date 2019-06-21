@@ -31,6 +31,36 @@ mod test_eval {
     }
 
     #[test]
+    fn addition_reduces() {
+        assert_eq!(
+            eval(Operator(Box::new(Frac(1, 3)), Plus, Box::new(Frac(7, 14)))),
+            Evaluated::Frac(Fraction::new(5u64, 6u64))
+        );
+    }
+
+    #[test]
+    fn division_reduces() {
+        assert_eq!(
+            eval(Operator(Box::new(Frac(1, 3)), Slash, Box::new(Frac(7, 14)))),
+            Evaluated::ApplyVariant(
+                "Ok".to_string(),
+                Some(vec![Evaluated::Frac(Fraction::new(2u64, 3u64))])
+            )
+        );
+    }
+
+    #[test]
+    fn division_by_zero() {
+        assert_eq!(
+            eval(Operator(Box::new(Frac(1, 10)), Slash, Box::new(Frac(0, 10)))),
+            Evaluated::ApplyVariant(
+                "Err".to_string(),
+                Some(vec![Evaluated::ApplyVariant("DivisionByZero".to_string(), None)])
+            )
+        );
+    }
+
+    #[test]
     fn string_interpolation() {
         assert_eq!(
             eval(
