@@ -768,12 +768,13 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 
                     match decimal_str.parse::<u32>() {
                         Ok(decimal) => {
+                            // Only the numerator may ever be signed!
                             let numerator = (int_val * denom) + (decimal as i64);
 
                             if is_positive {
-                                value(Expr::Frac(numerator, denom as u64)).right()
+                                value(Expr::Frac(numerator, denom)).right()
                             } else {
-                                value(Expr::Frac(-numerator, denom as u64)).right()
+                                value(Expr::Frac(-numerator, denom)).right()
                             }
                         },
                         Err(_) => {
@@ -845,12 +846,13 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 
                     match decimal_str.parse::<u32>() {
                         Ok(decimal) => {
+                            // Only the numerator may ever be signed.
                             let numerator = (int_val * denom) + (decimal as i64);
 
                             if is_positive {
-                                value(Pattern::Fraction(numerator, denom as u64)).right()
+                                value(Pattern::Fraction(numerator, denom)).right()
                             } else {
-                                value(Pattern::Fraction(-numerator, denom as u64)).right()
+                                value(Pattern::Fraction(-numerator, denom)).right()
                             }
                         },
                         Err(_) => {

@@ -2,7 +2,7 @@
 pub enum Expr {
     // Literals
     Int(i64),
-    Frac(i64, u64),
+    Frac(i64, i64),
     EmptyStr,
     Str(String),
     InterpolatedStr(Vec<(String, Ident)>, String),
@@ -36,7 +36,7 @@ pub enum Pattern {
     Identifier(String),
     Variant(String, Option<Vec<Pattern>>),
     Integer(i64),
-    Fraction(i64, u64),
+    Fraction(i64, i64),
     EmptyRecordLiteral,
     Underscore
 }

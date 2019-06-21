@@ -234,7 +234,7 @@ mod test_parse {
         assert_eq!(Ok((Int(expected), "")), parse_standalone(actual));
     }
 
-    fn expect_parsed_ratio<'a>(expected_numerator: i64, expected_denominator: u64, actual: &str) {
+    fn expect_parsed_ratio<'a>(expected_numerator: i64, expected_denominator: i64, actual: &str) {
         assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "")), parse_standalone(actual));
     }
 

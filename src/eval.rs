@@ -6,6 +6,7 @@ use std::fmt;
 use im_rc::hashmap::HashMap;
 use self::Evaluated::*;
 use self::Problem::*;
+use fraction::Fraction;
 
 pub fn eval(expr: Expr) -> Evaluated {
     scoped_eval(expr, &HashMap::new())
@@ -15,7 +16,7 @@ pub fn eval(expr: Expr) -> Evaluated {
 pub enum Evaluated {
     // Literals
     Int(i64),
-    Frac(i64, u64),
+    Frac(Fraction),
     EmptyStr,
     Str(String),
     InterpolatedStr(Vec<(String, Ident)>, String),
@@ -42,7 +43,6 @@ pub enum Problem {
     NoBranchesMatched,
 }
 
-
 type Scope = HashMap<String, Rc<Evaluated>>;
 
 pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
@@ -50,7 +50,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
         Expr::Int(num) => Int(num),
         Expr::EmptyStr => EmptyStr,
         Expr::Str(string) => Str(string),
-        Expr::Frac(numerator, denominator) => Frac(numerator, denominator),
+        Expr::Frac(numerator, denominator) => Frac(fraction_from_i64s(numerator, denominator)),
         Expr::Char(ch) => Char(ch),
         Expr::Closure(args, body) => Closure(args, body, vars.clone()),
         Expr::EmptyRecord => EmptyRecord,
@@ -246,7 +246,7 @@ fn eq(evaluated1: &Evaluated, evaluated2: &Evaluated) -> Evaluated {
         (Int(left), Int(right)) => bool_variant(left == right),
         (Str(left), Str(right)) => bool_variant(left == right),
         (Char(left), Char(right)) => bool_variant(left == right),
-        (Frac(_, _), Frac(_, _)) => panic!("Don't know how to == on Fracs yet"),
+        (Frac(left), Frac(right)) => bool_variant(left == right),
 
         (_, _) => EvalError(TypeMismatch("tried to use == on two values with incompatible types".to_string())),
     }
@@ -261,53 +261,61 @@ fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) ->
 
         // Plus
         (Int(left_num), Plus, Int(right_num)) => Int(left_num + right_num),
-        (Frac(_, _), Plus, Frac(_, _)) => panic!("Don't know how to add fracs yet"),
+        (Frac(left_num), Plus, Frac(right_num)) => Frac(left_num + right_num),
 
-        (Int(_), Plus, Frac(_, _)) => panic!("Tried to add Int and Frac"),
+        (Int(_), Plus, Frac(_)) => EvalError(TypeMismatch("tried to add Frac to Int. Explicitly convert them to the same type first!".to_string())),
 
-        (Frac(_, _), Plus, Int(_)) => panic!("Tried to add Frac and Int"),
+        (Frac(_), Plus, Int(_)) => EvalError(TypeMismatch("tried to add Int to Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Plus, _) => panic!("Tried to add non-numbers"),
+        (_, Plus, _) => EvalError(TypeMismatch("tried to add non-numbers".to_string())),
 
         // Star
         (Int(left_num), Star, Int(right_num)) => Int(left_num * right_num),
-        (Frac(_, _), Star, Frac(_, _)) => panic!("Don't know how to multiply fracs yet"),
+        (Frac(left_num), Star, Frac(right_num)) => Frac(left_num * right_num),
 
-        (Int(_), Star, Frac(_, _)) => panic!("Tried to multiply Int and Frac"),
+        (Int(_), Star, Frac(_)) => EvalError(TypeMismatch("tried to multiply Int by Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (Frac(_, _), Star, Int(_)) => panic!("Tried to multiply Frac and Int"),
+        (Frac(_), Star, Int(_)) => EvalError(TypeMismatch("tried to multiply Frac by Int. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Star, _) => panic!("Tried to multiply non-numbers"),
+        (_, Star, _) => EvalError(TypeMismatch("tried to multiply non-numbers".to_string())),
 
         // Minus
         (Int(left_num), Minus, Int(right_num)) => Int(left_num - right_num),
-        (Frac(_, _), Minus, Frac(_, _)) => panic!("Don't know how to subtract fracs yet"),
+        (Frac(left_num), Minus, Frac(right_num)) => Frac(left_num - right_num),
 
-        (Int(_), Minus, Frac(_, _)) => panic!("Tried to subtract Frac from Int"),
+        (Int(_), Minus, Frac(_)) => EvalError(TypeMismatch("tried to subtract Frac from Int. Explicitly convert them to the same type first!".to_string())),
 
-        (Frac(_, _), Minus, Int(_)) => panic!("Tried to subtract Int from Frac"),
+        (Frac(_), Minus, Int(_)) => EvalError(TypeMismatch("tried to subtract Int from Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Minus, _) => panic!("Tried to subtract non-numbers"),
+        (_, Minus, _) => EvalError(TypeMismatch("tried to subtract non-numbers".to_string())),
 
         // Slash
         (Int(left_num), Slash, Int(right_num)) => Int(left_num / right_num),
-        (Frac(_, _), Slash, Frac(_, _)) => panic!("Don't know how to divide fracs yet"),
+        (Frac(left_num), Slash, Frac(right_num)) => {
+            let answer = left_num / right_num;
 
-        (Int(_), Slash, Frac(_, _)) => panic!("Tried to divide Int by Frac"),
+            if answer.is_finite() {
+                ok_variant(Frac(answer))
+            } else {
+                err_variant(ApplyVariant("DivisionByZero".to_string(), None))
+            }
+        },
 
-        (Frac(_, _), Slash, Int(_)) => panic!("Tried to divide Frac by Int"),
+        (Int(_), Slash, Frac(_)) => EvalError(TypeMismatch("tried to divide Int by Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Slash, _) => panic!("Tried to divide non-numbers"),
+        (Frac(_), Slash, Int(_)) => EvalError(TypeMismatch("tried to divide Frac by Int. Explicitly convert them to the same type first!".to_string())),
+
+        (_, Slash, _) => EvalError(TypeMismatch("tried to divide non-numbers".to_string())),
 
         // DoubleSlash
         (Int(left_num), DoubleSlash, Int(right_num)) => Int(left_num / right_num),
-        (Frac(_, _), DoubleSlash, Frac(_, _)) => panic!("Tried to do integer division on fracs"),
+        (Frac(_), DoubleSlash, Frac(_)) => EvalError(TypeMismatch("tried to do integer division on two Frac values".to_string())),
 
-        (Int(_), DoubleSlash, Frac(_, _)) => panic!("Tried to integer-divide Int by Frac"),
+        (Int(_), DoubleSlash, Frac(_)) => EvalError(TypeMismatch("tried to integer-divide Int by Frac".to_string())),
 
-        (Frac(_, _), DoubleSlash, Int(_)) => panic!("Tried to integer-divide Frac by Int"),
+        (Frac(_), DoubleSlash, Int(_)) => EvalError(TypeMismatch("tried to integer-divide Frac by Int".to_string())),
 
-        (_, DoubleSlash, _) => panic!("Tried to integer-divide non-numbers"),
+        (_, DoubleSlash, _) => EvalError(TypeMismatch("tried to do integer division on two non-numbers".to_string())),
     }
 }
 
@@ -360,10 +368,16 @@ fn pattern_match(evaluated: &Evaluated, pattern: &Pattern, vars: &mut Scope) -> 
             }
         },
 
-        Fraction(_pattern_numerator, _pattern_denominator) => {
+        Fraction(numerator, denominator) => {
             match evaluated {
-                Frac(_evaluated_numerator, _evaluated_denominator) => {
-                    panic!("Can't handle pattern matching on fracs yet.");
+                Frac(actual_frac) => {
+                    let expected_frac = fraction_from_i64s(*numerator, *denominator);
+
+                    if expected_frac == *actual_frac {
+                        Ok(())
+                    } else {
+                        Err(Problem::NotEqual)
+                    }
                 },
 
                 expr => Err(TypeMismatch(
@@ -430,9 +444,12 @@ impl fmt::Display for Evaluated {
         match self {
             // PRIMITIVES
             Int(num) => write!(f, "{}", *num),
-            Frac(numerator, denominator) => {
-                if *denominator == 10 {
-                    write!(f, "{}", (*numerator as f64 / 10.0))
+            Frac(fraction) => {
+                let numerator = *fraction.numer().unwrap();
+                let denominator = *fraction.denom().unwrap();
+
+                if denominator == 10 {
+                    write!(f, "{}", (numerator as f64 / 10.0))
                 } else {
                     write!(f, "{}/{}", numerator, denominator)
                 }
@@ -490,5 +507,21 @@ impl fmt::Display for Problem {
                 }
             }
         }
+    }
+}
+
+fn ok_variant(contents: Evaluated) -> Evaluated{
+    ApplyVariant("Ok".to_string(), Some(vec![contents]))
+}
+
+fn err_variant(contents: Evaluated) -> Evaluated {
+    ApplyVariant("Err".to_string(), Some(vec![contents]))
+}
+
+fn fraction_from_i64s(numerator: i64, denominator: i64) -> Fraction {
+    if numerator.is_negative() {
+        Fraction::new_neg(numerator as u64, denominator as u64)
+    } else {
+        Fraction::new(numerator as u64, denominator as u64)
     }
 }

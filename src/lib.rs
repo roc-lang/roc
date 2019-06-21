@@ -11,5 +11,6 @@ pub mod eval;
 extern crate dogged;
 
 extern crate im_rc;
+extern crate fraction;
 
 #[macro_use] extern crate combine;

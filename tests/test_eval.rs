@@ -1,5 +1,6 @@
 #[macro_use] extern crate pretty_assertions;
 extern crate combine;
+extern crate fraction;
 
 extern crate roc;
 
@@ -10,12 +11,22 @@ mod test_eval {
     use roc::expr::Expr::*;
     use roc::eval::eval;
     use roc::eval::Evaluated;
+    use fraction::Fraction;
 
     #[test]
     fn one_plus_one() {
         assert_eq!(
             eval(Operator(Box::new(Int(1)), Plus, Box::new(Int(1)))),
             Evaluated::Int(2)
+        );
+    }
+
+    #[test]
+    fn point_one_plus_point_two() {
+        // 0.1 + 0.2 == 0.3 THAT'S WHAT'S UP
+        assert_eq!(
+            eval(Operator(Box::new(Frac(1, 10)), Plus, Box::new(Frac(2, 10)))),
+            Evaluated::Frac(Fraction::new(3u64, 10u64))
         );
     }
 
