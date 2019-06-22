@@ -640,7 +640,7 @@ fn lcm(me: i64, other: i64) -> i64 {
 }
 
 #[cfg(test)]
-mod test_stack_fraction {
+mod test_fast_fraction {
 	use super::Fraction;
 
 	fn frac(numerator: i64, denominator: i64) -> Fraction {
@@ -660,6 +660,22 @@ mod test_stack_fraction {
 		assert_eq!(
 			frac(1, 10).add(&mut frac(2, 10)),
 			frac(3, 10)
+		);
+	}
+
+	#[test]
+	fn multiply() {
+		assert_eq!(
+			frac(2, 3).mul(&mut frac(5, 7)),
+			frac(10, 21)
+		);
+	}
+
+	#[test]
+	fn divide() {
+		assert_eq!(
+			frac(2, 3).div_or_panic(&mut frac(5, 7)),
+			frac(14, 15)
 		);
 	}
 }
