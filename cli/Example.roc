@@ -1,5 +1,3 @@
-Example exposes [ program ]
-
 program =
   after (echo "What is your first name?"), ({}) ->
     after readInput, (firstName) ->

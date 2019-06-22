@@ -9,7 +9,7 @@ use roc::parse;
 use std::io;
 
 fn main() -> std::io::Result<()> {
-    let mut file = File::open("test.roc")?;
+    let mut file = File::open("Example.roc")?;
     let mut contents = String::new();
 
     file.read_to_string(&mut contents)?;
