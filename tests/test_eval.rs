@@ -12,7 +12,6 @@ mod test_eval {
     use roc::eval::eval;
     use roc::eval::Evaluated;
     use fraction::Fraction;
-    use roc::stack_fraction;
 
     #[test]
     fn one_plus_one() {
