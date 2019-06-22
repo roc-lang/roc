@@ -204,6 +204,7 @@ dependencies = [
  "im-rc 13.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "maplit 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "petgraph 0.4.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "pretty_assertions 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

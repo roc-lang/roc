@@ -10,6 +10,7 @@ petgraph = { version = "0.4.5", optional = true }
 combine = "3.8.1"
 im-rc = "13.0.0"
 fraction = "0.6.2"
+num = "0.2.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
