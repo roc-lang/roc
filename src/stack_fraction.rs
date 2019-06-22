@@ -3,7 +3,6 @@ use std::hash::{Hash, Hasher};
 use std::ops::Neg;
 
 use std::mem;
-use std::f64;
 use std::fmt;
 
 #[derive(Clone, Copy)]
@@ -475,6 +474,12 @@ impl Fraction {
 	}
 }
 
+impl fmt::Debug for Fraction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}/{}", self.numerator, self.denominator)
+    }
+}
+
 impl PartialEq for Fraction {
 	fn eq(&self, other: &Self) -> bool {
 		if self.denominator == other.denominator {
@@ -522,11 +527,62 @@ impl Ord for Fraction {
 	}
 }
 
+impl Hash for Fraction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+		let (numerator, denominator) = self.clone().reduced();
+
+        numerator.hash(state);
+        denominator.hash(state);
+    }
+}
+
 impl Neg for Fraction {
 	type Output = Fraction;
 
 	fn neg(self) -> Self {
 		Fraction { numerator: -self.numerator, denominator: self.denominator }
+	}
+}
+
+impl From<u8> for Fraction {
+	fn from (numerator: u8) -> Fraction {
+		Fraction { numerator: numerator as i64, denominator: 1 }
+	}
+}
+
+impl From<i8> for Fraction {
+	fn from (numerator: i8) -> Fraction {
+		Fraction { numerator: numerator as i64, denominator: 1 }
+	}
+}
+
+impl From<u16> for Fraction {
+	fn from (numerator: u16) -> Fraction {
+		Fraction { numerator: numerator as i64, denominator: 1 }
+	}
+}
+
+impl From<i16> for Fraction {
+	fn from (numerator: i16) -> Fraction {
+		Fraction { numerator: numerator as i64, denominator: 1 }
+	}
+}
+
+impl From<u32> for Fraction {
+	fn from (numerator: u32) -> Fraction {
+		Fraction { numerator: numerator as i64, denominator: 1 }
+	}
+}
+
+impl From<i32> for Fraction {
+	fn from (numerator: i32) -> Fraction {
+		Fraction { numerator: numerator as i64, denominator: 1 }
+	}
+}
+
+impl From<i64> for Fraction {
+	fn from (numerator: i64) -> Fraction {
+		Fraction { numerator, denominator: 1 }
 	}
 }
 
