@@ -638,3 +638,28 @@ fn gcd(me: i64, other: i64) -> i64 {
 fn lcm(me: i64, other: i64) -> i64 {
     me * (other / gcd(me, other))
 }
+
+#[cfg(test)]
+mod test_stack_fraction {
+	use super::Fraction;
+
+	fn frac(numerator: i64, denominator: i64) -> Fraction {
+		Fraction::new_from_positive_denominator(numerator, denominator)
+	}
+
+	#[test]
+	fn one_plus_one() {
+		assert_eq!(
+			frac(1, 1).add(&mut frac(1, 1)),
+			frac(2, 1)
+		);
+	}
+
+	#[test]
+	fn point_one_plus_point_two() {
+		assert_eq!(
+			frac(1, 10).add(&mut frac(2, 10)),
+			frac(3, 10)
+		);
+	}
+}
