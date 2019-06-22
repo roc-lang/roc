@@ -777,6 +777,21 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn inline_comment_in_assignment() {
+        assert_eq!(
+            parse_standalone("foo = 1\n# comment\nbar"),
+            Ok(
+                (
+                    Assign(
+                        Identifier("foo".to_string()),
+                        Box::new(Int(1)),
+                        Box::new(Var("bar".to_string())),
+                    ),
+                "")
+            )
+        );
+    }
 
     #[test]
     fn horizontal_line_comment() {
