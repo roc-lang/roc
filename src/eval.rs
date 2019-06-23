@@ -259,6 +259,34 @@ fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) ->
         // Equals
         (_, Equals, _) => eq(left_expr, right_expr),
 
+        // LessThan
+        (Int(left_num), LessThan, Int(right_num)) => bool_variant(left_num < right_num),
+        (Frac(left_num), LessThan, Frac(right_num)) => bool_variant(left_num < right_num),
+        (Int(_), LessThan, Frac(_)) => EvalError(TypeMismatch("tried check Frac < Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), LessThan, Int(_)) => EvalError(TypeMismatch("tried check Int < Frac. Explicitly convert them to the same type first!".to_string())),
+        (_, LessThan, _) => EvalError(TypeMismatch("tried to check if one non-number < another non-number".to_string())),
+
+        // LessThanOrEq
+        (Int(left_num), LessThanOrEq, Int(right_num)) => bool_variant(left_num <= right_num),
+        (Frac(left_num), LessThanOrEq, Frac(right_num)) => bool_variant(left_num <= right_num),
+        (Int(_), LessThanOrEq, Frac(_)) => EvalError(TypeMismatch("tried check Frac <= Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), LessThanOrEq, Int(_)) => EvalError(TypeMismatch("tried check Int <= Frac. Explicitly convert them to the same type first!".to_string())),
+        (_, LessThanOrEq, _) => EvalError(TypeMismatch("tried to check if one non-number <= another non-number".to_string())),
+
+        // GreaterThan
+        (Int(left_num), GreaterThan, Int(right_num)) => bool_variant(left_num > right_num),
+        (Frac(left_num), GreaterThan, Frac(right_num)) => bool_variant(left_num > right_num),
+        (Int(_), GreaterThan, Frac(_)) => EvalError(TypeMismatch("tried check Frac > Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), GreaterThan, Int(_)) => EvalError(TypeMismatch("tried check Int > Frac. Explicitly convert them to the same type first!".to_string())),
+        (_, GreaterThan, _) => EvalError(TypeMismatch("tried to check if one non-number > another non-number".to_string())),
+
+        // GreaterThanOrEq
+        (Int(left_num), GreaterThanOrEq, Int(right_num)) => bool_variant(left_num >= right_num),
+        (Frac(left_num), GreaterThanOrEq, Frac(right_num)) => bool_variant(left_num >= right_num),
+        (Int(_), GreaterThanOrEq, Frac(_)) => EvalError(TypeMismatch("tried check Frac >= Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), GreaterThanOrEq, Int(_)) => EvalError(TypeMismatch("tried check Int >= Frac. Explicitly convert them to the same type first!".to_string())),
+        (_, GreaterThanOrEq, _) => EvalError(TypeMismatch("tried to check if one non-number >= another non-number".to_string())),
+
         // Plus
         (Int(left_num), Plus, Int(right_num)) => Int(left_num + right_num),
         (Frac(left_num), Plus, Frac(right_num)) => Frac(left_num + right_num),

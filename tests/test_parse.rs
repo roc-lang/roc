@@ -288,6 +288,42 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn comparison_operators() {
+        assert_eq!(
+            parse_standalone("x >= 0"),
+            Ok((Operator(
+                Box::new(Var("x".to_string())),
+                GreaterThanOrEq,
+                Box::new(Int(0))
+            ), ""))
+        );
+        assert_eq!(
+            parse_standalone("x > 0"),
+            Ok((Operator(
+                Box::new(Var("x".to_string())),
+                GreaterThan,
+                Box::new(Int(0))
+            ), ""))
+        );
+        assert_eq!(
+            parse_standalone("x <= 0"),
+            Ok((Operator(
+                Box::new(Var("x".to_string())),
+                LessThanOrEq,
+                Box::new(Int(0))
+            ), ""))
+        );
+        assert_eq!(
+            parse_standalone("x < 0"),
+            Ok((Operator(
+                Box::new(Var("x".to_string())),
+                LessThan,
+                Box::new(Int(0))
+            ), ""))
+        );
+    }
+
 
     #[test]
     fn single_operator() {

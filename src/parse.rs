@@ -339,11 +339,15 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     choice((
-        string("==").map(|_| Operator::Equals),
+        attempt(string("==")).map(|_| Operator::Equals),
+        attempt(string("<=")).map(|_| Operator::LessThanOrEq),
+        attempt(string(">=")).map(|_| Operator::GreaterThanOrEq),
         char('+').map(|_| Operator::Plus),
         char('-').map(|_| Operator::Minus),
         char('*').map(|_| Operator::Star),
         char('/').map(|_| Operator::Slash),
+        char('<').map(|_| Operator::LessThan),
+        char('>').map(|_| Operator::GreaterThan),
     ))
 }
 

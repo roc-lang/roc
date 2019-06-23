@@ -44,5 +44,6 @@ pub enum Pattern {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Operator {
-    Plus, Minus, Star, Slash, DoubleSlash, Equals,
+    Plus, Minus, Star, Slash, DoubleSlash,
+    Equals, LessThan, GreaterThan, LessThanOrEq, GreaterThanOrEq
 }
