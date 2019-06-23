@@ -89,8 +89,8 @@ impl Fraction {
     /// that calculation later.
 	pub fn checked_add(&mut self, other: &mut Self) -> Option<Self> {
 		if self.denominator == other.denominator {
+			// Happy path - we get to skip calculating a common denominator!
 			match self.numerator.checked_add(other.numerator) {
-				// Happy path - we get to skip calculating a common denominator!
 				Some(numerator) => Some(Fraction { numerator, denominator: self.denominator }),
 				None => self.reducing_checked_add(other)
 			}
@@ -115,8 +115,18 @@ impl Fraction {
     /// that calculation later.
 	pub fn add(&mut self, other: &mut Self) -> Self {
 		if self.denominator == other.denominator {
+			// Happy path - we get to skip calculating a common denominator!
 			match self.numerator.checked_add(other.numerator) {
-				// Happy path - we get to skip calculating a common denominator!
+				// There's a case to be made that we shouldn't do a checked_add here.
+				// For this to avoid an overflow, all of the following must be true:
+				//
+				// 1. The two denominators are the same. (We already verified this.)
+				// 2. When added, the two numerators overflow.
+				// 3. When both fractions are reduced, and we find a common denominator, this new common denominator
+				//    is smaller than the current (already common) denominator the two fractions share.
+				// 4. When adding the revised numerators, with the new common denominator, they no longer overflow.
+				//
+				// What are the odds that all of these will be true?
 				Some(numerator) => Fraction { numerator, denominator: self.denominator },
 				None => self.reducing_add(other)
 			}
