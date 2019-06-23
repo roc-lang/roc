@@ -9,14 +9,25 @@ use roc::parse;
 use std::io;
 
 fn main() -> std::io::Result<()> {
-    let mut file = File::open("Example.roc")?;
-    let mut contents = String::new();
+    let argv = std::env::args().into_iter().collect::<Vec<String>>();
 
-    file.read_to_string(&mut contents)?;
+    match argv.get(1) {
+        Some(filename) => {
+            let mut file = File::open(filename)?;
+            let mut contents = String::new();
 
-    let expr = parse::parse_string(contents.as_str()).unwrap();
+            file.read_to_string(&mut contents)?;
 
-    process_task(eval(expr))
+            let expr = parse::parse_string(contents.as_str()).unwrap();
+
+            process_task(eval(expr))
+        },
+        None => {
+            println!("Usage: roc FILENAME.roc");
+
+            Ok(())
+        }
+    }
 }
 
 fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
