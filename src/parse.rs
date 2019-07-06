@@ -33,7 +33,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position> ,
     I: Positioned
 {
-    position().map(|pos: IndentablePosition| (pos.indent_col))
+    position().map(|pos: IndentablePosition| pos.indent_col)
 }
 
 fn whitespace_or_eof<I>() -> impl Parser<Input = I, Output = ()>
