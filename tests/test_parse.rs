@@ -8,7 +8,8 @@ mod test_parse {
     use roc::expr::Expr::*;
     use roc::expr::Pattern::*;
     use roc::expr::{Expr};
-    use roc::expr::Operator::*;
+    use roc::operator::Operator::*;
+    use roc::region::{Located, Region};
     use roc::parse;
     use roc::parse_state::{IndentablePosition};
     use combine::{Parser, eof};
@@ -24,6 +25,37 @@ mod test_parse {
         parse::expr().skip(eof())
     }
 
+    /// Zero out the parse locations on everything in this Expr, so we can compare expected/actual without
+    /// having to account for that.
+    fn zero_loc_expr(expr: Expr) -> Expr {
+        match expr {
+            Int(_) | Frac(_, _) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord => expr,
+            InterpolatedStr(pairs, string) => InterpolatedStr(pairs.into_iter().map(|( prefix, ident )| ( prefix, zero_loc(ident))).collect(), string),
+            Assign(pattern, expr1, expr2) => Assign(loc(pattern.value), loc_box(zero_loc_expr((*expr1).value)), loc_box(zero_loc_expr((*expr2).value))),
+            CallByName(ident, args) => CallByName(ident, args.into_iter().map(|arg| loc(zero_loc_expr(arg.value))).collect()),
+            Apply(fn_expr, args) => Apply(loc_box(zero_loc_expr((*fn_expr).value)), args.into_iter().map(|arg| loc(zero_loc_expr(arg.value))).collect()),
+            Operator(left, op, right) => Operator(loc_box(zero_loc_expr((*left).value)), zero_loc(op), loc_box(zero_loc_expr((*right).value))),
+            Closure(patterns, body) => Closure(patterns.into_iter().map(zero_loc).collect(), loc_box(zero_loc_expr((*body).value))),
+            ApplyVariant(_, None) => expr,
+            ApplyVariant(name, Some(args)) => ApplyVariant(name, Some(args.into_iter().map(|arg| loc(zero_loc_expr(arg.value))).collect())),
+            If(condition, if_true, if_false) => If(loc_box(zero_loc_expr((*condition).value)), loc_box(zero_loc_expr((*if_true).value)), loc_box(zero_loc_expr((*if_false).value))),
+            Case(condition, branches) =>
+                Case(
+                    loc_box(zero_loc_expr((*condition).value)),
+                    branches.into_iter().map(|( pattern, expr )| ( zero_loc(pattern), loc_box(zero_loc_expr((*expr).value)))).collect()
+                ),
+        }
+    }
+
+    fn zero_loc<T>(located_val: Located<T>) -> Located<T> {
+        loc(located_val.value)
+    }
+
+    fn parse_without_loc(actual_str: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>>{
+        parse_standalone(actual_str)
+            .map(|(expr, leftover)| (zero_loc_expr(expr), leftover))
+    }
+
     fn parse_standalone(actual_str: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>>{
         let parse_state = State::with_positioner(actual_str, IndentablePosition::default());
 
@@ -36,18 +68,32 @@ mod test_parse {
         standalone_expr().easy_parse(parse_state).map(|(expr, state)| (expr, state.input))
     }
 
+    fn loc_box<T>(val: T) -> Box<Located<T>> {
+        Box::new(loc(val))
+    }
+
+    fn loc<T>(val: T) -> Located<T> {
+        Located::new(val, Region {
+            start_line: 0,
+            start_col: 0,
+
+            end_line: 0,
+            end_col: 0,
+        })
+    }
+
     // STRING LITERALS
 
     fn expect_parsed_str<'a>(expected_str: &'a str, actual_str: &'a str) {
         assert_eq!(
             Ok((Str(expected_str.to_string()), "")),
-            parse_standalone(actual_str)
+            parse_without_loc(actual_str)
         );
     }
 
     fn expect_parsed_str_error<'a>(actual_str: &'a str) {
         assert!(
-            parse_standalone(actual_str).is_err(),
+            parse_without_loc(actual_str).is_err(),
             "Expected parsing error"
         );
     }
@@ -56,7 +102,7 @@ mod test_parse {
     fn empty_string() {
         assert_eq!(
             Ok((EmptyStr, "")),
-            parse_standalone("\"\"")
+            parse_without_loc("\"\"")
         );
     }
 
@@ -84,7 +130,7 @@ mod test_parse {
     fn string_with_escaped_interpolation() {
         assert_eq!(
             // This should NOT be string interpolation, because of the \\
-            parse_standalone("\"abcd\\\\(efg)hij\""),
+            parse_without_loc("\"abcd\\\\(efg)hij\""),
             Ok((
                 Str("abcd\\(efg)hij".to_string()),
                 ""
@@ -95,10 +141,10 @@ mod test_parse {
     #[test]
     fn string_with_interpolation_at_end() {
         assert_eq!(
-            parse_standalone("\"abcd\\(efg)\""),
+            parse_without_loc("\"abcd\\(efg)\""),
             Ok((
                 InterpolatedStr(
-                    vec![("abcd".to_string(), "efg".to_string())],
+                    vec![("abcd".to_string(), loc("efg".to_string()))],
                     "".to_string()
                 ),
                 "")
@@ -109,10 +155,10 @@ mod test_parse {
     #[test]
     fn string_with_interpolation() {
         assert_eq!(
-            parse_standalone("\"abcd\\(efg)hij\""),
+            parse_without_loc("\"abcd\\(efg)hij\""),
             Ok((
                 InterpolatedStr(
-                    vec![("abcd".to_string(), "efg".to_string())],
+                    vec![("abcd".to_string(), loc("efg".to_string()))],
                     "hij".to_string()
                 ),
                 "")
@@ -154,31 +200,21 @@ mod test_parse {
     // CHAR LITERALS
 
     fn expect_parsed_char<'a>(expected: char, actual_str: &'a str) {
-        assert_eq!(Ok((Char(expected), "")), parse_standalone(actual_str));
+        assert_eq!(Ok((Char(expected), "")), parse_without_loc(actual_str));
     }
 
     fn expect_parsed_char_error<'a>(actual_str: &'a str) {
         assert!(
-            parse_standalone(actual_str).is_err(),
+            parse_without_loc(actual_str).is_err(),
             "Expected parsing error"
         );
     }
 
     #[test]
     fn empty_char() {
-        match easy_parse_standalone("''") {
-            Ok(_) => panic!("Expected parse error"),
-            Err(err) => {
-                let errors = err.errors;
-
-                assert_eq!(errors,
-                    vec![
-                        easy::Error::Unexpected('\''.into()),
-                        easy::Error::Expected(parse::ERR_EMPTY_CHAR.into()),
-                    ]
-                );
-            }
-        };
+        if easy_parse_standalone("''").is_ok() {
+            panic!("Expected parse error");
+        }
     }
 
     #[test]
@@ -231,11 +267,11 @@ mod test_parse {
     // NUMBER LITERALS
 
     fn expect_parsed_int<'a>(expected: i64, actual: &str) {
-        assert_eq!(Ok((Int(expected), "")), parse_standalone(actual));
+        assert_eq!(Ok((Int(expected), "")), parse_without_loc(actual));
     }
 
     fn expect_parsed_ratio<'a>(expected_numerator: i64, expected_denominator: i64, actual: &str) {
-        assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "")), parse_standalone(actual));
+        assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "")), parse_without_loc(actual));
     }
 
     #[test]
@@ -279,11 +315,11 @@ mod test_parse {
         assert_eq!(
             // It's important that this isn't mistaken for
             // a declaration like (x = 1)
-            parse_standalone("x == 1"),
+            parse_without_loc("x == 1"),
             Ok((Operator(
-                Box::new(Var("x".to_string())),
-                Equals,
-                Box::new(Int(1))
+                loc_box(Var("x".to_string())),
+                loc(Equals),
+                loc_box(Int(1))
             ), ""))
         );
     }
@@ -291,35 +327,35 @@ mod test_parse {
     #[test]
     fn comparison_operators() {
         assert_eq!(
-            parse_standalone("x >= 0"),
+            parse_without_loc("x >= 0"),
             Ok((Operator(
-                Box::new(Var("x".to_string())),
-                GreaterThanOrEq,
-                Box::new(Int(0))
+                loc_box(Var("x".to_string())),
+                loc(GreaterThanOrEq),
+                loc_box(Int(0))
             ), ""))
         );
         assert_eq!(
-            parse_standalone("x > 0"),
+            parse_without_loc("x > 0"),
             Ok((Operator(
-                Box::new(Var("x".to_string())),
-                GreaterThan,
-                Box::new(Int(0))
+                loc_box(Var("x".to_string())),
+                loc(GreaterThan),
+                loc_box(Int(0))
             ), ""))
         );
         assert_eq!(
-            parse_standalone("x <= 0"),
+            parse_without_loc("x <= 0"),
             Ok((Operator(
-                Box::new(Var("x".to_string())),
-                LessThanOrEq,
-                Box::new(Int(0))
+                loc_box(Var("x".to_string())),
+                loc(LessThanOrEq),
+                loc_box(Int(0))
             ), ""))
         );
         assert_eq!(
-            parse_standalone("x < 0"),
+            parse_without_loc("x < 0"),
             Ok((Operator(
-                Box::new(Var("x".to_string())),
-                LessThan,
-                Box::new(Int(0))
+                loc_box(Var("x".to_string())),
+                loc(LessThan),
+                loc_box(Int(0))
             ), ""))
         );
     }
@@ -327,11 +363,11 @@ mod test_parse {
 
     #[test]
     fn single_operator() {
-        match parse_standalone("1234 + 567") {
+        match parse_without_loc("1234 + 567") {
             Ok((Operator(v1, op, v2), "")) => {
-                assert_eq!(*v1, Int(1234));
-                assert_eq!(op, Plus);
-                assert_eq!(*v2, Int(567));
+                assert_eq!((*v1).value, Int(1234));
+                assert_eq!(op.value, Plus);
+                assert_eq!((*v2).value, Int(567));
             },
 
             _ => panic!("Expression didn't parse"),
@@ -340,54 +376,54 @@ mod test_parse {
 
     #[test]
     fn multiple_operators() {
-        assert_eq!(parse_standalone("1 + 2 * 3"),
+        assert_eq!(parse_without_loc("1 + 2 * 3"),
             Ok((Operator(
-                Box::new(Int(1)),
-                Plus,
-                Box::new(Operator(Box::new(Int(2)), Star, Box::new(Int(3))))
+                loc_box(Int(1)),
+                loc(Plus),
+                loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(Int(3))))
             ), ""))
         );
     }
 
     #[test]
     fn operators_with_parens() {
-        assert_eq!(parse_standalone("(1 + 2)"),
+        assert_eq!(parse_without_loc("(1 + 2)"),
             Ok((Operator(
-                Box::new(Int(1)),
-                Plus,
-                Box::new(Int(2))
+                loc_box(Int(1)),
+                loc(Plus),
+                loc_box(Int(2))
             ), ""))
         );
 
-        assert_eq!(parse_standalone("(1 - 2)"),
+        assert_eq!(parse_without_loc("(1 - 2)"),
             Ok((Operator(
-                Box::new(Int(1)),
-                Minus,
-                Box::new(Int(2))
+                loc_box(Int(1)),
+                loc(Minus),
+                loc_box(Int(2))
             ), ""))
         );
 
-        assert_eq!(parse_standalone("(1 + 2 * 3)"),
+        assert_eq!(parse_without_loc("(1 + 2 * 3)"),
             Ok((Operator(
-                Box::new(Int(1)),
-                Plus,
-                Box::new(Operator(Box::new(Int(2)), Star, Box::new(Int(3))))
+                loc_box(Int(1)),
+                loc(Plus),
+                loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(Int(3))))
             ), ""))
         );
 
-        assert_eq!(parse_standalone("1 + (2 * 3)"),
+        assert_eq!(parse_without_loc("1 + (2 * 3)"),
             Ok((Operator(
-                Box::new(Int(1)),
-                Plus,
-                Box::new(Operator(Box::new(Int(2)), Star, Box::new(Int(3))))
+                loc_box(Int(1)),
+                loc(Plus),
+                loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(Int(3))))
             ), ""))
         );
 
-        assert_eq!(parse_standalone("(1 + 2)  * 3"),
+        assert_eq!(parse_without_loc("(1 + 2)  * 3"),
             Ok((Operator(
-                Box::new(Operator(Box::new(Int(1)), Plus, Box::new(Int(2)))),
-                Star,
-                Box::new(Int(3)),
+                loc_box(Operator(loc_box(Int(1)), loc(Plus), loc_box(Int(2)))),
+                loc(Star),
+                loc_box(Int(3)),
             ), ""))
         );
     }
@@ -398,12 +434,12 @@ mod test_parse {
     fn expect_parsed_var<'a>(expected_str: &'a str) {
         let expected = expected_str.to_string();
 
-        assert_eq!(Ok((Var(expected), "")), parse_standalone(expected_str));
+        assert_eq!(Ok((Var(expected), "")), parse_without_loc(expected_str));
     }
 
     fn expect_parsed_var_error<'a>(actual_str: &'a str) {
         assert!(
-            parse_standalone(actual_str).is_err(),
+            parse_without_loc(actual_str).is_err(),
             "Expected parsing error"
         );
     }
@@ -427,14 +463,14 @@ mod test_parse {
 
     fn expect_parsed_apply<'a>(parse_str: &'a str, expr1: Expr, expr2: Expr) {
         assert_eq!(
-            Ok((Apply(Box::new(expr1), vec![expr2]), "")),
-            parse_standalone(parse_str)
+            Ok((Apply(loc_box(expr1), vec![loc(expr2)]), "")),
+            parse_without_loc(parse_str)
         );
     }
 
     fn expect_parsed_apply_error<'a>(actual_str: &'a str) {
         assert!(
-            parse_standalone(actual_str).is_err(),
+            parse_without_loc(actual_str).is_err(),
             "Expected parsing error"
         );
     }
@@ -449,14 +485,14 @@ mod test_parse {
 
         expect_parsed_apply(
             "(x 5) y",
-            CallByName("x".to_string(), vec![Int(5)]),
+            CallByName("x".to_string(), vec![loc(Int(5))]),
             Var("y".to_string())
         );
 
         expect_parsed_apply(
             "(x 5) (y 6)",
-            CallByName("x".to_string(), vec![Int(5)]),
-            CallByName("y".to_string(), vec![Int(6)]),
+            CallByName("x".to_string(), vec![loc(Int(5))]),
+            CallByName("y".to_string(), vec![loc(Int(6))]),
         );
 
         expect_parsed_apply(
@@ -478,23 +514,23 @@ mod test_parse {
 
     // FUNC
 
-    fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, args: Vec<Expr>) {
+    fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, args: Vec<Located<Expr>>) {
         assert_eq!(
             Ok((CallByName(func_str.to_string(), args), "")),
-            parse_standalone(parse_str)
+            parse_without_loc(parse_str)
         );
     }
 
     fn expect_parsed_func_syntax_problem<'a>(actual_str: &'a str) {
         assert!(
-            parse_standalone(actual_str).is_err(),
+            parse_without_loc(actual_str).is_err(),
             "Expected parsing error"
         );
     }
 
     fn expect_parsed_func_error<'a>(actual_str: &'a str) {
         assert!(
-            parse_standalone(actual_str).is_err(),
+            parse_without_loc(actual_str).is_err(),
             "Expected parsing error"
         );
     }
@@ -502,39 +538,39 @@ mod test_parse {
 
     #[test]
     fn single_arg_func() {
-        expect_parsed_func("f 1", "f", vec![Int(1)]);
-        expect_parsed_func("foo  bar", "foo", vec![Var("bar".to_string())]);
-        expect_parsed_func("foo \"hi\"", "foo", vec![Str("hi".to_string())]);
+        expect_parsed_func("f 1", "f", vec![loc(Int(1))]);
+        expect_parsed_func("foo  bar", "foo", vec![loc(Var("bar".to_string()))]);
+        expect_parsed_func("foo \"hi\"", "foo", vec![loc(Str("hi".to_string()))]);
     }
 
     #[test]
     fn multi_arg_func() {
-        expect_parsed_func("f 1,  23,  456", "f", vec![Int(1), Int(23), Int(456)]);
-        expect_parsed_func("foo  bar, 'z'", "foo", vec![Var("bar".to_string()), Char('z')]);
-        expect_parsed_func("foo \"hi\", 1, blah", "foo", vec![Str("hi".to_string()), Int(1), Var("blah".to_string())]);
+        expect_parsed_func("f 1,  23,  456", "f", vec![loc(Int(1)), loc(Int(23)), loc(Int(456))]);
+        expect_parsed_func("foo  bar, 'z'", "foo", vec![loc(Var("bar".to_string())), loc(Char('z'))]);
+        expect_parsed_func("foo \"hi\", 1, blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(Var("blah".to_string()))]);
     }
 
     #[test]
     fn multiline_func() {
-        expect_parsed_func("f\n 1", "f", vec![Int(1)]);
-        expect_parsed_func("foo  bar,\n 'z'", "foo", vec![Var("bar".to_string()), Char('z')]);
-        expect_parsed_func("foo \"hi\",\n 1,\n blah", "foo", vec![Str("hi".to_string()), Int(1), Var("blah".to_string())]);
+        expect_parsed_func("f\n 1", "f", vec![loc(Int(1))]);
+        expect_parsed_func("foo  bar,\n 'z'", "foo", vec![loc(Var("bar".to_string())), loc(Char('z'))]);
+        expect_parsed_func("foo \"hi\",\n 1,\n blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(Var("blah".to_string()))]);
     }
 
     #[test]
     fn func_with_operator() {
         assert_eq!(
-            parse_standalone("f 5 + 6"),
+            parse_without_loc("f 5 + 6"),
             Ok(
                 (
                     Operator(
-                        Box::new(
+                        loc_box(
                             CallByName("f".to_string(),
-                                vec![Int(5)],
+                                vec![loc(Int(5))],
                             )
                         ),
-                        Plus,
-                        Box::new(Int(6))
+                        loc(Plus),
+                        loc_box(Int(6))
                     ),
                 "")
             )
@@ -544,17 +580,17 @@ mod test_parse {
     #[test]
     fn func_with_operator_and_multiple_args() {
         assert_eq!(
-            parse_standalone("f 1, 2, 3 + 6"),
+            parse_without_loc("f 1, 2, 3 + 6"),
             Ok(
                 (
                     Operator(
-                        Box::new(
+                        loc_box(
                             CallByName("f".to_string(),
-                                vec![Int(1), Int(2), Int(3)],
+                                vec![loc(Int(1)), loc(Int(2)), loc(Int(3))],
                             )
                         ),
-                        Plus,
-                        Box::new(Int(6))
+                        loc(Plus),
+                        loc_box(Int(6))
                     ),
                 "")
             )
@@ -576,15 +612,15 @@ mod test_parse {
         expect_parsed_int(-2, "((-2))");
         expect_parsed_str("a", "(\"a\")");
         expect_parsed_str("abc", "((\"abc\"))");
-        expect_parsed_func("(f 1)", "f", vec![Int(1)]);
-        expect_parsed_func("(foo  bar)", "foo", vec![Var("bar".to_string())]);
+        expect_parsed_func("(f 1)", "f", vec![loc(Int(1))]);
+        expect_parsed_func("(foo  bar)", "foo", vec![loc(Var("bar".to_string()))]);
     }
 
     #[test]
     fn parens_with_spaces() {
-        expect_parsed_func("(a \"x\" )", "a", vec![Str("x".to_string())]);
-        expect_parsed_func("(  b \"y\")", "b", vec![Str("y".to_string())]);
-        expect_parsed_func("(  c \"z\"  )", "c", vec![Str("z".to_string())]);
+        expect_parsed_func("(a \"x\" )", "a", vec![loc(Str("x".to_string()))]);
+        expect_parsed_func("(  b \"y\")", "b", vec![loc(Str("y".to_string()))]);
+        expect_parsed_func("(  c \"z\"  )", "c", vec![loc(Str("z".to_string()))]);
     }
 
     #[test]
@@ -598,11 +634,11 @@ mod test_parse {
     #[test]
     fn one_branch_case() {
         assert_eq!(
-            parse_standalone("case 1 when x then 2"),
+            parse_without_loc("case 1 when x then 2"),
             Ok((
                 Case(
-                    Box::new(Int(1)),
-                    vec![( Identifier("x".to_string()), Box::new(Int(2)) )]
+                    loc_box(Int(1)),
+                    vec![( loc(Identifier("x".to_string())), loc_box(Int(2)) )]
                 ),
                 ""
             ))
@@ -612,13 +648,13 @@ mod test_parse {
     #[test]
     fn two_branch_case() {
         assert_eq!(
-            parse_standalone("case 1 when x then 2 when y then 3"),
+            parse_without_loc("case 1 when x then 2 when y then 3"),
             Ok((
                 Case(
-                    Box::new(Int(1)),
+                    loc_box(Int(1)),
                     vec![
-                        ( Identifier("x".to_string()), Box::new(Int(2)) ),
-                        ( Identifier("y".to_string()), Box::new(Int(3)) )
+                        ( loc(Identifier("x".to_string())), loc_box(Int(2)) ),
+                        ( loc(Identifier("y".to_string())), loc_box(Int(3)) )
                     ]
                 ),
                 ""
@@ -629,13 +665,13 @@ mod test_parse {
     #[test]
     fn two_branch_case_with_two_newlines() {
         assert_eq!(
-            parse_standalone("case a\n\n  when b then 1\n\n  when\n    c then 2"),
+            parse_without_loc("case a\n\n  when b then 1\n\n  when\n    c then 2"),
             Ok((
                 Case(
-                    Box::new(Var("a".to_string())),
+                    loc_box(Var("a".to_string())),
                     vec![
-                        ( Identifier("b".to_string()), Box::new(Int(1)) ),
-                        ( Identifier("c".to_string()), Box::new(Int(2)) ),
+                        ( loc(Identifier("b".to_string())), loc_box(Int(1)) ),
+                        ( loc(Identifier("c".to_string())), loc_box(Int(2)) ),
                     ]
                 ),
                 ""
@@ -646,18 +682,18 @@ mod test_parse {
     #[test]
     fn multi_newline_case_regression() {
         assert_eq!(
-            parse_standalone("a =\n  case x\n   when b then 1\n\n   when c then 2\na"),
+            parse_without_loc("a =\n  case x\n   when b then 1\n\n   when c then 2\na"),
             Ok((
                 Assign(
-                    Identifier("a".to_string()),
-                    Box::new(Case(
-                        Box::new(Var("x".to_string())),
+                    loc(Identifier("a".to_string())),
+                    loc_box(Case(
+                        loc_box(Var("x".to_string())),
                         vec![
-                            ( Identifier("b".to_string()), Box::new(Int(1)) ),
-                            ( Identifier("c".to_string()), Box::new(Int(2)) ),
+                            ( loc(Identifier("b".to_string())), loc_box(Int(1)) ),
+                            ( loc(Identifier("c".to_string())), loc_box(Int(2)) ),
                         ]
                     )),
-                    Box::new(Var("a".to_string()))
+                    loc_box(Var("a".to_string()))
                 ),
                 ""
             ))
@@ -667,12 +703,12 @@ mod test_parse {
     #[test]
     fn case_with_two_newlines() {
         assert_eq!(
-            parse_standalone("case a\n\n  when b then 1"),
+            parse_without_loc("case a\n\n  when b then 1"),
             Ok((
                 Case(
-                    Box::new(Var("a".to_string())),
+                    loc_box(Var("a".to_string())),
                     vec![
-                        ( Identifier("b".to_string()), Box::new(Int(1)) ),
+                        ( loc(Identifier("b".to_string())), loc_box(Int(1)) ),
                     ]
                 ),
                 ""
@@ -683,12 +719,12 @@ mod test_parse {
     #[test]
     fn case_with_number_pattern() {
         assert_eq!(
-            parse_standalone("case 1 when 2 then 3"),
+            parse_without_loc("case 1 when 2 then 3"),
             Ok((
                 Case(
-                    Box::new(Int(1)),
+                    loc_box(Int(1)),
                     vec![
-                        ( Integer(2), Box::new(Int(3)) ),
+                        ( loc(Integer(2)), loc_box(Int(3)) ),
                     ]
                 ),
                 ""
@@ -699,12 +735,12 @@ mod test_parse {
     #[test]
     fn case_with_empty_variant() {
         assert_eq!(
-            parse_standalone("case 1 when Foo then 3"),
+            parse_without_loc("case 1 when Foo then 3"),
             Ok((
                 Case(
-                    Box::new(Int(1)),
+                    loc_box(Int(1)),
                     vec![
-                        ( Variant("Foo".to_string(), None), Box::new(Int(3)) ),
+                        ( loc(Variant("Foo".to_string(), None)), loc_box(Int(3)) ),
                     ]
                 ),
                 ""
@@ -715,12 +751,12 @@ mod test_parse {
     #[test]
     fn case_with_nonempty_variant() {
         assert_eq!(
-            parse_standalone("case 1 when Foo x then 3"),
+            parse_without_loc("case 1 when Foo x then 3"),
             Ok((
                 Case(
-                    Box::new(Int(1)),
+                    loc_box(Int(1)),
                     vec![
-                        ( Variant("Foo".to_string(), Some(vec![Identifier("x".to_string())])), Box::new(Int(3)) ),
+                        ( loc(Variant("Foo".to_string(), Some(vec![Identifier("x".to_string())]))), loc_box(Int(3)) ),
                     ]
                 ),
                 ""
@@ -731,13 +767,13 @@ mod test_parse {
     #[test]
     fn case_with_two_branches_and_function_call() {
         assert_eq!(
-            parse_standalone("case 0 when 2 then foo 9 when 1 then bar 8"),
+            parse_without_loc("case 0 when 2 then foo 9 when 1 then bar 8"),
             Ok((
                 Case(
-                    Box::new(Int(0)),
+                    loc_box(Int(0)),
                     vec![
-                        ( Integer(2), Box::new(CallByName("foo".to_string(), vec![Int(9)])) ),
-                        ( Integer(1), Box::new(CallByName("bar".to_string(), vec![Int(8)])) ),
+                        ( loc(Integer(2)), loc_box(CallByName("foo".to_string(), vec![loc(Int(9))])) ),
+                        ( loc(Integer(1)), loc_box(CallByName("bar".to_string(), vec![loc(Int(8))])) ),
                     ]
                 ),
                 ""
@@ -750,13 +786,13 @@ mod test_parse {
     #[test]
     fn indented_if() {
         assert_eq!(
-            parse_standalone("if 12 34 5 then\n  5 4 32 1\n  else 1 3 37"),
+            parse_without_loc("if 12 34 5 then\n  5 4 32 1\n  else 1 3 37"),
             Ok(
                 (
                     If(
-                        Box::new(Int(12345)),
-                        Box::new(Int(54321)),
-                        Box::new(Int(1337))
+                        loc_box(Int(12345)),
+                        loc_box(Int(54321)),
+                        loc_box(Int(1337))
                     ),
                 "")
             )
@@ -766,13 +802,13 @@ mod test_parse {
     #[test]
     fn if_space_separated_number() {
         assert_eq!(
-            parse_standalone("if 12 34 5 then 5 4 32 1 else 1 3 37"),
+            parse_without_loc("if 12 34 5 then 5 4 32 1 else 1 3 37"),
             Ok(
                 (
                     If(
-                        Box::new(Int(12345)),
-                        Box::new(Int(54321)),
-                        Box::new(Int(1337))
+                        loc_box(Int(12345)),
+                        loc_box(Int(54321)),
+                        loc_box(Int(1337))
                     ),
                 "")
             )
@@ -782,13 +818,13 @@ mod test_parse {
     #[test]
     fn single_line_if() {
         assert_eq!(
-            parse_standalone("if foo then 1 else 2"),
+            parse_without_loc("if foo then 1 else 2"),
             Ok(
                 (
                     If(
-                        Box::new(Var("foo".to_string())),
-                        Box::new(Int(1)),
-                        Box::new(Int(2))
+                        loc_box(Var("foo".to_string())),
+                        loc_box(Int(1)),
+                        loc_box(Int(2))
                     ),
                 "")
             )
@@ -800,13 +836,13 @@ mod test_parse {
     #[test]
     fn inline_comment() {
         assert_eq!(
-            parse_standalone("if 12 34 5 then # blah blah\n  5 4 32 1 #whee!\n  else 1 3 37"),
+            parse_without_loc("if 12 34 5 then # blah blah\n  5 4 32 1 #whee!\n  else 1 3 37"),
             Ok(
                 (
                     If(
-                        Box::new(Int(12345)),
-                        Box::new(Int(54321)),
-                        Box::new(Int(1337))
+                        loc_box(Int(12345)),
+                        loc_box(Int(54321)),
+                        loc_box(Int(1337))
                     ),
                 "")
             )
@@ -816,13 +852,13 @@ mod test_parse {
     #[test]
     fn inline_comment_in_assignment() {
         assert_eq!(
-            parse_standalone("foo = 1\n# comment\nbar"),
+            parse_without_loc("foo = 1\n# comment\nbar"),
             Ok(
                 (
                     Assign(
-                        Identifier("foo".to_string()),
-                        Box::new(Int(1)),
-                        Box::new(Var("bar".to_string())),
+                        loc(Identifier("foo".to_string())),
+                        loc_box(Int(1)),
+                        loc_box(Var("bar".to_string())),
                     ),
                 "")
             )
@@ -832,13 +868,13 @@ mod test_parse {
     #[test]
     fn horizontal_line_comment() {
         assert_eq!(
-            parse_standalone("if 12 34 5 then ##### Heading #####\n  5 4 32 1 #whee!\n  else 1 3 37"),
+            parse_without_loc("if 12 34 5 then ##### Heading #####\n  5 4 32 1 #whee!\n  else 1 3 37"),
             Ok(
                 (
                     If(
-                        Box::new(Int(12345)),
-                        Box::new(Int(54321)),
-                        Box::new(Int(1337))
+                        loc_box(Int(12345)),
+                        loc_box(Int(54321)),
+                        loc_box(Int(1337))
                     ),
                 "")
             )
@@ -850,13 +886,13 @@ mod test_parse {
     #[test]
     fn block_comment() {
         assert_eq!(
-            parse_standalone("if 12 34 5### blah\n\nblah etc\nwhee #comment ###then\n  5 4 32 1\n  else 1 3 37"),
+            parse_without_loc("if 12 34 5### blah\n\nblah etc\nwhee #comment ###then\n  5 4 32 1\n  else 1 3 37"),
             Ok(
                 (
                     If(
-                        Box::new(Int(12345)),
-                        Box::new(Int(54321)),
-                        Box::new(Int(1337))
+                        loc_box(Int(12345)),
+                        loc_box(Int(54321)),
+                        loc_box(Int(1337))
                     ),
                 "")
             )
@@ -868,7 +904,7 @@ mod test_parse {
     #[test]
     fn basic_variant() {
         assert_eq!(
-            parse_standalone("Abc"),
+            parse_without_loc("Abc"),
             Ok((
                 ApplyVariant("Abc".to_string(), None),
                 ""
@@ -879,9 +915,9 @@ mod test_parse {
     #[test]
     fn variant_with_one_arg() {
         assert_eq!(
-            parse_standalone("Bbc 1"),
+            parse_without_loc("Bbc 1"),
             Ok((
-                ApplyVariant("Bbc".to_string(), Some(vec![Int(1)])),
+                ApplyVariant("Bbc".to_string(), Some(vec![loc(Int(1))])),
                 ""
             ))
         );
@@ -890,9 +926,9 @@ mod test_parse {
     #[test]
     fn variant_with_two_args() {
         assert_eq!(
-            parse_standalone("Bbc 1, 2"),
+            parse_without_loc("Bbc 1, 2"),
             Ok((
-                ApplyVariant("Bbc".to_string(), Some(vec![Int(1), Int(2)])),
+                ApplyVariant("Bbc".to_string(), Some(vec![loc(Int(1)), loc(Int(2))])),
                 ""
             ))
         );
@@ -902,7 +938,7 @@ mod test_parse {
     fn variant_regression() {
         // Somehow parsing the variant "Abc" worked but "Foo" failed (?!)
         assert_eq!(
-            parse_standalone("F"),
+            parse_without_loc("F"),
             Ok((
                 ApplyVariant("F".to_string(), None),
                 ""
@@ -916,25 +952,25 @@ mod test_parse {
     #[test]
     fn nested_let_variant() {
         assert_eq!(
-            parse_standalone("one = Abc\n\ntwo = Bar\n\none"),
+            parse_without_loc("one = Abc\n\ntwo = Bar\n\none"),
             Ok((
                 Assign(
-                    Identifier(
+                    loc(Identifier(
                         "one".to_string()
-                    ),
-                    Box::new(ApplyVariant(
+                    )),
+                    loc_box(ApplyVariant(
                         "Abc".to_string(),
                         None
                     )),
-                    Box::new(Assign(
-                        Identifier(
+                    loc_box(Assign(
+                        loc(Identifier(
                             "two".to_string()
-                        ),
-                        Box::new(ApplyVariant(
+                        )),
+                        loc_box(ApplyVariant(
                             "Bar".to_string(),
                             None
                         )),
-                        Box::new(Var(
+                        loc_box(Var(
                             "one".to_string()
                         ))
                     ))
@@ -948,24 +984,24 @@ mod test_parse {
     fn complex_expressions() {
         expect_parsed_apply(
             "(x 5) (y + (f 6))",
-            CallByName("x".to_string(), vec![Int(5)]),
+            CallByName("x".to_string(), vec![loc(Int(5))]),
             Operator(
-                Box::new(Var("y".to_string())),
-                Plus,
-                Box::new(CallByName("f".to_string(), vec![Int(6)])),
+                loc_box(Var("y".to_string())),
+                loc(Plus),
+                loc_box(CallByName("f".to_string(), vec![loc(Int(6))])),
             )
         );
 
         assert_eq!(
-            parse_standalone("(x 5)"),
+            parse_without_loc("(x 5)"),
             Ok((
-                CallByName("x".to_string(), vec![Int(5)]),
+                CallByName("x".to_string(), vec![loc(Int(5))]),
                 "")
             )
         );
 
         assert_eq!(
-            parse_standalone("(5)"),
+            parse_without_loc("(5)"),
             Ok((
                 Int(5),
                 "")
@@ -973,7 +1009,7 @@ mod test_parse {
         );
 
         assert_eq!(
-            parse_standalone("((1905))"),
+            parse_without_loc("((1905))"),
             Ok((
                 Int(1905),
                 "")
@@ -981,64 +1017,64 @@ mod test_parse {
         );
 
         assert_eq!(
-            parse_standalone("6 + (685)"),
+            parse_without_loc("6 + (685)"),
             Ok((
                 Operator(
-                    Box::new(Int(6)),
-                    Plus,
-                    Box::new(Int(685))
+                    loc_box(Int(6)),
+                    loc(Plus),
+                    loc_box(Int(685))
                 ),
                 "")
             )
         );
 
         assert_eq!(
-            parse_standalone("12 + 34"),
+            parse_without_loc("12 + 34"),
             Ok((
                 Operator(
-                    Box::new(Int(12)),
-                    Plus,
-                    Box::new(Int(34))
+                    loc_box(Int(12)),
+                    loc(Plus),
+                    loc_box(Int(34))
                 ),
                 "")
             )
         );
 
         assert_eq!(
-            parse_standalone("(51) + 19"),
+            parse_without_loc("(51) + 19"),
             Ok((
                 Operator(
-                    Box::new(Int(51)),
-                    Plus,
-                    Box::new(Int(19))
+                    loc_box(Int(51)),
+                    loc(Plus),
+                    loc_box(Int(19))
                 ),
                 "")
             )
         );
 
         assert_eq!(
-            parse_standalone("(x 5) + 123"),
+            parse_without_loc("(x 5) + 123"),
             Ok((
                 Operator(
-                    Box::new(CallByName("x".to_string(), vec![Int(5)])),
-                    Plus,
-                    Box::new(Int(123))
+                    loc_box(CallByName("x".to_string(), vec![loc(Int(5))])),
+                    loc(Plus),
+                    loc_box(Int(123))
                 ),
                 "")
             )
         );
 
         assert_eq!(
-            parse_standalone("(x 5) + (2 * y)"),
+            parse_without_loc("(x 5) + (2 * y)"),
             Ok((
                 Operator(
-                    Box::new(CallByName("x".to_string(), vec![Int(5)])),
-                    Plus,
-                    Box::new(
+                    loc_box(CallByName("x".to_string(), vec![loc(Int(5))])),
+                    loc(Plus),
+                    loc_box(
                         Operator(
-                            Box::new(Int(2)),
-                            Star,
-                            Box::new(Var("y".to_string()))
+                            loc_box(Int(2)),
+                            loc(Star),
+                            loc_box(Var("y".to_string()))
                         )
                     )
                 ),
@@ -1052,21 +1088,21 @@ mod test_parse {
     #[test]
     fn let_with_function_application() {
         assert_eq!(
-            parse_standalone("abc =\n  y 1\n\nabc"),
+            parse_without_loc("abc =\n  y 1\n\nabc"),
             Ok((
                 Assign(
-                    Identifier(
+                    loc(Identifier(
                         "abc".to_string()
-                    ),
-                    Box::new(CallByName(
+                    )),
+                    loc_box(CallByName(
                         "y".to_string(),
                         vec![
-                            Int(
+                            loc(Int(
                                 1
-                            )
+                            ))
                         ]
                     )),
-                    Box::new(Var(
+                    loc_box(Var(
                         "abc".to_string()
                     ))
                 ),
@@ -1079,18 +1115,18 @@ mod test_parse {
     fn let_returning_number() {
         assert_eq!(
             // let x = 5 in -10
-            parse_standalone("x = 5\n-10"),
+            parse_without_loc("x = 5\n-10"),
             Ok((
-                Assign(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Int(-10))),
+                Assign(loc(Identifier("x".to_string())), loc_box(Int(5)), loc_box(Int(-10))),
                 "")
             )
         );
 
         assert_eq!(
             // let x = 5 in 10
-            parse_standalone("x=5\n-10"),
+            parse_without_loc("x=5\n-10"),
             Ok((
-                Assign(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Int(-10))),
+                Assign(loc(Identifier("x".to_string())), loc_box(Int(5)), loc_box(Int(-10))),
                 "")
             )
         );
@@ -1100,33 +1136,33 @@ mod test_parse {
     fn let_with_operator() {
         assert_eq!(
             // let x = 5 + 10 in -20
-            parse_standalone("x =(5 + 10)\n-20"),
+            parse_without_loc("x =(5 + 10)\n-20"),
             Ok((
-                Assign(Identifier("x".to_string()),
-                    Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
-                    Box::new(Int(-20))),
+                Assign(loc(Identifier("x".to_string())),
+                    loc_box(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
+                    loc_box(Int(-20))),
                 "")
             )
         );
 
         assert_eq!(
             // let x = 5 + 10 in -20
-            parse_standalone("x=  5  +  10\n-20"),
+            parse_without_loc("x=  5  +  10\n-20"),
             Ok((
-                Assign(Identifier("x".to_string()),
-                    Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
-                    Box::new(Int(-20))),
+                Assign(loc(Identifier("x".to_string())),
+                    loc_box(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
+                    loc_box(Int(-20))),
                 "")
             )
         );
 
         assert_eq!(
             // let x = 5 + 10 in -20
-            parse_standalone("x=5\n    + 10\n-20"),
+            parse_without_loc("x=5\n    + 10\n-20"),
             Ok((
-                Assign(Identifier("x".to_string()),
-                    Box::new(Operator(Box::new(Int(5)), Plus, Box::new(Int(10)))),
-                    Box::new(Int(-20))),
+                Assign(loc(Identifier("x".to_string())),
+                    loc_box(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
+                    loc_box(Int(-20))),
                 "")
             )
         );
@@ -1135,7 +1171,7 @@ mod test_parse {
     #[test]
     fn invalid_let_returning_number() {
         assert!(
-            parse_standalone("x=5\n    -10").is_err(),
+            parse_without_loc("x=5\n    -10").is_err(),
             "Expected parsing error"
         );
     }
@@ -1144,13 +1180,13 @@ mod test_parse {
     fn nested_let() {
         assert_eq!(
             // let x = 5 in let y = 12 in 3
-            parse_standalone("x = 5\ny = 12\n3"),
+            parse_without_loc("x = 5\ny = 12\n3"),
             Ok((
-                Assign(Identifier("x".to_string()),
-                    Box::new(Int(5)),
-                    Box::new(
-                        Assign(Identifier("y".to_string()), Box::new(Int(12)),
-                            Box::new(Int(3))
+                Assign(loc(Identifier("x".to_string())),
+                    loc_box(Int(5)),
+                    loc_box(
+                        Assign(loc(Identifier("y".to_string())), loc_box(Int(12)),
+                            loc_box(Int(3))
                         ))),
                 "")
             )
@@ -1158,21 +1194,21 @@ mod test_parse {
 
         assert_eq!(
             // let x = 5 in let y = 12 in 3
-            parse_standalone("x = 5 - -3\ny = 12 + 7\n3 * -5"),
+            parse_without_loc("x = 5 - -3\ny = 12 + 7\n3 * -5"),
             Ok((
-                Assign(Identifier("x".to_string()),
-                    Box::new(
+                Assign(loc(Identifier("x".to_string())),
+                    loc_box(
                         Operator(
-                            Box::new(Int(5)), Minus, Box::new(Int(-3))
+                            loc_box(Int(5)), loc(Minus), loc_box(Int(-3))
                         )
                     ),
-                    Box::new(
-                        Assign(Identifier("y".to_string()),
-                            Box::new(Operator(
-                                Box::new(Int(12)), Plus, Box::new(Int(7))
+                    loc_box(
+                        Assign(loc(Identifier("y".to_string())),
+                            loc_box(Operator(
+                                loc_box(Int(12)), loc(Plus), loc_box(Int(7))
                             )),
-                            Box::new(Operator(
-                                Box::new(Int(3)), Star, Box::new(Int(-5))
+                            loc_box(Operator(
+                                loc_box(Int(3)), loc(Star), loc_box(Int(-5))
                             )),
                         ))),
                 "")
@@ -1183,9 +1219,9 @@ mod test_parse {
     #[test]
     fn let_returning_var() {
         assert_eq!(
-            parse_standalone("x=5\nx"),
+            parse_without_loc("x=5\nx"),
             Ok((
-                Assign(Identifier("x".to_string()), Box::new(Int(5)), Box::new(Var("x".to_string()))),
+                Assign(loc(Identifier("x".to_string())), loc_box(Int(5)), loc_box(Var("x".to_string()))),
                 "")
             )
         );
@@ -1194,7 +1230,7 @@ mod test_parse {
     #[test]
     fn bad_equals_indent_let() {
         assert!(
-            parse_standalone("  x=\n5\n\n5").is_err(),
+            parse_without_loc("  x=\n5\n\n5").is_err(),
             "Expected parsing error"
         );
     }
@@ -1204,15 +1240,15 @@ mod test_parse {
     fn regression_on_calling_function_named_c() {
         // This was broken because case-expressions were greedily consuming 'c' characters for "case"
         assert_eq!(
-            parse_standalone("f = (x) -> c 1\n\nf"),
+            parse_without_loc("f = (x) -> c 1\n\nf"),
             Ok((
                 Assign(
-                    Identifier("f".to_string()),
-                    Box::new(Closure(
-                        vec![Identifier("x".to_string())],
-                        Box::new(CallByName("c".to_string(), vec![Int(1)]))
+                    loc(Identifier("f".to_string())),
+                    loc_box(Closure(
+                        vec![loc(Identifier("x".to_string()))],
+                        loc_box(CallByName("c".to_string(), vec![loc(Int(1))]))
                     )),
-                    Box::new(Var("f".to_string()))
+                    loc_box(Var("f".to_string()))
                 ),
                 ""
             ))
@@ -1223,9 +1259,9 @@ mod test_parse {
     fn regression_on_passing_arguments_named_i() {
         // This was broken because if-expressions were greedily consuming 'i' characters for "if"
         assert_eq!(
-            parse_standalone("x i"),
+            parse_without_loc("x i"),
             Ok((
-                CallByName("x".to_string(), vec![Var("i".to_string())]),
+                CallByName("x".to_string(), vec![loc(Var("i".to_string()))]),
                 ""
             ))
         );

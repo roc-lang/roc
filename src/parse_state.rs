@@ -16,12 +16,12 @@ use combine::stream::state::{Positioner, RangePositioner};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct IndentablePosition {
     /// Current line of the input
-    pub line: i32,
+    pub line: u32,
     /// Current column of the input
-    pub column: i32,
+    pub column: u32,
 
     /// Current indentation level, in columns (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_col : i32,
+    pub indent_col : u32,
 
     // true at the beginning of each line, then false after encountering the first nonspace char.
     pub is_indenting: bool,

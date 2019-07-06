@@ -1,3 +1,7 @@
+
+use operator::Operator;
+use region::{Located, Region};
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
@@ -5,31 +9,30 @@ pub enum Expr {
     Frac(i64, i64),
     EmptyStr,
     Str(String),
-    InterpolatedStr(Vec<(String, Ident)>, String),
+    InterpolatedStr(Vec<(String, Located<Ident>)>, String),
     Char(char),
 
     Var(Ident),
-    Assign(Pattern, Box<Expr>, Box<Expr>),
+    Assign(Located<Pattern>, Box<Located<Expr>>, Box<Located<Expr>>),
 
     // Functions
-    CallByName(Ident, Vec<Expr>),
-    Apply(Box<Expr>, Vec<Expr>),
-    Operator(Box<Expr>, Operator, Box<Expr>),
-    Closure(Vec<Pattern>, Box<Expr>),
+    CallByName(Ident, Vec<Located<Expr>>),
+    Apply(Box<Located<Expr>>, Vec<Located<Expr>>),
+    Operator(Box<Located<Expr>>, Located<Operator>, Box<Located<Expr>>),
+    Closure(Vec<Located<Pattern>>, Box<Located<Expr>>),
 
     // Sum Types
-    ApplyVariant(String, Option<Vec<Expr>>),
+    ApplyVariant(String, Option<Vec<Located<Expr>>>),
 
     // Product Types
     EmptyRecord,
 
     // Conditionals
-    If(Box<Expr>, Box<Expr>, Box<Expr>),
-    Case(Box<Expr>, Vec<(Pattern, Box<Expr>)>),
+    If(Box<Located<Expr>>, Box<Located<Expr>>, Box<Located<Expr>>),
+    Case(Box<Located<Expr>>, Vec<(Located<Pattern>, Box<Located<Expr>>)>),
 }
 
 pub type Ident = String;
-
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
@@ -42,8 +45,4 @@ pub enum Pattern {
 }
 
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Operator {
-    Plus, Minus, Star, Slash, DoubleSlash,
-    Equals, LessThan, GreaterThan, LessThanOrEq, GreaterThanOrEq
 }

@@ -2,6 +2,8 @@ pub mod expr;
 pub mod parse;
 pub mod parse_state;
 // pub mod eval;
+pub mod operator;
+pub mod region;
 pub mod fast_fraction;
 // mod ena;
 
