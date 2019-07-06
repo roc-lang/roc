@@ -1,6 +1,7 @@
-use expr::{Expr, Operator, Pattern, Ident};
+use expr::{Expr, Pattern, Ident};
 use expr::Pattern::*;
-use expr::Operator::*;
+use operator::Operator::*;
+use operator::Operator;
 use std::rc::Rc;
 use std::fmt;
 use im_rc::hashmap::HashMap;
@@ -52,7 +53,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
         Expr::Str(string) => Str(string),
         Expr::Frac(numerator, denominator) => Frac(fraction_from_i64s(numerator, denominator)),
         Expr::Char(ch) => Char(ch),
-        Expr::Closure(args, body) => Closure(args, body, vars.clone()),
+        Expr::Closure(args, body) => Closure(args.into_iter().map(|e| e.value).collect(), Box::new(body.value), vars.clone()),
         Expr::EmptyRecord => EmptyRecord,
 
         // Resolve variable names
@@ -65,7 +66,7 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
             let mut output = String::new();
 
             for (string, var_name) in pairs.into_iter() {
-                match vars.get(&var_name) {
+                match vars.get(&var_name.value) {
                     Some(resolved) => {
                         match **resolved {
                             Str(ref var_string) => {
@@ -73,11 +74,11 @@ pub fn scoped_eval(expr: Expr, vars: &Scope) -> Evaluated {
                                 output.push_str(var_string.as_str());
                             },
                             _ => {
-                                return EvalError(TypeMismatch(var_name));
+                                return EvalError(TypeMismatch(var_name.value));
                             }
                         }
                     },
-                    None => { return EvalError(UnrecognizedVarName(var_name)); }
+                    None => { return EvalError(UnrecognizedVarName(var_name.value)); }
                 }
             }
 

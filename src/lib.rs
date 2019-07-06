@@ -1,7 +1,7 @@
 pub mod expr;
 pub mod parse;
 pub mod parse_state;
-pub mod eval;
+// pub mod eval;
 pub mod fast_fraction;
 // mod ena;
 

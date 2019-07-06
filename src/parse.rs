@@ -1,4 +1,4 @@
-use expr::Operator;
+use operator::Operator;
 use expr::{Expr, Pattern, Ident};
 
 use std::char;
