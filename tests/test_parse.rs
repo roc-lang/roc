@@ -512,6 +512,37 @@ mod test_parse {
     // all of the above tests except with parens too!
     // Also, verify them all with variable paren counts; ((foo)) should work.
 
+    // CLOSURE
+
+    #[test]
+    fn single_arg_closure() {
+        assert_eq!(
+            parse_without_loc("\\a => b"),
+            Ok((
+                Closure(
+                    vec![loc(Identifier("a".to_string()))],
+                    loc_box(Var("b".to_string()))
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn multi_arg_closure() {
+        assert_eq!(
+            parse_without_loc("\\a b => c"),
+            Ok((
+                Closure(
+                    vec![loc(Identifier("a".to_string())), loc(Identifier("b".to_string()))],
+                    loc_box(Var("c".to_string()))
+                ),
+                ""
+            ))
+        );
+    }
+
+
     // FUNC
 
     fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, args: Vec<Located<Expr>>) {
@@ -1235,12 +1266,11 @@ mod test_parse {
         );
     }
 
-
     #[test]
     fn regression_on_calling_function_named_c() {
         // This was broken because case-expressions were greedily consuming 'c' characters for "case"
         assert_eq!(
-            parse_without_loc("f = (x) -> c 1\n\nf"),
+            parse_without_loc("f = \\x => c 1\n\nf"),
             Ok((
                 Assign(
                     loc(Identifier("f".to_string())),
