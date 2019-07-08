@@ -179,21 +179,29 @@ where I: Stream<Item = char, Position = IndentablePosition>,
 /// This is separate from expr_body for the sake of function application,
 /// so it can stop parsing when it reaches an operator (since they have
 /// higher precedence.)
-fn expr_body_without_operators<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+fn function_arg_expr<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    expr_body_without_operators_(min_indent)
+    function_arg_expr_(min_indent)
 }
 
 parser! {
     #[inline(always)]
-    fn expr_body_without_operators_[I](min_indent_ref: u32)(I) -> Expr
+    fn function_arg_expr_[I](min_indent_ref: u32)(I) -> Expr
         where [ I: Stream<Item = char, Position = IndentablePosition> ]
     {
         // TODO figure out why min_indent_ref has the type &mut u32
         let min_indent = *min_indent_ref;
 
+        // Rules for expressions that can go in function arguments:
+        //
+        // 1. Don't parse operators, because they have a higher
+        //    precedence than function application.
+        // 2. Don't parse assignments unless they're wrapped in parens.
+        // 3. Don't parse variants; those will be handled separately by
+        //    the function arg parser (it only accepts non-applied variants)
+        // 4. Parse variables but not functions.
         choice((
             closure(min_indent),
             parenthetical_expr(min_indent),
@@ -203,9 +211,6 @@ parser! {
             char_literal(),
             if_expr(min_indent),
             case_expr(min_indent),
-            let_expr(min_indent),
-            apply_variant(min_indent),
-            func_or_var(min_indent),
         ))
     }
 }
@@ -226,7 +231,12 @@ parser! {
         // TODO figure out why min_indent_ref has the type &mut u32
         let min_indent = *min_indent_ref;
 
-        located(expr_body_without_operators(min_indent))
+        located(choice((
+            function_arg_expr(min_indent),
+            let_expr(min_indent),
+            apply_variant(min_indent),
+            func_or_var(min_indent),
+        )))
         .and(
             // Optionally follow the expression with an operator,
             //
@@ -236,7 +246,6 @@ parser! {
                 attempt(
                     indented_whitespaces(min_indent)
                         .with(located(operator()))
-                        .skip(whitespace())
                         .skip(indented_whitespaces(min_indent))
                         .and(located(expr_body(min_indent)))
                 )
@@ -326,10 +335,20 @@ fn function_arg<I>(min_indent: u32) -> impl Parser<Input = I, Output = Located<E
     where I: Stream<Item = char, Position = IndentablePosition>,
         I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    // Don't parse operators, because they have a higher
-    // precedence than function application. If we see one,
-    // we're done!
-    located(expr_body_without_operators(min_indent))
+    located(
+        choice((
+            // Don't parse operators, because they have a higher
+            // precedence than function application. If we see one,
+            // we're done!
+            function_arg_expr(min_indent),
+            // Variants can't be applied in function args without parens;
+            // (foo Bar baz) will pass 2 arguments to foo, rather than parsing like (foo (Bar baz))
+            attempt(variant_name()).map(|name| Expr::ApplyVariant(name, None)),
+            // Functions can't be called by name in function args without parens;
+            // (foo bar baz) will pass 2 arguments to foo, rather than parsing like (foo (bar baz))
+            attempt(ident()).map(|name| Expr::Var(name)),
+        ))
+    )
 }
 
 pub fn apply_args<I>(min_indent: u32) -> impl Parser<Input = I, Output = Vec<Located<Expr>>>
@@ -343,25 +362,39 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 // If there's a reserved keyword next, this isn't function application after all!
                 not_followed_by(choice((string("then"), string("else"), string("when"))))
             )
-    )
         .with(
-            // Arguments are comma-separated.
-            sep_by1(
-                    choice((
-                        attempt(indented_whitespaces1(min_indent))
-                            .with(function_arg(min_indent)),
 
-                        function_arg(min_indent),
-                    ))
-                ,
-                // Only consume these spaces if there's a comma after them.
-                // Otherwise we consume too much and mess up indentation checking!
-                attempt(
-                    indented_whitespaces(min_indent)
-                        .skip(char(','))
-                ),
-            )
+            // function_arg(min_indent).map(|val| vec![
+            //     Located::new(val.value, Region {
+            //         start_line: 0,
+            //         start_col: 0,
+
+            //         end_line: 0,
+            //         end_col: 0,
+            //     }) ])
+        // Arguments are whitespace-separated.
+        sep_by1(
+            function_arg(min_indent),
+            // Only consume these spaces if there's another argument after them.
+            // Otherwise we consume too much and mess up indentation checking!
+            attempt(
+                indented_whitespaces1(min_indent)
+                .skip(
+                    // Any of these indicates we've hit the end of the argument list.
+                    not_followed_by(
+                        choice((
+                            string(")"),
+                            operator().with(value("")),
+                            string("then"),
+                            string("else"),
+                            string("when"),
+                        ))
+                    )
+                )
+            ),
         )
+        )
+    )
 }
 
 pub fn operator<I>() -> impl Parser<Input = I, Output = Operator>
@@ -732,12 +765,12 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // happen to begin with a number. We'll check for that at the end.
     let digits_after_decimal =  many1::<Vec<_>, _>(alpha_num());
 
-    // Digits before the decimal point can be space-separated
-    // e.g. one million can be written as 1 000 000
+    // Digits before the decimal point can be underscore-separated
+    // e.g. one million can be written as 1_000_000
     let digits_before_decimal = many1::<Vec<_>, _>(
         alpha_num().skip(optional(
                 attempt(
-                    char(' ').skip(
+                    char('_').skip(
                         // Don't mistake keywords like `then` and `else` for
                         // space-separated digits!
                         not_followed_by(choice((string("then"), string("else"), string("when"))))
@@ -810,12 +843,12 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // happen to begin with a number. We'll check for that at the end.
     let digits_after_decimal =  many1::<Vec<_>, _>(alpha_num());
 
-    // Digits before the decimal point can be space-separated
-    // e.g. one million can be written as 1 000 000
+    // Digits before the decimal point can be underscore-separated
+    // e.g. one million can be written as 1_000_000
     let digits_before_decimal = many1::<Vec<_>, _>(
         alpha_num().skip(optional(
                 attempt(
-                    char(' ').skip(
+                    char('_').skip(
                         // Don't mistake keywords like `then` and `else` for
                         // space-separated digits!
                         not_followed_by(choice((string("then"), string("else"), string("when"))))

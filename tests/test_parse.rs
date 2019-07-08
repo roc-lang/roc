@@ -297,17 +297,17 @@ mod test_parse {
     }
 
     #[test]
-    fn ints_with_spaces() {
-        expect_parsed_int(987654321, "987 6 5 432 1");
-        expect_parsed_int(-1234567890, "-1 234 567 890");
+    fn ints_with_underscores() {
+        expect_parsed_int(987654321, "987_6_5_432_1");
+        expect_parsed_int(-1234567890, "-1_234_567_890");
     }
 
     #[test]
-    fn ratios_with_spaces() {
-        expect_parsed_ratio(-1234567, 1000, "-1 23 4.567");
-        expect_parsed_ratio(-1920, 10, "-19 2.0");
-        expect_parsed_ratio(12345, 100, "1 2 3.45");
-        expect_parsed_ratio(4200, 100, "4 2.00");
+    fn fracs_with_spaces() {
+        expect_parsed_ratio(-1234567, 1000, "-1_23_4.567");
+        expect_parsed_ratio(-1920, 10, "-19_2.0");
+        expect_parsed_ratio(12345, 100, "1_2_3.45");
+        expect_parsed_ratio(4200, 100, "4_2.00");
     }
 
     #[test]
@@ -576,16 +576,16 @@ mod test_parse {
 
     #[test]
     fn multi_arg_func() {
-        expect_parsed_func("f 1,  23,  456", "f", vec![loc(Int(1)), loc(Int(23)), loc(Int(456))]);
-        expect_parsed_func("foo  bar, 'z'", "foo", vec![loc(Var("bar".to_string())), loc(Char('z'))]);
-        expect_parsed_func("foo \"hi\", 1, blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(Var("blah".to_string()))]);
+        expect_parsed_func("f 1  23  456", "f", vec![loc(Int(1)), loc(Int(23)), loc(Int(456))]);
+        expect_parsed_func("foo  bar 'z'", "foo", vec![loc(Var("bar".to_string())), loc(Char('z'))]);
+        expect_parsed_func("foo \"hi\" 1 blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(Var("blah".to_string()))]);
     }
 
     #[test]
     fn multiline_func() {
         expect_parsed_func("f\n 1", "f", vec![loc(Int(1))]);
-        expect_parsed_func("foo  bar,\n 'z'", "foo", vec![loc(Var("bar".to_string())), loc(Char('z'))]);
-        expect_parsed_func("foo \"hi\",\n 1,\n blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(Var("blah".to_string()))]);
+        expect_parsed_func("foo  bar\n 'z'", "foo", vec![loc(Var("bar".to_string())), loc(Char('z'))]);
+        expect_parsed_func("foo \"hi\"\n 1\n blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(Var("blah".to_string()))]);
     }
 
     #[test]
@@ -611,7 +611,7 @@ mod test_parse {
     #[test]
     fn func_with_operator_and_multiple_args() {
         assert_eq!(
-            parse_without_loc("f 1, 2, 3 + 6"),
+            parse_without_loc("f 1 2 3 + 6"),
             Ok(
                 (
                     Operator(
@@ -649,7 +649,7 @@ mod test_parse {
 
     #[test]
     fn parens_with_spaces() {
-        expect_parsed_func("(a \"x\" )", "a", vec![loc(Str("x".to_string()))]);
+        expect_parsed_func("(a 1 )", "a", vec![loc(Int(1))]);
         expect_parsed_func("(  b \"y\")", "b", vec![loc(Str("y".to_string()))]);
         expect_parsed_func("(  c \"z\"  )", "c", vec![loc(Str("z".to_string()))]);
     }
@@ -817,7 +817,7 @@ mod test_parse {
     #[test]
     fn indented_if() {
         assert_eq!(
-            parse_without_loc("if 12 34 5 then\n  5 4 32 1\n  else 1 3 37"),
+            parse_without_loc("if 12345 then\n  54321\n  else 1337"),
             Ok(
                 (
                     If(
@@ -831,9 +831,9 @@ mod test_parse {
     }
 
     #[test]
-    fn if_space_separated_number() {
+    fn if_underscore_separated_number() {
         assert_eq!(
-            parse_without_loc("if 12 34 5 then 5 4 32 1 else 1 3 37"),
+            parse_without_loc("if 12_34_5 then 5_4_32_1 else 1_3_37"),
             Ok(
                 (
                     If(
@@ -867,7 +867,7 @@ mod test_parse {
     #[test]
     fn inline_comment() {
         assert_eq!(
-            parse_without_loc("if 12 34 5 then # blah blah\n  5 4 32 1 #whee!\n  else 1 3 37"),
+            parse_without_loc("if 12345 then # blah blah\n  54321 #whee!\n  else 1337"),
             Ok(
                 (
                     If(
@@ -899,7 +899,7 @@ mod test_parse {
     #[test]
     fn horizontal_line_comment() {
         assert_eq!(
-            parse_without_loc("if 12 34 5 then ##### Heading #####\n  5 4 32 1 #whee!\n  else 1 3 37"),
+            parse_without_loc("if 12345 then ##### Heading #####\n  54321 #whee!\n  else 1337"),
             Ok(
                 (
                     If(
@@ -917,7 +917,7 @@ mod test_parse {
     #[test]
     fn block_comment() {
         assert_eq!(
-            parse_without_loc("if 12 34 5### blah\n\nblah etc\nwhee #comment ###then\n  5 4 32 1\n  else 1 3 37"),
+            parse_without_loc("if 12345### blah\n\nblah etc\nwhee #comment ###then\n  54321\n  else 1337"),
             Ok(
                 (
                     If(
@@ -957,7 +957,7 @@ mod test_parse {
     #[test]
     fn variant_with_two_args() {
         assert_eq!(
-            parse_without_loc("Bbc 1, 2"),
+            parse_without_loc("Bbc 1 2"),
             Ok((
                 ApplyVariant("Bbc".to_string(), Some(vec![loc(Int(1)), loc(Int(2))])),
                 ""
