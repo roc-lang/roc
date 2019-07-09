@@ -6,6 +6,7 @@ use roc::expr::Expr;
 use roc::eval::{Evaluated, eval, call};
 use roc::eval::Evaluated::*;
 use roc::parse;
+use roc::region::{Region, Located};
 use std::io;
 
 fn main() -> std::io::Result<()> {
@@ -54,7 +55,7 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                     // Continue with the callback.
                     let callback = vals.pop().unwrap();
 
-                    process_task(call(callback, vec![Expr::EmptyRecord]))
+                    process_task(call(callback, vec![with_zero_loc(Expr::EmptyRecord)]))
                 },
                 "Read" => {
                     // Read a line from from stdin, since that's what Read does!
@@ -65,7 +66,7 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                     // Continue with the callback.
                     let callback = vals.pop().unwrap();
 
-                    process_task(call(callback, vec![Expr::Str(input.trim().to_string())]))
+                    process_task(call(callback, vec![with_zero_loc(Expr::Str(input.trim().to_string()))]))
                 },
                 "Success" => {
                     // We finished all our tasks. Great! No need to print anything.
@@ -87,6 +88,17 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
         }
     }
 }
+
+fn with_zero_loc<T>(val: T) -> Located<T> {
+    Located::new(val, Region {
+        start_line: 0,
+        start_col: 0,
+
+        end_line: 0,
+        end_col: 0,
+    })
+}
+
 
 fn display_val(evaluated: Evaluated) {
     println!("\n\u{001B}[4mroc out\u{001B}[24m\n\n{}\n", evaluated);

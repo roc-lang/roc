@@ -16,10 +16,10 @@ use combine::stream::state::{State};
 
 pub const ERR_EMPTY_CHAR: &'static str = "EMPTY_CHAR";
 
-pub fn parse_string(string: &str) -> Result<Expr, combine::easy::Errors<char, &str, IndentablePosition>> {
+pub fn parse_string(string: &str) -> Result<Located<Expr>, combine::easy::Errors<char, &str, IndentablePosition>> {
     let parse_state = State::with_positioner(string, IndentablePosition::default());
 
-    expr().skip(eof()).easy_parse(parse_state).map(|( expr, _ )| expr)
+    located(expr()).skip(eof()).easy_parse(parse_state).map(|( expr, _ )| expr)
 }
 
 pub fn expr<I>() -> impl Parser<Input = I, Output = Expr>
@@ -233,7 +233,7 @@ parser! {
 
         located(choice((
             function_arg_expr(min_indent),
-            let_expr(min_indent),
+            assignment(min_indent),
             apply_variant(min_indent),
             func_or_var(min_indent),
         )))
@@ -405,6 +405,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         attempt(string("==")).map(|_| Operator::Equals),
         attempt(string("<=")).map(|_| Operator::LessThanOrEq),
         attempt(string(">=")).map(|_| Operator::GreaterThanOrEq),
+        attempt(string("|>")).map(|_| Operator::Pizza),
         char('+').map(|_| Operator::Plus),
         char('-').map(|_| Operator::Minus),
         char('*').map(|_| Operator::Star),
@@ -416,7 +417,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     ))
 }
 
-pub fn let_expr<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn assignment<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
@@ -433,16 +434,16 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         .skip(whitespace())
         .then(move |((var_pattern, original_indent), equals_sign_indent)| {
             if original_indent < min_indent {
-                unexpected_any("this declaration is outdented too far").left()
+                unexpected_any("this assignment is outdented too far").left()
             } else if equals_sign_indent < original_indent /* `<` because '=' should be same indent or greater */ {
-                unexpected_any("the = in this declaration seems outdented").left()
+                unexpected_any("the = in this assignment seems outdented").left()
             } else {
                 located(expr_body(original_indent + 1 /* declaration body must be indented relative to original decl */))
                     .skip(whitespace1())
                     .and(located(expr_body(original_indent)).and(indentation()))
                 .then(move |(var_expr, (in_expr, in_expr_indent))| {
                     if in_expr_indent != original_indent {
-                        unexpected_any("the return expression was indented differently from the original declaration").left()
+                        unexpected_any("the return expression was indented differently from the original assignment").left()
                     } else {
                         value(Expr::Assign(var_pattern.to_owned(), Box::new(var_expr), Box::new(in_expr))).right()
                     }
@@ -524,11 +525,14 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             indented_whitespaces(min_indent)
             .with(
                 sep_by1(
-                    pattern(min_indent),
-                    char(',').skip(indented_whitespaces(min_indent))
+                    located(pattern(min_indent)),
+                    attempt(
+                        indented_whitespaces1(min_indent)
+                            .skip(not_followed_by(string("then")))
+                    )
                 )
         ))))
-        .map(|(name, opt_args): (String, Option<Vec<Pattern>>)|
+        .map(|(name, opt_args): (String, Option<Vec<Located<Pattern>>>)|
             // Use optional(sep_by1()) over sep_by() to avoid
             // allocating a Vec in case the variant is empty
             Pattern::Variant(name, opt_args)

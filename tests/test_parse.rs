@@ -7,7 +7,7 @@ extern crate roc;
 mod test_parse {
     use roc::expr::Expr::*;
     use roc::expr::Pattern::*;
-    use roc::expr::{Expr};
+    use roc::expr::{Expr, Pattern};
     use roc::operator::Operator::*;
     use roc::region::{Located, Region};
     use roc::parse;
@@ -42,8 +42,20 @@ mod test_parse {
             Case(condition, branches) =>
                 Case(
                     loc_box(zero_loc_expr((*condition).value)),
-                    branches.into_iter().map(|( pattern, expr )| ( zero_loc(pattern), loc_box(zero_loc_expr((*expr).value)))).collect()
+                    branches.into_iter().map(|( pattern, expr )| ( zero_loc_pattern(pattern), loc_box(zero_loc_expr((*expr).value)))).collect()
                 ),
+        }
+    }
+
+    /// Zero out the parse locations on everything in this Pattern, so we can compare expected/actual without
+    /// having to account for that.
+    fn zero_loc_pattern(loc_pattern: Located<Pattern>) -> Located<Pattern> {
+        let pattern = loc_pattern.value;
+
+        match pattern {
+            Identifier(_) | Integer(_) | Fraction(_, _) | EmptyRecordLiteral | Underscore | Variant(_, None) => loc(pattern),
+            Variant(name, Some(opt_located_patterns)) =>
+                loc(Variant(name, Some(opt_located_patterns.into_iter().map(|loc_pat| zero_loc_pattern(loc_pat)).collect())))
         }
     }
 
@@ -677,6 +689,28 @@ mod test_parse {
     }
 
     #[test]
+    fn case_matching_multi_arg_variant() {
+        assert_eq!(
+            parse_without_loc("case 1 when Foo bar baz then 2"),
+            Ok((
+                Case(
+                    loc_box(Int(1)),
+                    vec![(
+                        loc(Variant("Foo".to_string(),
+                            Some(vec![
+                                loc(Identifier("bar".to_string())),
+                                loc(Identifier("baz".to_string()))
+                            ])
+                        )),
+                        loc_box(Int(2)) )
+                    ]
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
     fn two_branch_case() {
         assert_eq!(
             parse_without_loc("case 1 when x then 2 when y then 3"),
@@ -787,7 +821,7 @@ mod test_parse {
                 Case(
                     loc_box(Int(1)),
                     vec![
-                        ( loc(Variant("Foo".to_string(), Some(vec![Identifier("x".to_string())]))), loc_box(Int(3)) ),
+                        ( loc(Variant("Foo".to_string(), Some(vec![loc(Identifier("x".to_string()))]))), loc_box(Int(3)) ),
                     ]
                 ),
                 ""

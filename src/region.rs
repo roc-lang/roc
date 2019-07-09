@@ -18,3 +18,15 @@ impl<T> Located<T> {
         Located { value, region }
     }
 }
+
+impl<T> Located<T> {
+    pub fn with_value<U>(&self, value: U) -> Located<U> {
+        Located { region: self.region, value: value }
+    }
+
+    pub fn map<U, F>(&self, transform: F) -> Located<U>
+        where F: (FnOnce(&T) -> U)
+    {
+        Located { region: self.region, value: transform(&self.value) }
+    }
+}

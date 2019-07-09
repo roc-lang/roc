@@ -10,7 +10,7 @@ pub enum Operator {
     Equals, LessThan, GreaterThan, LessThanOrEq, GreaterThanOrEq,
     And,
     Or,
-    LeftPizza, RightPizza
+    Pizza
     // lowest precedence
 }
 
@@ -40,8 +40,8 @@ impl Operator {
         use self::Associativity::*;
 
         match self {
-            RightPizza | Star | Slash | DoubleSlash | Percent | Plus | Minus => LeftAssociative,
-            LeftPizza | And | Or | Caret => RightAssociative,
+            Pizza | Star | Slash | DoubleSlash | Percent | Plus | Minus => LeftAssociative,
+            And | Or | Caret => RightAssociative,
             Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => NonAssociative
         }
     }
@@ -54,7 +54,7 @@ impl Operator {
             Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => 4,
             And => 3,
             Or => 2,
-            LeftPizza | RightPizza => 1
+            Pizza => 1
         }
 	}
 }
