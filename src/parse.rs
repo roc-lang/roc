@@ -204,7 +204,7 @@ parser! {
         // 4. Parse variables but not functions.
         choice((
             closure(min_indent),
-            parenthetical_expr(min_indent),
+            apply_with_parens(min_indent),
             string("{}").with(value(Expr::EmptyRecord)),
             string_literal(),
             number_literal(),
@@ -233,6 +233,7 @@ parser! {
 
         located(choice((
             function_arg_expr(min_indent),
+            apply_with_parens(min_indent),
             assignment(min_indent),
             apply_variant(min_indent),
             func_or_var(min_indent),
@@ -307,7 +308,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         )
 }
 
-pub fn parenthetical_expr<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn apply_with_parens<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
@@ -324,6 +325,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         )
     ).map(|(located_expr, opt_args): (Located<Expr>, Option<Vec<Located<Expr>>>)|
         match opt_args {
+            // If there was nothing after the parens, that's okay; this is still parens, but not application.
             None => located_expr.value,
             Some(args) => Expr::Apply(Box::new(located_expr), args)
         }
@@ -337,13 +339,22 @@ fn function_arg<I>(min_indent: u32) -> impl Parser<Input = I, Output = Located<E
 {
     located(
         choice((
+            // Don't use apply_with_parens here, because it will think anything following
+            // this parenthetical expr is an argument *to be passed to the parenthetical expr*.
+            between(char('('), char(')'),
+                indented_whitespaces(min_indent)
+                    .with(expr_body(min_indent))
+                    .skip(indented_whitespaces(min_indent))),
+
             // Don't parse operators, because they have a higher
             // precedence than function application. If we see one,
             // we're done!
             function_arg_expr(min_indent),
+
             // Variants can't be applied in function args without parens;
             // (foo Bar baz) will pass 2 arguments to foo, rather than parsing like (foo (Bar baz))
             attempt(variant_name()).map(|name| Expr::ApplyVariant(name, None)),
+
             // Functions can't be called by name in function args without parens;
             // (foo bar baz) will pass 2 arguments to foo, rather than parsing like (foo (bar baz))
             attempt(ident()).map(|name| Expr::Var(name)),
@@ -363,36 +374,27 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 not_followed_by(choice((string("then"), string("else"), string("when"))))
             )
         .with(
-
-            // function_arg(min_indent).map(|val| vec![
-            //     Located::new(val.value, Region {
-            //         start_line: 0,
-            //         start_col: 0,
-
-            //         end_line: 0,
-            //         end_col: 0,
-            //     }) ])
-        // Arguments are whitespace-separated.
-        sep_by1(
-            function_arg(min_indent),
-            // Only consume these spaces if there's another argument after them.
-            // Otherwise we consume too much and mess up indentation checking!
-            attempt(
-                indented_whitespaces1(min_indent)
-                .skip(
-                    // Any of these indicates we've hit the end of the argument list.
-                    not_followed_by(
-                        choice((
-                            string(")"),
-                            operator().with(value("")),
-                            string("then"),
-                            string("else"),
-                            string("when"),
-                        ))
+            // Arguments are whitespace-separated.
+            sep_by1(
+                function_arg(min_indent),
+                // Only consume these spaces if there's another argument after them.
+                // Otherwise we consume too much and mess up indentation checking!
+                attempt(
+                    indented_whitespaces1(min_indent)
+                    .skip(
+                        // Any of these indicates we've hit the end of the argument list.
+                        not_followed_by(
+                            choice((
+                                string(")"),
+                                operator().with(value("")),
+                                string("then"),
+                                string("else"),
+                                string("when"),
+                            ))
+                        )
                     )
-                )
-            ),
-        )
+                ),
+            )
         )
     )
 }

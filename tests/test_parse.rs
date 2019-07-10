@@ -471,6 +471,13 @@ mod test_parse {
         expect_parsed_var_error("2Foo2Furious");
     }
 
+    #[test]
+    fn var_with_parens() {
+        assert_eq!(parse_without_loc("( x)"), Ok(( Var("x".to_string()), "" )));
+        assert_eq!(parse_without_loc("(x )"), Ok(( Var("x".to_string()), "" )));
+        assert_eq!(parse_without_loc("( x )"), Ok(( Var("x".to_string()), "" )));
+    }
+
     // APPLY
 
     fn expect_parsed_apply<'a>(parse_str: &'a str, expr1: Expr, expr2: Expr) {
@@ -554,7 +561,6 @@ mod test_parse {
         );
     }
 
-
     // FUNC
 
     fn expect_parsed_func<'a>(parse_str: &'a str, func_str: &'a str, args: Vec<Located<Expr>>) {
@@ -592,6 +598,19 @@ mod test_parse {
         expect_parsed_func("foo  bar 'z'", "foo", vec![loc(Var("bar".to_string())), loc(Char('z'))]);
         expect_parsed_func("foo \"hi\" 1 blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(Var("blah".to_string()))]);
     }
+
+    #[test]
+    fn multi_arg_func_with_parens() {
+        expect_parsed_func("f (1)  23  456", "f", vec![loc(Int(1)), loc(Int(23)), loc(Int(456))]);
+        expect_parsed_func("foo  bar ('z')", "foo", vec![loc(Var("bar".to_string())), loc(Char('z'))]);
+        expect_parsed_func("foo 1 (bar \"hi\") 2 (blah)", "foo", vec![
+            loc(Int(1)),
+            loc(CallByName("bar".to_string(), vec![loc(Str("hi".to_string()))])),
+            loc(Int(2)),
+            loc(Var("blah".to_string()))
+        ]);
+    }
+
 
     #[test]
     fn multiline_func() {

@@ -36,14 +36,14 @@ pub enum Evaluated {
     EmptyRecord,
 
     // Errors
-    EvalError(Problem)
+    EvalError(Region, Problem)
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
-    UnrecognizedVarName(Region, String),
+    UnrecognizedVarName(String),
     TypeMismatch(String),
-    ReassignedVarName(Region, String),
+    ReassignedVarName(String),
     WrongArity(u32 /* Expected */, u32 /* Provided */),
     NotEqual, // Used when (for example) a string literal pattern match fails
     NoBranchesMatched,
@@ -68,7 +68,7 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
         // Resolve variable names
         Expr::Var(name) => match vars.get(&name) {
             Some(resolved) => (**resolved).clone(),
-            None => EvalError(UnrecognizedVarName(region, name))
+            None => EvalError(region, UnrecognizedVarName(name))
         },
 
         Expr::InterpolatedStr(pairs, trailing_str) => {
@@ -83,11 +83,11 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
                                 output.push_str(var_string.as_str());
                             },
                             _ => {
-                                return EvalError(TypeMismatch(var_name.value));
+                                return EvalError(region, TypeMismatch(var_name.value));
                             }
                         }
                     },
-                    None => { return EvalError(UnrecognizedVarName(region, var_name.value)); }
+                    None => { return EvalError(region, UnrecognizedVarName(var_name.value)); }
                 }
             }
 
@@ -103,10 +103,10 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
         Expr::CallByName(name, args) => {
             let func_expr = match vars.get(&name) {
                 Some(resolved) => (**resolved).clone(),
-                None => EvalError(UnrecognizedVarName(region, name))
+                None => EvalError(region, UnrecognizedVarName(name))
             };
 
-            eval_apply(func_expr, args, vars)
+            eval_apply(region, func_expr, args, vars)
         },
 
         Expr::ApplyVariant(name, None) => ApplyVariant(name, None),
@@ -119,15 +119,16 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
         }
 
         Expr::Apply(func_expr, args) => {
-            eval_apply(scoped_eval(*func_expr, vars), args, vars)
+            eval_apply(region, scoped_eval(*func_expr, vars), args, vars)
         },
 
         Expr::Case(condition, branches) => {
-            eval_case(scoped_eval(*condition, vars), branches, vars)
+            eval_case(region, scoped_eval(*condition, vars), branches, vars)
         },
 
         Expr::Operator(left_arg, op, right_arg) => {
             eval_operator(
+                region,
                 &scoped_eval(*left_arg, vars),
                 op.value,
                 &scoped_eval(*right_arg, vars)
@@ -140,10 +141,10 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
                     match variant_name.as_str() {
                         "True" => scoped_eval(*if_true, vars),
                         "False" => scoped_eval(*if_false, vars),
-                        _ => EvalError(TypeMismatch("non-Bool used in `if` condition".to_string()))
+                        _ => EvalError(region, TypeMismatch("non-Bool used in `if` condition".to_string()))
                     }
                 },
-                _ => EvalError(TypeMismatch("non-Bool used in `if` condition".to_string()))
+                _ => EvalError(region, TypeMismatch("non-Bool used in `if` condition".to_string()))
             }
         }
     }
@@ -157,7 +158,7 @@ fn eval_assign(pattern: Located<Pattern>, assigned_expr: Located<Expr>, returned
     match pattern.value {
         Identifier(name) => {
             if vars.contains_key(&name) {
-                EvalError(ReassignedVarName(pattern_region, name))
+                EvalError(pattern_region, ReassignedVarName(name))
             } else {
                 // Create a new scope containing the new declaration.
                 let mut new_vars = vars.clone();
@@ -193,12 +194,12 @@ fn eval_assign(pattern: Located<Pattern>, assigned_expr: Located<Expr>, returned
 }
 
 #[inline(always)]
-pub fn call(evaluated: Evaluated, args: Vec<Located<Expr>>) -> Evaluated {
-    eval_apply(evaluated, args, &HashMap::new())
+pub fn call(region: Region, evaluated: Evaluated, args: Vec<Located<Expr>>) -> Evaluated {
+    eval_apply(region, evaluated, args, &HashMap::new())
 }
 
 #[inline(always)]
-fn eval_apply(evaluated: Evaluated, args: Vec<Located<Expr>>, vars: &Scope) -> Evaluated {
+fn eval_apply(region: Region, evaluated: Evaluated, args: Vec<Located<Expr>>, vars: &Scope) -> Evaluated {
     use self::Evaluated::*;
 
     match evaluated {
@@ -211,11 +212,11 @@ fn eval_apply(evaluated: Evaluated, args: Vec<Located<Expr>>, vars: &Scope) -> E
 
             match eval_closure(evaluated_args, arg_patterns, &combined_vars) {
                 Ok(new_vars) => scoped_eval(*body, &new_vars),
-                Err(prob) => EvalError(prob)
+                Err(prob) => EvalError(region, prob)
             }
         },
         val => {
-            EvalError(TypeMismatch(format!("Tried to call a non-function: {}", val)))
+            EvalError(region, TypeMismatch(format!("Tried to call a non-function: {}", val)))
         }
     }
 }
@@ -246,7 +247,7 @@ fn bool_variant(is_true: bool) -> Evaluated {
     }
 }
 
-fn eq(evaluated1: &Evaluated, evaluated2: &Evaluated) -> Evaluated {
+fn eq(region: Region, evaluated1: &Evaluated, evaluated2: &Evaluated) -> Evaluated {
     use self::Evaluated::*;
 
     match (evaluated1, evaluated2) {
@@ -274,7 +275,7 @@ fn eq(evaluated1: &Evaluated, evaluated2: &Evaluated) -> Evaluated {
         (Char(left), Char(right)) => bool_variant(left == right),
         (Frac(left), Frac(right)) => bool_variant(left == right),
 
-        (_, _) => EvalError(TypeMismatch("tried to use == on two values with incompatible types".to_string())),
+        (_, _) => EvalError(region, TypeMismatch("tried to use == on two values with incompatible types".to_string())),
     }
 }
 
@@ -289,95 +290,95 @@ fn bool_from_variant_name(name: &str) -> Option<bool> {
 }
 
 #[inline(always)]
-fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) -> Evaluated {
+fn eval_operator(region: Region, left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) -> Evaluated {
     use self::Evaluated::*;
 
     // TODO in the future, replace these with named function calls to stdlib
     match (left_expr, op, right_expr) {
         // Equals
-        (_, Equals, _) => eq(left_expr, right_expr),
+        (_, Equals, _) => eq(region, left_expr, right_expr),
 
         // And
         (ApplyVariant(left_name, None), And, ApplyVariant(right_name, None)) => {
             match (bool_from_variant_name(left_name), bool_from_variant_name(right_name)) {
                 (Some(left_bool), Some(right_bool)) => bool_variant(left_bool && right_bool),
-                _ => EvalError(TypeMismatch("tried to use && on non-bools".to_string())),
+                _ => EvalError(region, TypeMismatch("tried to use && on non-bools".to_string())),
             }
         }
-        (_, And, _) => EvalError(TypeMismatch("tried to use && on non-bools".to_string())),
+        (_, And, _) => EvalError(region, TypeMismatch("tried to use && on non-bools".to_string())),
 
         // Or
         (ApplyVariant(left_name, None), Or, ApplyVariant(right_name, None)) => {
             match (bool_from_variant_name(left_name), bool_from_variant_name(right_name)) {
                 (Some(left_bool), Some(right_bool)) => bool_variant(left_bool || right_bool),
-                _ => EvalError(TypeMismatch("tried to use && on non-bools".to_string())),
+                _ => EvalError(region, TypeMismatch("tried to use && on non-bools".to_string())),
             }
         }
-        (_, Or, _) => EvalError(TypeMismatch("tried to use && on non-bools".to_string())),
+        (_, Or, _) => EvalError(region, TypeMismatch("tried to use && on non-bools".to_string())),
 
         // LessThan
         (Int(left_num), LessThan, Int(right_num)) => bool_variant(left_num < right_num),
         (Frac(left_num), LessThan, Frac(right_num)) => bool_variant(left_num < right_num),
-        (Int(_), LessThan, Frac(_)) => EvalError(TypeMismatch("tried check Frac < Int. Explicitly convert them to the same type first!".to_string())),
-        (Frac(_), LessThan, Int(_)) => EvalError(TypeMismatch("tried check Int < Frac. Explicitly convert them to the same type first!".to_string())),
-        (_, LessThan, _) => EvalError(TypeMismatch("tried to check if one non-number < another non-number".to_string())),
+        (Int(_), LessThan, Frac(_)) => EvalError(region, TypeMismatch("tried check Frac < Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), LessThan, Int(_)) => EvalError(region,TypeMismatch("tried check Int < Frac. Explicitly convert them to the same type first!".to_string())),
+        (_, LessThan, _) => EvalError(region, TypeMismatch("tried to check if one non-number < another non-number".to_string())),
 
         // LessThanOrEq
         (Int(left_num), LessThanOrEq, Int(right_num)) => bool_variant(left_num <= right_num),
         (Frac(left_num), LessThanOrEq, Frac(right_num)) => bool_variant(left_num <= right_num),
-        (Int(_), LessThanOrEq, Frac(_)) => EvalError(TypeMismatch("tried check Frac <= Int. Explicitly convert them to the same type first!".to_string())),
-        (Frac(_), LessThanOrEq, Int(_)) => EvalError(TypeMismatch("tried check Int <= Frac. Explicitly convert them to the same type first!".to_string())),
-        (_, LessThanOrEq, _) => EvalError(TypeMismatch("tried to check if one non-number <= another non-number".to_string())),
+        (Int(_), LessThanOrEq, Frac(_)) => EvalError(region, TypeMismatch("tried check Frac <= Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), LessThanOrEq, Int(_)) => EvalError(region, TypeMismatch("tried check Int <= Frac. Explicitly convert them to the same type first!".to_string())),
+        (_, LessThanOrEq, _) => EvalError(region, TypeMismatch("tried to check if one non-number <= another non-number".to_string())),
 
         // GreaterThan
         (Int(left_num), GreaterThan, Int(right_num)) => bool_variant(left_num > right_num),
         (Frac(left_num), GreaterThan, Frac(right_num)) => bool_variant(left_num > right_num),
-        (Int(_), GreaterThan, Frac(_)) => EvalError(TypeMismatch("tried check Frac > Int. Explicitly convert them to the same type first!".to_string())),
-        (Frac(_), GreaterThan, Int(_)) => EvalError(TypeMismatch("tried check Int > Frac. Explicitly convert them to the same type first!".to_string())),
-        (_, GreaterThan, _) => EvalError(TypeMismatch("tried to check if one non-number > another non-number".to_string())),
+        (Int(_), GreaterThan, Frac(_)) => EvalError(region, TypeMismatch("tried check Frac > Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), GreaterThan, Int(_)) => EvalError(region, TypeMismatch("tried check Int > Frac. Explicitly convert them to the same type first!".to_string())),
+        (_, GreaterThan, _) => EvalError(region, TypeMismatch("tried to check if one non-number > another non-number".to_string())),
 
         // GreaterThanOrEq
         (Int(left_num), GreaterThanOrEq, Int(right_num)) => bool_variant(left_num >= right_num),
         (Frac(left_num), GreaterThanOrEq, Frac(right_num)) => bool_variant(left_num >= right_num),
-        (Int(_), GreaterThanOrEq, Frac(_)) => EvalError(TypeMismatch("tried check Frac >= Int. Explicitly convert them to the same type first!".to_string())),
-        (Frac(_), GreaterThanOrEq, Int(_)) => EvalError(TypeMismatch("tried check Int >= Frac. Explicitly convert them to the same type first!".to_string())),
-        (_, GreaterThanOrEq, _) => EvalError(TypeMismatch("tried to check if one non-number >= another non-number".to_string())),
+        (Int(_), GreaterThanOrEq, Frac(_)) => EvalError(region, TypeMismatch("tried check Frac >= Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), GreaterThanOrEq, Int(_)) => EvalError(region, TypeMismatch("tried check Int >= Frac. Explicitly convert them to the same type first!".to_string())),
+        (_, GreaterThanOrEq, _) => EvalError(region, TypeMismatch("tried to check if one non-number >= another non-number".to_string())),
 
         // Plus
         (Int(left_num), Plus, Int(right_num)) => Int(left_num.checked_add(*right_num).unwrap_or_else(|| panic!("Integer overflow on +"))),
         (Frac(left_num), Plus, Frac(right_num)) => Frac(left_num + right_num),
 
-        (Int(_), Plus, Frac(_)) => EvalError(TypeMismatch("tried to add Frac to Int. Explicitly convert them to the same type first!".to_string())),
+        (Int(_), Plus, Frac(_)) => EvalError(region, TypeMismatch("tried to add Frac to Int. Explicitly convert them to the same type first!".to_string())),
 
-        (Frac(_), Plus, Int(_)) => EvalError(TypeMismatch("tried to add Int to Frac. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), Plus, Int(_)) => EvalError(region, TypeMismatch("tried to add Int to Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Plus, _) => EvalError(TypeMismatch("tried to add non-numbers".to_string())),
+        (_, Plus, _) => EvalError(region, TypeMismatch("tried to add non-numbers".to_string())),
 
         // Star
         (Int(left_num), Star, Int(right_num)) => Int(left_num.checked_mul(*right_num).unwrap_or_else(|| panic!("Integer overflow on *"))),
         (Frac(left_num), Star, Frac(right_num)) => Frac(left_num * right_num),
 
-        (Int(_), Star, Frac(_)) => EvalError(TypeMismatch("tried to multiply Int by Frac. Explicitly convert them to the same type first!".to_string())),
+        (Int(_), Star, Frac(_)) => EvalError(region, TypeMismatch("tried to multiply Int by Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (Frac(_), Star, Int(_)) => EvalError(TypeMismatch("tried to multiply Frac by Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), Star, Int(_)) => EvalError(region, TypeMismatch("tried to multiply Frac by Int. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Star, _) => EvalError(TypeMismatch("tried to multiply non-numbers".to_string())),
+        (_, Star, _) => EvalError(region, TypeMismatch("tried to multiply non-numbers".to_string())),
 
         // Minus
         (Int(left_num), Minus, Int(right_num)) => Int(left_num.checked_sub(*right_num).unwrap_or_else(|| panic!("Integer underflow on -"))),
         (Frac(left_num), Minus, Frac(right_num)) => Frac(left_num - right_num),
 
-        (Int(_), Minus, Frac(_)) => EvalError(TypeMismatch("tried to subtract Frac from Int. Explicitly convert them to the same type first!".to_string())),
+        (Int(_), Minus, Frac(_)) => EvalError(region, TypeMismatch("tried to subtract Frac from Int. Explicitly convert them to the same type first!".to_string())),
 
-        (Frac(_), Minus, Int(_)) => EvalError(TypeMismatch("tried to subtract Int from Frac. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), Minus, Int(_)) => EvalError(region, TypeMismatch("tried to subtract Int from Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Minus, _) => EvalError(TypeMismatch("tried to subtract non-numbers".to_string())),
+        (_, Minus, _) => EvalError(region, TypeMismatch("tried to subtract non-numbers".to_string())),
 
         // Caret
         (Int(left_num), Caret, Int(right_num)) => Int(left_num.checked_pow(*right_num as u32 /* TODO panic if this cast fails */).unwrap_or_else(|| panic!("Integer underflow on ^"))),
-        (Frac(_), Caret, Frac(_)) => EvalError(TypeMismatch("tried to use ^ with a Frac, which is not yet supported on either side of the ^ operator.".to_string())),
+        (Frac(_), Caret, Frac(_)) => EvalError(region, TypeMismatch("tried to use ^ with a Frac, which is not yet supported on either side of the ^ operator.".to_string())),
 
-        (_, Caret, _) => EvalError(TypeMismatch("tried to use ^ on non-numbers".to_string())),
+        (_, Caret, _) => EvalError(region, TypeMismatch("tried to use ^ on non-numbers".to_string())),
 
         // Slash
         (Int(left_num), Slash, Int(right_num)) => Int(left_num.checked_div(*right_num).unwrap_or_else(|| panic!("Integer underflow on /"))),
@@ -391,21 +392,21 @@ fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) ->
             }
         },
 
-        (Int(_), Slash, Frac(_)) => EvalError(TypeMismatch("tried to divide Int by Frac. Explicitly convert them to the same type first!".to_string())),
+        (Int(_), Slash, Frac(_)) => EvalError(region, TypeMismatch("tried to divide Int by Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (Frac(_), Slash, Int(_)) => EvalError(TypeMismatch("tried to divide Frac by Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), Slash, Int(_)) => EvalError(region, TypeMismatch("tried to divide Frac by Int. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Slash, _) => EvalError(TypeMismatch("tried to divide non-numbers".to_string())),
+        (_, Slash, _) => EvalError(region, TypeMismatch("tried to divide non-numbers".to_string())),
 
         // DoubleSlash
         (Int(left_num), DoubleSlash, Int(right_num)) => Int(left_num / right_num),
-        (Frac(_), DoubleSlash, Frac(_)) => EvalError(TypeMismatch("tried to do integer division on two Frac values".to_string())),
+        (Frac(_), DoubleSlash, Frac(_)) => EvalError(region, TypeMismatch("tried to do integer division on two Frac values".to_string())),
 
-        (Int(_), DoubleSlash, Frac(_)) => EvalError(TypeMismatch("tried to integer-divide Int by Frac".to_string())),
+        (Int(_), DoubleSlash, Frac(_)) => EvalError(region,TypeMismatch("tried to integer-divide Int by Frac".to_string())),
 
-        (Frac(_), DoubleSlash, Int(_)) => EvalError(TypeMismatch("tried to integer-divide Frac by Int".to_string())),
+        (Frac(_), DoubleSlash, Int(_)) => EvalError(region, TypeMismatch("tried to integer-divide Frac by Int".to_string())),
 
-        (_, DoubleSlash, _) => EvalError(TypeMismatch("tried to do integer division on two non-numbers".to_string())),
+        (_, DoubleSlash, _) => EvalError(region, TypeMismatch("tried to do integer division on two non-numbers".to_string())),
 
         // Percent
         (Int(left_num), Percent, Int(right_num)) => Int(left_num % right_num),
@@ -419,11 +420,11 @@ fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) ->
             }
         },
 
-        (Int(_), Percent, Frac(_)) => EvalError(TypeMismatch("tried to do Int % Frac. Explicitly convert them to the same type first!".to_string())),
+        (Int(_), Percent, Frac(_)) => EvalError(region, TypeMismatch("tried to do Int % Frac. Explicitly convert them to the same type first!".to_string())),
 
-        (Frac(_), Percent, Int(_)) => EvalError(TypeMismatch("tried to do Frac % Int. Explicitly convert them to the same type first!".to_string())),
+        (Frac(_), Percent, Int(_)) => EvalError(region, TypeMismatch("tried to do Frac % Int. Explicitly convert them to the same type first!".to_string())),
 
-        (_, Percent, _) => EvalError(TypeMismatch("tried to use % on non-numbers".to_string())),
+        (_, Percent, _) => EvalError(region, TypeMismatch("tried to use % on non-numbers".to_string())),
 
         // Pizza
         (_, Pizza, _) => { panic!("There was a |> operator that hadn't been removed prior to eval time. This should never happen!"); }
@@ -431,7 +432,7 @@ fn eval_operator(left_expr: &Evaluated, op: Operator, right_expr: &Evaluated) ->
 }
 
 #[inline(always)]
-fn eval_case(evaluated: Evaluated, branches: Vec<(Located<Pattern>, Box<Located<Expr>>)>, vars: &Scope) -> Evaluated {
+fn eval_case(region: Region, evaluated: Evaluated, branches: Vec<(Located<Pattern>, Box<Located<Expr>>)>, vars: &Scope) -> Evaluated {
     use self::Evaluated::*;
 
     for (pattern, definition) in branches {
@@ -442,7 +443,7 @@ fn eval_case(evaluated: Evaluated, branches: Vec<(Located<Pattern>, Box<Located<
         }
     }
 
-    EvalError(NoBranchesMatched)
+    EvalError(region, NoBranchesMatched)
 }
 
 fn pattern_match(evaluated: &Evaluated, pattern: &Pattern, vars: &mut Scope) -> Result<(), Problem> {
@@ -600,7 +601,7 @@ impl fmt::Display for Evaluated {
             },
 
             // ERRORS
-            EvalError(problem) => write!(f, "ERROR: {}", format!("{}", problem)),
+            EvalError(region, problem) => write!(f, "ERROR: {} at {}", format!("{}", problem), format!("line {}, column {}", region.start_line, region.start_col)),
 
             // UNFORMATTED
             _ => write!(f, "<partially evaluated expression>")
@@ -611,10 +612,10 @@ impl fmt::Display for Evaluated {
 impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Problem::UnrecognizedVarName(region, name) => write!(f, "Unrecognized var name `{}` at {:?}", name, region),
+            Problem::UnrecognizedVarName(name) => write!(f, "Unrecognized var name `{}`", name),
             Problem::NoBranchesMatched => write!(f, "No branches matched in this case-expression"),
             Problem::TypeMismatch(info) => write!(f, "Type Mismatch - {}", info),
-            Problem::ReassignedVarName(region, name) => write!(f, "Reassigned constant - {} at {:?}", name, region),
+            Problem::ReassignedVarName(name) => write!(f, "Reassigned constant - {}", name),
             Problem::NotEqual => write!(f, "Pattern match on literal value failed; the branch wasn't equal."),
             Problem::WrongArity(expected_arity, provided_arity) => {
                 if provided_arity > expected_arity {

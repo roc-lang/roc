@@ -33,8 +33,9 @@ fn main() -> std::io::Result<()> {
 
 fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
     match evaluated {
-        EvalError(problem) => {
-            println!("\n\u{001B}[4mruntime error\u{001B}[24m\n\n{:?}\n", problem);
+        EvalError(region, problem) => {
+            println!("\n\u{001B}[4mruntime error\u{001B}[24m\n\n{} at {}\n",
+                format!("{}", problem), format!("line {}, column {}", region.start_line, region.start_col));
 
             Ok(())
         },
@@ -44,7 +45,13 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                     // Extract the string from the Echo variant.
                     let string_to_be_displayed = match vals.pop() {
                         Some(Str(payload)) => payload,
-                        Some(EvalError(err)) => { panic!("RUNTIME ERROR in Echo: {}", format!("{}", err)); },
+                        Some(EvalError(region, err)) => {
+                            panic!(
+                                "RUNTIME ERROR in Echo: {} at {}",
+                                format!("{}", err),
+                                format!("line {}, column {}", region.start_line, region.start_col)
+                            );
+                        },
                         Some(val) => { panic!("TYPE MISMATCH in Echo: {}", format!("{}", val)); },
                         None => { panic!("TYPE MISMATCH in Echo: None"); }
                     };
@@ -55,7 +62,13 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                     // Continue with the callback.
                     let callback = vals.pop().unwrap();
 
-                    process_task(call(callback, vec![with_zero_loc(Expr::EmptyRecord)]))
+                    process_task(
+                        call(
+                            Region { start_line: 0, start_col: 0, end_line: 0, end_col: 0 },
+                            callback,
+                            vec![with_zero_loc(Expr::EmptyRecord)]
+                        )
+                    )
                 },
                 "Read" => {
                     // Read a line from from stdin, since that's what Read does!
@@ -66,7 +79,13 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                     // Continue with the callback.
                     let callback = vals.pop().unwrap();
 
-                    process_task(call(callback, vec![with_zero_loc(Expr::Str(input.trim().to_string()))]))
+                    process_task(
+                        call(
+                            Region { start_line: 0, start_col: 0, end_line: 0, end_col: 0 },
+                            callback,
+                            vec![with_zero_loc(Expr::Str(input.trim().to_string()))]
+                        )
+                    )
                 },
                 "Success" => {
                     // We finished all our tasks. Great! No need to print anything.
