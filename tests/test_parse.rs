@@ -1392,4 +1392,23 @@ mod test_parse {
             ""))
         );
     }
+
+    #[test]
+    fn compare_and() {
+        assert_eq!(
+            parse_with_precedence("x > 1 || True"),
+            Ok((Operator(
+                    loc_box(
+                        Operator(
+                            loc_box(Var("x".to_string())),
+                            loc(GreaterThan),
+                            loc_box(Int(1))
+                        )
+                    ),
+                    loc(Or),
+                    loc_box(ApplyVariant("True".to_string(), None))
+                ),
+            ""))
+        );
+    }
 }

@@ -404,10 +404,12 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     choice((
+        string("&&").map(|_| Operator::And),
         attempt(string("==")).map(|_| Operator::Equals),
         attempt(string("<=")).map(|_| Operator::LessThanOrEq),
         attempt(string(">=")).map(|_| Operator::GreaterThanOrEq),
         attempt(string("|>")).map(|_| Operator::Pizza),
+        string("||").map(|_| Operator::Or),
         char('+').map(|_| Operator::Plus),
         char('-').map(|_| Operator::Minus),
         char('*').map(|_| Operator::Star),
