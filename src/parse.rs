@@ -404,12 +404,35 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     choice((
+        string("==").map(|_| Operator::Equals),
         string("&&").map(|_| Operator::And),
-        attempt(string("==")).map(|_| Operator::Equals),
-        attempt(string("<=")).map(|_| Operator::LessThanOrEq),
-        attempt(string(">=")).map(|_| Operator::GreaterThanOrEq),
-        attempt(string("|>")).map(|_| Operator::Pizza),
-        string("||").map(|_| Operator::Or),
+        // either < or <=
+        char('<').with(
+            optional(char('='))
+                .map(|opt_eq| {
+                    if opt_eq.is_none() {
+                        Operator::LessThan
+                    } else {
+                        Operator::LessThanOrEq
+                    }
+                })
+        ),
+        // either > or >=
+        char('>').with(
+            optional(char('='))
+                .map(|opt_eq| {
+                    if opt_eq.is_none() {
+                        Operator::GreaterThan
+                    } else {
+                        Operator::GreaterThanOrEq
+                    }
+                })
+        ),
+        // either || or |>
+        char('|').with(
+            char('>').map(|_| Operator:: Pizza)
+                .or(char('|').map(|_| Operator::Or))
+        ),
         char('+').map(|_| Operator::Plus),
         char('-').map(|_| Operator::Minus),
         char('*').map(|_| Operator::Star),
