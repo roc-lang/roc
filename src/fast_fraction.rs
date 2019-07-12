@@ -1,14 +1,16 @@
 use std::cmp::{Eq, Ordering, PartialEq, PartialOrd};
 use std::hash::{Hash, Hasher};
-use std::ops::Neg;
+use std::ops::{Add, Sub, Mul, Neg};
 
 use std::mem;
 use std::fmt;
 
 use std::marker::PhantomData;
 
+pub type Frac = Fraction<Valid>;
+
 #[derive(Clone, Copy)]
-pub struct Frac<T> {
+pub struct Fraction<T> {
     numerator: i64,
 
     /// A positive denominator represents a valid, rational Fraction.
@@ -54,51 +56,63 @@ pub struct Frac<T> {
 
 pub struct Valid;
 
-/// Returns a new Fraction where the denominator is guaranteed to be non-negative.
+/// Returns a new fraction.
 ///
-/// If the provided denominator is negative, both numerator and denominator will
-/// be negated; this will result in a mathematically equivalent fraction, but with the
-/// denominator becoming non-negative.
+/// Panics in non-release builds if given a denominator larger than the
+/// largest possible i64.
 ///
-/// All other Fraction operations assume a non-negative denominator, so this is an
-/// important invariant to maintain!
+/// Internally, Fraction stores the denominator as an i64 that must be positive.
+/// The positivity guarantee allows Fraction to do comparisons faster, because
+/// it can avoid accounting for the case where one fraction has both its
+/// numerator and denominator negated, and the other has neither negated.
 ///
-/// Panics in non-release builds if given a denominator of zero.
-pub fn new(numerator: i64, denominator: i64) -> Frac<Valid> {
-    assert_ne!(denominator, 0);
+/// The denominator cannot be higher than std::i64::MAX because certain operations
+/// (e.g. `reciprocal` and `div`) require swapping numerator and denominator,
+/// and numerator is an i64.
+///
+/// A Fraction with a denominator of zero is invalid, and this function returns
+/// a Fraction<U> because it is unknown whether the given denominator is zero.
+/// To convert to a Fraction<Valid>, see `valid_or` and `valid_or_else`.
+pub fn new<U>(numerator: i64, denominator: u64) -> Fraction<U> {
+    assert!(denominator <= std::i64::MAX as u64);
 
-    if denominator.is_positive() {
-        Frac { numerator, denominator, phantom: PhantomData }
-    } else {
-        // Denominator may never be negative. This lets us avoid -0,
-        // get the sign merely by returning the numerator's sign, etc.
-        Frac { numerator: -numerator, denominator: -denominator, phantom: PhantomData }
-    }
+    Fraction { numerator, denominator: denominator as i64, phantom: PhantomData }
 }
 
-impl<T> Frac<T> {
+/// Returns a new fraction. This is `unsafe` because it assumes, without checking,
+/// that it was given a nonzero denominator. Never pass this a zero denominator!
+///
+/// Panics in non-release builds if given a denominator of zero, or if
+/// the denominator is larger than the largest possible i64.
+///
+/// Internally, Fraction stores the denominator as an i64 that must be positive.
+/// The positivity guarantee allows Fraction to do comparisons faster, because
+/// it can avoid accounting for the case where one fraction has both its
+/// numerator and denominator negated, and the other has neither negated.
+///
+/// The denominator cannot be higher than std::i64::MAX because certain operations
+/// (e.g. `reciprocal` and `div`) require swapping numerator and denominator,
+/// and numerator is an i64.
+///
+/// A Fraction with a denominator of zero is invalid, and this function returns
+/// a Fraction<Valid>, so it is important that this function never return a Fraction<Valid>
+/// with a zero denominator. That would lead to undefined behavior!
+pub unsafe fn unchecked_new(numerator: i64, denominator: u64) -> Fraction<Valid> {
+    assert_ne!(denominator, 0);
+    assert!(denominator <= std::i64::MAX as u64);
 
+    Fraction { numerator, denominator: denominator as i64, phantom: PhantomData }
+}
+
+impl<T> Fraction<T> {
     #[inline]
     /// Reduces the fraction in place.
-    pub fn reduce(&mut self) {
+    pub fn reduced(&self) -> Self {
         let common_divisor = gcd(self.numerator, self.denominator);
+        let numerator = self.numerator / common_divisor;
+        let denominator = self.denominator / common_divisor;
 
-        self.numerator = self.numerator / common_divisor;
-        self.denominator = self.denominator / common_divisor;
-    }
-
-    #[inline]
-    /// Reduces the fraction, then returns the numerator.
-    pub fn reduced_numerator(&mut self) -> i64 {
-        self.reduce();
-        self.numerator
-    }
-
-    #[inline]
-    /// Reduces the fraction, then returns the denominator.
-    pub fn reduced_denominator(&mut self) -> i64 {
-        self.reduce();
-        self.denominator
+        Fraction { numerator, denominator, phantom: PhantomData }
     }
 
     pub fn is_rational(&self) -> bool {
@@ -106,17 +120,12 @@ impl<T> Frac<T> {
     }
 
     #[inline]
-    /// Reduces the fraction, then returns a tuple of (numerator, denominator).
-    pub fn reduced(&mut self) -> ( i64, i64 ) {
-        self.reduce();
-        ( self.numerator, self.denominator )
-    }
-
-    #[inline]
     /// Reduces the fraction, then returns true iff the denominator is 1.
-    pub fn is_integer(&mut self) -> bool {
-        self.reduce();
-        self.denominator == 1
+    pub fn is_integer(&self) -> bool {
+        let common_divisor = gcd(self.numerator, self.denominator);
+        let denominator = self.denominator / common_divisor;
+
+        denominator == 1
     }
 
     #[inline]
@@ -127,108 +136,87 @@ impl<T> Frac<T> {
         self.numerator == 0
     }
 
-    pub fn abs(&mut self) -> Self {
-        let (mut numerator, underflowed) = self.numerator.overflowing_abs();
+    pub fn abs(&self) -> Self {
+        match self.numerator.overflowing_abs() {
+            (numerator, false) =>
+                Fraction { numerator, denominator: self.denominator, phantom: PhantomData },
 
-        // If we underflowed, reduce and try again.
-        if underflowed {
-            self.reduce();
+            (_, true) => {
+                // We underflowed, so reduce and try again.
+                let reduced_self = self.reduced();
 
-            numerator = self.numerator.abs();
-        }
-
-        Frac { numerator, denominator: self.denominator, phantom: PhantomData }
-    }
-
-
-    pub fn checked_abs(&mut self) -> Option<Self> {
-        let (numerator, underflowed) = self.numerator.overflowing_abs();
-
-        // If we underflowed, reduce and try again.
-        if underflowed {
-            self.reduce();
-
-            match self.numerator.overflowing_abs() {
-                (numerator, false) => {
-                    Some(Frac { numerator, denominator: self.denominator, phantom: PhantomData })
-                },
-                (_, true) => None
+                Fraction {
+                    numerator: reduced_self.numerator.abs(),
+                    denominator: reduced_self.denominator,
+                    phantom: PhantomData
+                }
             }
-        } else {
-            Some(Frac { numerator, denominator: self.denominator, phantom: PhantomData })
         }
     }
 
-    pub fn overflowing_abs(&mut self) -> (Self, bool) {
-        let (numerator, underflowed) = self.numerator.overflowing_abs();
+    pub fn checked_abs(&self) -> Option<Self> {
+        match self.numerator.overflowing_abs() {
+            (numerator, false) =>
+                Some(Fraction { numerator, denominator: self.denominator, phantom: PhantomData }),
 
-        // If we underflowed, reduce and try again.
-        if underflowed {
-            self.reduce();
+            (_, true) => {
+                // We underflowed, so reduce and try again.
+                let reduced_self = self.reduced();
 
-            let (numerator, underflowed) = self.numerator.overflowing_abs();
+                match reduced_self.numerator.overflowing_abs() {
+                    (numerator, false) => {
+                        Some(Fraction { numerator, denominator: reduced_self.denominator, phantom: PhantomData })
+                    },
+                    (_, true) => None
+                }
+            }
+        }
+    }
 
-            (Frac { numerator, denominator: self.denominator, phantom: PhantomData }, underflowed)
-        } else {
-            (Frac { numerator, denominator: self.denominator, phantom: PhantomData }, underflowed)
+    pub fn overflowing_abs(&self) -> (Self, bool) {
+        match self.numerator.overflowing_abs() {
+            (numerator, false) =>
+                (Fraction { numerator, denominator: self.denominator, phantom: PhantomData }, false),
+
+            (_, true) => {
+                let reduced_self = self.reduced();
+
+                let (numerator, underflowed) = reduced_self.numerator.overflowing_abs();
+
+                (Fraction { numerator, denominator: reduced_self.denominator, phantom: PhantomData }, underflowed)
+            }
         }
     }
 
     /// Add two fractions, returning None on overflow. Note: overflow can occur on more than just large numerators!
-    /// This requires mutable references because it may decide to reduce
-    /// the fractions mid-operation, and that reduction should persist to avoid having to redo
-    /// that calculation later.
-    pub fn checked_add(&mut self, other: &mut Self) -> Option<Self> {
+    pub fn checked_add(&self, other: &Self) -> Option<Self> {
         if self.denominator == other.denominator {
             // Happy path - we get to skip calculating a common denominator!
             match self.numerator.overflowing_add(other.numerator) {
-                (numerator, false) => Some(Frac { numerator, denominator: self.denominator, phantom: PhantomData }),
+                (numerator, false) => Some(Fraction { numerator, denominator: self.denominator, phantom: PhantomData }),
                 (_, true) => self.reducing_checked_add(other)
             }
         } else {
             let common_denom: i64 = self.denominator * other.denominator;
 
-            (common_denom / self.denominator).checked_mul(self.numerator)
-                .and_then(|self_numer| {
-                    (common_denom / other.denominator).checked_mul(other.numerator)
-                        .and_then(|other_numer| {
-                            self_numer.checked_add(other_numer)
-                                .map(|numerator| Frac { numerator, denominator: common_denom, phantom: PhantomData })
-                        })
-                })
-                // Something overflowed - try reducing the inputs first.
-                .or_else(|| self.reducing_checked_add(other))
-        }
-    }
-
-    /// Add two fractions. This requires mutable references because it may decide to reduce
-    /// the fractions mid-operation, and that reduction should persist to avoid having to redo
-    /// that calculation later.
-    pub fn add(&mut self, other: &mut Self) -> Self {
-        if self.denominator == other.denominator {
-            // Happy path - we get to skip calculating a common denominator!
-            match self.numerator.overflowing_add(other.numerator) {
-                (numerator, false) => Frac { numerator, denominator: self.denominator, phantom: PhantomData },
-                (_, true) => self.reducing_add(other)
-            }
-        } else {
-            let common_denom: i64 = self.denominator * other.denominator;
-
-            // This code would look nicer with checked_ instead of overflowing_, but
-            // seems likely the perf would be worse.
             match (common_denom / self.denominator).overflowing_mul(self.numerator) {
                 (self_numer, false) => {
                     match (common_denom / other.denominator).overflowing_mul(other.numerator) {
                         (other_numer, false) => {
                             match self_numer.overflowing_add(other_numer) {
-                                (numerator, false) => Frac { numerator, denominator: common_denom, phantom: PhantomData },
-                                (_, true) => self.reducing_add(other)
+                                (numerator, false) =>
+                                    Some(Fraction { numerator, denominator: common_denom, phantom: PhantomData }),
+
+                                (_, true) =>
+                                    None
                             }
-                        },
-                        (_, true) => self.reducing_add(other)
+                        }
+                        // Denominator overflowed - try reducing the inputs first.
+                        (_, true) => self.reducing_checked_add(other)
                     }
                 },
-                (_, true) => self.reducing_add(other)
+                // Numerator overflowed - try reducing the inputs first.
+                (_, true) => self.reducing_checked_add(other)
             }
         }
     }
@@ -236,91 +224,75 @@ impl<T> Frac<T> {
     /// Add while sacrificing performance to avoid overflow.
     /// This should only be used as a fallback after an overflow was caught in a higher-perf arithmetic operation.
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reducing_add(&mut self, other: &mut Self) -> Self {
-        self.reduce();
-        other.reduce();
+    fn reducing_add(&self, other: &Self) -> Self {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
-        let denominator = lcm(self.denominator, other.denominator);
+        let denominator = lcm(reduced_self.denominator, reduced_other.denominator);
         let numerator =
-            (self.numerator * (denominator / self.denominator))
-                + (other.numerator * (denominator / other.denominator));
+            (reduced_self.numerator * (denominator / reduced_self.denominator))
+                + (reduced_other.numerator * (denominator / reduced_other.denominator));
 
-        Frac { numerator, denominator, phantom: PhantomData }
+        Fraction { numerator, denominator, phantom: PhantomData }
     }
 
     /// Add while sacrificing performance to avoid overflow.
     /// This should only be used as a fallback after an overflow was caught in a higher-perf arithmetic operation.
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reducing_checked_add(&mut self, other: &mut Self) -> Option<Self> {
-        self.reduce();
-        other.reduce();
+    fn reducing_checked_add(&self, other: &Self) -> Option<Self> {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
-        let denominator = lcm(self.denominator, other.denominator);
+        let denominator = lcm(reduced_self.denominator, reduced_other.denominator);
 
-        (denominator / self.denominator).checked_mul(self.numerator).and_then(|self_numerator|
-            (denominator / other.denominator).checked_mul(other.numerator).and_then(|other_numerator|
-                self_numerator.checked_add(other_numerator).map(|numerator|
-                    Frac { numerator, denominator, phantom: PhantomData }
-                )
-            )
-        )
+        match (denominator / reduced_self.denominator).overflowing_mul(reduced_self.numerator) {
+            (self_numer, false) => {
+                match (denominator / reduced_other.denominator).overflowing_mul(reduced_other.numerator) {
+                    (other_numer, false) => {
+                        match self_numer.overflowing_add(other_numer) {
+                            (numerator, false) =>
+                                Some(Fraction { numerator, denominator, phantom: PhantomData }),
+
+                            (_, true) =>
+                                None
+                        }
+                    },
+                    (_, true) => None
+                }
+            },
+            (_, true) => None
+        }
     }
 
     /// Subtract two fractions, returning None on overflow. Note: overflow can occur on more than just large numerators!
-    /// This requires mutable references because it may decide to reduce
-    /// the fractions mid-operation, and that reduction should persist to avoid having to redo
-    /// that calculation later.
-    pub fn checked_sub(&mut self, other: &mut Self) -> Option<Self> {
-        if self.denominator == other.denominator {
-            match self.numerator.checked_sub(other.numerator) {
-                // Happy path - we get to skip calculating a common denominator!
-                Some(numerator) => Some(Frac { numerator, denominator: self.denominator, phantom: PhantomData }),
-                None => self.reducing_checked_sub(other)
-            }
-        } else {
-            let common_denom: i64 = self.denominator * other.denominator;
-
-            (common_denom / self.denominator).checked_mul(self.numerator)
-                .and_then(|self_numer| {
-                    (common_denom / other.denominator).checked_mul(other.numerator)
-                        .and_then(|other_numer| {
-                            self_numer.checked_sub(other_numer)
-                                .map(|numerator| Frac { numerator, denominator: common_denom, phantom: PhantomData })
-                        })
-                })
-                // Something overflowed - try reducing the inputs first.
-                .or_else(|| self.reducing_checked_sub(other))
-        }
-    }
-
-    /// Subtract two fractions. This requires mutable references because it may decide to reduce
-    /// the fractions mid-operation, and that reduction should persist to avoid having to redo
-    /// that calculation later.
-    pub fn sub(&mut self, other: &mut Self) -> Self {
+    pub fn checked_sub(&self, other: &Self) -> Option<Self> {
         if self.denominator == other.denominator {
             // Happy path - we get to skip calculating a common denominator!
             match self.numerator.overflowing_sub(other.numerator) {
-                (numerator, false) => Frac { numerator, denominator: self.denominator, phantom: PhantomData },
-                (_, true) => self.reducing_sub(other)
+                (numerator, false) => Some(Fraction { numerator, denominator: self.denominator, phantom: PhantomData }),
+                (_, true) => self.reducing_checked_sub(other)
             }
         } else {
             let common_denom: i64 = self.denominator * other.denominator;
 
-            // This code would look nicer with checked_ instead of overflowing_, but
-            // seems likely the perf would be worse.
             match (common_denom / self.denominator).overflowing_mul(self.numerator) {
                 (self_numer, false) => {
                     match (common_denom / other.denominator).overflowing_mul(other.numerator) {
                         (other_numer, false) => {
                             match self_numer.overflowing_sub(other_numer) {
-                                (numerator, false) => Frac { numerator, denominator: common_denom, phantom: PhantomData },
-                                (_, true) => self.reducing_sub(other)
+                                (numerator, false) =>
+                                    Some(Fraction { numerator, denominator: common_denom, phantom: PhantomData }),
+
+                                (_, true) =>
+                                    None
                             }
-                        },
-                        (_, true) => self.reducing_sub(other)
+                        }
+                        // Denominator overflowed - try reducing the inputs first.
+                        (_, true) => self.reducing_checked_sub(other)
                     }
                 },
-                (_, true) => self.reducing_sub(other)
+                // Numerator overflowed - try reducing the inputs first.
+                (_, true) => self.reducing_checked_sub(other)
             }
         }
     }
@@ -328,41 +300,48 @@ impl<T> Frac<T> {
     /// Subtract while sacrificing performance to avoid overflow.
     /// This should only be used as a fallback after an overflow was caught in a higher-perf arithmetic operation.
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reducing_sub(&mut self, other: &mut Self) -> Self {
-        self.reduce();
-        other.reduce();
+    fn reducing_sub(&self, other: &Self) -> Self {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
-        let denominator = lcm(self.denominator, other.denominator);
+        let denominator = lcm(reduced_self.denominator, reduced_other.denominator);
         let numerator =
-            (self.numerator * (denominator / self.denominator))
-                - (other.numerator * (denominator / other.denominator));
+            (reduced_self.numerator * (denominator / reduced_self.denominator))
+                + (reduced_other.numerator * (denominator / reduced_other.denominator));
 
-        Frac { numerator, denominator, phantom: PhantomData }
+        Fraction { numerator, denominator, phantom: PhantomData }
     }
 
     /// Subtract while sacrificing performance to avoid overflow.
     /// This should only be used as a fallback after an overflow was caught in a higher-perf arithmetic operation.
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reducing_checked_sub(&mut self, other: &mut Self) -> Option<Self> {
-        self.reduce();
-        other.reduce();
+    fn reducing_checked_sub(&self, other: &Self) -> Option<Self> {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
-        let denominator = lcm(self.denominator, other.denominator);
+        let denominator = lcm(reduced_self.denominator, reduced_other.denominator);
 
-        (denominator / self.denominator).checked_mul(self.numerator).and_then(|self_numerator|
-            (denominator / other.denominator).checked_mul(other.numerator).and_then(|other_numerator|
-                self_numerator.checked_sub(other_numerator).map(|numerator|
-                    Frac { numerator, denominator, phantom: PhantomData }
-                )
-            )
-        )
+        match (denominator / reduced_self.denominator).overflowing_mul(reduced_self.numerator) {
+            (self_numer, false) => {
+                match (denominator / reduced_other.denominator).overflowing_mul(reduced_other.numerator) {
+                    (other_numer, false) => {
+                        match self_numer.overflowing_sub(other_numer) {
+                            (numerator, false) =>
+                                Some(Fraction { numerator, denominator, phantom: PhantomData }),
+
+                            (_, true) =>
+                                None
+                        }
+                    },
+                    (_, true) => None
+                }
+            },
+            (_, true) => None
+        }
     }
 
     /// Multiply two fractions, returning None on overflow. Note: overflow can occur on more than just large numerators!
-    /// This requires mutable references because it may decide to reduce
-    /// the fractions mid-operation, and that reduction should persist to avoid having to redo
-    /// that calculation later.
-    pub fn checked_mul(&mut self, other: &mut Self) -> Option<Self> {
+    pub fn checked_mul(&self, other: &Self) -> Option<Self> {
         match self.numerator.checked_mul(other.numerator) {
             Some(numerator) => {
                 // Common denominator is valuable. If we have it, try to preserve it!
@@ -378,14 +357,14 @@ impl<T> Frac<T> {
                     // instruction, grab the remainder value out of the register, then
                     // do the test, and if it passes, grab the existing result of the division
                     // out of the other register without issuing a second division instruction.
-                    Some(Frac {
+                    Some(Fraction {
                         numerator: numerator / self.denominator,
                         denominator: self.denominator,
                         phantom: PhantomData
                     })
                 } else {
                     match self.denominator.checked_mul(other.denominator) {
-                        Some(denominator) => Some(Frac { numerator, denominator, phantom: PhantomData }),
+                        Some(denominator) => Some(Fraction { numerator, denominator, phantom: PhantomData }),
 
                         // Denominator overflowed. See if reducing the inputs helps!
                         None => self.reducing_checked_mul(other)
@@ -398,92 +377,82 @@ impl<T> Frac<T> {
         }
     }
 
-    /// Multiply two fractions. This requires mutable references because it may decide to reduce
-    /// the fractions mid-operation, and that reduction should persist to avoid having to redo
-    /// that calculation later.
-    pub fn mul(&mut self, other: &mut Self) -> Self {
-        match self.numerator.overflowing_mul(other.numerator) {
-            (numerator, false) => {
-                // Common denominator is valuable. If we have it, try to preserve it!
-                if self.denominator == other.denominator
-                    // See if the denominator is evenly divisible by the new numerator.
-                    // If it is, we can "pre-reduce" to the original denominator!
-                    && (numerator.overflowing_rem(self.denominator) == (0, false))
-                {
-                    // TODO There's probably an optimization opportunity here. Check the
-                    // generated instructions - there might be a way to use a division-with-remainder
-                    // instruction, grab the remainder value out of the register, then
-                    // do the test, and if it passes, grab the existing result of the division
-                    // out of the other register without issuing a second division instruction.
-                    Frac {
-                        numerator: numerator / self.denominator,
-                        denominator: self.denominator,
-                        phantom: PhantomData
-                    }
-                } else {
-                    match self.denominator.overflowing_mul(other.denominator) {
-                        (denominator, false) => Frac { numerator, denominator, phantom: PhantomData },
+    /// Return the fracion with numerator and denominator swapped.
+    ///
+    /// Returns a Fraction with an unbound type variable because this can make it invalid;
+    /// if the numerator was 0 before (which is valid), now the denominator will be 0 (which is invalid).
+    pub fn reciprocal<V>(&self) -> Fraction<V> {
+        let denominator = self.numerator;
+        let numerator = self.denominator;
 
-                        // Denominator overflowed. See if reducing the inputs helps!
-                        (_, true) => self.reducing_mul(other)
-                    }
-                }
-            },
-
-            // Numerator overflowed. See if reducing the inputs helps!
-            (_, true) => self.reducing_mul(other)
+        // Make sure we don't end up with a negative denominator!
+        if denominator.is_negative() {
+            Fraction { numerator: -numerator, denominator: -denominator, phantom: PhantomData }
+        } else {
+            Fraction { numerator, denominator, phantom: PhantomData }
         }
     }
 
-    /// This requires mutable references because it may decide to reduce
-    /// the fractions mid-operation, and that reduction should persist to avoid having to redo
-    /// that calculation later.
-    pub fn checked_div(&mut self, other: &mut Self) -> Option<Self> {
+    pub fn checked_div<U, V>(&self, other: &Self) -> Option<Fraction<V>> {
         // We're going to multiply by the reciprocal of `other`, so if its numerator
         // was 0, then the resulting fraction will have 0 for a denominator, so we're done.
         if other.numerator == 0 {
             return None;
         }
 
-        match self.numerator.checked_mul(other.denominator) {
-            Some(numerator) => {
-                match self.denominator.checked_mul(other.numerator) {
-                    Some(denominator) => Some(Frac { numerator, denominator, phantom: PhantomData }),
+        match self.numerator.overflowing_mul(other.denominator) {
+            (numerator, false) => {
+                match self.denominator.overflowing_mul(other.numerator) {
+                    (denominator, false) => {
+                        // Make sure we don't end up with a negative denominator!
+                        if denominator.is_negative() {
+                            Some(Fraction { numerator: -numerator, denominator: -denominator, phantom: PhantomData })
+                        } else {
+                            Some(Fraction { numerator, denominator, phantom: PhantomData })
+                        }
+                    },
                     // Denominator overflowed. See if reducing the inputs helps!
-                    None => self.reducing_checked_div(other)
+                    (_, true) => self.reducing_checked_div(other)
                 }
             },
 
             // Numerator overflowed. See if reducing the inputs helps!
-            None => self.reducing_checked_div(other)
+            (_, true) => self.reducing_checked_div(other)
         }
     }
 
-    /// If the Frac is valid, returns it wrapped in Some.
-    /// Otherwise, returns None.
-    pub fn into_valid<V>(self) -> Option<Frac<Valid>> {
-        if self.denominator.is_positive() {
-            Some(unsafe { std::mem::transmute::<Frac<T>, Frac<Valid>>(self) })
+    /// Returns whether the fraction is valid.
+    /// For a Frac<Valid>, this will always return true.
+    #[inline(always)]
+    pub fn is_valid(&self) -> bool {
+        self.denominator.is_positive()
+    }
+
+    /// If the fraction is valid, return it wrapped in Some.
+    /// Otherwise, return None.
+    pub fn into_valid<V>(self) -> Option<Fraction<Valid>> {
+        if self.is_valid() {
+            Some(unsafe { std::mem::transmute::<Fraction<T>, Fraction<Valid>>(self) })
         } else {
             None
         }
     }
 
-    /// If the Frac is valid, returns it with the type variable set accordingly.
+    /// If the fraction is valid, returns it with the type variable set accordingly.
     /// Otherwise, returns the fallback value.
-    pub fn valid_or<V>(self, fallback: V) -> Result<Frac<Valid>, V> {
-        if self.denominator.is_positive() {
-            Ok(unsafe { std::mem::transmute::<Frac<T>, Frac<Valid>>(self) })
+    pub fn valid_or<V>(self, fallback: V) -> Result<Fraction<Valid>, V> {
+        if self.is_valid() {
+            Ok(unsafe { std::mem::transmute::<Fraction<T>, Fraction<Valid>>(self) })
         } else {
             Err(fallback)
         }
     }
 
-    pub fn valid_or_else<F, V>(self, fallback_fn: F) -> Result<Frac<Valid>, V>
+    pub fn valid_or_else<F, V>(self, fallback_fn: F) -> Result<Fraction<Valid>, V>
     where F: Fn() -> V
     {
-        if self.denominator.is_positive() {
-            Ok(unsafe { std::mem::transmute::<Frac<T>, Frac<Valid>>(self) })
+        if self.is_valid() {
+            Ok(unsafe { std::mem::transmute::<Fraction<T>, Fraction<Valid>>(self) })
         } else {
             Err(fallback_fn())
         }
@@ -492,15 +461,18 @@ impl<T> Frac<T> {
     /// Divide two fractions.
     ///
     /// This returns a Frac with an unbound type parameter because the result may not be valid.
-    ///
-    /// This requires mutable references because it may decide to reduce
-    /// the fractions mid-operation, and that reduction should persist to avoid having to redo
-    /// that calculation later.
-    pub fn div<U, V>(&mut self, other: &mut Frac<U>) -> Frac<V> {
+    pub fn div<U, V>(&self, other: &Fraction<U>) -> Fraction<V> {
         match self.numerator.checked_mul(other.denominator) {
             Some(numerator) => {
                 match self.denominator.checked_mul(other.numerator) {
-                    Some(denominator) => Frac { numerator, denominator, phantom: PhantomData },
+                    Some(denominator) => {
+                        // Make sure we don't end up with a negative denominator!
+                        if denominator.is_negative() {
+                            Fraction { numerator: -numerator, denominator: -denominator, phantom: PhantomData }
+                        } else {
+                            Fraction { numerator, denominator, phantom: PhantomData }
+                        }
+                    },
                     // Denominator overflowed. See if reducing the inputs helps!
                     None => self.reducing_div(other)
                 }
@@ -514,66 +486,78 @@ impl<T> Frac<T> {
     /// Multiply while sacrificing performance to avoid overflow.
     /// This should only be used as a fallback after an overflow was caught in a higher-perf arithmetic operation.
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reducing_mul(&mut self, other: &mut Self) -> Self {
-        self.reduce();
-        other.reduce();
+    fn reducing_mul(&self, other: &Self) -> Self {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
         // Preserving common denominator is out the window at this point.
-        let numerator = self.numerator * other.numerator;
-        let denominator = self.denominator * other.denominator;
+        let numerator = reduced_self.numerator * reduced_other.numerator;
+        let denominator = reduced_self.denominator * reduced_other.denominator;
 
-        Frac { numerator, denominator, phantom: PhantomData }
+        Fraction { numerator, denominator, phantom: PhantomData }
     }
 
     /// Multiply while sacrificing performance to avoid overflow.
     /// This should only be used as a fallback after an overflow was caught in a higher-perf arithmetic operation.
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reducing_checked_mul(&mut self, other: &mut Self) -> Option<Self> {
-        self.reduce();
-        other.reduce();
+    fn reducing_checked_mul(&self, other: &Self) -> Option<Self> {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
         // Preserving common denominator is out the window at this point.
-        self.numerator.checked_mul(other.numerator)
-            .and_then(|numerator|
-                self.denominator.checked_mul(other.denominator)
-                    .map(|denominator| Frac { numerator, denominator, phantom: PhantomData })
-            )
+        match reduced_self.numerator.overflowing_mul(reduced_other.numerator) {
+            (numerator, false) => {
+                match reduced_self.denominator.overflowing_mul(reduced_other.denominator) {
+                    (denominator, false) =>
+                        Some(Fraction { numerator, denominator, phantom: PhantomData }),
+
+                    (_, true) =>
+                        None
+                }
+            },
+            (_, true) => None
+        }
     }
 
     /// Divide while sacrificing performance to avoid overflow.
     /// This should only be used as a fallback after an overflow was caught in a higher-perf arithmetic operation.
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reducing_checked_div(&mut self, other: &mut Self) -> Option<Self> {
-        self.reduce();
-        other.reduce();
+    fn reducing_checked_div<U, V>(&self, other: &Fraction<U>) -> Option<Fraction<V>> {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
-        self.numerator.checked_mul(other.denominator)
-            .and_then(|numerator|
-                self.denominator.checked_mul(other.numerator)
-                    .map(|denominator| Frac { numerator, denominator, phantom: PhantomData })
-            )
+        // Preserving common denominator is out the window at this point.
+        match reduced_self.numerator.overflowing_mul(reduced_other.numerator) {
+            (denominator, false) => {
+                match reduced_self.denominator.overflowing_mul(reduced_other.denominator) {
+                    (numerator, false) =>
+                        Some(Fraction { numerator, denominator, phantom: PhantomData }),
+
+                    (_, true) =>
+                        None
+                }
+            },
+            (_, true) => None
+        }
     }
 
     /// Divide while sacrificing performance to avoid overflow.
     /// This should only be used as a fallback after an overflow was caught in a higher-perf arithmetic operation.
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reducing_div<U, V>(&mut self, other: &mut Frac<U>) -> Frac<V> {
-        self.reduce();
-        other.reduce();
+    fn reducing_div<U, V>(&self, other: &Fraction<U>) -> Fraction<V> {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
-        let numerator = self.numerator * other.denominator;
-        let denominator = self.denominator * other.numerator;
+        let numerator = reduced_self.denominator * reduced_other.denominator;
+        let denominator = reduced_self.numerator * reduced_other.numerator;
 
-        Frac { numerator, denominator, phantom: PhantomData }
+        Fraction { numerator, denominator, phantom: PhantomData }
     }
 
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reduced_eq(&self, other: &Self) -> bool {
-        let mut reduced_self: Frac<Valid> = Frac { numerator: self.numerator, denominator: self.denominator, phantom: PhantomData };
-        let mut reduced_other: Frac<Valid> = Frac { numerator: other.numerator, denominator: other.denominator, phantom: PhantomData };
-
-        reduced_self.reduce();
-        reduced_other.reduce();
+    fn reducing_eq(&self, other: &Self) -> bool {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
         let denominator = lcm(reduced_self.denominator, reduced_other.denominator);
         let self_numerator = reduced_self.numerator * (denominator / reduced_self.denominator);
@@ -583,12 +567,9 @@ impl<T> Frac<T> {
     }
 
     #[inline(never)] // We don't want to inline this because it should be almost never invoked in practice.
-    fn reduced_cmp(&self, other: &Self) -> Ordering {
-        let mut reduced_self: Frac<Valid> = Frac { numerator: self.numerator, denominator: self.denominator, phantom: PhantomData };
-        let mut reduced_other: Frac<Valid> = Frac { numerator: other.numerator, denominator: other.denominator, phantom: PhantomData };
-
-        reduced_self.reduce();
-        reduced_other.reduce();
+    fn reducing_cmp(&self, other: &Self) -> Ordering {
+        let reduced_self = self.reduced();
+        let reduced_other = other.reduced();
 
         let denominator = lcm(reduced_self.denominator, reduced_other.denominator);
         let self_numerator = reduced_self.numerator * (denominator / reduced_self.denominator);
@@ -596,119 +577,271 @@ impl<T> Frac<T> {
 
         self_numerator.cmp(&other_numerator)
     }
+
+    /// If the Frac is valid, transforms it with the given function.
+    /// If the Frac is invalid, returns it unchanged.
+    pub fn map<F>(self, transform: F) -> Self
+    where F: FnOnce(Fraction<Valid>) -> Fraction<Valid>
+    {
+        if self.is_valid() {
+            unsafe {
+                std::mem::transmute::<Fraction<Valid>, Fraction<T>>(
+                    transform(
+                        std::mem::transmute::<Fraction<T>, Fraction<Valid>>(self)
+                    )
+                )
+            }
+        } else {
+            self
+        }
+    }
 }
 
-impl<T> fmt::Debug for Frac<T> {
+impl<T> fmt::Debug for Fraction<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}/{}", self.numerator, self.denominator)
     }
 }
 
-impl<T> PartialEq for Frac<T> {
+impl<T> PartialEq for Fraction<T> {
     fn eq(&self, other: &Self) -> bool {
         if self.denominator == other.denominator {
-            self.numerator == other.numerator
+            self.numerator.eq(&other.numerator)
+        } else if self.numerator == 0 {
+            // If numerator is 0, the whole fraction is 0.
+            other.numerator == 0
+        } else if other.numerator == 0 {
+            // We couldn't have reached this branch if self.numerator == 0
+            false
         } else {
-            let common_denom: i64 = self.denominator * other.denominator;
-
-            (common_denom / self.denominator).checked_mul(self.numerator)
-                .and_then(|self_numer| {
-                    (common_denom / other.denominator).checked_mul(other.numerator)
-                        .map(|other_numer| {
-                            self_numer == other_numer
-                        })
-                })
-                // Something overflowed - try reducing the inputs first.
-                .unwrap_or_else(|| self.reduced_eq(other))
+            match self.denominator.overflowing_mul(other.denominator) {
+                (common_denom, false) => {
+                    match (common_denom / self.denominator).overflowing_mul(self.numerator) {
+                        (self_numer, false) => {
+                            match (common_denom / other.denominator).overflowing_mul(other.numerator) {
+                                (other_numer, false) => self_numer.eq(&other_numer),
+                                // other.numerator overflowed - try reducing the inputs first.
+                                (_, true) => self.reducing_eq(other)
+                            }
+                        },
+                        // self.numerator overflowed - try reducing the inputs first.
+                        (_, true) => self.reducing_eq(other)
+                    }
+                }
+                // Common denominator overflowed - try reducing the inputs first.
+                (_, true) => self.reducing_eq(other)
+            }
         }
     }
 }
 
-impl<T> Eq for Frac<T> {}
-impl<T> PartialOrd for Frac<T> {
+impl<T> Eq for Fraction<T> {}
+
+/// We only have Ord for valid Fracs because potentially invalid ones are essentially equivalent
+/// to Result<Frac, ()>. Defining Ord for that case too would mean all Ord implementations would
+/// have to do extra checking for situations where either denominator is 0, which does not
+/// seem worth the cost.
+impl PartialOrd for Fraction<Valid> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T> Ord for Frac<T> {
+impl Ord for Fraction<Valid> {
     fn cmp(&self, other: &Self) -> Ordering {
         if self.denominator == other.denominator {
             self.numerator.cmp(&other.numerator)
+        } else if self.numerator == 0 {
+            // If numerator is 0, the whole fraction is 0.
+            // Just compare numerators to see if the other one is 0, positive, or negative.
+            0.cmp(&other.numerator)
+        } else if other.numerator == 0 {
+            self.numerator.cmp(&0)
         } else {
-            let common_denom: i64 = self.denominator * other.denominator;
-
-            (common_denom / self.denominator).checked_mul(self.numerator)
-                .and_then(|self_numer| {
-                    (common_denom / other.denominator).checked_mul(other.numerator)
-                        .map(|other_numer| {
-                            self_numer.cmp(&other_numer)
-                        })
-                })
-                // Something overflowed - try reducing the inputs first.
-                .unwrap_or_else(|| self.reduced_cmp(other))
+            match self.denominator.overflowing_mul(other.denominator) {
+                (common_denom, false) => {
+                    match (common_denom / self.denominator).overflowing_mul(self.numerator) {
+                        (self_numer, false) => {
+                            match (common_denom / other.denominator).overflowing_mul(other.numerator) {
+                                (other_numer, false) => self_numer.cmp(&other_numer),
+                                // other.numerator overflowed - try reducing the inputs first.
+                                (_, true) => self.reducing_cmp(other)
+                            }
+                        },
+                        // self.numerator overflowed - try reducing the inputs first.
+                        (_, true) => self.reducing_cmp(other)
+                    }
+                }
+                // Common denominator overflowed - try reducing the inputs first.
+                (_, true) => self.reducing_cmp(other)
+            }
         }
     }
 }
 
-impl<T> Hash for Frac<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let mut cloned: Frac<Valid> = Frac { numerator: self.numerator, denominator: self.denominator, phantom: PhantomData };
+impl Add for Fraction<Valid> {
+    type Output = Fraction<Valid>;
 
-        cloned.reduce();
+    /// Add two fractions.
+    fn add(self, other: Self) -> Self {
+        if self.denominator == other.denominator {
+            // Happy path - we get to skip calculating a common denominator!
+            match self.numerator.overflowing_add(other.numerator) {
+                (numerator, false) => Fraction { numerator, denominator: self.denominator, phantom: PhantomData },
+                (_, true) => self.reducing_add(&other)
+            }
+        } else {
+            let common_denom: i64 = self.denominator * other.denominator;
 
-        cloned.numerator.hash(state);
-        cloned.denominator.hash(state);
+            // This code would look nicer with checked_ instead of overflowing_, but
+            // seems likely the perf would be worse.
+            match (common_denom / self.denominator).overflowing_mul(self.numerator) {
+                (self_numer, false) => {
+                    match (common_denom / other.denominator).overflowing_mul(other.numerator) {
+                        (other_numer, false) => {
+                            match self_numer.overflowing_add(other_numer) {
+                                (numerator, false) => Fraction { numerator, denominator: common_denom, phantom: PhantomData },
+                                (_, true) => self.reducing_add(&other)
+                            }
+                        },
+                        (_, true) => self.reducing_add(&other)
+                    }
+                },
+                (_, true) => self.reducing_add(&other)
+            }
+        }
     }
 }
 
-impl<T> Neg for Frac<T> {
-    type Output = Frac<T>;
+impl Mul for Fraction<Valid> {
+    type Output = Fraction<Valid>;
+
+    /// Multiply two fractions.
+    fn mul(self, other: Self) -> Self {
+        match self.numerator.overflowing_mul(other.numerator) {
+            (numerator, false) => {
+                // Common denominator is valuable. If we have it, try to preserve it!
+                if self.denominator == other.denominator
+                    // See if the denominator is evenly divisible by the new numerator.
+                    // If it is, we can "pre-reduce" to the original denominator!
+                    && (numerator.overflowing_rem(self.denominator) == (0, false))
+                {
+                    // TODO There's probably an optimization opportunity here. Check the
+                    // generated instructions - there might be a way to use a division-with-remainder
+                    // instruction, grab the remainder value out of the register, then
+                    // do the test, and if it passes, grab the existing result of the division
+                    // out of the other register without issuing a second division instruction.
+                    Fraction {
+                        numerator: numerator / self.denominator,
+                        denominator: self.denominator,
+                        phantom: PhantomData
+                    }
+                } else {
+                    match self.denominator.overflowing_mul(other.denominator) {
+                        (denominator, false) => Fraction { numerator, denominator, phantom: PhantomData },
+
+                        // Denominator overflowed. See if reducing the inputs helps!
+                        (_, true) => self.reducing_mul(&other)
+                    }
+                }
+            },
+
+            // Numerator overflowed. See if reducing the inputs helps!
+            (_, true) => self.reducing_mul(&other)
+        }
+    }
+}
+
+impl Sub for Fraction<Valid> {
+    type Output = Fraction<Valid>;
+
+    /// Subtract two fractions.
+    fn sub(self, other: Self) -> Self {
+        if self.denominator == other.denominator {
+            // Happy path - we get to skip calculating a common denominator!
+            match self.numerator.overflowing_sub(other.numerator) {
+                (numerator, false) => Fraction { numerator, denominator: self.denominator, phantom: PhantomData },
+                (_, true) => self.reducing_sub(&other)
+            }
+        } else {
+            let common_denom: i64 = self.denominator * other.denominator;
+
+            // This code would look nicer with checked_ instead of overflowing_, but
+            // seems likely the perf would be worse.
+            match (common_denom / self.denominator).overflowing_mul(self.numerator) {
+                (self_numer, false) => {
+                    match (common_denom / other.denominator).overflowing_mul(other.numerator) {
+                        (other_numer, false) => {
+                            match self_numer.overflowing_sub(other_numer) {
+                                (numerator, false) => Fraction { numerator, denominator: common_denom, phantom: PhantomData },
+                                (_, true) => self.reducing_sub(&other)
+                            }
+                        },
+                        (_, true) => self.reducing_sub(&other)
+                    }
+                },
+                (_, true) => self.reducing_sub(&other)
+            }
+        }
+    }
+}
+
+impl Hash for Fraction<Valid> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let reduced_self = self.reduced();
+
+        reduced_self.numerator.hash(state);
+        reduced_self.denominator.hash(state);
+    }
+}
+
+impl<T> Neg for Fraction<T> {
+    type Output = Fraction<T>;
 
     fn neg(self) -> Self {
-        Frac { numerator: -self.numerator, denominator: self.denominator, phantom: PhantomData }
+        Fraction { numerator: -self.numerator, denominator: self.denominator, phantom: PhantomData }
     }
 }
 
-impl<T> From<u8> for Frac<T> {
-    fn from (numerator: u8) -> Frac<T> {
-        Frac { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
+impl<T> From<u8> for Fraction<T> {
+    fn from (numerator: u8) -> Fraction<T> {
+        Fraction { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
     }
 }
 
-impl<T> From<i8> for Frac<T> {
-    fn from (numerator: i8) -> Frac<T> {
-        Frac { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
+impl<T> From<i8> for Fraction<T> {
+    fn from (numerator: i8) -> Fraction<T> {
+        Fraction { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
     }
 }
 
-impl<T> From<u16> for Frac<T> {
-    fn from (numerator: u16) -> Frac<T> {
-        Frac { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
+impl<T> From<u16> for Fraction<T> {
+    fn from (numerator: u16) -> Fraction<T> {
+        Fraction { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
     }
 }
 
-impl<T> From<i16> for Frac<T> {
-    fn from (numerator: i16) -> Frac<T> {
-        Frac { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
+impl<T> From<i16> for Fraction<T> {
+    fn from (numerator: i16) -> Fraction<T> {
+        Fraction { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
     }
 }
 
-impl<T> From<u32> for Frac<T> {
-    fn from (numerator: u32) -> Frac<T> {
-        Frac { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
+impl<T> From<u32> for Fraction<T> {
+    fn from (numerator: u32) -> Fraction<T> {
+        Fraction { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
     }
 }
 
-impl<T> From<i32> for Frac<T> {
-    fn from (numerator: i32) -> Frac<T> {
-        Frac { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
+impl<T> From<i32> for Fraction<T> {
+    fn from (numerator: i32) -> Fraction<T> {
+        Fraction { numerator: numerator as i64, denominator: 1, phantom: PhantomData }
     }
 }
 
-impl<T> From<i64> for Frac<T> {
-    fn from (numerator: i64) -> Frac<T> {
-        Frac { numerator, denominator: 1, phantom: PhantomData }
+impl<T> From<i64> for Fraction<T> {
+    fn from (numerator: i64) -> Fraction<T> {
+        Fraction { numerator, denominator: 1, phantom: PhantomData }
     }
 }
 
@@ -767,16 +900,16 @@ fn lcm(me: i64, other: i64) -> i64 {
 
 #[cfg(test)]
 mod test_fast_fraction {
-    use super::{Frac, Valid};
+    use super::Frac;
 
-    pub fn frac(numerator: i64, denominator: i64) -> Frac<Valid> {
+    pub fn frac(numerator: i64, denominator: u64) -> Frac {
         super::new(numerator, denominator)
     }
 
     #[test]
     fn one_plus_one() {
         assert_eq!(
-            frac(1, 1).add(&mut frac(1, 1)),
+            frac(1, 1) + frac(1, 1),
             frac(2, 1)
         );
     }
@@ -784,15 +917,23 @@ mod test_fast_fraction {
     #[test]
     fn point_one_plus_point_two() {
         assert_eq!(
-            frac(1, 10).add(&mut frac(2, 10)),
+            frac(1, 10) + frac(2, 10),
             frac(3, 10)
+        );
+    }
+
+    #[test]
+    fn one_minus_one() {
+        assert_eq!(
+            frac(1, 1) - frac(1, 1),
+            frac(0, 9999)
         );
     }
 
     #[test]
     fn multiply() {
         assert_eq!(
-            frac(2, 3).mul(&mut frac(5, 7)),
+            frac(2, 3) * frac(5, 7),
             frac(10, 21)
         );
     }
@@ -800,7 +941,7 @@ mod test_fast_fraction {
     #[test]
     fn divide() {
         assert_eq!(
-            frac(2, 3).div(&mut frac(5, 7)),
+            frac(2, 3).div(&frac(5, 7)),
             frac(14, 15)
         );
     }
