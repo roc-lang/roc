@@ -1,5 +1,6 @@
 use expr::{Expr, Pattern, Ident};
 use expr::Pattern::*;
+use expr;
 use operator::Operator::*;
 use operator::Operator;
 use std::rc::Rc;
@@ -14,8 +15,7 @@ pub fn eval(expr: Located<Expr>) -> Evaluated {
 }
 
 fn prepare_for_eval(expr: Located<Expr>) -> Located<Expr> {
-    // TODO apply operator precedence
-    expr.map(&apply_pizza)
+    expr::apply_precedence_and_associativity(expr).unwrap().map(&apply_pizza)
 }
 
 #[derive(Clone, Debug, PartialEq)]

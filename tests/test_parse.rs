@@ -8,6 +8,7 @@ mod test_parse {
     use roc::expr::Expr::*;
     use roc::expr::Pattern::*;
     use roc::expr::{Expr, Pattern};
+    use roc::expr;
     use roc::operator::Operator::*;
     use roc::region::{Located, Region};
     use roc::parse;
@@ -1347,6 +1348,48 @@ mod test_parse {
                 CallByName("x".to_string(), vec![loc(Var("i".to_string()))]),
                 ""
             ))
+        );
+    }
+
+    // OPERATOR PRECEDENCE
+
+    fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
+        parse_without_loc(input)
+            .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
+    }
+
+    #[test]
+    fn two_operator_precedence() {
+        assert_eq!(
+            parse_with_precedence("x + y * 5"),
+            Ok((Operator(
+                    loc_box(Var("x".to_string())),
+                    loc(Plus),
+                    loc_box(
+                        Operator(
+                            loc_box(Var("y".to_string())),
+                            loc(Star),
+                            loc_box(Int(5))
+                        )
+                    ),
+                ),
+            ""))
+        );
+
+        assert_eq!(
+            parse_with_precedence("x * y + 5"),
+            Ok((Operator(
+                    loc_box(
+                        Operator(
+                            loc_box(Var("x".to_string())),
+                            loc(Star),
+                            loc_box(Var("y".to_string())),
+                        )
+                    ),
+                    loc(Plus),
+                    loc_box(Int(5))
+                ),
+            ""))
         );
     }
 }

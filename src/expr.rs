@@ -1,5 +1,7 @@
 
 use operator::Operator;
+use operator::Associativity::*;
+use std::cmp::Ordering;
 use region::{Located, Region};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,6 +105,192 @@ impl Expr {
                     loc_op,
                     Box::new(loc_right.with_value(loc_right.value.walk(transform)))
                 )
+            }
+        }
+    }
+}
+
+// Precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
+// https://github.com/gluon-lang/gluon
+#[derive(Clone, Debug, PartialEq)]
+pub enum PrecedenceProblem {
+    BothNonAssociative(Located<Operator>, Located<Operator>),
+}
+
+fn new_op_expr(left: Box<Located<Expr>>, op: Located<Operator>, right: Box<Located<Expr>>)
+    -> Box<Located<Expr>> {
+    let new_region = Region {
+        start_line: left.region.start_line,
+        start_col: left.region.start_col,
+
+        end_line: right.region.end_line,
+        end_col: right.region.end_col
+    };
+    let new_expr = Expr::Operator(left, op, right);
+
+    Box::new(Located::new(new_expr, new_region))
+}
+
+/// Reorder the expression tree based on operator precedence and associativity rules.
+/// In many languages, this can fail due to (for example) <| and |> having the same
+/// precedence but different associativity. Languages which support custom operators with
+/// user-defined precedence and associativity (e.g. Haskell) can have many such errors.
+///
+/// By design, Roc neither allows custom operators nor has any built-in operators with
+/// the same precedence and different associativity, so this operation always succeeds
+/// and can never produce any user-facing errors.
+pub fn apply_precedence_and_associativity(expr: Located<Expr>)
+    -> Result<Located<Expr>, PrecedenceProblem> {
+    use self::PrecedenceProblem::*;
+
+    let mut infixes = Infixes::new(expr);
+    let mut arg_stack: Vec<Box<Located<Expr>>> = Vec::new();
+    let mut op_stack: Vec<Located<Operator>> = Vec::new();
+
+    while let Some(token) = infixes.next() {
+        match token {
+            InfixToken::Arg(next_expr) => arg_stack.push(next_expr),
+            InfixToken::Op(next_op) => {
+                match op_stack.pop() {
+                    Some(stack_op) => {
+                        match next_op.value.cmp(&stack_op.value) {
+                            Ordering::Less => {
+                                // Inline
+                                let right = arg_stack.pop().unwrap();
+                                let left = arg_stack.pop().unwrap();
+
+                                infixes.next_op = Some(next_op);
+                                arg_stack.push(new_op_expr(left, stack_op, right));
+                            }
+
+                            Ordering::Greater => {
+                                // Swap
+                                op_stack.push(stack_op);
+                                op_stack.push(next_op);
+                            }
+
+                            Ordering::Equal => {
+                                match (next_op.value.associativity(), stack_op.value.associativity()) {
+                                    ( LeftAssociative, LeftAssociative ) => {
+                                        // Inline
+                                        let right = arg_stack.pop().unwrap();
+                                        let left = arg_stack.pop().unwrap();
+
+                                        infixes.next_op = Some(next_op);
+                                        arg_stack.push(new_op_expr(left, stack_op, right));
+                                    },
+
+                                    ( RightAssociative, RightAssociative ) => {
+                                        // Swap
+                                        op_stack.push(stack_op);
+                                        op_stack.push(next_op);
+                                    },
+
+                                    ( NonAssociative, NonAssociative ) => {
+                                        // Both operators were non-associative, e.g. (True == False == False).
+                                        // We should tell the author to disambiguate by grouping them with parens.
+                                        return Err(BothNonAssociative(next_op, stack_op));
+                                    }
+
+                                    _ => {
+                                        // The operators had the same precedence but different associativity.
+                                        //
+                                        // In many languages, this case can happen due to (for example) <| and |> having the same
+                                        // precedence but different associativity. Languages which support custom operators with
+                                        // (e.g. Haskell) can potentially have arbitrarily many of these cases.
+                                        //
+                                        // By design, Roc neither allows custom operators nor has any built-in operators with
+                                        // the same precedence and different associativity, so this should never happen!
+                                        panic!("Operators had the same associativity, but different precedence. This should never happen!");
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    None => op_stack.push(next_op)
+                };
+            }
+        }
+    }
+
+    for op in op_stack.into_iter().rev() {
+        let right = arg_stack.pop().unwrap();
+        let left = arg_stack.pop().unwrap();
+
+        arg_stack.push(new_op_expr(left, op, right));
+    }
+
+    assert_eq!(arg_stack.len(), 1);
+
+    Ok(*arg_stack.pop().unwrap())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum InfixToken {
+    Arg(Box<Located<Expr>>),
+    Op(Located<Operator>),
+}
+
+/// An iterator that takes an expression that has had its operators grouped
+/// with _right associativity_, and yeilds a sequence of `InfixToken`s. This
+/// is useful for reparsing the operators with their correct associativies
+/// and precedences.
+///
+/// For example, the expression:
+///
+/// ```text
+/// (1 + (2 ^ (4 * (6 - 8))))
+/// ```
+///
+/// Will result in the following iterations:
+///
+/// ```text
+/// Arg:  1
+/// Op:   +
+/// Arg:  2
+/// Op:   ^
+/// Arg:  4
+/// Op:   *
+/// Arg:  6
+/// Op:   -
+/// Arg:  8
+/// ```
+struct Infixes {
+    /// The next part of the expression that we need to flatten
+    remaining_expr: Option<Box<Located<Expr>>>,
+    /// Cached operator from a previous iteration
+    next_op: Option<Located<Operator>>,
+}
+
+impl Infixes {
+    fn new(expr: Located<Expr>) -> Infixes {
+        Infixes {
+            remaining_expr: Some(Box::new(expr)),
+            next_op: None,
+        }
+    }
+}
+
+impl Iterator for Infixes {
+    type Item = InfixToken;
+
+    fn next(&mut self) -> Option<InfixToken> {
+        match self.next_op.take() {
+            Some(op) => Some(InfixToken::Op(op)),
+            None => {
+                self.remaining_expr.take().map(|boxed_expr| {
+                    let expr = *boxed_expr;
+
+                    match expr.value {
+                        Expr::Operator(left, op, right) => {
+                            self.remaining_expr = Some(right);
+                            self.next_op = Some(op);
+
+                            InfixToken::Arg(left)
+                        }
+                        _ => InfixToken::Arg(Box::new(expr)),
+                    }
+                })
             }
         }
     }
