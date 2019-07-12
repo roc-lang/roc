@@ -207,8 +207,11 @@ parser! {
             apply_with_parens(min_indent),
             string("{}").with(value(Expr::EmptyRecord)),
             string_literal(),
-            negative_int_or_frac_literal(),
             int_or_frac_literal(),
+            negative_int_or_frac_literal(),
+            char('~').with(
+                negative_approx_literal().or(approx_literal())
+            ),
             char_literal(),
             if_expr(min_indent),
             case_expr(min_indent),
@@ -800,29 +803,101 @@ where
     })
 }
 
-pub fn negative_int_or_frac_literal<I>() -> impl Parser<Input = I, Output = Expr>
+pub fn digits_after_decimal<I>() -> impl Parser<Input = I, Output = Vec<char>>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     // We expect these to be digits, but read any alphanumeric characters
     // because it could turn out they're malformed identifiers which
     // happen to begin with a number. We'll check for that at the end.
-    let digits_after_decimal = many1::<Vec<_>, _>(alpha_num());
+    many1::<Vec<_>, _>(alpha_num())
+}
 
+pub fn digits_before_decimal<I>() -> impl Parser<Input = I, Output = Vec<char>>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
     // Digits before the decimal point can be underscore-separated
     // e.g. one million can be written as 1_000_000
-    let digits_before_decimal = many1::<Vec<_>, _>(
+    many1::<Vec<_>, _>(
         alpha_num().skip(optional(
-                attempt(
-                    char('_').skip(
-                        // Don't mistake keywords like `then` and `else` for
-                        // space-separated digits!
-                        not_followed_by(choice((string("then"), string("else"), string("when"))))
-                    )
+            attempt(
+                char('_').skip(
+                    // Don't mistake keywords like `then` and `else` for
+                    // space-separated digits!
+                    not_followed_by(choice((string("then"), string("else"), string("when"))))
                 )
+            )
         ))
-    );
+    )
+}
 
+pub fn negative_approx_literal<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    char('-')
+        .with(digits_before_decimal())
+        .and(optional(char('.').with(digits_after_decimal())))
+        .then(|(int_digits, decimals): (Vec<char>, Option<Vec<char>>)| {
+            // TODO check length of digits and make sure not to overflow
+            let int_str: String = int_digits.into_iter().collect();
+
+            match decimals {
+                Some(nums) => {
+                    let decimal_str: String = nums.into_iter().collect();
+
+                    match format!("-{}.{}", int_str, decimal_str).parse::<f64>() {
+                        Ok(float) => {
+                            value(Expr::Approx(float)).right()
+                        },
+                        Err(_) => {
+                            unexpected_any("looked like a negative number literal but was actually malformed identifier").left()
+                        }
+                    }
+                },
+                None => {
+                    unexpected_any("negative number literal with ~ but without the decimal point that ~ number literals require").left()
+                }
+            }
+        })
+}
+
+pub fn approx_literal<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    digits_before_decimal()
+        .and(optional(char('.').with(digits_after_decimal())))
+        .then(|(int_digits, decimals): (Vec<char>, Option<Vec<char>>)| {
+            // TODO check length of digits and make sure not to overflow
+            let int_str: String = int_digits.into_iter().collect();
+
+            match decimals {
+                Some(nums) => {
+                    let decimal_str: String = nums.into_iter().collect();
+
+                    match format!("{}.{}", int_str, decimal_str).parse::<f64>() {
+                        Ok(float) => {
+                            value(Expr::Approx(float)).right()
+                        },
+                        Err(_) => {
+                            unexpected_any("looked like a negative number literal but was actually malformed identifier").left()
+                        }
+                    }
+                },
+                None => {
+                    unexpected_any("negative number literal with ~ but without the decimal point that ~ number literals require").left()
+                }
+            }
+        })
+}
+
+
+pub fn negative_int_or_frac_literal<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
     // Do this lookahead to decide if we should parse this as a number.
     // This matters because once we commit to parsing it as a number,
     // we may discover non-digit chars, indicating this is actually an
@@ -830,8 +905,8 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     // out to be an invalid identifier on closer inspection.)
     look_ahead(char('-').with(digit()))
         .skip(any()) // skip over the minus sign we already know is there
-        .with(digits_before_decimal)
-        .and(optional(char('.').with(digits_after_decimal)))
+        .with(digits_before_decimal())
+        .and(optional(char('.').with(digits_after_decimal())))
         .then(|(int_digits, decimals): (Vec<char>, Option<Vec<char>>)| {
             // TODO check length of digits and make sure not to overflow
             let int_str: String = int_digits.into_iter().collect();
@@ -869,29 +944,10 @@ pub fn int_or_frac_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    // We expect these to be digits, but read any alphanumeric characters
-    // because it could turn out they're malformed identifiers which
-    // happen to begin with a number. We'll check for that at the end.
-    let digits_after_decimal = many1::<Vec<_>, _>(alpha_num());
-
-    // Digits before the decimal point can be underscore-separated
-    // e.g. one million can be written as 1_000_000
-    let digits_before_decimal = many1::<Vec<_>, _>(
-        alpha_num().skip(optional(
-                attempt(
-                    char('_').skip(
-                        // Don't mistake keywords like `then` and `else` for
-                        // space-separated digits!
-                        not_followed_by(choice((string("then"), string("else"), string("when"))))
-                    )
-                )
-        ))
-    );
-
     // Confirm that it starts with a digit; otherwise, it's potentially an identifier!
     look_ahead(digit())
-        .with(digits_before_decimal)
-        .and(optional(char('.').with(digits_after_decimal)))
+        .with(digits_before_decimal())
+        .and(optional(char('.').with(digits_after_decimal())))
         .then(|(int_digits, decimals): (Vec<char>, Option<Vec<char>>)| {
             // TODO check length of digits and make sure not to overflow
             let int_str: String = int_digits.into_iter().collect();

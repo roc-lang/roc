@@ -279,6 +279,10 @@ mod test_parse {
 
     // NUMBER LITERALS
 
+    fn expect_parsed_approx<'a>(expected: f64, actual: &str) {
+        assert_eq!(Ok((Approx(expected), "")), parse_without_loc(actual));
+    }
+
     fn expect_parsed_int<'a>(expected: i64, actual: &str) {
         assert_eq!(Ok((Int(expected), "")), parse_without_loc(actual));
     }
@@ -298,7 +302,17 @@ mod test_parse {
     }
 
     #[test]
-    fn positive_ratio() {
+    fn positive_approx() {
+        expect_parsed_approx(123.4, "~123.4");
+    }
+
+    #[test]
+    fn negative_approx() {
+        expect_parsed_approx(-123.4, "~-123.4");
+    }
+
+    #[test]
+    fn positive_frac() {
         expect_parsed_ratio(12345, 100, "123.45");
         expect_parsed_ratio(4200, 100, "42.00");
     }
@@ -389,11 +403,11 @@ mod test_parse {
 
     #[test]
     fn multiple_operators() {
-        assert_eq!(parse_without_loc("1 + 2 * 3"),
+        assert_eq!(parse_without_loc("1 + 2 ~/ 3"),
             Ok((Operator(
                 loc_box(Int(1)),
                 loc(Plus),
-                loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(Int(3))))
+                loc_box(Operator(loc_box(Int(2)), loc(TildeSlash), loc_box(Int(3))))
             ), ""))
         );
     }
