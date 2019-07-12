@@ -595,6 +595,7 @@ impl fmt::Display for Evaluated {
                     write!(f, "{}/{}", numerator, denominator)
                 }
             },
+            Approx(num) => write!(f, "~{}", *num),
             Str(string) => {
                 let escaped_str =
                     (*string)
