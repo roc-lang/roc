@@ -5,6 +5,7 @@ pub mod eval;
 pub mod operator;
 pub mod region;
 pub mod fast_fraction;
+pub mod stdlib;
 // mod ena;
 
 // #[macro_use]
