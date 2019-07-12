@@ -207,7 +207,7 @@ parser! {
             apply_with_parens(min_indent),
             string("{}").with(value(Expr::EmptyRecord)),
             string_literal(),
-            number_literal(),
+            int_or_frac_literal(),
             char_literal(),
             if_expr(min_indent),
             case_expr(min_indent),
@@ -433,6 +433,18 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             char('>').map(|_| Operator:: Pizza)
                 .or(char('|').map(|_| Operator::Or))
         ),
+        // either / or //
+        char('/').with(
+            optional(char('/'))
+                .map(|opt_slash| {
+                    if opt_slash.is_none() {
+                        Operator::Slash
+                    } else {
+                        Operator::DoubleSlash
+                    }
+                })
+        ),
+        string("~/").map(|_| Operator::TildeSlash),
         char('+').map(|_| Operator::Plus),
         char('-').map(|_| Operator::Minus),
         char('*').map(|_| Operator::Star),
@@ -526,7 +538,7 @@ parser! {
             char('_').map(|_| Pattern::Underscore),
             string("{}").map(|_| Pattern::EmptyRecordLiteral),
             match_variant(min_indent),
-            number_pattern(), // This goes before ident() so number literals aren't mistaken for malformed idents.
+            int_or_frac_pattern(), // This goes before ident() so number literals aren't mistaken for malformed idents.
             ident().map(|name| Pattern::Identifier(name)),
         ))
     }
@@ -787,7 +799,7 @@ where
     })
 }
 
-pub fn number_literal<I>() -> impl Parser<Input = I, Output = Expr>
+pub fn int_or_frac_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
@@ -810,24 +822,24 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         ))
     );
 
+    // Do this lookahead to decide if we should parse this as a number.
+    // This matters because once we commit to parsing it as a number,
+    // we may discover non-digit chars, indicating this is actually an
+    // invalid identifier. (e.g. "523foo" looks like a number, but turns
+    // out to be an invalid identifier on closer inspection.)
     optional(attempt(char('-')))
-        // Do this lookahead to decide if we should parse this as a number.
-        // This matters because once we commit to parsing it as a number,
-        // we may discover non-digit chars, indicating this is actually an
-        // invalid identifier. (e.g. "523foo" looks like a number, but turns
-        // out to be an invalid identifier on closer inspection.)
-        .and(look_ahead(digit()))
+        .skip(look_ahead(digit()))
         .and(digits_before_decimal)
         .and(optional(char('.').with(digits_after_decimal)))
-        .then(|(((opt_minus, _), int_digits), decimals): (((Option<char>, _), Vec<char>), Option<Vec<char>>)| {
-            let is_positive = opt_minus.is_none();
+        .then(|((opt_minus, int_digits), decimals): ((Option<char>, Vec<char>), Option<Vec<char>>)| {
+            let is_non_negative = opt_minus.is_none();
 
             // TODO check length of digits and make sure not to overflow
             let int_str: String = int_digits.into_iter().collect();
 
             match ( int_str.parse::<i64>(), decimals ) {
                 (Ok(int_val), None) => {
-                    if is_positive {
+                    if is_non_negative {
                         value(Expr::Int(int_val as i64)).right()
                     } else {
                         value(Expr::Int(-int_val as i64)).right()
@@ -844,7 +856,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                             // Only the numerator may ever be signed!
                             let numerator = (int_val * denom) + (decimal as i64);
 
-                            if is_positive {
+                            if is_non_negative {
                                 value(Expr::Frac(numerator, denom)).right()
                             } else {
                                 value(Expr::Frac(-numerator, denom)).right()
@@ -861,11 +873,11 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         })
 }
 
-/// TODO find a way to remove the code duplication between this and number_literal
+/// TODO find a way to remove the code duplication between this and int_or_frac_literal
 /// without sacrificing performance. I attempted to do this in 0062e83d03d389f0f07e33e1e7929e77825d774f
 /// but couldn't figure out how to address the resulting compiler error, which was:
 /// "cannot move out of captured outer variable in an `FnMut` closure"
-pub fn number_pattern<I>() -> impl Parser<Input = I, Output = Pattern>
+pub fn int_or_frac_pattern<I>() -> impl Parser<Input = I, Output = Pattern>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {

@@ -5,7 +5,7 @@ use self::Operator::*;
 pub enum Operator {
     // highest precedence
     Caret,
-    Star, Slash, DoubleSlash, Percent,
+    Star, Slash, DoubleSlash, TildeSlash, Percent,
     Plus, Minus,
     Equals, LessThan, GreaterThan, LessThanOrEq, GreaterThanOrEq,
     And,
@@ -40,7 +40,7 @@ impl Operator {
         use self::Associativity::*;
 
         match self {
-            Pizza | Star | Slash | DoubleSlash | Percent | Plus | Minus => LeftAssociative,
+            Pizza | Star | Slash | DoubleSlash | TildeSlash | Percent | Plus | Minus => LeftAssociative,
             And | Or | Caret => RightAssociative,
             Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => NonAssociative
         }
@@ -49,7 +49,7 @@ impl Operator {
 	fn precedence(&self) -> u8 {
         match self {
             Caret => 7,
-            Star | Slash | DoubleSlash | Percent => 6,
+            Star | Slash | DoubleSlash | TildeSlash | Percent => 6,
             Plus | Minus => 5,
             Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => 4,
             And => 3,

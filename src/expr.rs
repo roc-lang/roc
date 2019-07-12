@@ -9,6 +9,7 @@ pub enum Expr {
     // Literals
     Int(i64),
     Frac(i64, i64),
+    Approx(f64),
     EmptyStr,
     Str(String),
     InterpolatedStr(Vec<(String, Located<Ident>)>, String),
@@ -55,7 +56,7 @@ impl Expr {
         let transformed = transform(self);
 
         match transformed {
-            Int(_) | Frac(_, _) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | InterpolatedStr(_, _) => transformed,
+            Int(_) | Frac(_, _) | Approx(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | InterpolatedStr(_, _) => transformed,
             Assign(pattern, expr1, expr2) => {
                 Assign(
                     pattern,

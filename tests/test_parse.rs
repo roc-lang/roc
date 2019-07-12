@@ -30,7 +30,7 @@ mod test_parse {
     /// having to account for that.
     fn zero_loc_expr(expr: Expr) -> Expr {
         match expr {
-            Int(_) | Frac(_, _) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord => expr,
+            Int(_) | Frac(_, _) | Approx(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord => expr,
             InterpolatedStr(pairs, string) => InterpolatedStr(pairs.into_iter().map(|( prefix, ident )| ( prefix, zero_loc(ident))).collect(), string),
             Assign(pattern, expr1, expr2) => Assign(loc(pattern.value), loc_box(zero_loc_expr((*expr1).value)), loc_box(zero_loc_expr((*expr2).value))),
             CallByName(ident, args) => CallByName(ident, args.into_iter().map(|arg| loc(zero_loc_expr(arg.value))).collect()),

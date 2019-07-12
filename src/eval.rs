@@ -23,6 +23,7 @@ pub enum Evaluated {
     // Literals
     Int(i64),
     Frac(Fraction),
+    Approx(f64),
     EmptyStr,
     Str(String),
     InterpolatedStr(Vec<(String, Ident)>, String),
@@ -61,6 +62,7 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
         Expr::EmptyStr => EmptyStr,
         Expr::Str(string) => Str(string),
         Expr::Frac(numerator, denominator) => Frac(fraction_from_i64s(numerator, denominator)),
+        Expr::Approx(num) => Approx(num),
         Expr::Char(ch) => Char(ch),
         Expr::Closure(args, body) => Closure(args.into_iter().map(|e| e.value).collect(), body, vars.clone()),
         Expr::EmptyRecord => EmptyRecord,
@@ -381,7 +383,6 @@ fn eval_operator(region: Region, left_expr: &Evaluated, op: Operator, right_expr
         (_, Caret, _) => EvalError(region, TypeMismatch("tried to use ^ on non-numbers".to_string())),
 
         // Slash
-        (Int(left_num), Slash, Int(right_num)) => Int(left_num.checked_div(*right_num).unwrap_or_else(|| panic!("Integer underflow on /"))),
         (Frac(left_num), Slash, Frac(right_num)) => {
             let answer = left_num / right_num;
 
@@ -392,21 +393,43 @@ fn eval_operator(region: Region, left_expr: &Evaluated, op: Operator, right_expr
             }
         },
 
+        (Int(_), Slash, Int(_)) => EvalError(region, TypeMismatch("tried to divide two Int values. Explicitly convert them to Frac values, or use Int division (the // operator).".to_string())),
+        (Approx(_), Slash, Approx(_)) => EvalError(region, TypeMismatch("tried to divide two Approx values. Explicitly convert them to Frac values, or use Approx division (the ~/ operator).".to_string())),
         (Int(_), Slash, Frac(_)) => EvalError(region, TypeMismatch("tried to divide Int by Frac. Explicitly convert them to the same type first!".to_string())),
-
         (Frac(_), Slash, Int(_)) => EvalError(region, TypeMismatch("tried to divide Frac by Int. Explicitly convert them to the same type first!".to_string())),
 
         (_, Slash, _) => EvalError(region, TypeMismatch("tried to divide non-numbers".to_string())),
 
         // DoubleSlash
         (Int(left_num), DoubleSlash, Int(right_num)) => Int(left_num / right_num),
-        (Frac(_), DoubleSlash, Frac(_)) => EvalError(region, TypeMismatch("tried to do integer division on two Frac values".to_string())),
 
+        (Approx(_), DoubleSlash, Approx(_)) => EvalError(region, TypeMismatch("tried to do integer division on two Approx values. Explicitly convert them to Int values, or use Approx division (the ~/ operator).".to_string())),
+        (Frac(_), DoubleSlash, Frac(_)) => EvalError(region, TypeMismatch("tried to do integer division on two Frac values. Explicitly conver them to Int values, or use Frac division (the / operator).".to_string())),
         (Int(_), DoubleSlash, Frac(_)) => EvalError(region,TypeMismatch("tried to integer-divide Int by Frac".to_string())),
-
         (Frac(_), DoubleSlash, Int(_)) => EvalError(region, TypeMismatch("tried to integer-divide Frac by Int".to_string())),
 
         (_, DoubleSlash, _) => EvalError(region, TypeMismatch("tried to do integer division on two non-numbers".to_string())),
+
+        // TildeSlash
+        (Approx(left_num), TildeSlash, Approx(right_num)) => {
+            let answer = left_num / right_num;
+
+            if answer.is_finite() {
+                ok_variant(Approx(answer))
+            } else {
+                err_variant(ApplyVariant("DivisionByZero".to_string(), None))
+            }
+        },
+
+        (Int(_), TildeSlash, Int(_)) => EvalError(region, TypeMismatch("tried to do Approx division on two Int values. Explicitly convert them to Approx values, or use Int division (the // operator).".to_string())),
+        (Frac(_), TildeSlash, Frac(_)) => EvalError(region, TypeMismatch("tried to do Approx division on two Frac values. Explicitly conver them to Approx values, or use Frac division (the / operator).".to_string())),
+        (Int(_), TildeSlash, Approx(_)) => EvalError(region, TypeMismatch("tried to do Int ~/ Approx. Explicitly convert both to Approx first!".to_string())),
+        (Frac(_), TildeSlash, Approx(_)) => EvalError(region, TypeMismatch("tried to do Frac ~/ Approx. Explicitly convert both to Approx first!".to_string())),
+
+        (Approx(_), TildeSlash, Int(_)) => EvalError(region, TypeMismatch("tried to divide Approx ~/ Int. Explicitly convert both to Approx first!".to_string())),
+        (Approx(_), TildeSlash, Frac(_)) => EvalError(region, TypeMismatch("tried to divide Approx ~/ Frac. Explicitly convert both to Approx first!".to_string())),
+
+        (_, TildeSlash, _) => EvalError(region, TypeMismatch("tried to divide non-numbers".to_string())),
 
         // Percent
         (Int(left_num), Percent, Int(right_num)) => Int(left_num % right_num),
