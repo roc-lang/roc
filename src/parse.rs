@@ -1,5 +1,5 @@
 use operator::Operator;
-use expr::{Expr, Pattern, Ident};
+use expr::{Expr, Pattern, Ident, VariantName};
 use region::{Located, Region};
 
 use std::char;
@@ -299,7 +299,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 )
                 .with(located(pattern(min_indent))).skip(indented_whitespaces1(min_indent))
                 .skip(string("then")).skip(indented_whitespaces1(min_indent))
-                .and(located(expr_body(min_indent)).map(|expr| Box::new(expr)))
+                .and(located(expr_body(min_indent)))
             )
         )
         .map(|(conditional, branches)|
@@ -357,11 +357,11 @@ fn function_arg<I>(min_indent: u32) -> impl Parser<Input = I, Output = Located<E
 
             // Variants can't be applied in function args without parens;
             // (foo Bar baz) will pass 2 arguments to foo, rather than parsing like (foo (Bar baz))
-            attempt(variant_name()).map(|name| Expr::ApplyVariant(name, None)),
+            attempt(variant_name()).map(|name| Expr::ApplyVariant(VariantName::Unqualified(name), None)),
 
             // Functions can't be called by name in function args without parens;
             // (foo bar baz) will pass 2 arguments to foo, rather than parsing like (foo (bar baz))
-            attempt(ident()).map(|name| Expr::Var(name)),
+            attempt(ident()).map(|name| Expr::Var(Ident::Unqualified(name))),
         ))
     )
 }
@@ -460,6 +460,41 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     ))
 }
 
+pub fn nested_assignment<I>(min_indent: u32) -> impl Parser<Input = I, Output = (Located<Pattern>, Located<Expr>)>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    attempt(
+        located(pattern(min_indent)).and(indentation())
+            .skip(whitespace())
+            .and(
+                char('=').with(indentation())
+                    // If the "=" after the identifier turns out to be
+                    // either "==" or "=>" then this is not a declaration!
+                    .skip(not_followed_by(choice((char('='), char('>')))))
+            )
+        .skip(whitespace())
+        .then(move |((var_pattern, original_indent), equals_sign_indent)| {
+            if original_indent < min_indent {
+                unexpected_any("this assignment is outdented too far").left()
+            } else if equals_sign_indent < original_indent /* `<` because '=' should be same indent or greater */ {
+                unexpected_any("the = in this assignment seems outdented").left()
+            } else {
+                located(expr_body(original_indent + 1 /* declaration body must be indented relative to original decl */))
+                    .skip(whitespace1())
+                    .and(indentation())
+                .then(move |(var_expr, in_expr_indent)| {
+                    if in_expr_indent != original_indent {
+                        unexpected_any("the return expression was indented differently from the original assignment").left()
+                    } else {
+                        value((var_pattern.to_owned(), var_expr)).right()
+                    }
+                }).right()
+            }
+        })
+    )
+}
+
 pub fn assignment<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
@@ -473,26 +508,30 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                     // either "==" or "=>" then this is not a declaration!
                     .skip(not_followed_by(choice((char('='), char('>')))))
             )
-        )
-        .skip(whitespace())
-        .then(move |((var_pattern, original_indent), equals_sign_indent)| {
-            if original_indent < min_indent {
-                unexpected_any("this assignment is outdented too far").left()
-            } else if equals_sign_indent < original_indent /* `<` because '=' should be same indent or greater */ {
-                unexpected_any("the = in this assignment seems outdented").left()
-            } else {
-                located(expr_body(original_indent + 1 /* declaration body must be indented relative to original decl */))
-                    .skip(whitespace1())
-                    .and(located(expr_body(original_indent)).and(indentation()))
-                .then(move |(var_expr, (in_expr, in_expr_indent))| {
-                    if in_expr_indent != original_indent {
-                        unexpected_any("the return expression was indented differently from the original assignment").left()
-                    } else {
-                        value(Expr::Assign(var_pattern.to_owned(), Box::new(var_expr), Box::new(in_expr))).right()
-                    }
-                }).right()
-            }
-        })
+    )
+    .skip(whitespace())
+    .then(move |((first_assignment_pattern, original_indent), equals_sign_indent)| {
+        if original_indent < min_indent {
+            unexpected_any("this assignment is outdented too far").left()
+        } else if equals_sign_indent < original_indent /* `<` because '=' should be same indent or greater */ {
+            unexpected_any("the = in this assignment seems outdented").left()
+        } else {
+            located(expr_body(original_indent + 1 /* declaration body must be indented relative to original decl */))
+                .skip(whitespace1())
+                // Parse any additional assignments that appear right after this one
+                .and(many::<Vec<_>, _>(nested_assignment(original_indent)))
+                .and(located(expr_body(original_indent)).and(indentation()))
+            .then(move |((first_assignment_expr, mut assignments), (in_expr, in_expr_indent))| {
+                if in_expr_indent != original_indent {
+                    unexpected_any("the return expression was indented differently from the original assignment").left()
+                } else {
+                    assignments.insert(0, (first_assignment_pattern.clone(), first_assignment_expr));
+
+                    value(Expr::Assign(assignments, Box::new(in_expr))).right()
+                }
+            }).right()
+        }
+    })
 }
 
 pub fn func_or_var<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
@@ -504,8 +543,8 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             // Use optional(sep_by1()) over sep_by() to avoid
             // allocating a Vec in the common case where this is a var
             match opt_args {
-                None => Expr::Var(name),
-                Some(args) => Expr::CallByName(name, args)
+                None => Expr::Var(Ident::Unqualified(name)),
+                Some(args) => Expr::CallByName(Ident::Unqualified(name), args)
             }
         })
 }
@@ -543,7 +582,7 @@ parser! {
             string("{}").map(|_| Pattern::EmptyRecordLiteral),
             match_variant(min_indent),
             int_or_frac_pattern(), // This goes before ident() so number literals aren't mistaken for malformed idents.
-            ident().map(|name| Pattern::Identifier(name)),
+            ident().map(Pattern::Identifier),
         ))
     }
 }
@@ -555,7 +594,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     attempt(variant_name())
         .and(optional(attempt(apply_args(min_indent))))
         .map(|(name, opt_args): (String, Option<Vec<Located<Expr>>>)|
-            Expr::ApplyVariant(name, opt_args)
+            Expr::ApplyVariant(VariantName::Unqualified(name), opt_args)
         )
 }
 
@@ -563,7 +602,7 @@ pub fn match_variant<I>(min_indent: u32) -> impl Parser<Input = I, Output = Patt
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    attempt(variant_name())
+    attempt(located(variant_name()))
         .and(optional(attempt(
             indented_whitespaces(min_indent)
             .with(
@@ -575,10 +614,13 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                     )
                 )
         ))))
-        .map(|(name, opt_args): (String, Option<Vec<Located<Pattern>>>)|
+        .map(|(loc_name, opt_args): (Located<String>, Option<Vec<Located<Pattern>>>)|
             // Use optional(sep_by1()) over sep_by() to avoid
             // allocating a Vec in case the variant is empty
-            Pattern::Variant(name, opt_args)
+            Pattern::Variant(
+                Located { region: loc_name.region, value: VariantName::Unqualified(loc_name.value)},
+                opt_args
+            )
         )
 }
 
@@ -627,7 +669,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     between(char('"'), char('"'),
-        many::<Vec<(String, Located<Ident>)>, _>(
+        many::<Vec<(String, Located<String>)>, _>(
             choice((
                 // Handle the edge cases where the interpolation happens
                 // to be at the very beginning of the string literal,
@@ -652,21 +694,28 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         match pairs.pop() {
             None => Expr::EmptyStr,
             Some(( trailing_str, located_name )) => {
+                let mut ident_pairs = pairs.into_iter().map(|(string, located_name)| {
+                    ( string, located_name.map(|name| Ident::Unqualified(name.clone())) )
+                }).collect::<Vec<(String, Located<Ident>)>>();
+
                 if located_name.value.is_empty() {
-                    if pairs.is_empty() {
+                    if ident_pairs.is_empty() {
                         // We didn't find any interpolation at all. This is a string literal!
                         Expr::Str(trailing_str.to_string())
                     } else {
-                        Expr::InterpolatedStr(pairs, trailing_str.to_string())
+                        Expr::InterpolatedStr(ident_pairs, trailing_str.to_string())
                     }
                 } else {
                     // This is an interpolated string where the interpolation
                     // happened to occur at the very end of the literal.
 
                     // Put the tuple back.
-                    pairs.push(( trailing_str, located_name ));
+                    ident_pairs.push((
+                        trailing_str,
+                        located_name.map(|name| Ident::Unqualified(name.clone()))
+                    ));
 
-                    Expr::InterpolatedStr(pairs, "".to_string())
+                    Expr::InterpolatedStr(ident_pairs, "".to_string())
                 }
             }
         }
@@ -938,7 +987,6 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             }
         })
 }
-
 
 pub fn int_or_frac_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
