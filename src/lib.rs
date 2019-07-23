@@ -4,6 +4,7 @@ pub mod parse_state;
 // pub mod eval;
 pub mod operator;
 pub mod region;
+pub mod canonicalize;
 mod collections;
 // mod ena;
 
