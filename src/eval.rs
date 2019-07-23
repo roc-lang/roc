@@ -1,17 +1,17 @@
-use expr::{Expr, Pattern, Ident};
+use expr::{Expr, Ident, Pattern, VariantName};
 use expr::Pattern::*;
 use expr;
 use operator::Operator::*;
 use operator::Operator;
 use std::rc::Rc;
 use std::fmt;
-use im_rc::hashmap::HashMap;
+use collections::ImMap;
 use self::Problem::*;
 use fraction::Fraction;
 use region::{Located, Region};
 
 pub fn eval(expr: Located<Expr>) -> Evaluated {
-    scoped_eval(prepare_for_eval(expr), &HashMap::new())
+    scoped_eval(prepare_for_eval(expr), &ImMap::default())
 }
 
 fn prepare_for_eval(expr: Located<Expr>) -> Located<Expr> {
@@ -31,7 +31,7 @@ pub enum Evaluated {
     Closure(Vec<Pattern>, Box<Located<Expr>>, Scope),
 
     // Sum Types
-    ApplyVariant(String, Option<Vec<Evaluated>>),
+    ApplyVariant(VariantName, Option<Vec<Evaluated>>),
 
     // Product Types
     EmptyRecord,
@@ -50,7 +50,7 @@ pub enum Problem {
     NoBranchesMatched,
 }
 
-type Scope = HashMap<String, Rc<Evaluated>>;
+type Scope = ImMap<String, Rc<Evaluated>>;
 
 pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
     use self::Evaluated::*;
@@ -68,16 +68,22 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
         Expr::EmptyRecord => EmptyRecord,
 
         // Resolve variable names
-        Expr::Var(name) => match vars.get(&name) {
-            Some(resolved) => (**resolved).clone(),
-            None => EvalError(region, UnrecognizedVarName(name))
-        },
+        Expr::Var(ident) => {
+            let ident_name = ident.name();
+
+            match vars.get(&ident_name) {
+                Some(resolved) => (**resolved).clone(),
+                None => EvalError(region, UnrecognizedVarName(ident_name))
+            }
+        }
 
         Expr::InterpolatedStr(pairs, trailing_str) => {
             let mut output = String::new();
 
-            for (string, var_name) in pairs.into_iter() {
-                match vars.get(&var_name.value) {
+            for (string, loc_ident) in pairs.into_iter() {
+                let ident_name = loc_ident.value.name();
+
+                match vars.get(&ident_name) {
                     Some(resolved) => {
                         match **resolved {
                             Str(ref var_string) => {
@@ -85,11 +91,11 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
                                 output.push_str(var_string.as_str());
                             },
                             _ => {
-                                return EvalError(region, TypeMismatch(var_name.value));
+                                return EvalError(region, TypeMismatch(ident_name));
                             }
                         }
                     },
-                    None => { return EvalError(region, UnrecognizedVarName(var_name.value)); }
+                    None => { return EvalError(region, UnrecognizedVarName(ident_name)); }
                 }
             }
 
@@ -102,10 +108,12 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
             eval_assign(located_pattern, *assigned_expr, *returned_expr, vars)
         }
 
-        Expr::CallByName(name, args) => {
-            let func_expr = match vars.get(&name) {
+        Expr::CallByName(ident, args) => {
+            let ident_name = ident.name();
+
+            let func_expr = match vars.get(&ident_name) {
                 Some(resolved) => (**resolved).clone(),
-                None => EvalError(region, UnrecognizedVarName(name))
+                None => EvalError(region, UnrecognizedVarName(ident_name))
             };
 
             eval_apply(region, func_expr, args, vars)
@@ -140,7 +148,7 @@ pub fn scoped_eval(expr: Located<Expr>, vars: &Scope) -> Evaluated {
         Expr::If(condition, if_true, if_false) => {
             match scoped_eval(*condition, vars) {
                 ApplyVariant(variant_name, None) => {
-                    match variant_name.as_str() {
+                    match variant_name.name().as_str() {
                         "True" => scoped_eval(*if_true, vars),
                         "False" => scoped_eval(*if_false, vars),
                         _ => EvalError(region, TypeMismatch("non-Bool used in `if` condition".to_string()))
@@ -158,15 +166,17 @@ fn eval_assign(pattern: Located<Pattern>, assigned_expr: Located<Expr>, returned
     let pattern_region = pattern.region;
 
     match pattern.value {
-        Identifier(name) => {
-            if vars.contains_key(&name) {
-                EvalError(pattern_region, ReassignedVarName(name))
+        Identifier(ident) => {
+            let ident_name = ident.name();
+
+            if vars.contains_key(&ident_name) {
+                EvalError(pattern_region, ReassignedVarName(ident_name))
             } else {
                 // Create a new scope containing the new declaration.
                 let mut new_vars = vars.clone();
                 let evaluated_defn = scoped_eval(assigned_expr, vars);
 
-                new_vars.insert(name, Rc::new(evaluated_defn));
+                new_vars.insert(ident_name, Rc::new(evaluated_defn));
 
                 // Evaluate in_expr with that new scope's variables.
                 scoped_eval(returned_expr, &new_vars)
@@ -243,9 +253,9 @@ fn eval_closure(args: Vec<Evaluated>, arg_patterns: Vec<Pattern>, vars: &Scope)
 
 fn bool_variant(is_true: bool) -> Evaluated {
     if is_true {
-        Evaluated::ApplyVariant("True".to_string(), None)
+        Evaluated::ApplyVariant(VariantName::Unqualified("True".to_string()), None)
     } else {
-        Evaluated::ApplyVariant("False".to_string(), None)
+        Evaluated::ApplyVariant(VariantName::Unqualified("False".to_string()), None)
     }
 }
 
@@ -281,13 +291,11 @@ fn eq(region: Region, evaluated1: &Evaluated, evaluated2: &Evaluated) -> Evaluat
     }
 }
 
-fn bool_from_variant_name(name: &str) -> Option<bool> {
-    if name == "True" {
-        Some(true)
-    } else if name == "False" {
-        Some(false)
-    } else {
-        None
+fn bool_from_variant_name(name: &VariantName) -> Option<bool> {
+    match name.clone().name().as_str() {
+        "True" => Some(true),
+        "False" => Some(false),
+        _ => None
     }
 }
 
@@ -389,7 +397,7 @@ fn eval_operator(region: Region, left_expr: &Evaluated, op: Operator, right_expr
             if answer.is_finite() {
                 ok_variant(Frac(answer))
             } else {
-                err_variant(ApplyVariant("DivisionByZero".to_string(), None))
+                err_variant(ApplyVariant(VariantName::Unqualified("DivisionByZero".to_string()), None))
             }
         },
 
@@ -417,7 +425,7 @@ fn eval_operator(region: Region, left_expr: &Evaluated, op: Operator, right_expr
             if answer.is_finite() {
                 ok_variant(Approx(answer))
             } else {
-                err_variant(ApplyVariant("DivisionByZero".to_string(), None))
+                err_variant(ApplyVariant(VariantName::Unqualified("DivisionByZero".to_string()), None))
             }
         },
 
@@ -439,7 +447,7 @@ fn eval_operator(region: Region, left_expr: &Evaluated, op: Operator, right_expr
             if answer.is_finite() {
                 ok_variant(Frac(answer))
             } else {
-                err_variant(ApplyVariant("DivisionByZero".to_string(), None))
+                err_variant(ApplyVariant(VariantName::Unqualified("DivisionByZero".to_string()), None))
             }
         },
 
@@ -455,14 +463,14 @@ fn eval_operator(region: Region, left_expr: &Evaluated, op: Operator, right_expr
 }
 
 #[inline(always)]
-fn eval_case(region: Region, evaluated: Evaluated, branches: Vec<(Located<Pattern>, Box<Located<Expr>>)>, vars: &Scope) -> Evaluated {
+fn eval_case(region: Region, evaluated: Evaluated, branches: Vec<(Located<Pattern>, Located<Expr>)>, vars: &Scope) -> Evaluated {
     use self::Evaluated::*;
 
     for (pattern, definition) in branches {
         let mut branch_vars = vars.clone();
 
         if pattern_match(&evaluated, &pattern.value, &mut branch_vars).is_ok() {
-            return scoped_eval(*definition, &branch_vars);
+            return scoped_eval(definition, &branch_vars);
         }
     }
 
@@ -474,7 +482,7 @@ fn pattern_match(evaluated: &Evaluated, pattern: &Pattern, vars: &mut Scope) -> 
 
     match pattern {
         Identifier(name) => {
-            vars.insert(name.clone(), Rc::new(evaluated.clone()));
+            vars.insert(name.clone().name(), Rc::new(evaluated.clone()));
 
             Ok(())
         },
@@ -611,7 +619,7 @@ impl fmt::Display for Evaluated {
             Closure(args, _, _) => write!(f, "<{}-argument function>", args.len()),
             ApplyVariant(name, opt_exprs) => {
                 match opt_exprs {
-                    None => write!(f, "{}", name),
+                    None => write!(f, "{}", name.clone().name()),
                     Some(exprs) => {
                         let contents =
                             exprs.into_iter()
@@ -619,7 +627,7 @@ impl fmt::Display for Evaluated {
                                 .collect::<Vec<_>>()
                                 .join(",");
 
-                        write!(f, "{}{}", name, contents)
+                        write!(f, "{}{}", name.clone().name(), contents)
                     }
                 }
             },
@@ -653,11 +661,11 @@ impl fmt::Display for Problem {
 }
 
 fn ok_variant(contents: Evaluated) -> Evaluated{
-    Evaluated::ApplyVariant("Ok".to_string(), Some(vec![contents]))
+    Evaluated::ApplyVariant(VariantName::Unqualified("Ok".to_string()), Some(vec![contents]))
 }
 
 fn err_variant(contents: Evaluated) -> Evaluated {
-    Evaluated::ApplyVariant("Err".to_string(), Some(vec![contents]))
+    Evaluated::ApplyVariant(VariantName::Unqualified("Err".to_string()), Some(vec![contents]))
 }
 
 fn fraction_from_i64s(numerator: i64, denominator: i64) -> Fraction {
