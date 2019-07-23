@@ -432,17 +432,17 @@ impl<T> Fraction<T> {
     /// Otherwise, return None.
     pub fn into_valid<V>(self) -> Option<Fraction<Valid>> {
         if self.is_valid() {
-            Some(unsafe { std::mem::transmute::<Fraction<T>, Fraction<Valid>>(self) })
+            Some(Fraction {numerator: self.numerator, denominator: self.denominator, phantom: PhantomData})
         } else {
             None
         }
     }
 
-    /// If the fraction is valid, returns it with the type variable set accordingly.
-    /// Otherwise, returns the fallback value.
+    /// If the fraction is valid, return it with the type variable set accordingly.
+    /// Otherwise, return the fallback value.
     pub fn valid_or<V>(self, fallback: V) -> Result<Fraction<Valid>, V> {
         if self.is_valid() {
-            Ok(unsafe { std::mem::transmute::<Fraction<T>, Fraction<Valid>>(self) })
+            Ok(Fraction {numerator: self.numerator, denominator: self.denominator, phantom: PhantomData})
         } else {
             Err(fallback)
         }
@@ -452,7 +452,7 @@ impl<T> Fraction<T> {
     where F: Fn() -> V
     {
         if self.is_valid() {
-            Ok(unsafe { std::mem::transmute::<Fraction<T>, Fraction<Valid>>(self) })
+            Ok(Fraction {numerator: self.numerator, denominator: self.denominator, phantom: PhantomData})
         } else {
             Err(fallback_fn())
         }
@@ -578,22 +578,14 @@ impl<T> Fraction<T> {
         self_numerator.cmp(&other_numerator)
     }
 
-    /// If the Frac is valid, transforms it with the given function.
-    /// If the Frac is invalid, returns it unchanged.
-    pub fn map<F>(self, transform: F) -> Self
-    where F: FnOnce(Fraction<Valid>) -> Fraction<Valid>
-    {
-        if self.is_valid() {
-            unsafe {
-                std::mem::transmute::<Fraction<Valid>, Fraction<T>>(
-                    transform(
-                        std::mem::transmute::<Fraction<T>, Fraction<Valid>>(self)
-                    )
-                )
-            }
-        } else {
-            self
-        }
+    #[inline(always)]
+    pub fn numerator(&self) -> i64 {
+        self.numerator
+    }
+
+    #[inline(always)]
+    pub fn denominator(&self) -> i64 {
+        self.denominator
     }
 }
 
