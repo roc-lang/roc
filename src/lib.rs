@@ -5,7 +5,7 @@ pub mod parse_state;
 pub mod operator;
 pub mod region;
 pub mod canonicalize;
-mod collections;
+pub mod collections;
 // mod ena;
 
 // #[macro_use]

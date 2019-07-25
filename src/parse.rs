@@ -394,10 +394,11 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                                 string("then"),
                                 string("else"),
                                 string("when"),
+                                eof().with(value(""))
                             ))
                         )
                     )
-                ),
+                )
             )
         )
     )
@@ -538,7 +539,7 @@ pub fn func_or_var<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    ident().and(optional(attempt(apply_args(min_indent))))
+    ident().and(optional(apply_args(min_indent)))
         .map(|(name, opt_args): (String, Option<Vec<Located<Expr>>>)| {
             // Use optional(sep_by1()) over sep_by() to avoid
             // allocating a Vec in the common case where this is a var
@@ -559,10 +560,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         .with(
             sep_by1(
                 located(pattern(min_indent)),
-                attempt(many1::<Vec<_>, _>(skipped_indented_whitespace_char(min_indent).skip(not_followed_by(string("=>")))))
+                attempt(many1::<Vec<_>, _>(skipped_indented_whitespace_char(min_indent).skip(not_followed_by(string("->")))))
             ))
         .skip(indented_whitespaces(min_indent))
-        .skip(string("=>"))
+        .skip(string("->"))
         .skip(indented_whitespaces1(min_indent))
     .and(located(expr_body(min_indent)))
     .map(|(patterns, closure_body)| {

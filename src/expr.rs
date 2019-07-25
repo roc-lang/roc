@@ -57,6 +57,10 @@ pub enum Ident {
 pub struct Path(String);
 
 impl Path {
+    pub fn new(string: String) -> Path {
+        Path(string)
+    }
+
     pub fn into_string(self) -> String {
         let Path(str) = self;
 
