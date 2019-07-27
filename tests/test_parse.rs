@@ -9,10 +9,9 @@ mod helpers;
 mod test_parse {
     use roc::expr::Expr::*;
     use roc::expr::Pattern::*;
-    use roc::expr::{Expr, Pattern, Ident, VariantName};
-    use roc::expr;
+    use roc::expr::{Expr, Ident, VariantName};
     use roc::operator::Operator::*;
-    use roc::region::{Located, Region};
+    use roc::region::Located;
     use roc::parse;
     use roc::parse_state::{IndentablePosition};
     use combine::{Parser, eof};
@@ -20,7 +19,7 @@ mod test_parse {
     use combine::stream::{Stream};
     use combine::easy;
     use combine::stream::state::{State};
-    use helpers::{loc, loc_box, zero_loc_expr, zero_loc_pattern};
+    use helpers::{loc, loc_box, zero_loc_expr};
 
     // PARSE TEST HELPERS
 
