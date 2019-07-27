@@ -1044,400 +1044,398 @@ mod test_parse {
         );
     }
 
-    // // VARIANT
+    // VARIANT
 
-    // #[test]
-    // fn basic_variant() {
-    //     assert_eq!(
-    //         parse_without_loc("Abc"),
-    //         Ok((
-    //             ApplyVariant(vname("Abc"), None),
-    //             ""
-    //         ))
-    //     );
-    // }
+    #[test]
+    fn basic_variant() {
+        assert_eq!(
+            parse_without_loc("Abc"),
+            Ok((
+                ApplyVariant(vname("Abc"), None),
+                "".to_string()
+            ))
+        );
+    }
 
-    // #[test]
-    // fn variant_with_one_arg() {
-    //     assert_eq!(
-    //         parse_without_loc("Bbc 1"),
-    //         Ok((
-    //             ApplyVariant(vname("Bbc"), Some(vec![loc(Int(1))])),
-    //             ""
-    //         ))
-    //     );
-    // }
+    #[test]
+    fn variant_with_one_arg() {
+        assert_eq!(
+            parse_without_loc("Bbc 1"),
+            Ok((
+                ApplyVariant(vname("Bbc"), Some(vec![loc(Int(1))])),
+                "".to_string()
+            ))
+        );
+    }
 
-    // #[test]
-    // fn variant_with_two_args() {
-    //     assert_eq!(
-    //         parse_without_loc("Bbc 1 2"),
-    //         Ok((
-    //             ApplyVariant(vname("Bbc"), Some(vec![loc(Int(1)), loc(Int(2))])),
-    //             ""
-    //         ))
-    //     );
-    // }
+    #[test]
+    fn variant_with_two_args() {
+        assert_eq!(
+            parse_without_loc("Bbc 1 2"),
+            Ok((
+                ApplyVariant(vname("Bbc"), Some(vec![loc(Int(1)), loc(Int(2))])),
+                "".to_string()
+            ))
+        );
+    }
 
-    // #[test]
-    // fn variant_regression() {
-    //     // Somehow parsing the variant "Abc" worked but "Foo" failed (?!)
-    //     assert_eq!(
-    //         parse_without_loc("F"),
-    //         Ok((
-    //             ApplyVariant(vname("F"), None),
-    //             ""
-    //         ))
-    //     );
-    // }
+    #[test]
+    fn variant_regression() {
+        // Somehow parsing the variant "Abc" worked but "Foo" failed (?!)
+        assert_eq!(
+            parse_without_loc("F"),
+            Ok((
+                ApplyVariant(vname("F"), None),
+                "".to_string()
+            ))
+        );
+    }
 
+    // COMPLEX EXPRESSIONS
 
-    // // COMPLEX EXPRESSIONS
+    #[test]
+    fn nested_let_variant() {
+        assert_eq!(
+            parse_without_loc("one = Abc\n\ntwo = Bar\n\none"),
+            Ok((
+                Assign(vec![
+                    (
+                        loc(Identifier(
+                            "one".to_string()
+                        )),
+                        loc(ApplyVariant(
+                            vname("Abc"),
+                            None
+                        )),
+                    ),
+                    (
+                        loc(Identifier(
+                            "two".to_string()
+                        )),
+                        loc(ApplyVariant(
+                            vname("Bar"),
+                            None
+                        )),
+                    )],
+                    loc_box(var("one"))
+                ),
+                "".to_string()
+            ))
+        );
+    }
 
-    // #[test]
-    // fn nested_let_variant() {
-    //     assert_eq!(
-    //         parse_without_loc("one = Abc\n\ntwo = Bar\n\none"),
-    //         Ok((
-    //             Assign(vec![
-    //                 (
-    //                     loc(Identifier(
-    //                         "one".to_string()
-    //                     )),
-    //                     loc(ApplyVariant(
-    //                         vname("Abc"),
-    //                         None
-    //                     )),
-    //                 ),
-    //                 (
-    //                     loc(Identifier(
-    //                         "two".to_string()
-    //                     )),
-    //                     loc(ApplyVariant(
-    //                         vname("Bar"),
-    //                         None
-    //                     )),
-    //                 )],
-    //                 loc_box(var("one"))
-    //             ),
-    //             ""
-    //         ))
-    //     );
-    // }
+    #[test]
+    fn complex_expressions() {
+        expect_parsed_apply(
+            "(x 5) (y + (f 6))",
+            call_by_name("x", vec![loc(Int(5))]),
+            Operator(
+                loc_box(var("y")),
+                loc(Plus),
+                loc_box(call_by_name("f", vec![loc(Int(6))])),
+            )
+        );
 
-    // #[test]
-    // fn complex_expressions() {
-    //     expect_parsed_apply(
-    //         "(x 5) (y + (f 6))",
-    //         call_by_name("x", vec![loc(Int(5))]),
-    //         Operator(
-    //             loc_box(var("y")),
-    //             loc(Plus),
-    //             loc_box(call_by_name("f", vec![loc(Int(6))])),
-    //         )
-    //     );
+        assert_eq!(
+            parse_without_loc("(x 5)"),
+            Ok((
+                call_by_name("x", vec![loc(Int(5))]),
+                "".to_string())
+            )
+        );
 
-    //     assert_eq!(
-    //         parse_without_loc("(x 5)"),
-    //         Ok((
-    //             call_by_name("x", vec![loc(Int(5))]),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            parse_without_loc("(5)"),
+            Ok((
+                Int(5),
+                "".to_string())
+            )
+        );
 
-    //     assert_eq!(
-    //         parse_without_loc("(5)"),
-    //         Ok((
-    //             Int(5),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            parse_without_loc("((1905))"),
+            Ok((
+                Int(1905),
+                "".to_string())
+            )
+        );
 
-    //     assert_eq!(
-    //         parse_without_loc("((1905))"),
-    //         Ok((
-    //             Int(1905),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            parse_without_loc("6 + (685)"),
+            Ok((
+                Operator(
+                    loc_box(Int(6)),
+                    loc(Plus),
+                    loc_box(Int(685))
+                ),
+                "".to_string())
+            )
+        );
 
-    //     assert_eq!(
-    //         parse_without_loc("6 + (685)"),
-    //         Ok((
-    //             Operator(
-    //                 loc_box(Int(6)),
-    //                 loc(Plus),
-    //                 loc_box(Int(685))
-    //             ),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            parse_without_loc("12 + 34"),
+            Ok((
+                Operator(
+                    loc_box(Int(12)),
+                    loc(Plus),
+                    loc_box(Int(34))
+                ),
+                "".to_string())
+            )
+        );
 
-    //     assert_eq!(
-    //         parse_without_loc("12 + 34"),
-    //         Ok((
-    //             Operator(
-    //                 loc_box(Int(12)),
-    //                 loc(Plus),
-    //                 loc_box(Int(34))
-    //             ),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            parse_without_loc("(51) + 19"),
+            Ok((
+                Operator(
+                    loc_box(Int(51)),
+                    loc(Plus),
+                    loc_box(Int(19))
+                ),
+                "".to_string())
+            )
+        );
 
-    //     assert_eq!(
-    //         parse_without_loc("(51) + 19"),
-    //         Ok((
-    //             Operator(
-    //                 loc_box(Int(51)),
-    //                 loc(Plus),
-    //                 loc_box(Int(19))
-    //             ),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            parse_without_loc("(x 5) + 123"),
+            Ok((
+                Operator(
+                    loc_box(call_by_name("x", vec![loc(Int(5))])),
+                    loc(Plus),
+                    loc_box(Int(123))
+                ),
+                "".to_string())
+            )
+        );
 
-    //     assert_eq!(
-    //         parse_without_loc("(x 5) + 123"),
-    //         Ok((
-    //             Operator(
-    //                 loc_box(call_by_name("x", vec![loc(Int(5))])),
-    //                 loc(Plus),
-    //                 loc_box(Int(123))
-    //             ),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            parse_without_loc("(x 5) + (2 * y)"),
+            Ok((
+                Operator(
+                    loc_box(call_by_name("x", vec![loc(Int(5))])),
+                    loc(Plus),
+                    loc_box(
+                        Operator(
+                            loc_box(Int(2)),
+                            loc(Star),
+                            loc_box(var("y"))
+                        )
+                    )
+                ),
+                "".to_string())
+            )
+        );
+    }
 
-    //     assert_eq!(
-    //         parse_without_loc("(x 5) + (2 * y)"),
-    //         Ok((
-    //             Operator(
-    //                 loc_box(call_by_name("x", vec![loc(Int(5))])),
-    //                 loc(Plus),
-    //                 loc_box(
-    //                     Operator(
-    //                         loc_box(Int(2)),
-    //                         loc(Star),
-    //                         loc_box(var("y"))
-    //                     )
-    //                 )
-    //             ),
-    //             "")
-    //         )
-    //     );
-    // }
+    // ASSIGN
 
-    // // ASSIGN
+    #[test]
+    fn assign_with_function_application() {
+        assert_eq!(
+            parse_without_loc("abc =\n  y 1\n\nabc"),
+            Ok((
+                Assign(vec![(
+                    loc(Identifier(
+                        "abc".to_string()
+                    )),
+                    loc(call_by_name(
+                        "y",
+                        vec![
+                            loc(Int(
+                                1
+                            ))
+                        ]
+                    ))
+                    )],
+                    loc_box(var("abc"))
+                ),
+                "".to_string()
+            ))
+        )
+    }
 
-    // #[test]
-    // fn assign_with_function_application() {
-    //     assert_eq!(
-    //         parse_without_loc("abc =\n  y 1\n\nabc"),
-    //         Ok((
-    //             Assign(vec![(
-    //                 loc(Identifier(
-    //                     "abc".to_string()
-    //                 )),
-    //                 loc(call_by_name(
-    //                     "y",
-    //                     vec![
-    //                         loc(Int(
-    //                             1
-    //                         ))
-    //                     ]
-    //                 ))
-    //                 )],
-    //                 loc_box(var("abc"))
-    //             ),
-    //             ""
-    //         ))
-    //     )
-    // }
+    #[test]
+    fn assign_returning_number() {
+        assert_eq!(
+            // let x = 5 in -10
+            parse_without_loc("x = 5\n-10"),
+            Ok((
+                Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(Int(-10))),
+                "".to_string())
+            )
+        );
 
-    // #[test]
-    // fn assign_returning_number() {
-    //     assert_eq!(
-    //         // let x = 5 in -10
-    //         parse_without_loc("x = 5\n-10"),
-    //         Ok((
-    //             Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(Int(-10))),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            // let x = 5 in 10
+            parse_without_loc("x=5\n-10"),
+            Ok((
+                Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(Int(-10))),
+                "".to_string())
+            )
+        );
+    }
 
-    //     assert_eq!(
-    //         // let x = 5 in 10
-    //         parse_without_loc("x=5\n-10"),
-    //         Ok((
-    //             Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(Int(-10))),
-    //             "")
-    //         )
-    //     );
-    // }
+    #[test]
+    fn assign_with_operator() {
+        assert_eq!(
+            // let x = 5 + 10 in -20
+            parse_without_loc("x =(5 + 10)\n-20"),
+            Ok((
+                Assign(
+                    vec![(
+                        loc(Identifier("x".to_string())),
+                        loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
+                    )],
+                    loc_box(Int(-20))),
+                "".to_string())
+            )
+        );
 
-    // #[test]
-    // fn assign_with_operator() {
-    //     assert_eq!(
-    //         // let x = 5 + 10 in -20
-    //         parse_without_loc("x =(5 + 10)\n-20"),
-    //         Ok((
-    //             Assign(
-    //                 vec![(
-    //                     loc(Identifier("x".to_string())),
-    //                     loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
-    //                 )],
-    //                 loc_box(Int(-20))),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            // let x = 5 + 10 in -20
+            parse_without_loc("x=  5  +  10\n-20"),
+            Ok((
+                Assign(
+                    vec![(
+                        loc(Identifier("x".to_string())),
+                        loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
+                    )],
+                    loc_box(Int(-20))),
+                "".to_string())
+            )
+        );
 
-    //     assert_eq!(
-    //         // let x = 5 + 10 in -20
-    //         parse_without_loc("x=  5  +  10\n-20"),
-    //         Ok((
-    //             Assign(
-    //                 vec![(
-    //                     loc(Identifier("x".to_string())),
-    //                     loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
-    //                 )],
-    //                 loc_box(Int(-20))),
-    //             "")
-    //         )
-    //     );
+        assert_eq!(
+            // let x = 5 + 10 in -20
+            parse_without_loc("x=5\n    + 10\n-20"),
+            Ok((
+                Assign(
+                    vec![(
+                        loc(Identifier("x".to_string())),
+                        loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
+                    )],
+                    loc_box(Int(-20))),
+                "".to_string())
+            )
+        );
+    }
 
-    //     assert_eq!(
-    //         // let x = 5 + 10 in -20
-    //         parse_without_loc("x=5\n    + 10\n-20"),
-    //         Ok((
-    //             Assign(
-    //                 vec![(
-    //                     loc(Identifier("x".to_string())),
-    //                     loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
-    //                 )],
-    //                 loc_box(Int(-20))),
-    //             "")
-    //         )
-    //     );
-    // }
+    #[test]
+    fn invalid_assign_returning_number() {
+        assert!(
+            parse_without_loc("x=5\n    -10").is_err(),
+            "Expected parsing error"
+        );
+    }
 
-    // #[test]
-    // fn invalid_assign_returning_number() {
-    //     assert!(
-    //         parse_without_loc("x=5\n    -10").is_err(),
-    //         "Expected parsing error"
-    //     );
-    // }
+    #[test]
+    fn assign_multiple() {
+        assert_fully_parses(
+            indoc!(r#"
+                x = 5
+                y = 12
+                z = 7
+                3
+            "#),
+            Assign(
+                vec![
+                    (
+                        loc(Identifier("x".to_string())),
+                        loc(Int(5))
+                    ),
+                    (
+                        loc(Identifier("y".to_string())),
+                        loc(Int(12))
+                    ),
+                    (
+                        loc(Identifier("z".to_string())),
+                        loc(Int(7))
+                    )
+                ],
+                loc_box(Int(3))
+            )
+        );
 
-    // #[test]
-    // fn assign_multiple() {
-    //     assert_fully_parses(
-    //         indoc!(r#"
-    //             x = 5
-    //             y = 12
-    //             z = 7
-    //             3
-    //         "#),
-    //         Assign(
-    //             vec![
-    //                 (
-    //                     loc(Identifier("x".to_string())),
-    //                     loc(Int(5))
-    //                 ),
-    //                 (
-    //                     loc(Identifier("y".to_string())),
-    //                     loc(Int(12))
-    //                 ),
-    //                 (
-    //                     loc(Identifier("z".to_string())),
-    //                     loc(Int(7))
-    //                 )
-    //             ],
-    //             loc_box(Int(3))
-    //         )
-    //     );
-    // }
+        assert_eq!(
+            // let x = 5 in let y = 12 in 3
+            parse_without_loc("x = 5 - -3\ny = 12 + 7\n3 * -5"),
+            Ok((
+                Assign(
+                    vec![
+                        (
+                            loc(Identifier("x".to_string())),
+                            loc(
+                                Operator(
+                                    loc_box(Int(5)), loc(Minus), loc_box(Int(-3))
+                                )
+                            )
+                        ),
+                        (
+                            loc(Identifier("y".to_string())),
+                            loc(Operator(
+                                loc_box(Int(12)), loc(Plus), loc_box(Int(7))
+                            ))
+                        )
+                    ],
+                    loc_box(Operator(
+                        loc_box(Int(3)), loc(Star), loc_box(Int(-5))
+                    )),
+                    ),
+                "".to_string())
+            )
+        );
+    }
 
-    //     assert_eq!(
-    //         // let x = 5 in let y = 12 in 3
-    //         parse_without_loc("x = 5 - -3\ny = 12 + 7\n3 * -5"),
-    //         Ok((
-    //             Assign(
-    //                 vec![
-    //                     (
-    //                         loc(Identifier("x".to_string())),
-    //                         loc(
-    //                             Operator(
-    //                                 loc_box(Int(5)), loc(Minus), loc_box(Int(-3))
-    //                             )
-    //                         )
-    //                     ),
-    //                     (
-    //                         loc(Identifier("y".to_string())),
-    //                         loc(Operator(
-    //                             loc_box(Int(12)), loc(Plus), loc_box(Int(7))
-    //                         ))
-    //                     )
-    //                 ],
-    //                 loc_box(Operator(
-    //                     loc_box(Int(3)), loc(Star), loc_box(Int(-5))
-    //                 )),
-    //                 ),
-    //             "")
-    //         )
-    //     );
-    // }
+    #[test]
+    fn assign_returning_var() {
+        assert_eq!(
+            parse_without_loc("x=5\nx"),
+            Ok((
+                Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(var("x"))),
+                "".to_string()
+            ))
+        );
+    }
 
-    // #[test]
-    // fn assign_returning_var() {
-    //     assert_eq!(
-    //         parse_without_loc("x=5\nx"),
-    //         Ok((
-    //             Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(var("x"))),
-    //             "")
-    //         )
-    //     );
-    // }
+    #[test]
+    fn bad_equals_indent_let() {
+        assert!(
+            parse_without_loc("  x=\n5\n\n5").is_err(),
+            "Expected parsing error"
+        );
+    }
 
-    // #[test]
-    // fn bad_equals_indent_let() {
-    //     assert!(
-    //         parse_without_loc("  x=\n5\n\n5").is_err(),
-    //         "Expected parsing error"
-    //     );
-    // }
+    #[test]
+    fn regression_on_calling_function_named_c() {
+        // This was broken because case-expressions were greedily consuming 'c' characters for "case"
+        assert_eq!(
+            parse_without_loc("f = \\x -> c 1\n\nf"),
+            Ok((
+                Assign(
+                    vec![(
+                        loc(Identifier("f".to_string())),
+                        loc(Closure(
+                            vec![loc(Identifier("x".to_string()))],
+                            loc_box(call_by_name("c", vec![loc(Int(1))]))
+                        )),
+                    )],
+                    loc_box(var("f"))
+                ),
+                "".to_string()
+            ))
+        );
+    }
 
-    // #[test]
-    // fn regression_on_calling_function_named_c() {
-    //     // This was broken because case-expressions were greedily consuming 'c' characters for "case"
-    //     assert_eq!(
-    //         parse_without_loc("f = \\x -> c 1\n\nf"),
-    //         Ok((
-    //             Assign(
-    //                 vec![(
-    //                     loc(Identifier("f".to_string())),
-    //                     loc(Closure(
-    //                         vec![loc(Identifier("x".to_string()))],
-    //                         loc_box(call_by_name("c", vec![loc(Int(1))]))
-    //                     )),
-    //                 )],
-    //                 loc_box(var("f"))
-    //             ),
-    //             ""
-    //         ))
-    //     );
-    // }
-
-    // #[test]
-    // fn regression_on_passing_arguments_named_i() {
-    //     // This was broken because if-expressions were greedily consuming 'i' characters for "if"
-    //     assert_eq!(
-    //         parse_without_loc("x i"),
-    //         Ok((
-    //             call_by_name("x", vec![loc(var("i"))]),
-    //             ""
-    //         ))
-    //     );
-    // }
+    #[test]
+    fn regression_on_passing_arguments_named_i() {
+        // This was broken because if-expressions were greedily consuming 'i' characters for "if"
+        assert_eq!(
+            parse_without_loc("x i"),
+            Ok((
+                call_by_name("x", vec![loc(var("i"))]),
+                "".to_string()
+            ))
+        );
+    }
 
 }
