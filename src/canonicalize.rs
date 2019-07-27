@@ -528,7 +528,12 @@ fn canonicalize(
             let mut combined_idents_in_scope = idents_in_scope.clone().union(new_idents_in_scope.clone());
 
             let can_args = loc_arg_patterns.into_iter().map(|loc_pattern| {
-                canonicalize_pattern(env, loc_pattern, &mut combined_idents_in_scope.clone(), &mut combined_idents_in_scope)
+                // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                let mut shadowable_idents = combined_idents_in_scope.clone();
+                remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
+
+                canonicalize_pattern(env, loc_pattern, &mut combined_idents_in_scope, &mut shadowable_idents)
             }).collect();
 
             let (body_expr, output) = canonicalize(env, *box_loc_body_expr, &combined_idents_in_scope);
@@ -581,6 +586,11 @@ fn canonicalize(
             output.tail_call = None;
 
             let can_branches = branches.into_iter().map(|(loc_pattern, loc_expr)| {
+                // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                let mut shadowable_idents = idents_in_scope.clone();
+                remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
+
                 let can_pattern = canonicalize_pattern(env, loc_pattern.clone(), &mut idents_in_scope.clone(), &mut idents_in_scope.clone());
 
                 // Patterns introduce new idents to the scope!
