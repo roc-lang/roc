@@ -73,22 +73,22 @@ mod test_canonicalize {
         tail_call: Option<Symbol>
     ) {
         assert_eq!(
-            output.applied_variants,
-            ImSet::from(
-                applied_variants.into_iter().map(|(path, str_ref)|
-                    (path, str_ref.to_string())
-                ).collect::<Vec<_>>()
-            )
+            output,
+            Output {
+                referenced_idents:
+                    ImSet::from(
+                        referenced_idents.into_iter().map(|(opt_path, str_ref)|
+                            (opt_path, str_ref.to_string())
+                        ).collect::<Vec<_>>()
+                    ),
+                applied_variants:
+                    ImSet::from(
+                        applied_variants.into_iter().map(|(path, str_ref)|
+                            (path, str_ref.to_string())
+                        ).collect::<Vec<_>>()),
+                tail_call
+            }
         );
-        assert_eq!(
-            output.referenced_idents,
-            ImSet::from(
-                referenced_idents.into_iter().map(|(opt_path, str_ref)|
-                    (opt_path, str_ref.to_string())
-                ).collect::<Vec<_>>()
-            )
-        );
-        assert_eq!(output.tail_call, tail_call);
     }
 
     #[test]
@@ -144,9 +144,8 @@ mod test_canonicalize {
 
     #[test]
     fn can_fibonacci() {
-        return ();
-        let (expr, output, problems) = can_expr(indoc!(r#"
-            fibonacci = \num =>
+        let (_, output, problems) = can_expr(indoc!(r#"
+            fibonacci = \num ->
                 if num < 2 then
                     num
                 else
@@ -155,67 +154,14 @@ mod test_canonicalize {
             fibonacci 9
         "#));
 
-        // assert_eq!(problems, vec![
-        //     Problem::UnrecognizedConstant(loc(Ident::Unqualified("z".to_string())))
-        // ]);
+        assert_eq!(problems, vec![]);
 
-        // assert_eq!(expr,
-        //     Assign(
-        //         vec![
-        //             (loc(Identifier(local_sym("a"))), loc(Int(5))),
-        //             (loc(Identifier(local_sym("b"))), loc(Int(6))),
-        //         ],
-        //         loc_box(Operator(
-        //             loc_box(Var(recognized_local_sym("a"))),
-        //             loc(Plus),
-        //             loc_box(Operator(
-        //                 loc_box(Var(recognized_local_sym("b"))),
-        //                 loc(Star),
-        //                 loc_box(Var(Resolved::UnrecognizedConstant(loc(Ident::Unqualified("z".to_string())))))
-        //             )),
-        //         ))
-        //     )
-        // );
-
-        check_output(output, vec![], vec![(None, "num"), (None, "fibonacci")], None);
+        check_output(output,
+            vec![],
+            vec![(None, "num"), (None, "fibonacci")],
+            Some(local_sym("fibonacci"))
+        );
     }
-
-
-    // #[test]
-    // fn can_fibonacci() {
-    //     let (expr, output, problems) = can_expr(indoc!(r#"
-    //         fibonacci = \num =>
-    //             if num < 2 then
-    //                 num
-    //             else
-    //                 fibonacci (num - 1) + fibonacci (num - 2)
-    //     "#));
-
-    //     assert_eq!(problems, vec![
-    //         Problem::UnrecognizedConstant(loc(Ident::Unqualified("z".to_string())))
-    //     ]);
-
-    //     assert_eq!(expr,
-    //         Assign(
-    //             vec![
-    //                 (loc(Identifier(local_sym("a"))), loc(Int(5))),
-    //                 (loc(Identifier(local_sym("b"))), loc(Int(6))),
-    //             ],
-    //             loc_box(Operator(
-    //                 loc_box(Var(recognized_local_sym("a"))),
-    //                 loc(Plus),
-    //                 loc_box(Operator(
-    //                     loc_box(Var(recognized_local_sym("b"))),
-    //                     loc(Star),
-    //                     loc_box(Var(Resolved::UnrecognizedConstant(loc(Ident::Unqualified("z".to_string())))))
-    //                 )),
-    //             ))
-    //         )
-    //     );
-
-    //     check_output(output, vec![], vec![(None, "a".to_string()), (None, "b".to_string())], None);
-    // }
-
 
 
     // OPERATOR PRECEDENCE

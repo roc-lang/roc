@@ -188,6 +188,7 @@ pub fn canonicalize_declaration(
     (new_loc_expr, output, env.problems)
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct Output {
     pub referenced_idents: ImSet<(Option<Path>, String)>,
     pub applied_variants: ImSet<(Path, String)>,
