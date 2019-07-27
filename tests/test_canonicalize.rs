@@ -143,6 +143,26 @@ mod test_canonicalize {
     }
 
     #[test]
+    fn mutual_unused_vars() {
+        // This should report that both a and b are unused, since the return expr never references them.
+        let (_, output, problems) = can_expr(indoc!(r#"
+            a = \_ -> b + 1
+            b = \_ -> a + 1
+            c = 5
+
+            c
+        "#));
+
+        assert_eq!(problems, vec![
+            // TODO Problem::UnusedAssignment("a")
+            // TODO Problem::UnusedAssignment("b")
+        ]);
+
+        check_output(output, vec![], vec![(None, "c")], None);
+    }
+
+
+    #[test]
     fn can_fibonacci() {
         let (_, output, problems) = can_expr(indoc!(r#"
             fibonacci = \num ->
