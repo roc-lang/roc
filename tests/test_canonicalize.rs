@@ -29,7 +29,7 @@ mod test_canonicalize {
 
     fn can_expr_with(
         expr_str: &str,
-        declared_idents: &ImMap<(Option<Path>, String), Located<expr::Ident>>,
+        declared_idents: &ImMap<Ident, Located<expr::Ident>>,
         declared_variants: &ImMap<(Path, String), Located<expr::VariantName>>,
     ) -> (Expr, Output, Vec<Problem>) {
         let parse_state: State<&str, IndentablePosition> = State::with_positioner(expr_str, IndentablePosition::default());
@@ -66,6 +66,14 @@ mod test_canonicalize {
         LocalSymbol::new(string.to_string())
     }
 
+    fn unqualified(string :&str) -> Ident {
+        Ident::Unqualified(string.to_string())
+    }
+
+    fn unused(string: &str) -> Problem {
+        Problem::UnusedAssignment(loc(unqualified(string)))
+    }
+
     fn check_output(
         output: Output,
         applied_variants: Vec<(Path, &str)>,
@@ -78,13 +86,16 @@ mod test_canonicalize {
                 referenced_idents:
                     ImSet::from(
                         referenced_idents.into_iter().map(|(opt_path, str_ref)|
-                            (opt_path, str_ref.to_string())
+                            match opt_path {
+                                Some(path) => Ident::Qualified(path, str_ref.to_string()),
+                                None => Ident::Unqualified(str_ref.to_string())
+                            }
                         ).collect::<Vec<_>>()
                     ),
                 applied_variants:
                     ImSet::from(
                         applied_variants.into_iter().map(|(path, str_ref)|
-                            (path, str_ref.to_string())
+                            (path, str_ref.to_string()),
                         ).collect::<Vec<_>>()),
                 tail_call
             }
@@ -124,8 +135,8 @@ mod test_canonicalize {
         assert_eq!(expr,
             Assign(
                 vec![
-                    (loc(Identifier(local_sym("a"))), loc(Int(5))),
-                    (loc(Identifier(local_sym("b"))), loc(Int(6))),
+                    (loc(Identifier(local("a"))), loc(Int(5))),
+                    (loc(Identifier(local("b"))), loc(Int(6))),
                 ],
                 loc_box(Operator(
                     loc_box(Var(recognized_local_sym("a"))),
@@ -153,10 +164,7 @@ mod test_canonicalize {
             c
         "#));
 
-        assert_eq!(problems, vec![
-            // TODO Problem::UnusedAssignment("a")
-            // TODO Problem::UnusedAssignment("b")
-        ]);
+        assert_eq!(problems, vec![unused("b"), unused("a")]);
 
         check_output(output, vec![], vec![(None, "c")], None);
     }
@@ -182,6 +190,10 @@ mod test_canonicalize {
             Some(local_sym("fibonacci"))
         );
     }
+
+    // UNSUPPORTED PATTERNS
+
+    // TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
 
 
     // OPERATOR PRECEDENCE

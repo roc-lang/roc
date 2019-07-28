@@ -37,19 +37,35 @@ pub enum Expr {
 /// A variant name, possibly fully-qualified with a module name
 /// e.g. (Result.Ok)
 /// Parameterized on a phantom marker for whether it has been canonicalized
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum VariantName {
     Unqualified(String),
-    Qualified((Path, String)),
+    Qualified(Path, String),
 }
 
 /// An identifier, possibly fully-qualified with a module name
 /// e.g. (Http.Request from http)
 /// Parameterized on a phantom marker for whether it has been canonicalized
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ident {
     Unqualified(String),
-    Qualified((Path, String)),
+    Qualified(Path, String),
+}
+
+impl Ident {
+    pub fn is_qualified(&self) -> bool {
+        match &self {
+            &Ident::Unqualified(_) => false,
+            &Ident::Qualified(_, _) => true,
+        }
+    }
+
+    pub fn name(self) -> String {
+        match self {
+            Ident::Unqualified(name) => name,
+            Ident::Qualified(_, name) => name
+        }
+    }
 }
 
 /// A path to a module, which may include the package it came from.
@@ -86,7 +102,7 @@ impl fmt::Display for Ident {
             Ident::Unqualified(name) => {
                 write!(f, "{}", name)
             },
-            Ident::Qualified((path, name)) => {
+            Ident::Qualified(path, name) => {
                 write!(f, "{}.{}", path.clone().into_string(), name)
             }
         }
@@ -99,7 +115,7 @@ impl fmt::Display for VariantName {
             VariantName::Unqualified(name) => {
                 write!(f, "{}", name)
             },
-            VariantName::Qualified((path, name)) => {
+            VariantName::Qualified(path, name) => {
                 write!(f, "{}.{}", path.clone().into_string(), name)
             }
         }

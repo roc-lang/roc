@@ -2,10 +2,11 @@ use region::{Located, Region};
 use operator::Operator;
 use operator::Operator::Pizza;
 use operator::Associativity::*;
-use collections::{ImSet, ImMap};
+use collections::{ImSet, ImMap, MutMap};
 use std::cmp::Ordering;
 use expr::{Ident, VariantName, Path};
 use expr;
+use self::PatternType::*;
 
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,7 +42,7 @@ pub enum Expr {
     If(Box<Located<Expr>>, Box<Located<Expr>>, Box<Located<Expr>>),
     Operator(Box<Located<Expr>>, Located<Operator>, Box<Located<Expr>>),
 
-    // Runtime Error
+    // Runtime Errors
     InvalidPrecedence(PrecedenceProblem, Box<Located<Expr>>)
 }
 
@@ -49,15 +50,33 @@ pub enum Expr {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
     Shadowing(Located<expr::Ident>),
-    UnrecognizedFunctionName(Located<expr::Ident>),
-    UnrecognizedConstant(Located<expr::Ident>),
-    UnrecognizedVariant(Located<expr::VariantName>),
-    UnusedAssignment(Located<expr::Ident>),
+    UnrecognizedFunctionName(Located<Ident>),
+    UnrecognizedConstant(Located<Ident>),
+    UnrecognizedVariant(Located<VariantName>),
+    UnusedAssignment(Located<Ident>),
     PrecedenceProblem(PrecedenceProblem),
+    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
+    UnsupportedPattern(PatternType, Located<expr::Pattern>)
+}
+
+/// A pattern, including possible problems (e.g. shadowing) so that
+/// codegen can generate a runtime error if this pattern is reached.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pattern {
+    Identifier(LocalSymbol),
+    Variant(Resolved<Symbol>, Option<Vec<Located<Pattern>>>),
+    Integer(i64),
+    Fraction(i64, i64),
+    ExactString(String),
+    EmptyRecordLiteral,
+    Underscore,
+    Shadowed(Located<Ident>),
+    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
+    UnsupportedPattern(Located<expr::Pattern>)
 }
 
 /// An ident or variant name, possibly unrecognized, possibly referring to either a toplevel or local symbol.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Symbol {
     /// An ident or variant name referencing a toplevel declaration.
     Global(GlobalSymbol),
@@ -67,12 +86,20 @@ pub enum Symbol {
 }
 
 /// An ident or variant name in the globlal scope; that is, something defined in the toplevel of some module.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GlobalSymbol(String);
 
 /// An ident referencing a local assignment - *not* something defined in the toplevel.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LocalSymbol(String);
+
+impl Into<Ident> for LocalSymbol {
+    fn into(self) -> Ident {
+        let LocalSymbol(name) = self;
+
+        Ident::Unqualified(name)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Resolved<T> {
@@ -86,12 +113,12 @@ pub enum Resolved<T> {
 }
 
 impl GlobalSymbol {
-    pub fn new((path, name): (Path, String)) -> GlobalSymbol {
+    pub fn new(path: Path, name: String) -> GlobalSymbol {
         GlobalSymbol(format!("{}.{}", path.into_string(), name))
     }
 
-    pub fn recognized(info: (Path, String)) -> Resolved<GlobalSymbol> {
-        Resolved::Recognized(GlobalSymbol::new(info))
+    pub fn recognized(path: Path, name: String) -> Resolved<GlobalSymbol> {
+        Resolved::Recognized(GlobalSymbol::new(path, name))
     }
 }
 
@@ -106,35 +133,21 @@ impl LocalSymbol {
 }
 
 impl Symbol {
-    pub fn resolved_global(info: (Path, String)) -> Resolved<Symbol> {
-        Resolved::Recognized(Symbol::Global(GlobalSymbol::new(info)))
+    pub fn resolved_global(path: Path, name: String) -> Resolved<Symbol> {
+        Resolved::Recognized(Symbol::Global(GlobalSymbol::new(path, name)))
     }
 
     pub fn resolved_local(name: String) -> Resolved<Symbol> {
         Resolved::Recognized(Symbol::Local(LocalSymbol::new(name)))
     }
 
-    pub fn global(info: (Path, String)) -> Symbol {
-        Symbol::Global(GlobalSymbol::new(info))
+    pub fn global(path: Path, name: String) -> Symbol {
+        Symbol::Global(GlobalSymbol::new(path, name))
     }
 
     pub fn local(name: String) -> Symbol {
         Symbol::Local(LocalSymbol::new(name))
     }
-}
-
-/// A pattern, including possible problems (e.g. shadowing) so that
-/// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Pattern {
-    Identifier(Symbol),
-    Variant(Resolved<Symbol>, Option<Vec<Located<Pattern>>>),
-    Integer(i64),
-    Fraction(i64, i64),
-    ExactString(String),
-    EmptyRecordLiteral,
-    Underscore,
-    Shadowed(Located<expr::Ident>)
 }
 
 /// The canonicalization environment for a particular module.
@@ -160,19 +173,10 @@ impl Env {
     }
 }
 
-pub fn canonicalize_declarations(
-    home: Path,
-    decls: Vec<(Located<Pattern>, Located<expr::Expr>)>,
-    declared_idents: &ImMap<(Option<Path>, String), Located<expr::Ident>>,
-    declared_variants: &ImMap<(Path, String), Located<expr::VariantName>>,
-) {
-    panic!("TODO: handle decls like assignments; check for shadowing, tail recursion, named closures functions, etc");
-}
-
 pub fn canonicalize_declaration(
     home: Path,
     loc_expr: Located<expr::Expr>,
-    declared_idents: &ImMap<(Option<Path>, String), Located<expr::Ident>>,
+    declared_idents: &ImMap<Ident, Located<expr::Ident>>,
     declared_variants: &ImMap<(Path, String), Located<expr::VariantName>>,
 ) -> (Located<Expr>, Output, Vec<Problem>) {
     let mut env = Env::new(home, declared_variants.clone());
@@ -190,7 +194,7 @@ pub fn canonicalize_declaration(
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Output {
-    pub referenced_idents: ImSet<(Option<Path>, String)>,
+    pub referenced_idents: ImSet<Ident>,
     pub applied_variants: ImSet<(Path, String)>,
     pub tail_call: Option<Symbol>,
 }
@@ -215,7 +219,7 @@ impl Output {
 fn canonicalize(
     env: &mut Env,
     loc_expr: Located<expr::Expr>,
-    idents_in_scope: &ImMap<(Option<Path>, String), Located<expr::Ident>>,
+    idents_in_scope: &ImMap<Ident, Located<expr::Ident>>,
 ) -> (Located<Expr>, Output) {
     use self::Expr::*;
 
@@ -433,7 +437,6 @@ fn canonicalize(
         expr::Expr::Assign(assignments, box_loc_returned) => {
             use self::Pattern::*;
 
-            let mut referenced_idents = ImSet::default();
             let mut applied_variants = ImSet::default();
             let mut new_idents_in_scope = ImMap::default();
 
@@ -446,13 +449,13 @@ fn canonicalize(
             // it means there was shadowing, so keep the original mapping from ident_in_scope.
             // Shadowing means the mapping from new_idents_in_scope will be removed later.
             let mut combined_idents_in_scope = idents_in_scope.clone().union(new_idents_in_scope.clone());
+            let mut referenced_idents_by_assigned_name: MutMap<Ident, (Region, ImSet<Ident>)> = MutMap::default();
 
             let can_assignments = assignments.into_iter().map(|(loc_pattern, expr)| {
                 // Each assignment gets to have all the idents in scope that are assigned in this
                 // block. Order of assignments doesn't matter, thanks to referential transparency!
                 let (loc_can_expr, can_output) = canonicalize(env, expr, &combined_idents_in_scope);
 
-                referenced_idents = referenced_idents.clone().union(can_output.referenced_idents);
                 applied_variants = applied_variants.clone().union(can_output.applied_variants);
 
                 // Exclude the current ident from shadowable_idents; you can't shadow yourself!
@@ -460,38 +463,43 @@ fn canonicalize(
                 let mut shadowable_idents = combined_idents_in_scope.clone();
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-                let can_pattern = canonicalize_pattern(env, loc_pattern, &mut combined_idents_in_scope, &mut shadowable_idents);
+                let can_pattern = canonicalize_pattern(env, &Assignment, loc_pattern.clone(), &mut combined_idents_in_scope, &mut shadowable_idents);
+
+                // Store the referenced idents in a map, so we can later figure out which
+                // assigned names reference each other.
+                for name in local_idents_in_pattern(&can_pattern.value) {
+                    referenced_idents_by_assigned_name.insert(name, (loc_pattern.region, can_output.referenced_idents.clone()));
+                }
 
                 // Give closures names (and tail-recursive status) where appropriate
                 let region = loc_can_expr.region;
-                let can_expr =
-                    match &can_pattern.value {
-                        // First, make sure we are actually assigning an identifier instead of (for example) a variant.
-                        // If we're assigning (UserId userId) = ... then this is by definition not a self tail call!
-                        // (We could theoretically support certain scenarios like that, but it doesn't seem worthwhile;
-                        // all we'd be saving anyone is the step of refactoring the closure out to have its own name.)
-                        // By our definition, only assignments of the form (foo = ...) can be self tail calls.
-                        &Identifier(ref closure_symbol_ref) => {
-                            match loc_can_expr.value {
-                                AnonymousClosure(closed_over, args, body) => {
-                                    let closure_symbol = closure_symbol_ref.clone();
-                                    let is_self_tail_recursive = match can_output.tail_call {
-                                        None => false,
-                                        Some(symbol) => symbol == closure_symbol
-                                    };
+                let can_expr = match &can_pattern.value {
+                    // First, make sure we are actually assigning an identifier instead of (for example) a variant.
+                    // If we're assigning (UserId userId) = ... then this is by definition not a self tail call!
+                    // (We could theoretically support certain scenarios like that, but it doesn't seem worthwhile;
+                    // all we'd be saving anyone is the step of refactoring the closure out to have its own name.)
+                    // By our definition, only assignments of the form (foo = ...) can be self tail calls.
+                    &Identifier(ref local_symbol_ref) => {
+                        match loc_can_expr.value {
+                            AnonymousClosure(closed_over, args, body) => {
+                                let closure_symbol = Symbol::Local(local_symbol_ref.clone());
+                                let is_self_tail_recursive = match can_output.tail_call {
+                                    None => false,
+                                    Some(symbol) => symbol == closure_symbol
+                                };
 
-                                    if is_self_tail_recursive {
-                                        TailRecursiveClosure(closure_symbol, closed_over, args, body)
-                                    } else {
-                                        NamedClosure(closure_symbol, closed_over, args, body)
-                                    }
-                                },
-                                non_closure => non_closure
-                            }
-                        },
-                        &Shadowed(_) | &Variant(_, _) | &Integer(_) | &Fraction(_, _)
-                            | &ExactString(_) | &EmptyRecordLiteral | &Underscore => loc_can_expr.value
-                    };
+                                if is_self_tail_recursive {
+                                    TailRecursiveClosure(closure_symbol, closed_over, args, body)
+                                } else {
+                                    NamedClosure(closure_symbol, closed_over, args, body)
+                                }
+                            },
+                            non_closure => non_closure
+                        }
+                    },
+                    &Variant(_, _) | &EmptyRecordLiteral | &Shadowed(_) | &UnsupportedPattern(_)
+                        | &Integer(_) | &Fraction(_, _) | &ExactString(_) | &Underscore => loc_can_expr.value,
+                };
 
                 (can_pattern, Located {region, value: can_expr})
             }).collect();
@@ -500,16 +508,59 @@ fn canonicalize(
             // We use its output as a starting point because its tail_call already has the right answer!
             let (ret_expr, mut output) = canonicalize(env, *box_loc_returned, &combined_idents_in_scope);
 
-            output.referenced_idents = output.referenced_idents.clone().union(referenced_idents);
             output.applied_variants = output.applied_variants.clone().union(applied_variants);
+
+            // Determine the full set of referenced_idents by traversing the graph
+            let mut referenced_idents = output.referenced_idents.clone();
+            let mut visited = ImSet::default();
+
+            // Start with the return expression's referenced_idents. They are the only ones that count!
+            // For example, if I have two assignments which reference each other, but neither of them
+            // is referenced in the return expression, I don't want either of them to end up in the
+            // final referenced_idents.
+            //
+            // The reason we need a graph here is so we don't overlook transitive dependencies.
+            // For example, if I have `a = b + 1` and the assignment returns `a + 1`, then the
+            // assignment as a whole references both `a` *and* `b`, even though it doesn't
+            // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
+            // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
+            for ident in output.referenced_idents.clone() {
+                match ident {
+                    // Only consider local referenced idents; the global ones don't need the graph.
+                    unqualified @ Ident::Unqualified(_) => {
+                        // Traverse the graph and look up *all* the references for this name
+                        let refs = get_all_referenced(unqualified, &mut visited, &referenced_idents_by_assigned_name);
+
+                        referenced_idents = referenced_idents.union(refs);
+                    }
+                    Ident::Qualified(_, _) => ()
+                };
+            }
 
             // Now that we've collected all the references, check to see if any of the new idents
             // we defined were unused. If any were, report it.
-            for (ident, loc_expr) in new_idents_in_scope {
-                if !output.referenced_idents.contains(&ident) {
-                    env.problem(Problem::UnusedAssignment(loc_expr));
+            for ident in new_idents_in_scope.keys() {
+                if !ident.is_qualified() && !referenced_idents.contains(&ident) {
+                    match ident {
+                        unqualified @ Ident::Unqualified(_) => {
+                            match referenced_idents_by_assigned_name.get(&unqualified) {
+                                Some((region, _)) => {
+                                    let loc_ident = Located {region: region.clone(), value: unqualified.clone()};
+
+                                    env.problem(Problem::UnusedAssignment(loc_ident));
+                                },
+                                None => unreachable!()
+                            };
+                        },
+                        Ident::Qualified(_, _) => ()
+                    }
                 }
             }
+
+            // TODO somewhere in here, build 2 graphs of all the idents
+            // 1. eval_deps - topological sort this and look for cycles (add a cycle test and an eval order test!)
+            // 2. references - do a dfs search on each referenced local value in ret, to see which
+            output.referenced_idents = referenced_idents;
 
             (Assign(can_assignments, Box::new(ret_expr)), output)
         },
@@ -533,7 +584,7 @@ fn canonicalize(
                 let mut shadowable_idents = combined_idents_in_scope.clone();
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-                canonicalize_pattern(env, loc_pattern, &mut combined_idents_in_scope, &mut shadowable_idents)
+                canonicalize_pattern(env, &FunctionArg, loc_pattern, &mut combined_idents_in_scope, &mut shadowable_idents)
             }).collect();
 
             let (body_expr, output) = canonicalize(env, *box_loc_body_expr, &combined_idents_in_scope);
@@ -550,14 +601,14 @@ fn canonicalize(
             let closed_over_locals = if output.referenced_idents.is_empty() {
                 None
             } else {
-                let locals = output.referenced_idents.iter().filter_map(|(opt_path, name)| {
+                let locals = output.referenced_idents.iter().filter_map(|ident| {
                     // Only close over locally assigned idents; globals are always available.
-                    if opt_path.is_none()
+                    if !ident.is_qualified()
                         // If it's not in scope, it'll be a NAMING ERROR at runtime, and
                         // attempting to close over it will fail. Leave it out!
-                        && combined_idents_in_scope.contains_key(&(None, name.clone()))
+                        && combined_idents_in_scope.contains_key(&ident)
                     {
-                        Some(LocalSymbol::new(name.clone()))
+                        Some(LocalSymbol::new(ident.clone().name()))
                     } else {
                         None
                     }
@@ -591,7 +642,7 @@ fn canonicalize(
                 let mut shadowable_idents = idents_in_scope.clone();
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-                let can_pattern = canonicalize_pattern(env, loc_pattern.clone(), &mut idents_in_scope.clone(), &mut idents_in_scope.clone());
+                let can_pattern = canonicalize_pattern(env, &CaseBranch, loc_pattern.clone(), &mut idents_in_scope.clone(), &mut idents_in_scope.clone());
 
                 // Patterns introduce new idents to the scope!
                 let mut new_idents_in_scope = ImMap::default();
@@ -644,9 +695,69 @@ fn canonicalize(
     (Located {region, value: expr}, output)
 }
 
+fn get_all_referenced(
+    name: Ident,
+    visited: &mut ImSet<Ident>,
+    referenced_idents_by_assigned_name: &MutMap<Ident, (Region, ImSet<Ident>)>
+) -> ImSet<Ident> {
+    match referenced_idents_by_assigned_name.get(&name) {
+        Some((_, idents)) => {
+            let mut output = ImSet::default();
+
+            visited.insert(name);
+
+            for ident in idents {
+                match ident {
+                    unqualified @ Ident::Unqualified(_) => {
+                        output.insert(unqualified.clone());
+
+                        if !visited.contains(&unqualified) {
+                            let other_refs = get_all_referenced(unqualified.clone(), visited, referenced_idents_by_assigned_name);
+
+                            output = output.union(other_refs);
+                        }
+                    }
+                    Ident::Qualified(_, _) => ()
+                };
+            }
+
+            output
+        },
+        None => ImSet::default()
+    }
+}
+
+fn local_idents_in_pattern(pattern: &Pattern) -> ImSet<Ident> {
+    use self::Pattern::*;
+
+    let mut output = ImSet::default();
+
+    // Insert any identifiers we find into the referenced_idents_by_name map.
+    match pattern {
+        &Identifier(ref local_symbol_ref) => {
+            output.insert(local_symbol_ref.clone().into());
+        },
+        &Variant(_, ref opt_args) => {
+            match opt_args {
+                &Some(ref loc_args) => {
+                    for loc_arg in loc_args {
+                        output = output.union(local_idents_in_pattern(&loc_arg.value));
+                    }
+                },
+                &None => ()
+            }
+        },
+        &Shadowed(_) | &Integer(_) | &Fraction(_, _) | &UnsupportedPattern(_)
+            | &ExactString(_) | &EmptyRecordLiteral | &Underscore => ()
+    };
+
+    output
+}
+
+
 fn add_idents_to_scope(
     pattern: Located<expr::Pattern>,
-    idents_in_scope: &mut ImMap<(Option<Path>, String), Located<expr::Ident>>
+    idents_in_scope: &mut ImMap<Ident, Located<expr::Ident>>
 ) {
     use expr::Pattern::*;
 
@@ -657,7 +768,7 @@ fn add_idents_to_scope(
                 value: Ident::Unqualified(name.clone())
             };
 
-            idents_in_scope.insert((None, name), loc_ident);
+            idents_in_scope.insert(Ident::Unqualified(name), loc_ident);
         },
         Variant(_, Some(loc_args)) => {
             for loc_arg in loc_args {
@@ -671,12 +782,12 @@ fn add_idents_to_scope(
 
 fn remove_idents(
     pattern: expr::Pattern,
-    idents: &mut ImMap<(Option<Path>, String), Located<expr::Ident>>
+    idents: &mut ImMap<Ident, Located<expr::Ident>>
 ) {
     use expr::Pattern::*;
 
     match pattern {
-        Identifier(name) => { idents.remove(&(None, name)); },
+        Identifier(name) => { idents.remove(&(Ident::Unqualified(name))); },
         Variant(_, Some(loc_args)) => {
             for loc_arg in loc_args {
                 remove_idents(loc_arg.value, idents);
@@ -692,40 +803,36 @@ fn remove_idents(
 fn resolve_ident(
     env: &Env,
     ident: Ident,
-    referenced_idents: &mut ImSet<(Option<Path>, String)>,
-    idents_in_scope: &ImMap<(Option<Path>, String), Located<expr::Ident>>,
+    referenced_idents: &mut ImSet<Ident>,
+    idents_in_scope: &ImMap<Ident, Located<expr::Ident>>,
 ) -> Result<Resolved<Symbol>, Ident> {
-    match ident {
-        Ident::Unqualified(name) => {
-            let unqualified = ( None, name );
+    if idents_in_scope.contains_key(&ident) {
+        referenced_idents.insert(ident.clone());
 
-            if idents_in_scope.contains_key(&unqualified) {
-                referenced_idents.insert(unqualified.clone());
-
-                Ok(Symbol::resolved_local(unqualified.1))
-            } else {
-                let qualified = ( Some(env.home.clone()), unqualified.1 );
+        match ident {
+            Ident::Unqualified(name) => Ok(Symbol::resolved_local(name)),
+            Ident::Qualified(path, name) => Ok(Symbol::resolved_global(path, name))
+        }
+    } else {
+        match ident {
+            Ident::Unqualified(name) => {
+                // Try again, this time using the current module as the path.
+                let path = env.home.clone();
+                let qualified = Ident::Qualified(path.clone(), name.clone());
 
                 if idents_in_scope.contains_key(&qualified) {
                     referenced_idents.insert(qualified.clone());
 
-                    Ok(Symbol::resolved_global((qualified.0.unwrap(), qualified.1)))
+                    Ok(Symbol::resolved_global(path, name))
                 } else {
                     // We couldn't find the unqualified ident in scope. NAMING PROBLEM!
-                    Err(Ident::Unqualified(qualified.1))
+                    Err(Ident::Unqualified(name))
                 }
-            }
-        },
-        Ident::Qualified((path, name)) => {
-            let qualified = (Some(path), name);
 
-            if idents_in_scope.contains_key(&qualified) {
-                referenced_idents.insert(qualified.clone());
-
-                Ok(Symbol::resolved_global((qualified.0.unwrap(), qualified.1)))
-            } else {
+            },
+            qualified @ Ident::Qualified(_, _) => {
                 // We couldn't find the qualified ident in scope. NAMING PROBLEM!
-                Err(Ident::Qualified((qualified.0.unwrap(), qualified.1)))
+                Err(qualified)
             }
         }
     }
@@ -740,38 +847,44 @@ fn resolve_variant_name(
     applied_variants: &mut ImSet<(Path, String)>,
 ) -> Result<Resolved<GlobalSymbol>, VariantName> {
     let qualified = match variant_name {
-        VariantName::Unqualified(name) => ( env.home.clone(), name ),
-        VariantName::Qualified(qualified) => qualified
+        VariantName::Unqualified(name) => (env.home.clone(), name),
+        VariantName::Qualified(path, name) => (path, name)
     };
 
     if env.declared_variants.contains_key(&qualified) {
         applied_variants.insert(qualified.clone());
 
-        Ok(GlobalSymbol::recognized(qualified))
+        Ok(GlobalSymbol::recognized(qualified.0, qualified.1))
     } else {
         // We couldn't find the qualified variant name in scope. NAMING PROBLEM!
-        Err(VariantName::Qualified(qualified))
+        Err(VariantName::Qualified(qualified.0, qualified.1))
     }
+}
+
+/// Different patterns are supported in different circumstances.
+/// For example, case branches can pattern match on number literals, but
+/// assignments and function args can't. Underscore is supported in function
+/// arg patterns and in case branch patterns, but not in assignments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PatternType {
+    Assignment,
+    FunctionArg,
+    CaseBranch
 }
 
 fn canonicalize_pattern(
     env: &mut Env,
+    pattern_type: &PatternType,
     loc_pattern: Located<expr::Pattern>,
-    idents_in_scope: &mut ImMap<(Option<Path>, String), Located<expr::Ident>>,
-    shadowable_idents: &mut ImMap<(Option<Path>, String), Located<expr::Ident>>,
+    idents_in_scope: &mut ImMap<Ident, Located<expr::Ident>>,
+    shadowable_idents: &mut ImMap<Ident, Located<expr::Ident>>,
 ) -> Located<Pattern> {
-    use self::Pattern::*;
+    use expr::Pattern::*;
 
     let region = loc_pattern.region;
-    let new_pattern = match loc_pattern.value {
-        expr::Pattern::Integer(num) => Integer(num),
-        expr::Pattern::Fraction(numerator, denominator) => Fraction(numerator, denominator),
-        expr::Pattern::EmptyRecordLiteral => EmptyRecordLiteral,
-        expr::Pattern::ExactString(string) => ExactString(string),
-        expr::Pattern::Underscore => Underscore,
-
-        expr::Pattern::Identifier(name) => {
-            let unqualified_ident = ( None, name );
+    let new_pattern = match &loc_pattern.value {
+        &Identifier(ref name) => {
+            let unqualified_ident = Ident::Unqualified(name.clone());
 
             // We use shadowable_idents for this, and not idents_in_scope, because for assignments
             // they are different. When canonicalizing a particular assignment, that new
@@ -788,10 +901,10 @@ fn canonicalize_pattern(
 
                     // Change this Pattern to a Shadowed variant, so that
                     // codegen knows to generate a runtime exception here.
-                    Shadowed(shadowed_ident.clone())
+                    Pattern::Shadowed(shadowed_ident.clone())
                 },
                 None => {
-                    let qualified_ident = ( Some(env.home.clone()), unqualified_ident.1 );
+                    let qualified_ident = Ident::Qualified(env.home.clone(), unqualified_ident.name());
 
                     match idents_in_scope.get(&qualified_ident) {
                         Some(shadowed_ident) => {
@@ -801,10 +914,11 @@ fn canonicalize_pattern(
 
                             // Change this Pattern to a Shadowed variant, so that
                             // codegen knows to generate a runtime exception here.
-                            Shadowed(shadowed_ident.clone())
+                            Pattern::Shadowed(shadowed_ident.clone())
                         },
                         None => {
-                            let new_name = qualified_ident.1.clone();
+                            let new_ident = qualified_ident.clone();
+                            let new_name = qualified_ident.name();
 
                             // This is a fresh identifier that wasn't already in scope.
                             // Add it to scope!
@@ -814,19 +928,19 @@ fn canonicalize_pattern(
                             // The latter is relevant when recursively canonicalizing Variant patterns,
                             // which can bring multiple new idents into scope. For example, it's important
                             // that we catch (Blah foo foo) as being an example of shadowing.
-                            idents_in_scope.insert(qualified_ident.clone(), located.clone());
-                            shadowable_idents.insert(qualified_ident, located);
+                            idents_in_scope.insert(new_ident.clone(), located.clone());
+                            shadowable_idents.insert(new_ident, located);
 
-                            Identifier(Symbol::local(new_name))
+                            Pattern::Identifier(LocalSymbol::new(new_name))
                         }
                     }
                 }
             }
         },
 
-        expr::Pattern::Variant(loc_name, opt_args) => {
+        &Variant(ref loc_name, ref opt_args) => {
             // Canonicalize the variant's name.
-            let can_name = canonicalize_variant_name(env, loc_name);
+            let can_name = canonicalize_variant_name(env, loc_name.clone());
 
             // Canonicalize the variant's arguments, if it has any.
             let opt_can_args: Option<Vec<Located<Pattern>>> = match opt_args {
@@ -835,7 +949,7 @@ fn canonicalize_pattern(
                     let mut can_args:Vec<Located<Pattern>> = Vec::new();
 
                     for loc_arg in loc_args {
-                        let can_arg = canonicalize_pattern(env, loc_arg, idents_in_scope, shadowable_idents);
+                        let can_arg = canonicalize_pattern(env, pattern_type, loc_arg.clone(), idents_in_scope, shadowable_idents);
 
                         can_args.push(can_arg);
                     }
@@ -844,11 +958,51 @@ fn canonicalize_pattern(
                 }
             };
 
-            Variant(can_name, opt_can_args)
-        }
+            Pattern::Variant(can_name, opt_can_args)
+        },
+
+        &Integer(ref num) => {
+            match pattern_type {
+                CaseBranch => Pattern::Integer(*num),
+                ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
+            }
+        },
+
+        &Fraction(ref numerator, ref denominator) => {
+            match pattern_type {
+                CaseBranch => Pattern::Fraction(*numerator, *denominator),
+                ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
+            }
+        },
+
+        &ExactString(ref string) => {
+            match pattern_type {
+                CaseBranch => Pattern::ExactString(string.clone()),
+                ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
+            }
+        },
+
+        &Underscore => {
+            match pattern_type {
+                CaseBranch | FunctionArg => Pattern::Underscore,
+                Assignment => unsupported_pattern(env, Assignment, &region, &loc_pattern.value)
+            }
+        },
+
+        &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
     };
 
     Located {region, value: new_pattern}
+}
+
+/// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
+/// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
+fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: &Region, pattern: &expr::Pattern) -> Pattern {
+    let loc_problem_pattern = Located {region: region.clone(), value: pattern.clone()};
+
+    env.problem(Problem::UnsupportedPattern(pattern_type, loc_problem_pattern.clone()));
+
+    Pattern::UnsupportedPattern(loc_problem_pattern)
 }
 
 fn canonicalize_variant_name(
@@ -857,12 +1011,12 @@ fn canonicalize_variant_name(
 ) -> Resolved<Symbol> {
     let qualified_name = match &loc_name.value {
         &VariantName::Unqualified(ref name) => ( env.home.clone(), name.clone() ),
-        &VariantName::Qualified(ref qualified) => qualified.clone()
+        &VariantName::Qualified(ref path, ref name) => ( path.clone(), name.clone() )
     };
 
     if env.declared_variants.contains_key(&qualified_name) {
         // No problems; the qualified variant name was in scope!
-        Symbol::resolved_global(qualified_name)
+        Symbol::resolved_global(qualified_name.0, qualified_name.1)
     } else {
         // We couldn't find the variant name in scope. NAMING PROBLEM!
         env.problem(Problem::UnrecognizedVariant(loc_name.clone()));
