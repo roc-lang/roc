@@ -480,7 +480,7 @@ fn canonicalize(
             };
 
             let can_expr =
-                match resolve_variant_name(&env, &scope, variant_name, &mut output.references) {
+                match resolve_variant_name(&env, variant_name, &mut output.references) {
                     Ok(symbol) => ApplyVariant(symbol, opt_can_args),
                     Err(variant_name) => {
                         let loc_variant = Located {region, value: variant_name};
@@ -886,7 +886,6 @@ fn resolve_ident(
 #[inline(always)]
 fn resolve_variant_name(
     env: &Env,
-    scope: &Scope,
     variant_name: VariantName,
     references: &mut References
 ) -> Result<Symbol, VariantName> {
