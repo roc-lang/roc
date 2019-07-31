@@ -255,7 +255,7 @@ mod test_canonicalize {
 
     #[test]
     fn reorder_assignments() {
-        let (_, output, problems) = can_expr(indoc!(r#"
+        let (expr, output, problems) = can_expr(indoc!(r#"
             func = \arg -> arg + y
             z = func 2
             y = x + 1
@@ -272,6 +272,17 @@ mod test_canonicalize {
             variants: vec![],
             tail_call: None
         }.into());
+
+        // This should get reordered to the following, so that in code gen
+        // everything will have been set before it gets read.
+        assert_eq!(expr, can_expr(indoc!(r#"
+            x = 9
+            y = x + 1
+            func = \arg -> arg + y
+            z = func 2
+
+            z * 3
+        "#)).0);
     }
 
     // UNSUPPORTED PATTERNS
