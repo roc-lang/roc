@@ -140,7 +140,8 @@ impl Scope {
     }
 }
 
-struct Procedure {
+#[allow(dead_code)] // TODO remove this once Procedure is fully used.
+pub struct Procedure {
     name: Option<String>,
     closes_over: ImSet<Symbol>,
     is_self_tail_recursive: bool,
