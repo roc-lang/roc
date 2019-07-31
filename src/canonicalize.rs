@@ -638,10 +638,7 @@ fn canonicalize(
 
                 canonicalize_pattern(env, &mut scope, &FunctionArg, &loc_pattern, &mut shadowable_idents)
             }).collect();
-            let (loc_body_expr, output) = canonicalize(env, &mut scope, *box_loc_body_expr);
-
-            // We only ever need to close over locals. Globals are always available!
-            let mut closes_over: ImSet<Symbol> = output.references.locals.clone();
+            let (loc_body_expr, mut output) = canonicalize(env, &mut scope, *box_loc_body_expr);
 
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
@@ -651,11 +648,15 @@ fn canonicalize(
                     env.problem(Problem::UnusedArgument(Located {region, value: ident}));
                 }
 
-                // If it's an argument, we shouldn't close over it.
-                // (We need to explicitly remove these because we start by
-                // closing over *all* referenced locals, including args.)
-                closes_over.remove(&arg_symbol);
+                // We shouldn't ultimately count arguments as referenced locals. Otherwise,
+                // we end up with weird conclusions like the expression (\x -> x + 1)
+                // references the (nonexistant) local variable x!
+                output.references.locals.remove(&arg_symbol);
             }
+
+            // We only ever need to close over locals. Globals are always available!
+            // Note: This must happen *after* removing args from locals. Never close over arguments!
+            let closes_over: ImSet<Symbol> = output.references.locals.clone();
 
             // We've finished analyzing the closure. Register it as a top-level procedure in the Env!
             env.register_closure(symbol.clone(), closes_over, can_args, loc_body_expr.value, region);

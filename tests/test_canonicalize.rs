@@ -90,6 +90,79 @@ mod test_canonicalize {
         }
     }
 
+    // BASIC CANONICALIZATION
+
+    #[test]
+    fn closure_args_are_not_locals() {
+        // "arg" shouldn't make it into output.locals, because
+        // it only exists in the closure's arguments.
+        let (_, output, problems) = can_expr(indoc!(r#"
+            func = \arg -> arg + 1
+
+            3 + func 2
+        "#));
+
+        assert_eq!(problems, vec![]);
+
+        assert_eq!(output, Out {
+            locals: vec!["func"],
+            globals: vec![],
+            variants: vec![],
+            tail_call: None
+        }.into());
+    }
+
+    #[test]
+    fn closing_over_locals() {
+        // "local" should be used, because the closure used it.
+        // However, "unused" should be unused.
+        let (_, output, problems) = can_expr(indoc!(r#"
+            local = 5
+            unused = 6
+            func = \arg -> arg + local
+
+            3 + func 2
+        "#));
+
+        assert_eq!(problems, vec![
+            Problem::UnusedAssignment(loc(Ident::Unqualified("unused".to_string())))
+        ]);
+
+        assert_eq!(output, Out {
+            locals: vec!["func", "local"],
+            globals: vec![],
+            variants: vec![],
+            tail_call: None
+        }.into());
+    }
+
+    #[test]
+    fn unused_closure() {
+        // "unused" should be unused because it's in func, which is unused.
+        let (_, output, problems) = can_expr(indoc!(r#"
+            local = 5
+            unused = 6
+            func = \arg -> arg + unused
+
+            local
+        "#));
+
+        assert_eq!(problems, vec![
+            Problem::UnusedAssignment(loc(Ident::Unqualified("func".to_string()))),
+            Problem::UnusedAssignment(loc(Ident::Unqualified("unused".to_string()))),
+        ]);
+
+        assert_eq!(output, Out {
+            locals: vec!["local"],
+            globals: vec![],
+            variants: vec![],
+            tail_call: None
+        }.into());
+    }
+
+
+    // UNRECOGNIZED
+
     #[test]
     fn basic_unrecognized_constant() {
         let (expr, output, problems) = can_expr(indoc!(r#"
@@ -133,6 +206,8 @@ mod test_canonicalize {
         }.into());
     }
 
+    // UNUSED
+
     #[test]
     fn mutual_unused_vars() {
         // This should report that both a and b are unused, since the return expr never references them.
@@ -154,7 +229,6 @@ mod test_canonicalize {
         }.into());
     }
 
-
     #[test]
     fn can_fibonacci() {
         let (_, output, problems) = can_expr(indoc!(r#"
@@ -170,10 +244,33 @@ mod test_canonicalize {
         assert_eq!(problems, vec![]);
 
         assert_eq!(output, Out {
-            locals: vec!["num", "fibonacci"],
+            locals: vec!["fibonacci"],
             globals: vec![],
             variants: vec![],
             tail_call: Some("fibonacci")
+        }.into());
+    }
+
+    // ASSIGNMENT REORDERING
+
+    #[test]
+    fn reorder_assignments() {
+        let (_, output, problems) = can_expr(indoc!(r#"
+            func = \arg -> arg + y
+            z = func 2
+            y = x + 1
+            x = 9
+
+            z * 3
+        "#));
+
+        assert_eq!(problems, vec![]);
+
+        assert_eq!(output, Out {
+            locals: vec!["func", "x", "y", "z"],
+            globals: vec![],
+            variants: vec![],
+            tail_call: None
         }.into());
     }
 
