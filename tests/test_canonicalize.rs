@@ -9,19 +9,20 @@ mod helpers;
 #[cfg(test)]
 mod test_canonicalize {
     use roc::canonicalize;
-    use roc::canonicalize::{Expr, Output, Problem, Symbol, References};
+    use roc::canonicalize::{Expr, Output, Problem, Symbol, References, Procedure, Pattern};
     use roc::canonicalize::Expr::*;
     use roc::expr::{Ident};
     use roc::expr;
+    use roc::operator::Operator;
     use roc::region::{Located, Region};
     use roc::parse;
-    use roc::collections::{ImMap, ImSet};
+    use roc::collections::{ImMap, ImSet, MutMap};
     use roc::parse_state::{IndentablePosition};
     use combine::{Parser, eof};
     use combine::stream::state::{State};
-    use helpers::{loc, zero_loc_expr};
+    use helpers::{loc, loc_box, empty_region, zero_loc_expr, mut_map_from_pairs};
 
-    fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>) {
+    fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
         can_expr_with("testDecl", expr_str, &ImMap::default(), &ImMap::default())
     }
 
@@ -30,7 +31,7 @@ mod test_canonicalize {
         expr_str: &str,
         declared_idents: &ImMap<Ident, (Symbol, Region)>,
         declared_variants: &ImMap<Symbol, Located<expr::VariantName>>,
-    ) -> (Expr, Output, Vec<Problem>) {
+    ) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
         let parse_state: State<&str, IndentablePosition> = State::with_positioner(expr_str, IndentablePosition::default());
         let expr = match parse::expr().skip(eof()).easy_parse(parse_state) {
             Ok((expr, state)) => {
@@ -47,10 +48,10 @@ mod test_canonicalize {
         };
 
         let home = "TestModule".to_string();
-        let (loc_expr, output, problems) =
+        let (loc_expr, output, problems, procedures) =
             canonicalize::canonicalize_declaration(home, name, loc(zero_loc_expr(expr)), declared_idents, declared_variants);
 
-        (loc_expr.value, output, problems)
+        (loc_expr.value, output, problems, procedures)
     }
 
     fn sym(name: &str) -> Symbol {
@@ -96,7 +97,7 @@ mod test_canonicalize {
     fn closure_args_are_not_locals() {
         // "arg" shouldn't make it into output.locals, because
         // it only exists in the closure's arguments.
-        let (_, output, problems) = can_expr(indoc!(r#"
+        let (_, output, problems, procedures) = can_expr(indoc!(r#"
             func = \arg -> arg + 1
 
             3 + func 2
@@ -110,13 +111,29 @@ mod test_canonicalize {
             variants: vec![],
             tail_call: None
         }.into());
+
+        assert_eq!(procedures,
+            mut_map_from_pairs(vec![(sym("func"),
+                Procedure {
+                    name: Some("func".to_string()),
+                    closes_over: ImSet::default(),
+                    is_self_tail_recursive: false,
+                    definition: empty_region(),
+                    args: vec![Pattern::Identifier(sym("arg"))],
+                    body: Expr::Operator(
+                        loc_box(Expr::Var(sym("arg"))),
+                        loc(Operator::Plus),
+                        loc_box(Expr::Int(1))
+                    )
+            })])
+        );
     }
 
     #[test]
     fn closing_over_locals() {
         // "local" should be used, because the closure used it.
         // However, "unused" should be unused.
-        let (_, output, problems) = can_expr(indoc!(r#"
+        let (_, output, problems, _) = can_expr(indoc!(r#"
             local = 5
             unused = 6
             func = \arg -> arg + local
@@ -139,7 +156,7 @@ mod test_canonicalize {
     #[test]
     fn unused_closure() {
         // "unused" should be unused because it's in func, which is unused.
-        let (_, output, problems) = can_expr(indoc!(r#"
+        let (_, output, problems, _) = can_expr(indoc!(r#"
             local = 5
             unused = 6
             func = \arg -> arg + unused
@@ -165,7 +182,7 @@ mod test_canonicalize {
 
     #[test]
     fn basic_unrecognized_constant() {
-        let (expr, output, problems) = can_expr(indoc!(r#"
+        let (expr, output, problems, _) = can_expr(indoc!(r#"
             x
         "#));
 
@@ -187,7 +204,7 @@ mod test_canonicalize {
 
     #[test]
     fn complex_unrecognized_constant() {
-        let (_, output, problems) = can_expr(indoc!(r#"
+        let (_, output, problems, _) = can_expr(indoc!(r#"
             a = 5
             b = 6
 
@@ -211,7 +228,7 @@ mod test_canonicalize {
     #[test]
     fn mutual_unused_vars() {
         // This should report that both a and b are unused, since the return expr never references them.
-        let (_, output, problems) = can_expr(indoc!(r#"
+        let (_, output, problems, _) = can_expr(indoc!(r#"
             a = \_ -> b + 1
             b = \_ -> a + 1
             c = 5
@@ -231,7 +248,7 @@ mod test_canonicalize {
 
     #[test]
     fn can_fibonacci() {
-        let (_, output, problems) = can_expr(indoc!(r#"
+        let (_, output, problems, _) = can_expr(indoc!(r#"
             fibonacci = \num ->
                 if num < 2 then
                     num
@@ -255,7 +272,7 @@ mod test_canonicalize {
 
     #[test]
     fn reorder_assignments() {
-        let (expr, output, problems) = can_expr(indoc!(r#"
+        let (expr, output, problems, _) = can_expr(indoc!(r#"
             func = \arg -> arg + y
             z = func 2
             y = x + 1

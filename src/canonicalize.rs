@@ -140,14 +140,14 @@ impl Scope {
     }
 }
 
-#[allow(dead_code)] // TODO remove this once Procedure is fully used.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Procedure {
-    name: Option<String>,
-    closes_over: ImSet<Symbol>,
-    is_self_tail_recursive: bool,
-    definition: Region,
-    args: Vec<Pattern>,
-    body: Expr
+    pub name: Option<String>,
+    pub closes_over: ImSet<Symbol>,
+    pub is_self_tail_recursive: bool,
+    pub definition: Region,
+    pub args: Vec<Pattern>,
+    pub body: Expr
 }
 
 impl Procedure {
