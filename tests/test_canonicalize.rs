@@ -9,28 +9,27 @@ mod helpers;
 #[cfg(test)]
 mod test_canonicalize {
     use roc::canonicalize;
-    use roc::canonicalize::{Expr, Output, Problem, Resolved, LocalSymbol, Symbol};
+    use roc::canonicalize::{Expr, Output, Problem, Symbol, References};
     use roc::canonicalize::Expr::*;
-    use roc::canonicalize::Pattern::*;
-    use roc::expr::{Path, Ident};
-    use roc::operator::Operator::*;
+    use roc::expr::{Ident};
     use roc::expr;
-    use roc::region::Located;
+    use roc::region::{Located, Region};
     use roc::parse;
     use roc::collections::{ImMap, ImSet};
     use roc::parse_state::{IndentablePosition};
     use combine::{Parser, eof};
     use combine::stream::state::{State};
-    use helpers::{loc, loc_box, zero_loc_expr};
+    use helpers::{loc, zero_loc_expr};
 
     fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>) {
-        can_expr_with(expr_str, &ImMap::default(), &ImMap::default())
+        can_expr_with("testDecl", expr_str, &ImMap::default(), &ImMap::default())
     }
 
     fn can_expr_with(
+        name: &str,
         expr_str: &str,
-        declared_idents: &ImMap<Ident, Located<expr::Ident>>,
-        declared_variants: &ImMap<(Path, String), Located<expr::VariantName>>,
+        declared_idents: &ImMap<Ident, (Symbol, Region)>,
+        declared_variants: &ImMap<Symbol, Located<expr::VariantName>>,
     ) -> (Expr, Output, Vec<Problem>) {
         let parse_state: State<&str, IndentablePosition> = State::with_positioner(expr_str, IndentablePosition::default());
         let expr = match parse::expr().skip(eof()).easy_parse(parse_state) {
@@ -47,23 +46,15 @@ mod test_canonicalize {
             }
         };
 
-        let home = Path::new("TestModule".to_string());
+        let home = "TestModule".to_string();
         let (loc_expr, output, problems) =
-            canonicalize::canonicalize_declaration(home, loc(zero_loc_expr(expr)), declared_idents, declared_variants);
+            canonicalize::canonicalize_declaration(home, name, loc(zero_loc_expr(expr)), declared_idents, declared_variants);
 
         (loc_expr.value, output, problems)
     }
 
-    fn recognized_local_sym(string: &str) -> Resolved<Symbol> {
-        Resolved::Recognized(local_sym(string))
-    }
-
-    fn local_sym(string: &str) -> Symbol {
-        Symbol::Local(local(string))
-    }
-
-    fn local(string: &str) -> LocalSymbol {
-        LocalSymbol::new(string.to_string())
+    fn sym(name: &str) -> Symbol {
+        Symbol::new("TestModule$testDecl$", name)
     }
 
     fn unqualified(string :&str) -> Ident {
@@ -74,32 +65,29 @@ mod test_canonicalize {
         Problem::UnusedAssignment(loc(unqualified(string)))
     }
 
-    fn check_output(
-        output: Output,
-        applied_variants: Vec<(Path, &str)>,
-        referenced_idents: Vec<(Option<Path>, &str)>,
-        tail_call: Option<Symbol>
-    ) {
-        assert_eq!(
-            output,
-            Output {
-                referenced_idents:
-                    ImSet::from(
-                        referenced_idents.into_iter().map(|(opt_path, str_ref)|
-                            match opt_path {
-                                Some(path) => Ident::Qualified(path, str_ref.to_string()),
-                                None => Ident::Unqualified(str_ref.to_string())
-                            }
-                        ).collect::<Vec<_>>()
-                    ),
-                applied_variants:
-                    ImSet::from(
-                        applied_variants.into_iter().map(|(path, str_ref)|
-                            (path, str_ref.to_string()),
-                        ).collect::<Vec<_>>()),
-                tail_call
+    struct Out<'a> {
+        locals: Vec<&'a str>,
+        globals: Vec<&'a str>,
+        variants: Vec<&'a str>,
+        tail_call: Option<&'a str>
+    }
+
+    impl<'a> Into<Output> for Out<'a> {
+        fn into(self) -> Output {
+            fn vec_to_set<'b>(vec: Vec<&'b str>) -> ImSet<Symbol> {
+                ImSet::from(vec.into_iter().map(sym).collect::<Vec<_>>())
             }
-        );
+
+            let references = References {
+                locals: vec_to_set(self.locals),
+                globals: vec_to_set(self.globals),
+                variants: vec_to_set(self.variants)
+            };
+
+            let tail_call = self.tail_call.map(sym);
+
+            Output {references, tail_call}
+        }
     }
 
     #[test]
@@ -113,15 +101,20 @@ mod test_canonicalize {
         ]);
 
         assert_eq!(expr,
-            Var(Resolved::UnrecognizedConstant(loc(Ident::Unqualified("x".to_string()))))
+            UnrecognizedConstant(loc(Ident::Unqualified("x".to_string())))
         );
 
-        check_output(output, vec![], vec![], None);
+        assert_eq!(output, Out {
+            locals: vec![],
+            globals: vec![],
+            variants: vec![],
+            tail_call: None
+        }.into());
     }
 
     #[test]
     fn complex_unrecognized_constant() {
-        let (expr, output, problems) = can_expr(indoc!(r#"
+        let (_, output, problems) = can_expr(indoc!(r#"
             a = 5
             b = 6
 
@@ -132,25 +125,12 @@ mod test_canonicalize {
             Problem::UnrecognizedConstant(loc(Ident::Unqualified("z".to_string())))
         ]);
 
-        assert_eq!(expr,
-            Assign(
-                vec![
-                    (loc(Identifier(local("a"))), loc(Int(5))),
-                    (loc(Identifier(local("b"))), loc(Int(6))),
-                ],
-                loc_box(Operator(
-                    loc_box(Var(recognized_local_sym("a"))),
-                    loc(Plus),
-                    loc_box(Operator(
-                        loc_box(Var(recognized_local_sym("b"))),
-                        loc(Star),
-                        loc_box(Var(Resolved::UnrecognizedConstant(loc(Ident::Unqualified("z".to_string())))))
-                    )),
-                ))
-            )
-        );
-
-        check_output(output, vec![], vec![(None, "a"), (None, "b")], None);
+        assert_eq!(output, Out {
+            locals: vec!["a", "b"],
+            globals: vec![],
+            variants: vec![],
+            tail_call: None
+        }.into());
     }
 
     #[test]
@@ -166,7 +146,12 @@ mod test_canonicalize {
 
         assert_eq!(problems, vec![unused("b"), unused("a")]);
 
-        check_output(output, vec![], vec![(None, "c")], None);
+        assert_eq!(output, Out {
+            locals: vec!["c"],
+            globals: vec![],
+            variants: vec![],
+            tail_call: None
+        }.into());
     }
 
 
@@ -184,11 +169,12 @@ mod test_canonicalize {
 
         assert_eq!(problems, vec![]);
 
-        check_output(output,
-            vec![],
-            vec![(None, "num"), (None, "fibonacci")],
-            Some(local_sym("fibonacci"))
-        );
+        assert_eq!(output, Out {
+            locals: vec!["num", "fibonacci"],
+            globals: vec![],
+            variants: vec![],
+            tail_call: Some("fibonacci")
+        }.into());
     }
 
     // UNSUPPORTED PATTERNS

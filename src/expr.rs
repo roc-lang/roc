@@ -40,7 +40,7 @@ pub enum Expr {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum VariantName {
     Unqualified(String),
-    Qualified(Path, String),
+    Qualified(String, String),
 }
 
 /// An identifier, possibly fully-qualified with a module name
@@ -49,7 +49,7 @@ pub enum VariantName {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ident {
     Unqualified(String),
-    Qualified(Path, String),
+    Qualified(String, String),
 }
 
 impl Ident {
@@ -68,34 +68,6 @@ impl Ident {
     }
 }
 
-/// A path to a module, which may include the package it came from.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct Path(String);
-
-impl Path {
-    pub fn new(string: String) -> Path {
-        Path(string)
-    }
-
-    pub fn into_string(self) -> String {
-        let Path(str) = self;
-
-        str
-    }
-}
-
-impl Into<String> for Path {
-    fn into(self) -> String {
-        self.into_string()
-    }
-}
-
-impl From<String> for Path {
-    fn from(str: String) -> Self {
-        Path(str)
-    }
-}
-
 impl fmt::Display for Ident {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -103,7 +75,7 @@ impl fmt::Display for Ident {
                 write!(f, "{}", name)
             },
             Ident::Qualified(path, name) => {
-                write!(f, "{}.{}", path.clone().into_string(), name)
+                write!(f, "{}.{}", path, name)
             }
         }
     }
@@ -116,7 +88,7 @@ impl fmt::Display for VariantName {
                 write!(f, "{}", name)
             },
             VariantName::Qualified(path, name) => {
-                write!(f, "{}.{}", path.clone().into_string(), name)
+                write!(f, "{}.{}", path, name)
             }
         }
     }
