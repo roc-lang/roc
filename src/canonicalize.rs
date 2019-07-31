@@ -217,7 +217,7 @@ pub fn canonicalize_declaration(
     loc_expr: Located<expr::Expr>,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
     declared_variants: &ImMap<Symbol, Located<expr::VariantName>>,
-) -> (Located<Expr>, Output, Vec<Problem>) {
+) -> (Located<Expr>, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main$foo$" and its first closure will be named "Main$foo$0"
     let scope_prefix = format!("{}${}$", home, name);
@@ -232,7 +232,7 @@ pub fn canonicalize_declaration(
     // rules multiple times unnecessarily.
     new_loc_expr = apply_precedence_and_associativity(&mut env, new_loc_expr);
 
-    (new_loc_expr, output, env.problems)
+    (new_loc_expr, output, env.problems, env.procedures)
 }
 
 #[derive(Clone, Debug, PartialEq)]
