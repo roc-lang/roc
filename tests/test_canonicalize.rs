@@ -226,11 +226,11 @@ mod test_canonicalize {
     // UNUSED
 
     #[test]
-    fn mutual_unused_vars() {
+    fn mutual_unused_closed_over_vars() {
         // This should report that both a and b are unused, since the return expr never references them.
         let (_, output, problems, _) = can_expr(indoc!(r#"
-            a = \_ -> b + 1
-            b = \_ -> a + 1
+            a = \_ -> b 7
+            b = \_ -> a 6
             c = 5
 
             c
@@ -244,6 +244,8 @@ mod test_canonicalize {
             variants: vec![],
             tail_call: None
         }.into());
+
+        panic!("TODO this shuoldn't report circular assignment problems; we haven't solved the halting problem here!");
     }
 
     #[test]
@@ -300,6 +302,31 @@ mod test_canonicalize {
 
             z * 3
         "#)).0);
+    }
+
+    // TODO test reordering where closed-over values are part of the dependency chain
+
+    // CIRCULAR ASSIGNMENT
+
+    #[test]
+    fn circular_assignment() {
+        let (_, _, problems, _) = can_expr(indoc!(r#"
+            a = b + 1
+            b = 2 * c
+            c = a 7
+
+            2 + c
+        "#));
+
+        assert_eq!(problems, vec![
+            Problem::CircularAssignment(vec![
+                loc(unqualified("c")),
+                loc(unqualified("b")),
+                loc(unqualified("a")),
+            ])
+        ]);
+
+        panic!("TODO strongly_connected_component doesn't sort these, but we want them sorted!");
     }
 
     // UNSUPPORTED PATTERNS

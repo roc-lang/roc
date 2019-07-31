@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use expr::{Ident, VariantName};
 use expr;
 use pathfinding::directed::topological_sort::topological_sort;
-use pathfinding::directed::bfs::bfs_loop;
+use pathfinding::directed::strongly_connected_components::strongly_connected_component;
 use self::PatternType::*;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -60,7 +60,8 @@ pub enum Problem {
     UnusedArgument(Located<Ident>),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-    UnsupportedPattern(PatternType, Located<expr::Pattern>)
+    UnsupportedPattern(PatternType, Located<expr::Pattern>),
+    CircularAssignment(Vec<Located<expr::Ident>>),
 }
 
 /// A pattern, including possible problems (e.g. shadowing) so that
@@ -642,12 +643,13 @@ fn canonicalize(
                 Err(node_in_cycle) => {
                     // We have one node we know is in the cycle.
                     // We want to show the entire cycle in the error message, so expand it out.
-                    let loc_idents_in_cycle =
-                        bfs_loop(&node_in_cycle, successors)
-                            .unwrap()
+                    let loc_idents_in_cycle: Vec<Located<expr::Ident>> =
+                        strongly_connected_component(&node_in_cycle, successors)
                             .into_iter()
                             .map(|symbol| refs_by_assignment.get(&symbol).unwrap().0.clone())
                             .collect();
+
+                    env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
 
                     let can_assignments = can_assignments_by_symbol.values().map(|tuple| tuple.clone()).collect();
 
