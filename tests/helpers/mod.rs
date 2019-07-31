@@ -1,19 +1,26 @@
 use roc::expr::{Expr, Pattern};
 use roc::region::{Located, Region};
+use std::hash::Hash;
+use roc::collections::{MutMap};
 
 pub fn loc_box<T>(val: T) -> Box<Located<T>> {
     Box::new(loc(val))
 }
 
 pub fn loc<T>(val: T) -> Located<T> {
-    Located::new(val, Region {
+    Located::new(val, empty_region())
+}
+
+pub fn empty_region() -> Region {
+    Region {
         start_line: 0,
         start_col: 0,
 
         end_line: 0,
         end_col: 0,
-    })
+    }
 }
+
 
 pub fn zero_loc<T>(located_val: Located<T>) -> Located<T> {
     loc(located_val.value)
@@ -65,3 +72,17 @@ pub fn zero_loc_pattern(loc_pattern: Located<Pattern>) -> Located<Pattern> {
             loc(Variant(loc(loc_name.value), Some(opt_located_patterns.into_iter().map(|loc_pat| zero_loc_pattern(loc_pat)).collect()))),
     }
 }
+
+#[allow(dead_code)] // For some reason rustc thinks this isn't used. It is, though, in test_canonicalize.rs
+pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>
+    where I: IntoIterator<Item=(K, V)>,
+        K: Hash + Eq
+    {
+        let mut answer = MutMap::default();
+
+        for (key, value) in pairs {
+            answer.insert(key, value);
+        }
+
+        answer
+    }
