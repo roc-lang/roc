@@ -6,8 +6,9 @@ use collections::{ImSet, ImMap, MutMap};
 use std::cmp::Ordering;
 use expr::{Ident, VariantName};
 use expr;
+use pathfinding::directed::topological_sort::topological_sort;
+use pathfinding::directed::bfs::bfs_loop;
 use self::PatternType::*;
-
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
@@ -45,6 +46,7 @@ pub enum Expr {
     UnrecognizedFunctionName(Located<expr::Ident>),
     UnrecognizedConstant(Located<expr::Ident>),
     UnrecognizedVariant(Located<expr::VariantName>),
+    CircularAssignment(Vec<Located<expr::Ident>>, Vec<(Pattern, Located<Expr>)>, Box<Located<Expr>>),
 }
 
 /// Problems that can occur in the course of canonicalization.
@@ -507,9 +509,10 @@ fn canonicalize(
 
             scope.idents = scope.idents.union(assigned_idents.clone());
 
-            let mut refs_by_assignment: MutMap<Symbol, (Region, References)> = MutMap::default();
+            let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
+            let mut can_assignments_by_symbol: MutMap<Symbol, (Pattern, Located<Expr>)> = MutMap::default();
 
-            let can_assignments: Vec<(Pattern, Located<Expr>)> = assignments.into_iter().map(|(loc_pattern, expr)| {
+            for (loc_pattern, expr) in assignments {
                 // Each assignment gets to have all the idents in scope that are assigned in this
                 // block. Order of assignments doesn't matter, thanks to referential transparency!
                 let (loc_can_expr, can_output) = canonicalize(env, &mut scope, expr);
@@ -520,13 +523,16 @@ fn canonicalize(
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
                 let can_pattern = canonicalize_pattern(env, &mut scope, &Assignment, &loc_pattern, &mut shadowable_idents);
+                let mut assigned_symbols = Vec::new();
 
                 // Store the referenced locals in the refs_by_assignment map, so we can later figure out
                 // which assigned names reference each other.
-                for (symbol, region) in idents_from_patterns(std::iter::once(loc_pattern.clone()), &scope).values() {
+                for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(loc_pattern.clone()), &scope) {
                     let refs = can_output.references.clone();
 
-                    refs_by_assignment.insert(symbol.clone(), (*region, refs));
+                    refs_by_assignment.insert(symbol.clone(), (Located {value: ident, region}, refs));
+
+                    assigned_symbols.push(symbol.clone());
                 }
 
                 // Give closures names (and tail-recursive status) where appropriate.
@@ -567,8 +573,13 @@ fn canonicalize(
                     _ => loc_can_expr.value
                 };
 
-                (can_pattern, Located {region: loc_can_expr.region, value: can_expr})
-            }).collect();
+                for symbol in assigned_symbols {
+                    can_assignments_by_symbol.insert(
+                        symbol,
+                        (can_pattern.clone(), Located {region: loc_can_expr.region, value: can_expr.clone()})
+                    );
+                }
+            }
 
             // The assignment as a whole is a tail call iff its return expression is a tail call.
             // Use its output as a starting point because its tail_call already has the right answer!
@@ -597,7 +608,7 @@ fn canonicalize(
 
             // Now that we've collected all the references, check to see if any of the new idents
             // we defined went unused by the return expression. If any were unused, report it.
-            for (ident, (symbol, region)) in assigned_idents {
+            for (ident, (symbol, region)) in assigned_idents.clone() {
                 if !output.references.has_local(&symbol) {
                     let loc_ident = Located {region: region.clone(), value: ident.clone()};
 
@@ -605,7 +616,44 @@ fn canonicalize(
                 }
             }
 
-            (Assign(can_assignments, Box::new(ret_expr)), output)
+            // Use topological sort to reorder the assignments based on their dependencies to one another.
+            // This way, during code gen, no assignment will refer to a value that hasn't been initialized yet.
+            // As a bonus, the topological sort also reveals any cycles between the assignments, allowing
+            // us to give a CircularAssignment error.
+            let successors = |symbol: &Symbol| -> ImSet<Symbol>  {
+                let (_, references) = refs_by_assignment.get(symbol).unwrap();
+
+                references.locals.clone()
+            };
+
+            let assigned_symbols: Vec<Symbol> =
+                can_assignments_by_symbol.keys().into_iter().map(Symbol::clone).collect();
+
+            match topological_sort(assigned_symbols.as_slice(), successors) {
+                Ok(sorted_symbols) => {
+                    let can_assignments =
+                        sorted_symbols
+                            .into_iter()
+                            .map(|symbol| can_assignments_by_symbol.get(&symbol).unwrap().clone())
+                            .collect();
+
+                    (Assign(can_assignments, Box::new(ret_expr)), output)
+                },
+                Err(node_in_cycle) => {
+                    // We have one node we know is in the cycle.
+                    // We want to show the entire cycle in the error message, so expand it out.
+                    let loc_idents_in_cycle =
+                        bfs_loop(&node_in_cycle, successors)
+                            .unwrap()
+                            .into_iter()
+                            .map(|symbol| refs_by_assignment.get(&symbol).unwrap().0.clone())
+                            .collect();
+
+                    let can_assignments = can_assignments_by_symbol.values().map(|tuple| tuple.clone()).collect();
+
+                    (CircularAssignment(loc_idents_in_cycle, can_assignments, Box::new(ret_expr)), output)
+                }
+            }
         },
 
         expr::Expr::Closure(loc_arg_patterns, box_loc_body_expr) => {
@@ -748,10 +796,10 @@ fn canonicalize(
     (Located {region, value: expr}, output)
 }
 
-fn get_all_referenced(
+fn get_all_referenced<T>(
     assigned_symbol: Symbol,
     visited: &mut ImSet<Symbol>,
-    refs_by_assignment: &MutMap<Symbol, (Region, References)>
+    refs_by_assignment: &MutMap<Symbol, (T, References)>
 ) -> References {
     match refs_by_assignment.get(&assigned_symbol) {
         Some((_, refs)) => {

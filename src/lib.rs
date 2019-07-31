@@ -18,5 +18,6 @@ extern crate im_rc;
 extern crate fraction;
 extern crate num;
 extern crate fxhash;
+extern crate pathfinding;
 
 #[macro_use] extern crate combine;
