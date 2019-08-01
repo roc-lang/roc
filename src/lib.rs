@@ -6,7 +6,7 @@ pub mod operator;
 pub mod region;
 pub mod canonicalize;
 pub mod collections;
-// mod ena;
+mod graph;
 
 // #[macro_use]
 // extern crate log;
@@ -18,6 +18,5 @@ extern crate im_rc;
 extern crate fraction;
 extern crate num;
 extern crate fxhash;
-extern crate pathfinding;
 
 #[macro_use] extern crate combine;

@@ -1,6 +1,7 @@
 use roc::expr::{Expr, Pattern};
 use roc::region::{Located, Region};
-use roc::collections::{MutSortedMap};
+use std::hash::Hash;
+use roc::collections::{MutMap};
 
 pub fn loc_box<T>(val: T) -> Box<Located<T>> {
     Box::new(loc(val))
@@ -73,11 +74,11 @@ pub fn zero_loc_pattern(loc_pattern: Located<Pattern>) -> Located<Pattern> {
 }
 
 #[allow(dead_code)] // For some reason rustc thinks this isn't used. It is, though, in test_canonicalize.rs
-pub fn mut_sorted_map_from_pairs<K, V, I>(pairs: I) -> MutSortedMap<K, V>
+pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>
     where I: IntoIterator<Item=(K, V)>,
-        K: Ord
+        K: Hash + Eq
     {
-        let mut answer = MutSortedMap::default();
+        let mut answer = MutMap::default();
 
         for (key, value) in pairs {
             answer.insert(key, value);

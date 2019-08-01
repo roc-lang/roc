@@ -12,7 +12,6 @@ im-rc = "13.0.0"
 fraction = "0.6.2"
 num = "0.2.0"
 fxhash = "0.2.1"
-pathfinding = "1.1.12"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

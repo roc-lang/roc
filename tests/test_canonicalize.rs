@@ -17,22 +17,22 @@ mod test_canonicalize {
     use roc::operator::Operator;
     use roc::region::{Located, Region};
     use roc::parse;
-    use roc::collections::{ImSortedMap, ImSortedSet, MutSortedMap};
+    use roc::collections::{ImMap, ImSet, MutMap};
     use roc::parse_state::{IndentablePosition};
     use combine::{Parser, eof};
     use combine::stream::state::{State};
-    use helpers::{loc, loc_box, empty_region, zero_loc_expr, mut_sorted_map_from_pairs};
+    use helpers::{loc, loc_box, empty_region, zero_loc_expr, mut_map_from_pairs};
 
-    fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, MutSortedMap<Symbol, Procedure>) {
-        can_expr_with("testDecl", expr_str, &ImSortedMap::default(), &ImSortedMap::default())
+    fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
+        can_expr_with("testDecl", expr_str, &ImMap::default(), &ImMap::default())
     }
 
     fn can_expr_with(
         name: &str,
         expr_str: &str,
-        declared_idents: &ImSortedMap<Ident, (Symbol, Region)>,
-        declared_variants: &ImSortedMap<Symbol, Located<expr::VariantName>>,
-    ) -> (Expr, Output, Vec<Problem>, MutSortedMap<Symbol, Procedure>) {
+        declared_idents: &ImMap<Ident, (Symbol, Region)>,
+        declared_variants: &ImMap<Symbol, Located<expr::VariantName>>,
+    ) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
         let parse_state: State<&str, IndentablePosition> = State::with_positioner(expr_str, IndentablePosition::default());
         let expr = match parse::expr().skip(eof()).easy_parse(parse_state) {
             Ok((expr, state)) => {
@@ -90,8 +90,8 @@ mod test_canonicalize {
         }
     }
 
-    fn vec_to_set<'a>(vec: Vec<&'a str>) -> ImSortedSet<Symbol> {
-        ImSortedSet::from(vec.into_iter().map(sym).collect::<Vec<_>>())
+    fn vec_to_set<'a>(vec: Vec<&'a str>) -> ImSet<Symbol> {
+        ImSet::from(vec.into_iter().map(sym).collect::<Vec<_>>())
     }
 
     // BASIC CANONICALIZATION
@@ -117,7 +117,7 @@ mod test_canonicalize {
         }.into());
 
         assert_eq!(procedures,
-            mut_sorted_map_from_pairs(vec![(sym("func"),
+            mut_map_from_pairs(vec![(sym("func"),
                 Procedure {
                     name: Some("func".to_string()),
                     is_self_tail_recursive: false,
@@ -340,59 +340,80 @@ mod test_canonicalize {
             tail_call: None
         }.into());
 
-        // This should get reordered to the following, so that in code gen
-        // everything will have been set before it gets read.
-        // (The order of the function definitions doesn't matter.)
-        assert_assignment_order(expr,
-            vec!["func1", "x", "z", "func2", "y"],
-        );
+        let symbols = assigned_symbols(expr);
+
+        // In code gen, for everything to have been set before it gets read,
+        // the following must be true about when things are assigned:
+        //
+        // x and func2 must be assigned (in either order) before y
+        // y and func1 must be assigned (in either order) before z
+        assert_before("x", "y", &symbols);
+        assert_before("func2", "y", &symbols);
+
+        assert_before("func1", "z", &symbols);
+        assert_before("y", "z", &symbols);
     }
 
-    fn assert_assignment_order(expr: Expr, expected_strings: Vec<&str>) {
+    fn assert_before(before: &str, after: &str, symbols: &Vec<Symbol>) {
+        assert_ne!(before, after);
+
+        let before_symbol = sym(before);
+        let after_symbol = sym(after);
+        let before_index = symbols.iter().position(|symbol| symbol == &before_symbol).unwrap_or_else(||
+            panic!("error in assert_before({:?}, {:?}): {:?} could not be found in {:?}", before, after, sym(before), symbols)
+        );
+        let after_index = symbols.iter().position(|symbol| symbol == &after_symbol).unwrap_or_else(||
+            panic!("error in assert_before({:?}, {:?}): {:?} could not be found in {:?}", before, after, sym(after), symbols)
+        );
+
+        if before_index == after_index {
+            panic!("error in assert_before({:?}, {:?}): both were at index {} in {:?}", before, after, after_index, symbols);
+        } else if before_index > after_index {
+            panic!("error in assert_before: {:?} appeared *after* {:?} (not before, as expected) in {:?}", before, after, symbols);
+        }
+    }
+
+    fn assigned_symbols(expr: Expr) -> Vec<Symbol> {
         match expr {
             Assign(assignments, _) => {
-                let expected_symbols: Vec<Symbol> = expected_strings.into_iter().map(sym).collect();
-                let actual_symbols: Vec<Symbol> = assignments.into_iter().map(|(pattern, _)| {
+                assignments.into_iter().map(|(pattern, _)| {
                     match pattern {
                         Identifier(symbol) => {
                             symbol
                         },
                         _ => {
-                            panic!("Called assert_assignment_order passing an Assign expr with non-Identifier patterns!");
+                            panic!("Called assigned_symbols passing an Assign expr with non-Identifier patterns!");
                         }
                     }
-                }).collect();
-
-                assert_eq!(actual_symbols, expected_symbols);
+                }).collect()
             }
             _ => {
-                panic!("Called assert_assignment_order passing a non-Assign expr!");
+                panic!("Called assigned_symbols passing a non-Assign expr!");
             }
         }
     }
-
 
     // CIRCULAR ASSIGNMENT
 
     #[test]
     fn circular_assignment() {
         let (_, _, problems, _) = can_expr(indoc!(r#"
+            c = d + 3
+            b = 2 + c
+            d = a + 7
             a = b + 1
-            b = 2 * c
-            c = a 7
 
-            2 + c
+            2 + d
         "#));
 
         assert_eq!(problems, vec![
             Problem::CircularAssignment(vec![
-                loc(unqualified("c")),
-                loc(unqualified("b")),
                 loc(unqualified("a")),
+                loc(unqualified("b")),
+                loc(unqualified("c")),
+                loc(unqualified("d")),
             ])
         ]);
-
-        panic!("TODO strongly_connected_component doesn't sort these, but we want them sorted!");
     }
 
 
