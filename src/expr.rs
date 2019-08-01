@@ -46,7 +46,7 @@ pub enum VariantName {
 /// An identifier, possibly fully-qualified with a module name
 /// e.g. (Http.Request from http)
 /// Parameterized on a phantom marker for whether it has been canonicalized
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Ident {
     Unqualified(String),
     Qualified(String, String),

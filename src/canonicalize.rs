@@ -2,7 +2,7 @@ use region::{Located, Region};
 use operator::Operator;
 use operator::Operator::Pizza;
 use operator::Associativity::*;
-use collections::{ImSet, ImMap, MutMap};
+use collections::{ImSortedSet, ImSortedMap, MutMap, MutSortedMap, MutSet};
 use std::cmp::Ordering;
 use expr::{Ident, VariantName};
 use expr;
@@ -85,7 +85,7 @@ pub enum Pattern {
 
 /// A globally unique identifier, used for both vars and variants.
 /// It will be used directly in code gen.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Symbol(String);
 
 impl Symbol {
@@ -114,13 +114,13 @@ impl Into<String> for Symbol {
 
 #[derive(Clone, Debug, PartialEq)]
 struct Scope {
-    pub idents: ImMap<Ident, (Symbol, Region)>,
+    pub idents: ImSortedMap<Ident, (Symbol, Region)>,
     symbol_prefix: String,
     next_unique_id: u64,
 }
 
 impl Scope {
-    pub fn new(symbol_prefix: String, declared_idents: ImMap<Ident, (Symbol, Region)>) -> Scope {
+    pub fn new(symbol_prefix: String, declared_idents: ImSortedMap<Ident, (Symbol, Region)>) -> Scope {
         Scope {
             symbol_prefix,
 
@@ -146,22 +146,22 @@ impl Scope {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Procedure {
     pub name: Option<String>,
-    pub closes_over: ImSet<Symbol>,
     pub is_self_tail_recursive: bool,
     pub definition: Region,
     pub args: Vec<Pattern>,
-    pub body: Expr
+    pub body: Expr,
+    pub references: References,
 }
 
 impl Procedure {
-    pub fn new(definition: Region, closes_over: ImSet<Symbol>, args: Vec<Pattern>, body: Expr) -> Procedure {
+    pub fn new(definition: Region, args: Vec<Pattern>, body: Expr, references: References) -> Procedure {
         Procedure {
             name: None,
-            closes_over,
             is_self_tail_recursive: false,
             definition,
             args,
-            body
+            body,
+            references,
         }
     }
 }
@@ -176,19 +176,19 @@ struct Env {
     problems: Vec<Problem>,
 
     /// Variants either declared in this module, or imported.
-    variants: ImMap<Symbol, Located<expr::VariantName>>,
+    variants: ImSortedMap<Symbol, Located<expr::VariantName>>,
 
     /// Former closures converted to top-level procedures.
-    procedures: MutMap<Symbol, Procedure>,
+    procedures: MutSortedMap<Symbol, Procedure>,
 }
 
 impl Env {
-    pub fn new(home: String, declared_variants: ImMap<Symbol, Located<expr::VariantName>>) -> Env {
+    pub fn new(home: String, declared_variants: ImSortedMap<Symbol, Located<expr::VariantName>>) -> Env {
         Env {
             home,
             variants: declared_variants,
             problems: Vec::new(),
-            procedures: MutMap::default(),
+            procedures: MutSortedMap::default(),
         }
     }
 
@@ -199,16 +199,16 @@ impl Env {
     pub fn register_closure(
         &mut self,
         symbol: Symbol,
-        closes_over: ImSet<Symbol>,
         args: Vec<Pattern>,
         body: Expr,
-        definition: Region
+        definition: Region,
+        references: References
     ) -> () {
         // We can't if the closure is self tail recursive yet, because it doesn't know its final name yet.
         // (Assign sets that.) Assume this is false, and let Assign change it to true after it sets final name.
         let is_self_tail_recursive = false;
         let name = None; // The Assign logic is also responsible for setting names after the fact.
-        let procedure = Procedure {closes_over, args, name, body, is_self_tail_recursive, definition};
+        let procedure = Procedure {args, name, body, is_self_tail_recursive, definition, references};
 
         self.procedures.insert(symbol, procedure);
     }
@@ -218,9 +218,9 @@ pub fn canonicalize_declaration(
     home: String,
     name: &str,
     loc_expr: Located<expr::Expr>,
-    declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    declared_variants: &ImMap<Symbol, Located<expr::VariantName>>,
-) -> (Located<Expr>, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
+    declared_idents: &ImSortedMap<Ident, (Symbol, Region)>,
+    declared_variants: &ImSortedMap<Symbol, Located<expr::VariantName>>,
+) -> (Located<Expr>, Output, Vec<Problem>, MutSortedMap<Symbol, Procedure>) {
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main$foo$" and its first closure will be named "Main$foo$0"
     let scope_prefix = format!("{}${}$", home, name);
@@ -244,19 +244,24 @@ pub struct Output {
     pub tail_call: Option<Symbol>,
 }
 
+/// These are all ordered sets because they end up getting traversed in a graph search
+/// to determine how assignments shuold be ordered. We want builds to be reproducible,
+/// so it's important that building the same code gives the same order every time!
 #[derive(Clone, Debug, PartialEq)]
 pub struct References {
-    pub locals: ImSet<Symbol>,
-    pub globals: ImSet<Symbol>,
-    pub variants: ImSet<Symbol>,
+    pub locals: ImSortedSet<Symbol>,
+    pub globals: ImSortedSet<Symbol>,
+    pub variants: ImSortedSet<Symbol>,
+    pub calls: ImSortedSet<Symbol>,
 }
 
 impl References {
     pub fn new() -> References {
         References {
-            locals: ImSet::default(),
-            globals: ImSet::default(),
-            variants: ImSet::default(),
+            locals: ImSortedSet::default(),
+            globals: ImSortedSet::default(),
+            variants: ImSortedSet::default(),
+            calls: ImSortedSet::default(),
         }
     }
 
@@ -264,6 +269,7 @@ impl References {
         self.locals = self.locals.union(other.locals);
         self.globals = self.globals.union(other.globals);
         self.variants = self.variants.union(other.variants);
+        self.calls = self.calls.union(other.calls);
 
         self
     }
@@ -414,6 +420,9 @@ fn canonicalize(
             let can_expr =
                 match resolve_ident(&env, &scope, ident, &mut output.references) {
                     Ok(symbol) => {
+                        // Record that we did, in fact, call this symbol.
+                        output.references.calls.insert(symbol.clone());
+
                         // CallByName expressions are considered tail calls,
                         // so that their parents in the expression tree will
                         // correctly inherit tail-call-ness from them.
@@ -505,13 +514,13 @@ fn canonicalize(
 
             // Add the assigned identifiers to scope. If there's a collision, it means there
             // was shadowing, which will be handled later.
-            let assigned_idents: ImMap<Ident, (Symbol, Region)> =
+            let assigned_idents: ImSortedMap<Ident, (Symbol, Region)> =
                 idents_from_patterns(assignments.clone().into_iter().map(|(loc_pattern, _)| loc_pattern), &scope);
 
             scope.idents = scope.idents.union(assigned_idents.clone());
 
             let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
-            let mut can_assignments_by_symbol: MutMap<Symbol, (Pattern, Located<Expr>)> = MutMap::default();
+            let mut can_assignments_by_symbol: MutSortedMap<Symbol, (Pattern, Located<Expr>)> = MutSortedMap::default();
 
             for (loc_pattern, expr) in assignments {
                 // Each assignment gets to have all the idents in scope that are assigned in this
@@ -564,6 +573,14 @@ fn canonicalize(
                                 // when code elsewhere calls it by assigned name, it'll resolve properly.
                                 env.procedures.insert(assigned_symbol.clone(), procedure);
 
+                                // Recursion doesn't count as referencing. (If it did, all recursive functions
+                                // would result in circular assignment errors!)
+                                refs_by_assignment
+                                    .entry(assigned_symbol.clone())
+                                    .and_modify(|(_, refs)| {
+                                        refs.locals = refs.locals.without(assigned_symbol);
+                                    });
+
                                 // Return a pointer to the assigned symbol, since the auto-generated one no
                                 // longer references any entry in the procedure map!
                                 FunctionPointer(assigned_symbol.clone())
@@ -587,7 +604,7 @@ fn canonicalize(
             let (ret_expr, mut output) = canonicalize(env, &mut scope, *box_loc_returned);
 
             // Determine the full set of references by traversing the graph.
-            let mut visited_symbols = ImSet::default();
+            let mut visited_symbols = MutSet::default();
 
             // Start with the return expression's referenced locals. They are the only ones that count!
             //
@@ -602,7 +619,16 @@ fn canonicalize(
             // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
             for symbol in output.references.locals.clone().into_iter() {
                 // Traverse the graph and look up *all* the references for this local symbol.
-                let refs = get_all_referenced(symbol, &mut visited_symbols, &refs_by_assignment);
+                let refs = references_from_local(symbol, &mut visited_symbols, &refs_by_assignment, &env.procedures);
+
+                output.references = output.references.union(refs);
+            }
+
+            for symbol in output.references.calls.clone().into_iter() {
+                // Traverse the graph and look up *all* the references for this call.
+                // Reuse the same visited_symbols as before; if we already visited it, we
+                // won't learn anything new from visiting it again!
+                let refs = references_from_call(symbol, &mut visited_symbols, &refs_by_assignment, &env.procedures);
 
                 output.references = output.references.union(refs);
             }
@@ -621,7 +647,7 @@ fn canonicalize(
             // This way, during code gen, no assignment will refer to a value that hasn't been initialized yet.
             // As a bonus, the topological sort also reveals any cycles between the assignments, allowing
             // us to give a CircularAssignment error.
-            let successors = |symbol: &Symbol| -> ImSet<Symbol>  {
+            let successors = |symbol: &Symbol| -> ImSortedSet<Symbol>  {
                 let (_, references) = refs_by_assignment.get(symbol).unwrap();
 
                 references.locals.clone()
@@ -635,6 +661,7 @@ fn canonicalize(
                     let can_assignments =
                         sorted_symbols
                             .into_iter()
+                            .rev() // Topological sort gives us the reverse of the sorting we want!
                             .map(|symbol| can_assignments_by_symbol.get(&symbol).unwrap().clone())
                             .collect();
 
@@ -675,7 +702,7 @@ fn canonicalize(
 
             // Add the arguments' idents to scope.idents. If there's a collision,
             // it means there was shadowing, which will be handled later.
-            let arg_idents: ImMap<Ident, (Symbol, Region)> =
+            let arg_idents: ImSortedMap<Ident, (Symbol, Region)> =
                 idents_from_patterns(loc_arg_patterns.clone().into_iter(), &scope);
 
             scope.idents = scope.idents.union(arg_idents.clone());
@@ -704,12 +731,14 @@ fn canonicalize(
                 output.references.locals.remove(&arg_symbol);
             }
 
-            // We only ever need to close over locals. Globals are always available!
-            // Note: This must happen *after* removing args from locals. Never close over arguments!
-            let closes_over: ImSet<Symbol> = output.references.locals.clone();
+            // We've finished analyzing the closure. Its references.locals are now the values it closes over,
+            // since we removed the only locals it shouldn't close over (its arguments).
+            // Register it as a top-level procedure in the Env!
+            env.register_closure(symbol.clone(), can_args, loc_body_expr.value, region, output.references);
 
-            // We've finished analyzing the closure. Register it as a top-level procedure in the Env!
-            env.register_closure(symbol.clone(), closes_over, can_args, loc_body_expr.value, region);
+            // Having now registered the closure's references, the function pointer that remains has
+            // no references. The references we registered will be used only if this symbol gets called!
+            output.references = References::new();
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
             // It's possible that Assign will rewrite this. In that case, Assign will need to know the symbol we
@@ -739,7 +768,7 @@ fn canonicalize(
                 // Patterns introduce new idents to the scope!
                 // Add the assigned identifiers to scope. If there's a collision, it means there
                 // was shadowing, which will be handled later.
-                let assigned_idents: ImMap<Ident, (Symbol, Region)> =
+                let assigned_idents: ImSortedMap<Ident, (Symbol, Region)> =
                     idents_from_patterns(std::iter::once(loc_pattern), &scope);
 
                 scope.idents = scope.idents.union(assigned_idents.clone());
@@ -798,10 +827,11 @@ fn canonicalize(
     (Located {region, value: expr}, output)
 }
 
-fn get_all_referenced<T>(
+fn references_from_local<T>(
     assigned_symbol: Symbol,
-    visited: &mut ImSet<Symbol>,
-    refs_by_assignment: &MutMap<Symbol, (T, References)>
+    visited: &mut MutSet<Symbol>,
+    refs_by_assignment: &MutMap<Symbol, (T, References)>,
+    procedures: &MutSortedMap<Symbol, Procedure>,
 ) -> References {
     match refs_by_assignment.get(&assigned_symbol) {
         Some((_, refs)) => {
@@ -809,14 +839,24 @@ fn get_all_referenced<T>(
 
             visited.insert(assigned_symbol);
 
-            for local in refs.locals.clone() {
+            for local in refs.locals.iter() {
                 if !visited.contains(&local) {
-                    let other_refs = get_all_referenced(local.clone(), visited, refs_by_assignment);
+                    let other_refs = references_from_local(local.clone(), visited, refs_by_assignment, procedures);
 
                     answer = answer.union(other_refs);
                 }
 
-                answer.locals.insert(local);
+                answer.locals.insert(local.clone());
+            }
+
+            for call in refs.calls.iter() {
+                if !visited.contains(&call) {
+                    let other_refs = references_from_call(call.clone(), visited, refs_by_assignment, procedures);
+
+                    answer = answer.union(other_refs);
+                }
+
+                answer.calls.insert(call.clone());
             }
 
             answer
@@ -825,10 +865,47 @@ fn get_all_referenced<T>(
     }
 }
 
-fn idents_from_patterns<I>(loc_patterns: I, scope: &Scope) -> ImMap<Ident, (Symbol, Region)>
+fn references_from_call<T>(
+    call_symbol: Symbol,
+    visited: &mut MutSet<Symbol>,
+    refs_by_assignment: &MutMap<Symbol, (T, References)>,
+    procedures: &MutSortedMap<Symbol, Procedure>,
+) -> References {
+    // This shuold be safe to unwrap. All unrecognized call symbols should have been recorded as
+    // such, and should never have made it into output.references.calls!
+    let procedure = procedures.get(&call_symbol).unwrap();
+    let mut answer = procedure.references.clone();
+
+    visited.insert(call_symbol);
+
+    for closed_over_local in procedure.references.locals.iter() {
+        if !visited.contains(&closed_over_local) {
+            let other_refs = references_from_local(closed_over_local.clone(), visited, refs_by_assignment, procedures);
+
+            answer = answer.union(other_refs);
+        }
+
+        answer.locals.insert(closed_over_local.clone());
+    }
+
+    for call in procedure.references.calls.iter() {
+        if !visited.contains(&call) {
+            let other_refs = references_from_call(call.clone(), visited, refs_by_assignment, procedures);
+
+            answer = answer.union(other_refs);
+        }
+
+        answer.calls.insert(call.clone());
+    }
+
+    answer
+}
+
+
+fn idents_from_patterns<I>(loc_patterns: I, scope: &Scope) -> ImSortedMap<Ident, (Symbol, Region)>
 where I: Iterator<Item = Located<expr::Pattern>>
 {
-    let mut answer = ImMap::default();
+    let mut answer = ImSortedMap::default();
 
     for loc_pattern in loc_patterns {
         add_idents_from_pattern(loc_pattern, scope, &mut answer);
@@ -841,7 +918,7 @@ where I: Iterator<Item = Located<expr::Pattern>>
 fn add_idents_from_pattern(
     loc_pattern: Located<expr::Pattern>,
     scope: &Scope,
-    answer: &mut ImMap<Ident, (Symbol, Region)>
+    answer: &mut ImSortedMap<Ident, (Symbol, Region)>
 ) {
     use expr::Pattern::*;
 
@@ -863,7 +940,7 @@ fn add_idents_from_pattern(
 
 fn remove_idents(
     pattern: expr::Pattern,
-    idents: &mut ImMap<Ident, (Symbol, Region)>
+    idents: &mut ImSortedMap<Ident, (Symbol, Region)>
 ) {
     use expr::Pattern::*;
 
@@ -968,7 +1045,7 @@ fn canonicalize_pattern(
     scope: &mut Scope,
     pattern_type: &PatternType,
     loc_pattern: &Located<expr::Pattern>,
-    shadowable_idents: &mut ImMap<Ident, (Symbol, Region)>,
+    shadowable_idents: &mut ImSortedMap<Ident, (Symbol, Region)>,
 ) -> Pattern {
     use expr::Pattern::*;
 

@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Region {
     pub start_line: u32,
     pub start_col: u32,
@@ -9,7 +9,7 @@ pub struct Region {
     pub end_col: u32,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Located<T> {
     pub region: Region,
     pub value: T,

@@ -19,3 +19,18 @@ pub type ImMap<K, V> =
 
 pub type ImSet<K> =
     im_rc::hashset::HashSet<K, BuildHasherDefault<FxHasher>>;
+
+// OrdMap equivalents, for naming symmetry.
+// Someday we may switch these implementations out.
+
+pub type MutSortedMap<K, V> =
+    std::collections::BTreeMap<K, V>;
+
+pub type MutSortedSet<K> =
+    std::collections::BTreeSet<K>;
+
+pub type ImSortedMap<K, V> =
+    im_rc::ordmap::OrdMap<K, V>;
+
+pub type ImSortedSet<K> =
+    im_rc::ordset::OrdSet<K>;
