@@ -288,8 +288,8 @@ mod test_canonicalize {
     #[test]
     fn reorder_assignments() {
         let (expr, output, problems, _) = can_expr(indoc!(r#"
-            func = \arg -> arg + y
-            z = func 2
+            increment = \arg -> arg + 1
+            z = (increment 2) + y
             y = x + 1
             x = 9
 
@@ -299,23 +299,24 @@ mod test_canonicalize {
         assert_eq!(problems, vec![]);
 
         assert_eq!(output, Out {
-            locals: vec!["func", "x", "y", "z"],
+            locals: vec!["increment", "x", "y", "z"],
             globals: vec![],
             variants: vec![],
-            calls: vec!["func"],
+            calls: vec!["increment"],
             tail_call: None
         }.into());
 
-        // This should get reordered to the following, so that in code gen
-        // everything will have been set before it gets read.
-        assert_eq!(expr, can_expr(indoc!(r#"
-            x = 9
-            y = x + 1
-            func = \arg -> arg + y
-            z = func 2
+        let symbols = assigned_symbols(expr);
 
-            z * 3
-        "#)).0);
+        // In code gen, for everything to have been set before it gets read,
+        // the following must be true about when things are assigned:
+        //
+        // x must be assigned before y
+        // y must be assigned before z
+        //
+        // The order of the increment function doesn't matter.
+        assert_before("x", "y", &symbols);
+        assert_before("y", "z", &symbols);
     }
 
     #[test]
