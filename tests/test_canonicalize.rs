@@ -485,4 +485,14 @@ mod test_canonicalize {
     //         ""))
     //     );
     // }
+
+    // HELPERS
+
+    #[test]
+    fn sort_cyclic_idents() {
+        assert_eq!(canonicalize::sort_cyclic_idents(
+            vec![loc(unqualified("c")), loc(unqualified("a")), loc(unqualified("b"))]),
+            vec![loc(unqualified("a")), loc(unqualified("b")), loc(unqualified("c"))]
+        );
+    }
 }

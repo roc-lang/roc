@@ -668,12 +668,14 @@ fn canonicalize(
                 Err(node_in_cycle) => {
                     // We have one node we know is in the cycle.
                     // We want to show the entire cycle in the error message, so expand it out.
-                    let loc_idents_in_cycle: Vec<Located<expr::Ident>> =
+                    let mut loc_idents_in_cycle: Vec<Located<expr::Ident>> =
                         strongly_connected_component(&node_in_cycle, successors)
                             .into_iter()
                             .rev() // Strongly connected component gives us the reverse of the sorting we want!
                             .map(|symbol| refs_by_assignment.get(&symbol).unwrap().0.clone())
                             .collect();
+
+                    loc_idents_in_cycle = sort_cyclic_idents(loc_idents_in_cycle);
 
                     env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
 
@@ -860,8 +862,51 @@ fn references_from_local<T>(
 
             answer
         },
-        None => References::new()
+        None => {
+            // This should never happen! If the local was not recognized, it should not have been
+            // added to the local references.
+            unreachable!();
+        }
     }
+}
+
+/// When we get a list of cyclic idents, the first node listed is a matter of chance.
+/// This reorders the list such that the first node listed is always alphabetically the lowest,
+/// while preserving the overall order of the cycle.
+///
+/// Example: the cycle  (c ---> a ---> b)  becomes  (a ---> b ---> c)
+pub fn sort_cyclic_idents(loc_idents: Vec<Located<Ident>>) -> Vec<Located<Ident>> {
+    let mut opt_lowest_ident = None;
+
+    // Find the lowest ident of the bunch. We'll use that as
+    // the first element in the vector.
+    for ident in loc_idents.iter() {
+        match &opt_lowest_ident {
+            &None => {
+                opt_lowest_ident = Some(ident.clone());
+            }
+            &Some(ref current_lowest) => {
+                if ident.value < current_lowest.value {
+                    opt_lowest_ident = Some(ident.clone())
+                }
+            }
+        }
+    }
+
+    let lowest_ident = opt_lowest_ident.unwrap();
+    let mut slice_iter = loc_idents.as_slice().split(|loc_ident| loc_ident.value == lowest_ident.value);
+    let before = slice_iter.next().unwrap();
+    let after = slice_iter.next().unwrap();
+
+    assert!(slice_iter.next().is_none());
+
+    let mut answer = Vec::with_capacity(before.len() + after.len() + 1);
+
+    answer.push(lowest_ident); // lowest_ident was removed by split()
+    answer.extend_from_slice(after); // swap the order of before and after
+    answer.extend_from_slice(before);
+
+    answer
 }
 
 fn references_from_call<T>(
