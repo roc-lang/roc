@@ -512,10 +512,13 @@ fn canonicalize(
 
             // Add the assigned identifiers to scope. If there's a collision, it means there
             // was shadowing, which will be handled later.
-            let assigned_idents: ImMap<Ident, (Symbol, Region)> =
+            let assigned_idents: Vec<(Ident, (Symbol, Region))> =
                 idents_from_patterns(assignments.clone().into_iter().map(|(loc_pattern, _)| loc_pattern), &scope);
 
-            scope.idents = scope.idents.union(assigned_idents.clone());
+            let symbols_by_ident: ImMap<Ident, (Symbol, Region)> =
+                assigned_idents.clone().into_iter().collect();
+
+            scope.idents = scope.idents.union(symbols_by_ident.clone());
 
             let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
             let mut can_assignments_by_symbol: MutMap<Symbol, (Pattern, Located<Expr>)> = MutMap::default();
@@ -675,7 +678,7 @@ fn canonicalize(
                             .map(|symbol| refs_by_assignment.get(&symbol).unwrap().0.clone())
                             .collect();
 
-                    loc_idents_in_cycle = sort_cyclic_idents(loc_idents_in_cycle);
+                    loc_idents_in_cycle = sort_cyclic_idents(loc_idents_in_cycle, &mut assigned_idents.iter().map(|(ident, _)| ident));
 
                     env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
 
@@ -696,6 +699,9 @@ fn canonicalize(
             // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
             let symbol = scope.gen_unique_symbol();
 
+            let arg_idents: Vec<(Ident, (Symbol, Region))> =
+                idents_from_patterns(loc_arg_patterns.clone().into_iter(), &scope);
+
             // The body expression gets a new scope for canonicalization.
             // Shadow `scope` to make sure we don't accidentally use the original one for the
             // rest of this block.
@@ -703,10 +709,7 @@ fn canonicalize(
 
             // Add the arguments' idents to scope.idents. If there's a collision,
             // it means there was shadowing, which will be handled later.
-            let arg_idents: ImMap<Ident, (Symbol, Region)> =
-                idents_from_patterns(loc_arg_patterns.clone().into_iter(), &scope);
-
-            scope.idents = scope.idents.union(arg_idents.clone());
+            scope.idents = scope.idents.union(arg_idents.clone().into_iter().collect());
 
             let can_args: Vec<Pattern> = loc_arg_patterns.into_iter().map(|loc_pattern| {
                 // Exclude the current ident from shadowable_idents; you can't shadow yourself!
@@ -769,10 +772,10 @@ fn canonicalize(
                 // Patterns introduce new idents to the scope!
                 // Add the assigned identifiers to scope. If there's a collision, it means there
                 // was shadowing, which will be handled later.
-                let assigned_idents: ImMap<Ident, (Symbol, Region)> =
+                let assigned_idents: Vec<(Ident, (Symbol, Region))> =
                     idents_from_patterns(std::iter::once(loc_pattern), &scope);
 
-                scope.idents = scope.idents.union(assigned_idents.clone());
+                scope.idents = scope.idents.union(assigned_idents.clone().into_iter().collect());
 
                 let (can_expr, branch_output) = canonicalize(env, &mut scope, loc_expr);
 
@@ -875,36 +878,30 @@ fn references_from_local<T>(
 /// while preserving the overall order of the cycle.
 ///
 /// Example: the cycle  (c ---> a ---> b)  becomes  (a ---> b ---> c)
-pub fn sort_cyclic_idents(loc_idents: Vec<Located<Ident>>) -> Vec<Located<Ident>> {
-    let mut opt_lowest_ident = None;
+pub fn sort_cyclic_idents<'a, I>(loc_idents: Vec<Located<Ident>>, ordered_idents: &mut I) -> Vec<Located<Ident>>
+where I: Iterator<Item=&'a Ident>
+{
+    // Find the first ident in ordered_idents that also appears in loc_idents.
+    let first_ident = ordered_idents.find(|ident| loc_idents.iter().any(|loc_ident| &&loc_ident.value == ident)).unwrap();
 
-    // Find the lowest ident of the bunch. We'll use that as
-    // the first element in the vector.
-    for ident in loc_idents.iter() {
-        match &opt_lowest_ident {
-            &None => {
-                opt_lowest_ident = Some(ident.clone());
-            }
-            &Some(ref current_lowest) => {
-                if ident.value < current_lowest.value {
-                    opt_lowest_ident = Some(ident.clone())
-                }
-            }
+    let mut answer = Vec::with_capacity(loc_idents.len());
+    let mut end = Vec::with_capacity(loc_idents.len());
+    let mut encountered_first_ident = false;
+
+    for loc_ident in loc_idents {
+        if encountered_first_ident {
+            answer.push(loc_ident);
+        } else if &loc_ident.value == first_ident {
+            encountered_first_ident = true;
+
+            answer.push(loc_ident);
+        } else {
+            end.push(loc_ident);
         }
     }
 
-    let lowest_ident = opt_lowest_ident.unwrap();
-    let mut slice_iter = loc_idents.as_slice().split(|loc_ident| loc_ident.value == lowest_ident.value);
-    let before = slice_iter.next().unwrap();
-    let after = slice_iter.next().unwrap();
-
-    assert!(slice_iter.next().is_none());
-
-    let mut answer = Vec::with_capacity(before.len() + after.len() + 1);
-
-    answer.push(lowest_ident); // lowest_ident was removed by split()
-    answer.extend_from_slice(after); // swap the order of before and after
-    answer.extend_from_slice(before);
+    // Add the contents of `end` to the end of the answer.
+    answer.extend_from_slice(end.as_slice());
 
     answer
 }
@@ -952,10 +949,10 @@ fn references_from_call<T>(
 }
 
 
-fn idents_from_patterns<I>(loc_patterns: I, scope: &Scope) -> ImMap<Ident, (Symbol, Region)>
+fn idents_from_patterns<I>(loc_patterns: I, scope: &Scope) -> Vec<(Ident, (Symbol, Region))>
 where I: Iterator<Item = Located<expr::Pattern>>
 {
-    let mut answer = ImMap::default();
+    let mut answer = Vec::new();
 
     for loc_pattern in loc_patterns {
         add_idents_from_pattern(loc_pattern, scope, &mut answer);
@@ -968,7 +965,7 @@ where I: Iterator<Item = Located<expr::Pattern>>
 fn add_idents_from_pattern(
     loc_pattern: Located<expr::Pattern>,
     scope: &Scope,
-    answer: &mut ImMap<Ident, (Symbol, Region)>
+    answer: &mut Vec<(Ident, (Symbol, Region))>
 ) {
     use expr::Pattern::*;
 
@@ -976,7 +973,7 @@ fn add_idents_from_pattern(
         Identifier(name) => {
             let symbol = scope.symbol(&name);
 
-            answer.insert(Ident::Unqualified(name), (symbol, loc_pattern.region));
+            answer.push((Ident::Unqualified(name), (symbol, loc_pattern.region)));
         },
         Variant(_, Some(loc_args)) => {
             for loc_arg in loc_args {

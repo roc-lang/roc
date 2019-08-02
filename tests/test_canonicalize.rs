@@ -63,6 +63,14 @@ mod test_canonicalize {
         Ident::Unqualified(string.to_string())
     }
 
+    fn unqualifieds(strings: Vec<&str>) -> Vec<Ident> {
+        strings.into_iter().map(unqualified).collect()
+    }
+
+    fn loc_unqualifieds(strings: Vec<&str>) -> Vec<Located<Ident>> {
+        strings.into_iter().map(|string| loc(unqualified(string))).collect()
+    }
+
     fn unused(string: &str) -> Problem {
         Problem::UnusedAssignment(loc(unqualified(string)))
     }
@@ -175,8 +183,8 @@ mod test_canonicalize {
         "#));
 
         assert_eq!(problems, vec![
-            Problem::UnusedAssignment(loc(Ident::Unqualified("func".to_string()))),
             Problem::UnusedAssignment(loc(Ident::Unqualified("unused".to_string()))),
+            Problem::UnusedAssignment(loc(Ident::Unqualified("func".to_string()))),
         ]);
 
         assert_eq!(output, Out {
@@ -249,7 +257,7 @@ mod test_canonicalize {
             c
         "#));
 
-        assert_eq!(problems, vec![unused("b"), unused("a")]);
+        assert_eq!(problems, vec![unused("a"), unused("b")]);
 
         assert_eq!(output, Out {
             locals: vec!["c"],
@@ -409,10 +417,11 @@ mod test_canonicalize {
 
         assert_eq!(problems, vec![
             Problem::CircularAssignment(vec![
-                loc(unqualified("a")),
-                loc(unqualified("b")),
+                // c should appear first because it's assigned first in the original expression.
                 loc(unqualified("c")),
                 loc(unqualified("d")),
+                loc(unqualified("a")),
+                loc(unqualified("b")),
             ])
         ]);
     }
@@ -491,9 +500,14 @@ mod test_canonicalize {
 
     #[test]
     fn sort_cyclic_idents() {
-        assert_eq!(canonicalize::sort_cyclic_idents(
-            vec![loc(unqualified("c")), loc(unqualified("a")), loc(unqualified("b"))]),
-            vec![loc(unqualified("a")), loc(unqualified("b")), loc(unqualified("c"))]
+        let assigned_idents = unqualifieds(vec!["blah", "c", "b", "d", "a"]);
+
+        assert_eq!(
+            canonicalize::sort_cyclic_idents(
+                loc_unqualifieds(vec!["a", "b", "c", "d"]),
+                &mut assigned_idents.iter()
+            ),
+            loc_unqualifieds(vec!["c", "d", "a", "b"])
         );
     }
 }
