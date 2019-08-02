@@ -24,7 +24,7 @@ mod test_canonicalize {
     use helpers::{loc, loc_box, empty_region, zero_loc_expr, mut_map_from_pairs};
 
     fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
-        can_expr_with("testDecl", expr_str, &ImMap::default(), &ImMap::default())
+        can_expr_with("blah", expr_str, &ImMap::default(), &ImMap::default())
     }
 
     fn can_expr_with(
@@ -48,7 +48,7 @@ mod test_canonicalize {
             }
         };
 
-        let home = "TestModule".to_string();
+        let home = "Test".to_string();
         let (loc_expr, output, problems, procedures) =
             canonicalize::canonicalize_declaration(home, name, loc(zero_loc_expr(expr)), declared_idents, declared_variants);
 
@@ -56,7 +56,7 @@ mod test_canonicalize {
     }
 
     fn sym(name: &str) -> Symbol {
-        Symbol::new("TestModule$testDecl$", name)
+        Symbol::new("Test$blah$", name)
     }
 
     fn unqualified(string :&str) -> Ident {
