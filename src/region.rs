@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Region {
     pub start_line: u32,
     pub start_col: u32,
@@ -9,7 +9,7 @@ pub struct Region {
     pub end_col: u32,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Located<T> {
     pub region: Region,
     pub value: T,
@@ -23,13 +23,13 @@ impl<T> Located<T> {
 
 impl<T> Located<T> {
     pub fn with_value<U>(&self, value: U) -> Located<U> {
-        Located { region: self.region, value: value }
+        Located { region: self.region.clone(), value: value }
     }
 
     pub fn map<U, F>(&self, transform: F) -> Located<U>
         where F: (FnOnce(&T) -> U)
     {
-        Located { region: self.region, value: transform(&self.value) }
+        Located { region: self.region.clone(), value: transform(&self.value) }
     }
 }
 
@@ -38,7 +38,7 @@ impl<T> fmt::Debug for Located<T>
 where T: fmt::Debug
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let region = self.region;
+        let region = self.region.clone();
 
         if region.start_line == 0 && region.start_col == 0 && region.end_line == 0 && region.end_col == 0 {
             // In tests, it's super common to set all Located values to 0.

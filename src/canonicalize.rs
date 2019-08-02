@@ -298,7 +298,6 @@ fn canonicalize(
 ) -> (Located<Expr>, Output) {
     use self::Expr::*;
 
-    let region = loc_expr.region;
     let (expr, output) = match loc_expr.value {
         expr::Expr::Int(num) => ( Int(num), Output::new() ),
         expr::Expr::Frac(numerator, denominator) => ( Frac(numerator, denominator), Output::new()),
@@ -389,7 +388,7 @@ fn canonicalize(
                 match resolve_ident(&env, &scope, ident, &mut output.references) {
                     Ok(symbol) => Var(symbol),
                     Err(ident) => {
-                        let loc_ident = Located {region, value: ident};
+                        let loc_ident = Located {region: loc_expr.region.clone(), value: ident};
 
                         env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
 
@@ -430,7 +429,7 @@ fn canonicalize(
                         CallByName(symbol, can_args)
                     }
                     Err(ident) => {
-                        let loc_ident = Located {region, value: ident};
+                        let loc_ident = Located {region: loc_expr.region.clone(), value: ident};
 
                         env.problem(Problem::UnrecognizedFunctionName(loc_ident.clone()));
 
@@ -494,7 +493,7 @@ fn canonicalize(
                 match resolve_variant_name(&env, variant_name, &mut output.references) {
                     Ok(symbol) => ApplyVariant(symbol, opt_can_args),
                     Err(variant_name) => {
-                        let loc_variant = Located {region, value: variant_name};
+                        let loc_variant = Located {region: loc_expr.region.clone(), value: variant_name};
 
                         env.problem(Problem::UnrecognizedVariant(loc_variant.clone()));
 
@@ -593,7 +592,7 @@ fn canonicalize(
                 for symbol in assigned_symbols {
                     can_assignments_by_symbol.insert(
                         symbol,
-                        (can_pattern.clone(), Located {region: loc_can_expr.region, value: can_expr.clone()})
+                        (can_pattern.clone(), Located {region: loc_can_expr.region.clone(), value: can_expr.clone()})
                     );
                 }
             }
@@ -734,7 +733,7 @@ fn canonicalize(
             // We've finished analyzing the closure. Its references.locals are now the values it closes over,
             // since we removed the only locals it shouldn't close over (its arguments).
             // Register it as a top-level procedure in the Env!
-            env.register_closure(symbol.clone(), can_args, loc_body_expr.value, region, output.references);
+            env.register_closure(symbol.clone(), can_args, loc_body_expr.value, loc_expr.region.clone(), output.references);
 
             // Having now registered the closure's references, the function pointer that remains has
             // no references. The references we registered will be used only if this symbol gets called!
@@ -824,7 +823,7 @@ fn canonicalize(
     // We aren't going to bother with DCE at the level of local assignments. It's going to be
     // a rounding error anyway (especially given that they'll be surfaced as warnings), LLVM will
     // DCE them in optimized builds, and it's not worth the bookkeeping for dev builds.
-    (Located {region, value: expr}, output)
+    (Located {region: loc_expr.region.clone(), value: expr}, output)
 }
 
 fn references_from_local<T>(
@@ -1055,7 +1054,7 @@ fn canonicalize_pattern(
 ) -> Pattern {
     use expr::Pattern::*;
 
-    let region = loc_pattern.region;
+    let region = loc_pattern.region.clone();
     match &loc_pattern.value {
         &Identifier(ref name) => {
             let unqualified_ident = Ident::Unqualified(name.clone());

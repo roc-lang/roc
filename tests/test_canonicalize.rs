@@ -386,7 +386,7 @@ mod test_canonicalize {
                         }
                     }
                 }).collect()
-            }
+            },
             _ => {
                 panic!("Called assigned_symbols passing a non-Assign expr!");
             }
