@@ -645,10 +645,10 @@ fn canonicalize(
             // This way, during code gen, no assignment will refer to a value that hasn't been initialized yet.
             // As a bonus, the topological sort also reveals any cycles between the assignments, allowing
             // us to give a CircularAssignment error.
-            let successors = |symbol: &Symbol| -> ImSet<Symbol>  {
+            let successors = |symbol: &Symbol| -> ImSet<Symbol> {
                 let (_, references) = refs_by_assignment.get(symbol).unwrap();
 
-                references.locals.clone()
+                local_successors(&references, &env.procedures)
             };
 
             let assigned_symbols: Vec<Symbol> =
@@ -840,6 +840,36 @@ where I: Iterator<Item=&'a (K, V)>,
     }
 
     map
+}
+
+fn local_successors(
+    references: &References,
+    procedures: &MutMap<Symbol, Procedure>,
+) -> ImSet<Symbol> {
+    let mut answer = references.locals.clone();
+
+    for call_symbol in references.calls.iter() {
+        answer = answer.union(call_successors(call_symbol, procedures));
+    }
+
+    answer
+}
+
+fn call_successors(
+    call_symbol: &Symbol,
+    procedures: &MutMap<Symbol, Procedure>,
+) -> ImSet<Symbol> {
+    // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 procedures reference each other; may need to track visited procedures!
+    match procedures.get(call_symbol) {
+        Some(procedure) => {
+            let mut answer = local_successors(&procedure.references, procedures);
+
+            answer.insert(call_symbol.clone());
+
+            answer
+        },
+        None => ImSet::default()
+    }
 }
 
 fn references_from_local<T>(
