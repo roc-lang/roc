@@ -21,7 +21,7 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
-    FunctionPointer(Symbol),
+    FunctionPointer(Symbol), // TODO do we actually need this, or is it completely redundant with Var?
     CallByName(Symbol, Vec<Located<Expr>>),
     InterpolatedStr(Vec<(String, Expr)>, String),
 
