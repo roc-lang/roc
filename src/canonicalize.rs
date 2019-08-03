@@ -513,12 +513,9 @@ fn canonicalize(
             // Add the assigned identifiers to scope. If there's a collision, it means there
             // was shadowing, which will be handled later.
             let assigned_idents: Vec<(Ident, (Symbol, Region))> =
-                idents_from_patterns(assignments.clone().into_iter().map(|(loc_pattern, _)| loc_pattern), &scope);
+                idents_from_patterns(assignments.clone().iter().map(|(loc_pattern, _)| loc_pattern), &scope);
 
-            let symbols_by_ident: ImMap<Ident, (Symbol, Region)> =
-                assigned_idents.clone().into_iter().collect();
-
-            scope.idents = scope.idents.union(symbols_by_ident.clone());
+            scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
             let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
             let mut can_assignments_by_symbol: MutMap<Symbol, (Pattern, Located<Expr>)> = MutMap::default();
@@ -538,7 +535,7 @@ fn canonicalize(
 
                 // Store the referenced locals in the refs_by_assignment map, so we can later figure out
                 // which assigned names reference each other.
-                for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(loc_pattern.clone()), &scope) {
+                for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(&loc_pattern), &scope) {
                     let refs = can_output.references.clone();
 
                     refs_by_assignment.insert(symbol.clone(), (Located {value: ident, region}, refs));
@@ -699,17 +696,17 @@ fn canonicalize(
             // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
             let symbol = scope.gen_unique_symbol();
 
-            let arg_idents: Vec<(Ident, (Symbol, Region))> =
-                idents_from_patterns(loc_arg_patterns.clone().into_iter(), &scope);
-
             // The body expression gets a new scope for canonicalization.
             // Shadow `scope` to make sure we don't accidentally use the original one for the
             // rest of this block.
             let mut scope = scope.clone();
 
+            let arg_idents: Vec<(Ident, (Symbol, Region))> =
+                idents_from_patterns(loc_arg_patterns.iter(), &scope);
+
             // Add the arguments' idents to scope.idents. If there's a collision,
             // it means there was shadowing, which will be handled later.
-            scope.idents = scope.idents.union(arg_idents.clone().into_iter().collect());
+            scope.idents = union_pairs(scope.idents, arg_idents.iter());
 
             let can_args: Vec<Pattern> = loc_arg_patterns.into_iter().map(|loc_pattern| {
                 // Exclude the current ident from shadowable_idents; you can't shadow yourself!
@@ -773,9 +770,9 @@ fn canonicalize(
                 // Add the assigned identifiers to scope. If there's a collision, it means there
                 // was shadowing, which will be handled later.
                 let assigned_idents: Vec<(Ident, (Symbol, Region))> =
-                    idents_from_patterns(std::iter::once(loc_pattern), &scope);
+                    idents_from_patterns(std::iter::once(&loc_pattern), &scope);
 
-                scope.idents = scope.idents.union(assigned_idents.clone().into_iter().collect());
+                scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
                 let (can_expr, branch_output) = canonicalize(env, &mut scope, loc_expr);
 
@@ -829,6 +826,20 @@ fn canonicalize(
     // a rounding error anyway (especially given that they'll be surfaced as warnings), LLVM will
     // DCE them in optimized builds, and it's not worth the bookkeeping for dev builds.
     (Located {region: loc_expr.region.clone(), value: expr}, output)
+}
+
+fn union_pairs<'a, K, V, I>(mut map: ImMap<K, V>, pairs: I) -> ImMap<K, V>
+where I: Iterator<Item=&'a (K, V)>,
+    K: std::hash::Hash + Eq + Clone,
+    K: 'a,
+    V: Clone,
+    V: 'a
+{
+    for (ref k, ref v) in pairs {
+        map.insert(k.clone(), v.clone());
+    }
+
+    map
 }
 
 fn references_from_local<T>(
@@ -949,8 +960,8 @@ fn references_from_call<T>(
 }
 
 
-fn idents_from_patterns<I>(loc_patterns: I, scope: &Scope) -> Vec<(Ident, (Symbol, Region))>
-where I: Iterator<Item = Located<expr::Pattern>>
+fn idents_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Ident, (Symbol, Region))>
+where I: Iterator<Item = &'a Located<expr::Pattern>>
 {
     let mut answer = Vec::new();
 
@@ -963,25 +974,30 @@ where I: Iterator<Item = Located<expr::Pattern>>
 
 /// helper function for idents_from_patterns
 fn add_idents_from_pattern(
-    loc_pattern: Located<expr::Pattern>,
+    loc_pattern: &Located<expr::Pattern>,
     scope: &Scope,
     answer: &mut Vec<(Ident, (Symbol, Region))>
 ) {
     use expr::Pattern::*;
 
-    match loc_pattern.value {
-        Identifier(name) => {
+    match &loc_pattern.value {
+        &Identifier(ref name) => {
             let symbol = scope.symbol(&name);
 
-            answer.push((Ident::Unqualified(name), (symbol, loc_pattern.region)));
+            answer.push((Ident::Unqualified(name.clone()), (symbol, loc_pattern.region.clone())));
         },
-        Variant(_, Some(loc_args)) => {
-            for loc_arg in loc_args {
-                add_idents_from_pattern(loc_arg, scope, answer);
+        &Variant(_, ref opt_loc_args) => {
+            match opt_loc_args {
+                &None => (),
+                &Some(ref loc_args) => {
+                    for loc_arg in loc_args.iter() {
+                        add_idents_from_pattern(loc_arg, scope, answer);
+                    }
+                }
             }
         },
-        Variant(_, None) | Integer(_) | Fraction(_, _) | ExactString(_)
-            | EmptyRecordLiteral | Underscore => ()
+        &Integer(_) | &Fraction(_, _) | &ExactString(_)
+            | &EmptyRecordLiteral | &Underscore => ()
     }
 }
 
