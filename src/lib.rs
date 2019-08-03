@@ -6,7 +6,7 @@ pub mod operator;
 pub mod region;
 pub mod canonicalize;
 pub mod collections;
-mod graph;
+pub mod graph;
 
 // #[macro_use]
 // extern crate log;
