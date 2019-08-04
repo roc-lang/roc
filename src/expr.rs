@@ -14,7 +14,6 @@ pub enum Expr {
 
     // Lookups
     Var(Ident),
-    CallByName(Ident, Vec<Located<Expr>>),
     InterpolatedStr(Vec<(String, Located<Ident>)>, String),
 
     // Pattern Matching
@@ -121,12 +120,6 @@ impl Expr {
                         (pattern, loc_expr.with_value(loc_expr.value.walk(transform)))
                     ).collect(),
                     Box::new(loc_ret.with_value(loc_ret.value.walk(transform)))
-                )
-            },
-            CallByName(ident, args) => {
-                CallByName(
-                    ident,
-                    args.into_iter().map(|arg| arg.with_value(arg.value.walk(transform))).collect()
                 )
             },
             Apply(fn_expr, args) => {

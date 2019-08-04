@@ -287,7 +287,36 @@ mod test_canonicalize {
             globals: vec![],
             variants: vec![],
             calls: vec!["fibonacci"],
-            tail_call: Some("fibonacci")
+            tail_call: None
+        }.into());
+    }
+
+    #[test]
+    fn can_tail_call() {
+        // TODO check the global params - make sure this
+        // is considered a tail call, even though it only
+        // calls itself from one branch!
+        let (_, output, problems, _) = can_expr(indoc!(r#"
+            factorial = \num ->
+                factorialHelp num 0
+
+            factorialHelp = \num total ->
+                if num == 0 then
+                    total
+                else
+                    factorialHelp (num - 1) (total * num)
+
+            factorial 9
+        "#));
+
+        assert_eq!(problems, vec![]);
+
+        assert_eq!(output, Out {
+            locals: vec!["factorial", "factorialHelp"],
+            globals: vec![],
+            variants: vec![],
+            calls: vec!["factorial", "factorialHelp"],
+            tail_call: None
         }.into());
     }
 

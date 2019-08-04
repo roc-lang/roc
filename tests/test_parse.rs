@@ -62,8 +62,8 @@ mod test_parse {
     }
 
     fn call_by_name(name: &str, args: Vec<Located<Expr>>) -> Expr {
-        CallByName(
-            raw(name),
+        Apply(
+            loc_box(Var(raw(name))),
             args.into_iter().map(|loc_expr| loc(zero_loc_expr(loc_expr.value))).collect()
         )
     }

@@ -22,7 +22,6 @@ pub enum Expr {
     // Lookups
     Var(Symbol),
     FunctionPointer(Symbol), // TODO do we actually need this, or is it completely redundant with Var?
-    CallByName(Symbol, Vec<Located<Expr>>),
     InterpolatedStr(Vec<(String, Expr)>, String),
 
     // Pattern Matching
@@ -344,6 +343,13 @@ fn canonicalize(
                 outputs.push(arg_out);
             }
 
+            match &fn_expr.value {
+                &Var(ref sym) => {
+                    output.references.calls.insert(sym.clone());
+                },
+                _ => ()
+            };
+
             let expr = Apply(Box::new(fn_expr), args);
 
             for arg_out in outputs {
@@ -370,7 +376,12 @@ fn canonicalize(
                 Pizza => {
                     match &right_expr.value {
                         &Var(ref sym) => Some(sym.clone()),
-                        &CallByName(ref sym, _) => Some(sym.clone()),
+                        &Apply(ref loc_boxed_expr, _) => {
+                            match (*loc_boxed_expr.clone()).value {
+                                Var(sym) => Some(sym),
+                                _ => None
+                            }
+                        }
                         _ => None
                     }
                 },
@@ -393,47 +404,6 @@ fn canonicalize(
                         env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
 
                         UnrecognizedConstant(loc_ident)
-                    }
-                };
-
-            (can_expr, output)
-        },
-
-        expr::Expr::CallByName(ident, args) => {
-            // Canonicalize the arguments and union their references into our output.
-            // We'll do this even if the function name isn't recognized, since we still
-            // want to report canonicalization problems with the function's arguments,
-            // and their references still matter for purposes of detecting unused things.
-            let mut output = Output::new();
-            let mut can_args = Vec::with_capacity(args.len());
-
-            for arg in args {
-                let (loc_expr, arg_output) = canonicalize(env, scope, arg);
-
-                output.references = output.references.union(arg_output.references);
-
-                can_args.push(loc_expr);
-            }
-
-            let can_expr =
-                match resolve_ident(&env, &scope, ident, &mut output.references) {
-                    Ok(symbol) => {
-                        // Record that we did, in fact, call this symbol.
-                        output.references.calls.insert(symbol.clone());
-
-                        // CallByName expressions are considered tail calls,
-                        // so that their parents in the expression tree will
-                        // correctly inherit tail-call-ness from them.
-                        output.tail_call = Some(symbol.clone());
-
-                        CallByName(symbol, can_args)
-                    }
-                    Err(ident) => {
-                        let loc_ident = Located {region: loc_expr.region.clone(), value: ident};
-
-                        env.problem(Problem::UnrecognizedFunctionName(loc_ident.clone()));
-
-                        UnrecognizedFunctionName(loc_ident)
                     }
                 };
 
@@ -1050,7 +1020,7 @@ fn remove_idents(
 }
 
 /// If it could not be found, return it unchanged as an Err.
-#[inline(always)] // This is shared code between Var() and CallByName(); it was inlined when handwritten
+#[inline(always)] // This is shared code between Var and InterpolatedStr; it was inlined when handwritten
 fn resolve_ident(
     env: &Env,
     scope: &Scope,
@@ -1282,6 +1252,7 @@ fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: &Region
 
 // Precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
 // https://github.com/gluon-lang/gluon
+// Thank you, Markus!
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrecedenceProblem {
     BothNonAssociative(Located<Operator>, Located<Operator>),

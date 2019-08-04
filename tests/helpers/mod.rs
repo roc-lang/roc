@@ -42,7 +42,6 @@ pub fn zero_loc_expr(expr: Expr) -> Expr {
 
             Assign(zeroed_assignments, loc_box(zero_loc_expr((*loc_ret).value)))
         },
-        CallByName(ident, args) => CallByName(ident, args.into_iter().map(|arg| loc(zero_loc_expr(arg.value))).collect()),
         Apply(fn_expr, args) => Apply(loc_box(zero_loc_expr((*fn_expr).value)), args.into_iter().map(|arg| loc(zero_loc_expr(arg.value))).collect()),
         Operator(left, op, right) => Operator(loc_box(zero_loc_expr((*left).value)), zero_loc(op), loc_box(zero_loc_expr((*right).value))),
         Closure(patterns, body) => Closure(patterns.into_iter().map(zero_loc).collect(), loc_box(zero_loc_expr((*body).value))),

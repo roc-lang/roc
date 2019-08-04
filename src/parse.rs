@@ -539,13 +539,13 @@ pub fn func_or_var<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
-    ident().and(optional(apply_args(min_indent)))
-        .map(|(name, opt_args): (String, Option<Vec<Located<Expr>>>)| {
+    located(ident()).and(optional(apply_args(min_indent)))
+        .map(|(loc_name, opt_args): (Located<String>, Option<Vec<Located<Expr>>>)| {
             // Use optional(sep_by1()) over sep_by() to avoid
             // allocating a Vec in the common case where this is a var
             match opt_args {
-                None => Expr::Var(Ident::Unqualified(name)),
-                Some(args) => Expr::CallByName(Ident::Unqualified(name), args)
+                None => Expr::Var(Ident::Unqualified(loc_name.value)),
+                Some(args) => Expr::Apply(Box::new(Located { region: loc_name.region, value: Expr::Var(Ident::Unqualified(loc_name.value))}), args)
             }
         })
 }
