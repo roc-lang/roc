@@ -21,7 +21,7 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
-    FunctionPointer(Symbol), // TODO do we actually need this, or is it completely redundant with Var?
+    FunctionPointer(Symbol),
     InterpolatedStr(Vec<(String, Expr)>, String),
 
     // Pattern Matching
