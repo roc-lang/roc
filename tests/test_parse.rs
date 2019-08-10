@@ -12,37 +12,13 @@ mod test_parse {
     use roc::expr::{Expr, Ident, VariantName};
     use roc::operator::Operator::*;
     use roc::region::Located;
-    use roc::parse;
-    use roc::parse_state::{IndentablePosition};
-    use combine::{Parser, eof};
-    use combine::error::{ParseError};
-    use combine::stream::{Stream};
+    use roc::parse_state::IndentablePosition;
+    use combine::Parser;
     use combine::easy;
-    use combine::stream::state::{State};
-    use helpers::{loc, loc_box, zero_loc_expr};
+    use combine::stream::state::State;
+    use helpers::{loc, loc_box, zero_loc_expr, parse_without_loc, standalone_expr};
 
     // PARSE TEST HELPERS
-
-    fn standalone_expr<I>() -> impl Parser<Input = I, Output = Expr>
-    where I: Stream<Item = char, Position = IndentablePosition>,
-        I::Error: ParseError<I::Item, I::Range, I::Position>
-    {
-        parse::expr().skip(eof())
-    }
-
-    fn parse_without_loc(actual_str: &str) -> Result<(Expr, String), String>{
-        parse_standalone(actual_str)
-            .map(|(expr, leftover)| (zero_loc_expr(expr), leftover))
-    }
-
-    fn parse_standalone(actual_str: &str) -> Result<(Expr, String), String> {
-        let parse_state: State<&str, IndentablePosition> = State::with_positioner(actual_str, IndentablePosition::default());
-
-        match standalone_expr().easy_parse(parse_state) {
-            Ok((expr, state)) => Ok(( expr, state.input.to_string() )),
-            Err(errors) => Err(errors.to_string())
-        }
-    }
 
     fn easy_parse_standalone(actual_str: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
         let parse_state = State::with_positioner(actual_str, IndentablePosition::default());

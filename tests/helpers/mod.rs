@@ -2,6 +2,12 @@ use roc::expr::{Expr, Pattern};
 use roc::region::{Located, Region};
 use std::hash::Hash;
 use roc::collections::{MutMap};
+use roc::parse_state::{IndentablePosition};
+use combine::stream::state::State;
+use combine::{Parser, eof};
+use combine::error::ParseError;
+use combine::stream::Stream;
+use roc::parse;
 
 pub fn loc_box<T>(val: T) -> Box<Located<T>> {
     Box::new(loc(val))
@@ -85,3 +91,30 @@ pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>
 
         answer
     }
+
+// PARSE HELPERS
+
+
+#[allow(dead_code)] // For some reason rustc thinks this isn't used. It is, though, in test_parse.rs
+pub fn standalone_expr<I>() -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    parse::expr().skip(eof())
+}
+
+#[allow(dead_code)] // For some reason rustc thinks this isn't used. It is, though, in test_parse.rs
+pub fn parse_without_loc(actual_str: &str) -> Result<(Expr, String), String> {
+    parse_standalone(actual_str)
+        .map(|(expr, leftover)| (zero_loc_expr(expr), leftover))
+}
+
+#[allow(dead_code)] // For some reason rustc thinks this isn't used. It is, though, in test_parse.rs
+pub fn parse_standalone(actual_str: &str) -> Result<(Expr, String), String> {
+    let parse_state: State<&str, IndentablePosition> = State::with_positioner(actual_str, IndentablePosition::default());
+
+    match standalone_expr().easy_parse(parse_state) {
+        Ok((expr, state)) => Ok(( expr, state.input.to_string() )),
+        Err(errors) => Err(errors.to_string())
+    }
+}
