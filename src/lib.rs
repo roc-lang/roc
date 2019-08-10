@@ -8,11 +8,6 @@ pub mod canonicalize;
 pub mod collections;
 pub mod graph;
 
-// #[macro_use]
-// extern crate log;
-
-#[cfg(feature = "persistent")]
-extern crate dogged;
 
 extern crate im_rc;
 extern crate fraction;
