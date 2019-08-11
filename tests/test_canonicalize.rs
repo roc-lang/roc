@@ -12,16 +12,11 @@ mod test_canonicalize {
     use roc::canonicalize::{Expr, Output, Problem, Symbol, References, Procedure, Pattern};
     use roc::canonicalize::Expr::*;
     use roc::canonicalize::Pattern::*;
-    use roc::expr::{Ident};
-    use roc::expr;
+    use roc::expr::{Ident, VariantName};
     use roc::operator::Operator;
     use roc::region::{Located, Region};
-    use roc::parse;
     use roc::collections::{ImMap, ImSet, MutMap};
-    use roc::parse_state::{IndentablePosition};
-    use combine::{Parser, eof};
-    use combine::stream::state::{State};
-    use helpers::{loc, loc_box, empty_region, zero_loc_expr, mut_map_from_pairs};
+    use helpers::{loc, loc_box, empty_region, zero_loc_expr, parse_without_loc, mut_map_from_pairs};
 
     fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
         can_expr_with("blah", expr_str, &ImMap::default(), &ImMap::default())
@@ -31,22 +26,13 @@ mod test_canonicalize {
         name: &str,
         expr_str: &str,
         declared_idents: &ImMap<Ident, (Symbol, Region)>,
-        declared_variants: &ImMap<Symbol, Located<expr::VariantName>>,
+        declared_variants: &ImMap<Symbol, Located<VariantName>>,
     ) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
-        let parse_state: State<&str, IndentablePosition> = State::with_positioner(expr_str, IndentablePosition::default());
-        let expr = match parse::expr().skip(eof()).easy_parse(parse_state) {
-            Ok((expr, state)) => {
-                if !state.input.is_empty() {
-                    panic!("There were unconsumed chars left over after parsing \"{}\" - the leftover string was: \"{}\"",
-                        expr_str.to_string(), state.input.to_string())
-                }
-
-                expr
-            },
-            Err(errors) => {
+        let (expr, unparsed) = parse_without_loc(expr_str).unwrap_or_else(|errors| {
                 panic!("Parse error trying to parse \"{}\" - {}", expr_str.to_string(), errors.to_string())
-            }
-        };
+        });
+
+        assert_eq!(unparsed, "".to_string());
 
         let home = "Test".to_string();
         let (loc_expr, output, problems, procedures) =
