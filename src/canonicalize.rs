@@ -514,6 +514,8 @@ fn canonicalize(
                 for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(&loc_pattern), &scope) {
                     let refs =
                         // Functions' references don't count in assignments.
+                        // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                        // parent commit for the bug this fixed!
                         if opt_closure_symbol.is_some() {
                             References::new()
                         } else {
