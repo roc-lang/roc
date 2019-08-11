@@ -21,10 +21,6 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
-    /// This is identical to Var, except it's marked as referencing a function,
-    /// so that Assign can tell it should rename it if appropriate. This could
-    /// be done in other ways, but this way seems easiest and possibly cheapest.
-    FunctionPointer(Symbol),
     InterpolatedStr(Vec<(String, Expr)>, String),
 
     // Pattern Matching
@@ -526,7 +522,7 @@ fn canonicalize(
                     // Only assignments of the form (foo = ...) can be closure declarations or self tail calls.
                     (&expr::Pattern::Identifier(ref name), &Pattern::Identifier(ref assigned_symbol)) => {
                         match loc_can_expr.value {
-                            FunctionPointer(anonymous_closure_symbol) => {
+                            Var(ref anonymous_closure_symbol) if env.procedures.contains_key(&anonymous_closure_symbol) => {
                                 // Since everywhere in the code it'll be referred to by its assigned name,
                                 // remove its generated name from the procedure map. (We'll re-insert it later.)
                                 let mut procedure = env.procedures.remove(&anonymous_closure_symbol).unwrap();
@@ -552,9 +548,9 @@ fn canonicalize(
                                         refs.locals = refs.locals.without(assigned_symbol);
                                     });
 
-                                // Return a pointer to the assigned symbol, since the auto-generated one no
+                                // Return a reference to the assigned symbol, since the auto-generated one no
                                 // longer references any entry in the procedure map!
-                                FunctionPointer(assigned_symbol.clone())
+                                Var(assigned_symbol.clone())
                             },
                             non_closure => non_closure
                         }
@@ -715,9 +711,7 @@ fn canonicalize(
             output.references = References::new();
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
-            // It's possible that Assign will rewrite this. In that case, Assign will need to know the symbol we
-            // used here, to look up the closure's info before renaming it. This pointer gives Assign that symbol.
-            (FunctionPointer(symbol), output)
+            (Var(symbol), output)
         },
 
         expr::Expr::Case(loc_cond, branches) => {
