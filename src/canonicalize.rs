@@ -494,6 +494,13 @@ fn canonicalize(
                 // block. Order of assignments doesn't matter, thanks to referential transparency!
                 let (loc_can_expr, can_output) = canonicalize(env, &mut scope, expr);
 
+                // If this is a closure, remember its symbol. We'll use it later!
+                let opt_closure_symbol: Option<&Symbol> =
+                    match loc_can_expr.value {
+                        Var(ref symbol) if env.procedures.contains_key(&symbol) => Some(symbol),
+                        _ => None
+                    };
+
                 // Exclude the current ident from shadowable_idents; you can't shadow yourself!
                 // (However, still include it in scope, because you *can* recursively refer to yourself.)
                 let mut shadowable_idents = scope.idents.clone();
@@ -505,7 +512,13 @@ fn canonicalize(
                 // Store the referenced locals in the refs_by_assignment map, so we can later figure out
                 // which assigned names reference each other.
                 for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(&loc_pattern), &scope) {
-                    let refs = can_output.references.clone();
+                    let refs =
+                        // Functions' references don't count in assignments.
+                        if opt_closure_symbol.is_some() {
+                            References::new()
+                        } else {
+                            can_output.references.clone()
+                        };
 
                     refs_by_assignment.insert(symbol.clone(), (Located {value: ident, region}, refs));
 
@@ -513,47 +526,46 @@ fn canonicalize(
                 }
 
                 // Give closures names (and tail-recursive status) where appropriate.
-                let can_expr = match (&loc_pattern.value, &can_pattern) {
+                let can_expr = match (&loc_pattern.value, &can_pattern, &opt_closure_symbol) {
                     // First, make sure we are actually assigning an identifier instead of (for example) a variant.
                     //
                     // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
                     // which also implies it's not a self tail call!
                     //
                     // Only assignments of the form (foo = ...) can be closure declarations or self tail calls.
-                    (&expr::Pattern::Identifier(ref name), &Pattern::Identifier(ref assigned_symbol)) => {
-                        match loc_can_expr.value {
-                            Var(ref anonymous_closure_symbol) if env.procedures.contains_key(&anonymous_closure_symbol) => {
-                                // Since everywhere in the code it'll be referred to by its assigned name,
-                                // remove its generated name from the procedure map. (We'll re-insert it later.)
-                                let mut procedure = env.procedures.remove(&anonymous_closure_symbol).unwrap();
+                    (
+                        &expr::Pattern::Identifier(ref name),
+                        &Pattern::Identifier(ref assigned_symbol),
+                        &Some(ref anonymous_closure_symbol)
+                    ) => {
+                        // Since everywhere in the code it'll be referred to by its assigned name,
+                        // remove its generated name from the procedure map. (We'll re-insert it later.)
+                        let mut procedure = env.procedures.remove(&anonymous_closure_symbol).unwrap();
 
-                                // The original ident name will be used for debugging and stack traces.
-                                procedure.name = Some(name.clone());
+                        // The original ident name will be used for debugging and stack traces.
+                        procedure.name = Some(name.clone());
 
-                                // The closure is self tail recursive iff it tail calls itself (by assigned name).
-                                procedure.is_self_tail_recursive = match &can_output.tail_call {
-                                    &None => false,
-                                    &Some(ref symbol) => symbol == assigned_symbol
-                                };
+                        // The closure is self tail recursive iff it tail calls itself (by assigned name).
+                        procedure.is_self_tail_recursive = match &can_output.tail_call {
+                            &None => false,
+                            &Some(ref symbol) => symbol == assigned_symbol
+                        };
 
-                                // Re-insert the procedure into the map, under its assigned name. This way,
-                                // when code elsewhere calls it by assigned name, it'll resolve properly.
-                                env.procedures.insert(assigned_symbol.clone(), procedure);
+                        // Re-insert the procedure into the map, under its assigned name. This way,
+                        // when code elsewhere calls it by assigned name, it'll resolve properly.
+                        env.procedures.insert(assigned_symbol.clone(), procedure);
 
-                                // Recursion doesn't count as referencing. (If it did, all recursive functions
-                                // would result in circular assignment errors!)
-                                refs_by_assignment
-                                    .entry(assigned_symbol.clone())
-                                    .and_modify(|(_, refs)| {
-                                        refs.locals = refs.locals.without(assigned_symbol);
-                                    });
+                        // Recursion doesn't count as referencing. (If it did, all recursive functions
+                        // would result in circular assignment errors!)
+                        refs_by_assignment
+                            .entry(assigned_symbol.clone())
+                            .and_modify(|(_, refs)| {
+                                refs.locals = refs.locals.without(assigned_symbol);
+                            });
 
-                                // Return a reference to the assigned symbol, since the auto-generated one no
-                                // longer references any entry in the procedure map!
-                                Var(assigned_symbol.clone())
-                            },
-                            non_closure => non_closure
-                        }
+                        // Return a reference to the assigned symbol, since the auto-generated one no
+                        // longer references any entry in the procedure map!
+                        Var(assigned_symbol.clone())
                     },
                     _ => loc_can_expr.value
                 };
@@ -704,11 +716,7 @@ fn canonicalize(
             // We've finished analyzing the closure. Its references.locals are now the values it closes over,
             // since we removed the only locals it shouldn't close over (its arguments).
             // Register it as a top-level procedure in the Env!
-            env.register_closure(symbol.clone(), can_args, loc_body_expr.value, loc_expr.region.clone(), output.references);
-
-            // Having now registered the closure's references, the function pointer that remains has
-            // no references. The references we registered will be used only if this symbol gets called!
-            output.references = References::new();
+            env.register_closure(symbol.clone(), can_args, loc_body_expr.value, loc_expr.region.clone(), output.references.clone());
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
             (Var(symbol), output)
