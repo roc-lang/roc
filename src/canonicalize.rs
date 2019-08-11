@@ -21,6 +21,9 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
+    /// This is identical to Var, except it's marked as referencing a function,
+    /// so that Assign can tell it should rename it if appropriate. This could
+    /// be done in other ways, but this way seems easiest and possibly cheapest.
     FunctionPointer(Symbol),
     InterpolatedStr(Vec<(String, Expr)>, String),
 
