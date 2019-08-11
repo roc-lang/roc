@@ -441,6 +441,16 @@ mod test_canonicalize {
         ]);
     }
 
+    #[test]
+    fn always_function() {
+        // There was a bug where this reported UnusedArgument("val")
+        // since it was used only in the returned function only.
+        let (_, _, problems, _) = can_expr(indoc!(r#"
+            \val -> \_ -> val
+        "#));
+
+        assert_eq!(problems, vec![]);
+    }
 
     // TODO verify that Apply handles output.references.calls correctly
 
