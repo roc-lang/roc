@@ -117,11 +117,11 @@ mod test_canonicalize {
                     is_self_tail_recursive: false,
                     definition: empty_region(),
                     args: vec![Pattern::Identifier(sym("arg"))],
-                    body: Expr::Operator(
+                    body: loc(Expr::Operator(
                         loc_box(Expr::Var(sym("arg"))),
                         loc(Operator::Plus),
                         loc_box(Expr::Int(1))
-                    ),
+                    )),
                     references: References {
                         locals: vec_to_set(vec![]),
                         globals: vec_to_set(vec![]),
