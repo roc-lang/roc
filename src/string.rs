@@ -2,6 +2,8 @@ use std::mem::{self, MaybeUninit};
 use std::slice;
 use std::ptr;
 
+pub struct RocStr(InnerStr);
+
 /// Roc strings are optimized not to do heap allocations when they are between
 /// 0-15 bytes in length on 64-bit little endian systems, 
 /// and 0-7 bytes on systems that are 32-bit, big endian, or both. 
@@ -39,7 +41,7 @@ use std::ptr;
 /// 64-bit systems and 7 on 32-bit ones. The final byte is the msbyte where
 /// we stored the flag, but it doesn't matter what's in that memory because the
 /// str's length will be too low to encounter that anyway.
-union Str {
+union InnerStr {
     raw: [u8; 16],
     long: LongStr,
 }
@@ -64,21 +66,21 @@ const EMPTY_STRING: usize = 2^63;
 #[cfg(target_pointer_width = "32")]
 const EMPTY_STRING: usize = 2^31;
 
-impl Str {
+impl RocStr {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        unsafe { self.long.length == EMPTY_STRING }
+        unsafe { self.0.long.length == EMPTY_STRING }
     }
 
     #[inline(always)]
-    pub fn empty() -> Str {
-        Str {
+    pub fn empty() -> RocStr {
+        RocStr(InnerStr {
             long: LongStr {
                 length: EMPTY_STRING,
                 // empty strings only ever have length set.
                 bytes: MaybeUninit::uninit(),
             }
-        }
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -91,7 +93,7 @@ impl Str {
 
             length as usize
         } else {
-            unsafe { self.long.length }
+            unsafe { self.0.long.length }
         }
     }
 
@@ -102,7 +104,7 @@ impl Str {
     #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
     fn len_msbyte(&self) -> u8 {
         // TODO: can we just cast this to u8? Will truncation do what we want?
-        (unsafe { mem::transmute::<usize, [u8; 8]>(self.long.length) })[7]
+        (unsafe { mem::transmute::<usize, [u8; 8]>(self.0.long.length) })[7]
     }
 
     #[inline(always)]
@@ -126,7 +128,7 @@ impl Str {
 }
 
 /// We can offer to convert to a shared string slice, but not a mutable one!
-impl<'a> Into<&'a str> for &'a Str {
+impl<'a> Into<&'a str> for &'a RocStr {
     #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
     fn into(self) -> &'a str {
         let len_msbyte = self.len_msbyte();
@@ -138,7 +140,7 @@ impl<'a> Into<&'a str> for &'a Str {
 
             unsafe { 
                 // These bytes are already aligned, so we can use them directly.
-                let bytes_ptr = &self.raw as *const u8;
+                let bytes_ptr = &self.0.raw as *const u8;
                 let bytes_slice: &[u8] = 
                     slice::from_raw_parts(bytes_ptr, length as usize);
 
@@ -148,16 +150,16 @@ impl<'a> Into<&'a str> for &'a Str {
         } else {
             // If it's a long string, we already have the exact
             // same memory layout as a Rust &str slice.
-            unsafe { mem::transmute::<[u8; 16], &'a str>(self.raw) } 
+            unsafe { mem::transmute::<[u8; 16], &'a str>(self.0.raw) } 
         }
     }
 }
 
-impl<'a> From<&'a str> for Str {
+impl<'a> From<&'a str> for RocStr {
     #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
-    fn from(string: &'a str) -> Str {
+    fn from(string: &'a str) -> RocStr {
         if string.is_empty() {
-            Str::empty()
+            RocStr::empty()
         } else {
             let str_len = string.len();
 
@@ -180,7 +182,7 @@ impl<'a> From<&'a str> for Str {
                 // Set the last byte in the buffer to be the length (with the flag).
                 buffer[15] = ((string.len() as u8) << 1) | 1;
 
-                Str { raw: buffer }
+                RocStr(InnerStr { raw: buffer })
             } else {
                 let bytes_ptr = string.as_bytes().clone().as_ptr();
                 let long = LongStr {
@@ -188,7 +190,7 @@ impl<'a> From<&'a str> for Str {
                     length: str_len,
                 };
 
-                Str {long}
+                RocStr(InnerStr {long})
             }
         }
     }
