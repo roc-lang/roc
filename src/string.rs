@@ -52,7 +52,7 @@ struct LongStr {
     /// which lets us transmute long strings directly into them.
     ///
     /// https://pramode.in/2016/09/13/using-unsafe-tricks-in-rust/
-    bytes: MaybeUninit<*const [u8]>,
+    bytes: MaybeUninit<*const u8>,
     length: usize,
 }
 
@@ -76,7 +76,7 @@ impl Str {
             long: LongStr {
                 length: EMPTY_STRING,
                 // empty strings only ever have length set.
-                bytes: unsafe { mem::uninitialized() },
+                bytes: MaybeUninit::uninit(),
             }
         }
     }
@@ -158,29 +158,38 @@ impl<'a> From<&'a str> for Str {
     fn from(string: &'a str) -> Str {
         if string.is_empty() {
             Str::empty()
-        } else if string.len() <= 15 {
-            let mut buffer: [u8; 16] = [0; 16];
-            let raw_bytes_ptr = &mut buffer as *mut [u8; 16];
-
-            // Copy the raw bytes from the string slice into short_str.
-            unsafe {
-                let coerced_raw_bytes_ptr = 
-                    mem::transmute::<*mut [u8; 16], *mut u8>(raw_bytes_ptr);
-
-                // Write over the bytes in short_str
-                ptr::copy_nonoverlapping(
-                    string.as_ptr(), 
-                    coerced_raw_bytes_ptr, 
-                    string.len()
-                );
-            }
-
-            // Set the last byte in raw_bytes to be the length with the flag.
-            buffer[15] = ((string.len() as u8) << 1) | 1;
-
-            Str { raw: buffer }
         } else {
-            panic!("TODO: clone the bytes and make an new long str");
+            let str_len = string.len();
+
+            if str_len <= 15 {
+                let mut buffer: [u8; 16] = [0; 16];
+
+                // Copy the raw bytes from the string slice into the buffer.
+                unsafe {
+                    let buffer_ptr =
+                        mem::transmute::<*mut [u8; 16], *mut u8>(&mut buffer);
+
+                    // Write into the buffer's bytes
+                    ptr::copy_nonoverlapping(
+                        string.as_ptr(),
+                        buffer_ptr,
+                        str_len
+                    );
+                }
+
+                // Set the last byte in the buffer to be the length (with the flag).
+                buffer[15] = ((string.len() as u8) << 1) | 1;
+
+                Str { raw: buffer }
+            } else {
+                let bytes_ptr = string.as_bytes().clone().as_ptr();
+                let long = LongStr {
+                    bytes: MaybeUninit::new(bytes_ptr),
+                    length: str_len,
+                };
+
+                Str {long}
+            }
         }
     }
 }
