@@ -1,4 +1,4 @@
-use std::mem;
+use std::mem::{self, MaybeUninit};
 use std::slice;
 use std::ptr;
 
@@ -39,8 +39,12 @@ use std::ptr;
 /// 64-bit systems and 7 on 32-bit ones. The final byte is the msbyte where
 /// we stored the flag, but it doesn't matter what's in that memory because the
 /// str's length will be too low to encounter that anyway.
-struct Str([u8; 16]);
+union Str {
+    raw: [u8; 16],
+    long: LongStr,
+}
 
+#[derive(Clone, Copy)]
 #[repr(C)]
 struct LongStr {
     /// It is *crucial* that we have exactly this memory layout!
@@ -48,7 +52,7 @@ struct LongStr {
     /// which lets us transmute long strings directly into them.
     ///
     /// https://pramode.in/2016/09/13/using-unsafe-tricks-in-rust/
-    bytes: *const u8,
+    bytes: MaybeUninit<*const [u8]>,
     length: usize,
 }
 
@@ -63,23 +67,18 @@ const EMPTY_STRING: usize = 2^31;
 impl Str {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        unsafe { self.long_str_length() == EMPTY_STRING }
+        unsafe { self.long.length == EMPTY_STRING }
     }
 
     #[inline(always)]
     pub fn empty() -> Str {
-        Str::from(
-            LongStr {
+        Str {
+            long: LongStr {
                 length: EMPTY_STRING,
                 // empty strings only ever have length set.
                 bytes: unsafe { mem::uninitialized() },
             }
-        )
-    }
-
-    #[inline(always)]
-    fn long_str_length<'a>(&'a self) -> usize {
-        unsafe { mem::transmute::<&'a Str, &'a LongStr>(self).length }
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -92,7 +91,7 @@ impl Str {
 
             length as usize
         } else {
-            self.long_str_length()
+            unsafe { self.long.length }
         }
     }
 
@@ -103,26 +102,26 @@ impl Str {
     #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
     fn len_msbyte(&self) -> u8 {
         // TODO: can we just cast this to u8? Will truncation do what we want?
-        (unsafe { mem::transmute::<usize, [u8; 8]>(self.long_str_length()) })[7]
+        (unsafe { mem::transmute::<usize, [u8; 8]>(self.long.length) })[7]
     }
 
     #[inline(always)]
     #[cfg(all(target_pointer_width = "32", target_endian = "little"))]
     fn len_msbyte(&self) -> u8 {
         // TODO: can we just cast this to u8? Will truncation do what we want?
-        (unsafe { mem::transmute::<usize, [u8; 4]>(self.long_str_length()) })[3]
+        (unsafe { mem::transmute::<usize, [u8; 4]>(self.long.length) })[3]
     }
 
     #[inline(always)]
     #[cfg(all(target_pointer_width = "64", target_endian = "big"))]
     fn len_msbyte(&self) -> u8 {
-        (unsafe { mem::transmute::<usize, [u8; 8]>(self.long_str_length()) })[0]
+        (unsafe { mem::transmute::<usize, [u8; 8]>(self.long.length) })[0]
     }
 
     #[inline(always)]
     #[cfg(all(target_pointer_width = "32", target_endian = "big"))]
     fn len_msbyte(&self) -> u8 {
-        (unsafe { mem::transmute::<usize, [u8; 4]>(self.long_str_length()) })[0]
+        (unsafe { mem::transmute::<usize, [u8; 4]>(self.long.length) })[0]
     }
 }
 
@@ -139,7 +138,7 @@ impl<'a> Into<&'a str> for &'a Str {
 
             unsafe { 
                 // These bytes are already aligned, so we can use them directly.
-                let bytes_ptr = &self.0 as *const u8;
+                let bytes_ptr = &self.raw as *const u8;
                 let bytes_slice: &[u8] = 
                     slice::from_raw_parts(bytes_ptr, length as usize);
 
@@ -149,7 +148,7 @@ impl<'a> Into<&'a str> for &'a Str {
         } else {
             // If it's a long string, we already have the exact
             // same memory layout as a Rust &str slice.
-            unsafe { mem::transmute::<[u8; 16], &'a str>(self.0) } 
+            unsafe { mem::transmute::<[u8; 16], &'a str>(self.raw) } 
         }
     }
 }
@@ -160,8 +159,8 @@ impl<'a> From<&'a str> for Str {
         if string.is_empty() {
             Str::empty()
         } else if string.len() <= 15 {
-            let mut raw_bytes: [u8; 16] = [0; 16];
-            let raw_bytes_ptr = &mut raw_bytes as *mut [u8; 16];
+            let mut buffer: [u8; 16] = [0; 16];
+            let raw_bytes_ptr = &mut buffer as *mut [u8; 16];
 
             // Copy the raw bytes from the string slice into short_str.
             unsafe {
@@ -177,39 +176,11 @@ impl<'a> From<&'a str> for Str {
             }
 
             // Set the last byte in raw_bytes to be the length with the flag.
-            raw_bytes[15] = ((string.len() as u8) << 1) | 1;
+            buffer[15] = ((string.len() as u8) << 1) | 1;
 
-            Str(raw_bytes)
+            Str { raw: buffer }
         } else {
             panic!("TODO: clone the bytes and make an new long str");
         }
-    }
-}
-
-impl<'a> From<&'a Str> for &'a LongStr {
-    #[inline(always)]
-    fn from(string: &'a Str) -> &'a LongStr {
-        unsafe { mem::transmute::<&'a Str, &'a LongStr>(string) }
-    }
-}
-
-impl<'a> From<&'a LongStr> for &'a Str {
-    #[inline(always)]
-    fn from(long_str: &'a LongStr) -> &'a Str {
-        unsafe { mem::transmute::<&'a LongStr, &'a Str>(long_str) }
-    }
-}
-
-impl From<Str> for LongStr {
-    #[inline(always)]
-    fn from(string: Str) -> LongStr {
-        unsafe { mem::transmute::<Str, LongStr>(string) }
-    }
-}
-
-impl From<LongStr> for Str {
-    #[inline(always)]
-    fn from(long_str: LongStr) -> Str {
-        unsafe { mem::transmute::<LongStr, Str>(long_str) }
     }
 }
