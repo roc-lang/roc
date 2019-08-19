@@ -1,7 +1,17 @@
 use std::mem::{self, MaybeUninit};
 use std::slice;
 use std::ptr;
+use std::fmt;
 
+/// An immutable string whose maximum length is `isize::MAX`. (For convenience,
+/// it still returns its length as `usize` since it can't be negative.)
+///
+/// For larger strings, under the hood this is a struct which stores a
+/// pointer and a usize for length (so 16 bytes on a 64-bit system).
+///
+/// For smaller strings (lengths 0-15 on 64-bit systems, and 0-7 on 32-bit),
+/// this uses a "short string optimization" where it stores the entire string
+/// in this struct and does not bother allocating on the heap at all.
 pub struct RocStr(InnerStr);
 
 /// Roc strings are optimized not to do heap allocations when they are between
@@ -46,12 +56,12 @@ union InnerStr {
     long: LongStr,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Copy)]
 #[repr(C)]
 struct LongStr {
     /// It is *crucial* that we have exactly this memory layout!
     /// This is the same layout that Rust uses for string slices in memory,
-    /// which lets us transmute long strings directly into them.
+    /// which lets us mem::transmute long strings directly into them.
     ///
     /// https://pramode.in/2016/09/13/using-unsafe-tricks-in-rust/
     bytes: MaybeUninit<*const u8>,
@@ -61,10 +71,10 @@ struct LongStr {
 // The bit pattern for an empty string. (1 and then all 0s.)
 // Any other bit pattern means this is not an empty string!
 #[cfg(target_pointer_width = "64")]
-const EMPTY_STRING: usize = 2^63;
+const EMPTY_STRING: usize = 0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
 
 #[cfg(target_pointer_width = "32")]
-const EMPTY_STRING: usize = 2^31;
+const EMPTY_STRING: usize = 0b1000_0000_0000_0000;
 
 impl RocStr {
     #[inline(always)]
@@ -86,10 +96,9 @@ impl RocStr {
     pub fn len(&self) -> usize {
         let len_msbyte = self.len_msbyte();
 
-        // This is a short string iff the last bit of len_msbyte is 1.
-        if len_msbyte & 1 == 1 {
-            // Shift away the "is this a short string?" flag
-            let length: u8 = len_msbyte >> 1;
+        if flagged_as_short_string(len_msbyte) {
+            // Drop the "is this a short string?" flag
+            let length: u8 = len_msbyte & 0b0111_1111;
 
             length as usize
         } else {
@@ -103,14 +112,12 @@ impl RocStr {
     #[inline(always)]
     #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
     fn len_msbyte(&self) -> u8 {
-        // TODO: can we just cast this to u8? Will truncation do what we want?
         (unsafe { mem::transmute::<usize, [u8; 8]>(self.0.long.length) })[7]
     }
 
     #[inline(always)]
     #[cfg(all(target_pointer_width = "32", target_endian = "little"))]
     fn len_msbyte(&self) -> u8 {
-        // TODO: can we just cast this to u8? Will truncation do what we want?
         (unsafe { mem::transmute::<usize, [u8; 4]>(self.long.length) })[3]
     }
 
@@ -127,16 +134,27 @@ impl RocStr {
     }
 }
 
+#[inline(always)]
+fn flagged_as_short_string(len_msbyte: u8) -> bool {
+    // It's a short string iff the first bit of len_msbyte is 1.
+    len_msbyte & 0b1000_0000 == 0b1000_0000
+}
+
+#[inline(always)]
+fn with_short_string_flag_enabled(len_msbyte: u8) -> u8 {
+    // It's a short string iff the first bit of len_msbyte is 1.
+    len_msbyte | 0b1000_0000
+}
+
 /// We can offer to convert to a shared string slice, but not a mutable one!
 impl<'a> Into<&'a str> for &'a RocStr {
     #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
     fn into(self) -> &'a str {
         let len_msbyte = self.len_msbyte();
 
-        // This is a short string iff the last bit of len_msbyte is 1.
-        if len_msbyte & 1 == 1 {
-            // Shift away the "is this a short string?" flag
-            let length: u8 = len_msbyte >> 1;
+        if flagged_as_short_string(len_msbyte) {
+            // Drop the "is this a short string?" flag
+            let length: u8 = len_msbyte & 0b0111_1111;
 
             unsafe { 
                 // These bytes are already aligned, so we can use them directly.
@@ -179,8 +197,8 @@ impl<'a> From<&'a str> for RocStr {
                     );
                 }
 
-                // Set the last byte in the buffer to be the length (with the flag).
-                buffer[15] = ((string.len() as u8) << 1) | 1;
+                // Set the last byte in the buffer to be the length (with flag).
+                buffer[15] = with_short_string_flag_enabled(string.len() as u8);
 
                 RocStr(InnerStr { raw: buffer })
             } else {
@@ -193,5 +211,73 @@ impl<'a> From<&'a str> for RocStr {
                 RocStr(InnerStr {long})
             }
         }
+    }
+}
+
+impl fmt::Debug for RocStr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str_slice: &str = self.into();
+
+        str_slice.fmt(f)
+    }
+}
+
+impl fmt::Display for RocStr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str_slice: &str = self.into();
+
+        str_slice.fmt(f)
+    }
+}
+
+impl Clone for LongStr {
+    fn clone(&self) -> Self {
+        panic!("TODO: figure out how to clone a LongStr properly so the cloned bytes end up on the heap");
+        // let str_slice = unsafe { mem::transmute::<&LongStr, &str>(&self) };
+        // let string = str_slice.to_string();
+        // let bytes = string.clone().as_bytes();
+
+        // LongStr {
+        //     bytes: MaybeUninit::new(bytes.as_ptr()),
+        //     length: self.length,
+        // }
+    }
+}
+
+impl Clone for RocStr {
+    fn clone(&self) -> Self {
+        let inner = if flagged_as_short_string(self.len_msbyte()) {
+            InnerStr { raw: (unsafe { self.0.raw }).clone() }
+        } else {
+            InnerStr { long: (unsafe { self.0.long }).clone() }
+        };
+
+        RocStr(inner)
+    }
+}
+
+impl Drop for RocStr {
+    fn drop(&mut self) {
+        if !flagged_as_short_string(self.len_msbyte()) {
+            let mut bytes_ptr = unsafe { self.0.long.bytes.assume_init() };
+
+            unsafe { ptr::drop_in_place(&mut bytes_ptr); }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_roc_str {
+    use super::RocStr;
+
+    #[test]
+    fn empty_str() {
+        assert!(RocStr::empty().is_empty());
+        assert_eq!(RocStr::empty().len(), 0);
+    }
+
+    #[test]
+    fn fmt() {
+        assert_eq!("".to_string(), format!("{}", RocStr::empty()));
     }
 }
