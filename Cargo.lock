@@ -56,6 +56,14 @@ version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "ena"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,6 +263,7 @@ version = "0.1.0"
 dependencies = [
  "combine 3.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "dogged 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ena 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "fraction 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "im-rc 13.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -362,6 +371,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum difference 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 "checksum dogged 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "2638df109789fe360f0d9998c5438dd19a36678aaf845e46f285b688b1a1657a"
 "checksum either 1.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "5527cfe0d098f36e3f8839852688e63c8fff1c90b2b405aef730615f9a7bcf7b"
+"checksum ena 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3dc01d68e08ca384955a3aeba9217102ca1aa85b6e168639bf27739f1d749d87"
 "checksum fixedbitset 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)" = "86d4de0081402f5e88cdac65c8dcdcc73118c1a7a465e2a05f0da05843a8ea33"
 "checksum fraction 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)" = "1055159ac82fb210c813303f716b6c8db57ace9d5ec2dbbc2e1d7a864c1dd74e"
 "checksum fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"

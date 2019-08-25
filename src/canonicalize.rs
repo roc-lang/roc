@@ -24,8 +24,8 @@ pub enum Expr {
     InterpolatedStr(Vec<(String, Expr)>, String),
 
     // Pattern Matching
-    Case(Box<Located<Expr>>, Vec<(Pattern, Located<Expr>)>),
-    Assign(Vec<(Pattern, Located<Expr>)>, Box<Located<Expr>>),
+    Case(Box<Located<Expr>>, Vec<(Located<Pattern>, Located<Expr>)>),
+    Assign(Vec<(Located<Pattern>, Located<Expr>)>, Box<Located<Expr>>),
 
     // Application
     Apply(Box<Located<Expr>>, Vec<Located<Expr>>),
@@ -43,7 +43,7 @@ pub enum Expr {
     UnrecognizedFunctionName(Located<expr::Ident>),
     UnrecognizedConstant(Located<expr::Ident>),
     UnrecognizedVariant(Located<expr::VariantName>),
-    CircularAssignment(Vec<Located<expr::Ident>>, Vec<(Pattern, Located<Expr>)>, Box<Located<Expr>>),
+    CircularAssignment(Vec<Located<expr::Ident>>, Vec<(Located<Pattern>, Located<Expr>)>, Box<Located<Expr>>),
 }
 
 /// Problems that can occur in the course of canonicalization.
@@ -66,7 +66,7 @@ pub enum Problem {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
-    Variant(Symbol, Option<Vec<Pattern>>),
+    Variant(Symbol, Option<Vec<Located<Pattern>>>),
     Integer(i64),
     Fraction(i64, i64),
     ExactString(String),
@@ -145,13 +145,13 @@ pub struct Procedure {
     pub name: Option<String>,
     pub is_self_tail_recursive: bool,
     pub definition: Region,
-    pub args: Vec<Pattern>,
-    pub body: Expr,
+    pub args: Vec<Located<Pattern>>,
+    pub body: Located<Expr>,
     pub references: References,
 }
 
 impl Procedure {
-    pub fn new(definition: Region, args: Vec<Pattern>, body: Expr, references: References) -> Procedure {
+    pub fn new(definition: Region, args: Vec<Located<Pattern>>, body: Located<Expr>, references: References) -> Procedure {
         Procedure {
             name: None,
             is_self_tail_recursive: false,
@@ -196,8 +196,8 @@ impl Env {
     pub fn register_closure(
         &mut self,
         symbol: Symbol,
-        args: Vec<Pattern>,
-        body: Expr,
+        args: Vec<Located<Pattern>>,
+        body: Located<Expr>,
         definition: Region,
         references: References
     ) -> () {
@@ -487,7 +487,7 @@ fn canonicalize(
             scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
             let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
-            let mut can_assignments_by_symbol: MutMap<Symbol, (Pattern, Located<Expr>)> = MutMap::default();
+            let mut can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> = MutMap::default();
 
             for (loc_pattern, expr) in assignments {
                 // Each assignment gets to have all the idents in scope that are assigned in this
@@ -506,7 +506,7 @@ fn canonicalize(
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-                let can_pattern = canonicalize_pattern(env, &mut scope, &Assignment, &loc_pattern, &mut shadowable_idents);
+                let loc_can_pattern = canonicalize_pattern(env, &mut scope, &Assignment, &loc_pattern, &mut shadowable_idents);
                 let mut assigned_symbols = Vec::new();
 
                 // Store the referenced locals in the refs_by_assignment map, so we can later figure out
@@ -528,7 +528,7 @@ fn canonicalize(
                 }
 
                 // Give closures names (and tail-recursive status) where appropriate.
-                let can_expr = match (&loc_pattern.value, &can_pattern, &opt_closure_symbol) {
+                let can_expr = match (&loc_pattern.value, &loc_can_pattern.value, &opt_closure_symbol) {
                     // First, make sure we are actually assigning an identifier instead of (for example) a variant.
                     //
                     // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
@@ -575,7 +575,7 @@ fn canonicalize(
                 for symbol in assigned_symbols {
                     can_assignments_by_symbol.insert(
                         symbol,
-                        (can_pattern.clone(), Located {region: loc_can_expr.region.clone(), value: can_expr.clone()})
+                        (loc_can_pattern.clone(), Located {region: loc_can_expr.region.clone(), value: can_expr.clone()})
                     );
                 }
             }
@@ -691,7 +691,7 @@ fn canonicalize(
             // it means there was shadowing, which will be handled later.
             scope.idents = union_pairs(scope.idents, arg_idents.iter());
 
-            let can_args: Vec<Pattern> = loc_arg_patterns.into_iter().map(|loc_pattern| {
+            let can_args: Vec<Located<Pattern>> = loc_arg_patterns.into_iter().map(|loc_pattern| {
                 // Exclude the current ident from shadowable_idents; you can't shadow yourself!
                 // (However, still include it in scope, because you *can* recursively refer to yourself.)
                 let mut shadowable_idents = scope.idents.clone();
@@ -718,7 +718,7 @@ fn canonicalize(
             // We've finished analyzing the closure. Its references.locals are now the values it closes over,
             // since we removed the only locals it shouldn't close over (its arguments).
             // Register it as a top-level procedure in the Env!
-            env.register_closure(symbol.clone(), can_args, loc_body_expr.value, loc_expr.region.clone(), output.references.clone());
+            env.register_closure(symbol.clone(), can_args, loc_body_expr, loc_expr.region.clone(), output.references.clone());
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
             (Var(symbol), output)
@@ -741,7 +741,7 @@ fn canonicalize(
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-                let can_pattern = canonicalize_pattern(env, &mut scope, &CaseBranch, &loc_pattern, &mut shadowable_idents);
+                let loc_can_pattern = canonicalize_pattern(env, &mut scope, &CaseBranch, &loc_pattern, &mut shadowable_idents);
 
                 // Patterns introduce new idents to the scope!
                 // Add the assigned identifiers to scope. If there's a collision, it means there
@@ -776,7 +776,7 @@ fn canonicalize(
                     }
                 }
 
-                can_branches.push((can_pattern, can_expr));
+                can_branches.push((loc_can_pattern, can_expr));
             }
 
             // One of the branches should have flipped this, so this should only happen
@@ -1116,11 +1116,11 @@ fn canonicalize_pattern(
     pattern_type: &PatternType,
     loc_pattern: &Located<expr::Pattern>,
     shadowable_idents: &mut ImMap<Ident, (Symbol, Region)>,
-) -> Pattern {
+) -> Located<Pattern> {
     use expr::Pattern::*;
 
     let region = loc_pattern.region.clone();
-    match &loc_pattern.value {
+    let pattern = match &loc_pattern.value {
         &Identifier(ref name) => {
             let unqualified_ident = Ident::Unqualified(name.clone());
 
@@ -1184,15 +1184,15 @@ fn canonicalize_pattern(
 
         &Variant(ref loc_name, ref opt_args) => {
             // Canonicalize the variant's arguments, if it has any.
-            let opt_can_args: Option<Vec<Pattern>> = match opt_args {
+            let opt_can_args: Option<Vec<Located<Pattern>>> = match opt_args {
                 None => None,
                 Some(loc_args) => {
-                    let mut can_args:Vec<Pattern> = Vec::new();
+                    let mut can_args:Vec<Located<Pattern>> = Vec::new();
 
                     for loc_arg in loc_args {
-                        let can_arg = canonicalize_pattern(env, scope, pattern_type, &loc_arg, shadowable_idents);
+                        let loc_can_arg = canonicalize_pattern(env, scope, pattern_type, &loc_arg, shadowable_idents);
 
-                        can_args.push(can_arg);
+                        can_args.push(loc_can_arg);
                     }
 
                     Some(can_args)
@@ -1242,7 +1242,9 @@ fn canonicalize_pattern(
         },
 
         &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
-    }
+    };
+
+    Located {region, value: pattern}
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't

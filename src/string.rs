@@ -2,6 +2,8 @@ use std::mem::{self, MaybeUninit};
 use std::slice;
 use std::ptr;
 use std::fmt;
+use std::str;
+use std::alloc::{self, Layout};
 
 /// An immutable string whose maximum length is `isize::MAX`. (For convenience,
 /// it still returns its length as `usize` since it can't be negative.)
@@ -146,36 +148,85 @@ fn with_short_string_flag_enabled(len_msbyte: u8) -> u8 {
     len_msbyte | 0b1000_0000
 }
 
-/// We can offer to convert to a shared string slice, but not a mutable one!
-impl<'a> Into<&'a str> for &'a RocStr {
-    #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
-    fn into(self) -> &'a str {
-        let len_msbyte = self.len_msbyte();
+impl fmt::Debug for RocStr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // TODO do this without getting a cloned String involved
+        let string: String = self.clone().into();
 
-        if flagged_as_short_string(len_msbyte) {
-            // Drop the "is this a short string?" flag
-            let length: u8 = len_msbyte & 0b0111_1111;
+        string.fmt(f)
+    }
+}
 
-            unsafe { 
-                // These bytes are already aligned, so we can use them directly.
-                let bytes_ptr = &self.0.raw as *const u8;
-                let bytes_slice: &[u8] = 
-                    slice::from_raw_parts(bytes_ptr, length as usize);
+impl fmt::Display for RocStr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // TODO do this without getting a cloned String involved
+        let string: String = self.clone().into();
 
-                // &str in Rust has the same memory layout as an &[u8] slice.
-                mem::transmute::<&[u8], &str>(bytes_slice)
-            }
-        } else {
-            // If it's a long string, we already have the exact
-            // same memory layout as a Rust &str slice.
-            unsafe { mem::transmute::<[u8; 16], &'a str>(self.0.raw) } 
+        string.fmt(f)
+    }
+}
+
+impl Clone for LongStr {
+    fn clone(&self) -> Self {
+        let length = self.length;
+        let layout = unsafe { Layout::from_size_align_unchecked(length, 8) };
+        let old_bytes_ptr = unsafe { self.bytes.assume_init() };
+
+        // Allocate memory for the new bytes. (We'll manually drop them later.)
+        let new_bytes_ptr = unsafe { alloc::alloc(layout) };
+
+        unsafe {
+            ptr::copy_nonoverlapping(
+                old_bytes_ptr,
+                new_bytes_ptr,
+                length
+            );
+        }
+
+        LongStr {
+            bytes: MaybeUninit::new(new_bytes_ptr),
+            length
         }
     }
 }
 
-impl<'a> From<&'a str> for RocStr {
+impl Into<String> for RocStr {
     #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
-    fn from(string: &'a str) -> RocStr {
+    fn into(self) -> String {
+        let len_msbyte = self.len_msbyte();
+
+        panic!("I'm not sure this works the way we want it to. Need to review.");
+
+        if flagged_as_short_string(len_msbyte) {
+            // Drop the "is this a short string?" flag
+            let length: u8 = len_msbyte & 0b0111_1111;
+            let bytes_ptr = unsafe { &self.0.raw } as *const u8 ;
+
+            // These bytes are already aligned, so we can use them directly.
+            let bytes_slice: &[u8] = unsafe {
+                slice::from_raw_parts(bytes_ptr, length as usize)
+            };
+
+            (unsafe { str::from_utf8_unchecked(bytes_slice) }).to_string()
+        } else {
+            // If it's a long string, we already have the exact
+            // same memory layout as a Rust &str slice.
+            let str_slice = unsafe { mem::transmute::<[u8; 16], &str>(self.0.raw) };
+            let string = str_slice.to_string();
+            let mut roc_str_mut = self;
+
+            // Drop will deallocate the bytes, which we don't want in this case. 
+            // String is using those bytes now!
+            mem::forget(self);
+
+            string
+        }
+    }
+}
+
+impl From<String> for RocStr {
+    #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
+    fn from(string: String) -> RocStr {
         if string.is_empty() {
             RocStr::empty()
         } else {
@@ -184,15 +235,12 @@ impl<'a> From<&'a str> for RocStr {
             if str_len <= 15 {
                 let mut buffer: [u8; 16] = [0; 16];
 
-                // Copy the raw bytes from the string slice into the buffer.
+                // Copy the raw bytes from the string into the buffer.
                 unsafe {
-                    let buffer_ptr =
-                        mem::transmute::<*mut [u8; 16], *mut u8>(&mut buffer);
-
                     // Write into the buffer's bytes
                     ptr::copy_nonoverlapping(
                         string.as_ptr(),
-                        buffer_ptr,
+                        buffer.as_ptr() as *mut u8,
                         str_len
                     );
                 }
@@ -208,41 +256,13 @@ impl<'a> From<&'a str> for RocStr {
                     length: str_len,
                 };
 
+                panic!("TODO: use mem::forget on the string and steal its bytes!");
                 RocStr(InnerStr {long})
             }
         }
     }
 }
 
-impl fmt::Debug for RocStr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str_slice: &str = self.into();
-
-        str_slice.fmt(f)
-    }
-}
-
-impl fmt::Display for RocStr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str_slice: &str = self.into();
-
-        str_slice.fmt(f)
-    }
-}
-
-impl Clone for LongStr {
-    fn clone(&self) -> Self {
-        panic!("TODO: figure out how to clone a LongStr properly so the cloned bytes end up on the heap");
-        // let str_slice = unsafe { mem::transmute::<&LongStr, &str>(&self) };
-        // let string = str_slice.to_string();
-        // let bytes = string.clone().as_bytes();
-
-        // LongStr {
-        //     bytes: MaybeUninit::new(bytes.as_ptr()),
-        //     length: self.length,
-        // }
-    }
-}
 
 impl Clone for RocStr {
     fn clone(&self) -> Self {
@@ -258,10 +278,21 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
+        // If this is a LongStr, we need to deallocate its bytes. 
+        // Otherwise we would have a memory leak!
         if !flagged_as_short_string(self.len_msbyte()) {
-            let mut bytes_ptr = unsafe { self.0.long.bytes.assume_init() };
+            let bytes_ptr = unsafe { self.0.long.bytes.assume_init() };
 
-            unsafe { ptr::drop_in_place(&mut bytes_ptr); }
+            // If this was already dropped previously (most likely because the
+            // bytes were moved into a String), we shouldn't deallocate them.
+            if !bytes_ptr.is_null() {
+                let length = unsafe { self.0.long.length };
+                let layout = unsafe { Layout::from_size_align_unchecked(length, 8) };
+
+                // We don't need to call drop_in_place. We know bytes_ptr points to
+                // a plain u8 array, so there will for sure be no destructor to run.
+                unsafe { alloc::dealloc(bytes_ptr as *mut u8, layout); }
+            }
         }
     }
 }

@@ -8,10 +8,18 @@ pub mod canonicalize;
 pub mod collections;
 pub mod graph;
 
+// pub mod string;
+
+pub mod types;
+pub mod subs;
+pub mod constrain;
+pub mod solve;
+pub mod unify;
 
 extern crate im_rc;
 extern crate fraction;
 extern crate num;
 extern crate fxhash;
+extern crate ena;
 
 #[macro_use] extern crate combine;
