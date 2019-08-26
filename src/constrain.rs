@@ -33,6 +33,7 @@ pub fn constrain(
         Approx(_) => { builtin(Builtin::Approx) },
         Str(_) => { builtin(Builtin::Str) },
         EmptyStr => { builtin(Builtin::Str) },
+        EmptyRecord => { builtin(Builtin::EmptyRecord) },
         InterpolatedStr(_, _) => { builtin(Builtin::Str) },
         _ => { panic!("TODO constraints") }
     }

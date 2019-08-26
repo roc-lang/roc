@@ -4,10 +4,6 @@ use operator::Operator;
 use region::Located;
 use canonicalize::Symbol;
 use collections::MutMap;
-use self::Type::*;
-use self::Problem::*;
-use std::cmp::min;
-use std::usize;
 
 type ModuleName = String;
 
@@ -80,4 +76,3 @@ pub enum Builtin {
     Str, Int, Frac, Approx, 
     EmptyRecord,
 }
-

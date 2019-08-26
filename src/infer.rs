@@ -1,13 +1,13 @@
-use canonicalize::Expr;
+use canonicalize::{Expr, Procedure, Symbol};
 use region::Located;
 use subs::{Subs, Content};
 use types::Expected::*;
 use types::Type::*;
-use collections::ImMap;
+use collections::{ImMap, MutMap};
 use solve::solve;
 use constrain::constrain;
 
-pub fn infer(loc_expr: Located<Expr>) -> Content {
+pub fn infer_expr(loc_expr: Located<Expr>, procedures: MutMap<Symbol, Procedure>) -> Content {
     let mut subs = Subs::new();
     let bound_vars = ImMap::default();
     let variable = subs.mk_flex_var();

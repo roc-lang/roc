@@ -79,12 +79,7 @@ impl UnifyValue for Descriptor {
 
 #[inline(always)]
 fn flex_var_descriptor() -> Descriptor {
-    Descriptor { 
-        content: unnamed_flex_var(),
-        rank: 0, 
-        mark: 2, // no mark
-        copy: None
-    }
+    Descriptor::from(unnamed_flex_var())
 }
 
 #[inline(always)]
@@ -98,6 +93,17 @@ pub struct Descriptor {
     pub rank: usize,
     pub mark: u32,
     pub copy: Option<Variable>
+}
+
+impl From<Content> for Descriptor {
+    fn from(content: Content) -> Self {
+        Descriptor { 
+            content,
+            rank: 0, 
+            mark: 2, // no mark
+            copy: None
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,3 +121,9 @@ pub enum FlatType {
     EmptyRecord,
 }
 
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum Builtin {
+    Str, Int, Frac, Approx, 
+    EmptyRecord,
+}

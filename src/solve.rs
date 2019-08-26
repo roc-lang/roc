@@ -13,9 +13,10 @@
 //     , _errors :: [Error.Error]
 //     }
 
-use subs::{Subs, Variable};
+use subs::{Subs, Variable, Descriptor, Content, FlatType};
 use types::Constraint::{self, *};
 use types::Type::{self, *};
+use types::Builtin;
 
 pub fn solve(subs: &mut Subs, constraint: Constraint) {
     match constraint {
@@ -92,7 +93,26 @@ pub fn solve(subs: &mut Subs, constraint: Constraint) {
 fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
+        Builtin(builtin) => {
+            match builtin {
+                Builtin::EmptyRecord => {
+                    let content = Content::Structure(FlatType::EmptyRecord);
+
+                    subs.fresh(Descriptor::from(content))
+                },
+                _ => panic!("type_to_variable builtin")
+            }
+        },
         _ => panic!("TODO type_to_var")
+
+        // AppN home name args ->
+        // do  argVars <- traverse go args
+        //     register rank pools (Structure (App1 home name argVars))
+
+        // FunN a b ->
+        // do  aVar <- go a
+        //     bVar <- go b
+        //     register rank pools (Structure (Fun1 aVar bVar))
     }
 }
 
