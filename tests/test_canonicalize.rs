@@ -116,7 +116,7 @@ mod test_canonicalize {
                     name: Some("func".to_string()),
                     is_self_tail_recursive: false,
                     definition: empty_region(),
-                    args: vec![Pattern::Identifier(sym("arg"))],
+                    args: vec![loc(Pattern::Identifier(sym("arg")))],
                     body: loc(Expr::Operator(
                         loc_box(Expr::Var(sym("arg"))),
                         loc(Operator::Plus),
@@ -401,7 +401,7 @@ mod test_canonicalize {
         match expr {
             Assign(assignments, _) => {
                 assignments.into_iter().map(|(pattern, _)| {
-                    match pattern {
+                    match pattern.value {
                         Identifier(symbol) => {
                             symbol
                         },

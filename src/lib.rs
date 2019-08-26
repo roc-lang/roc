@@ -15,6 +15,7 @@ pub mod subs;
 pub mod constrain;
 pub mod solve;
 pub mod unify;
+pub mod infer;
 
 extern crate im_rc;
 extern crate fraction;

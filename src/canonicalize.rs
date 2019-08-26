@@ -1166,7 +1166,7 @@ fn canonicalize_pattern(
 
                             // This is a fresh identifier that wasn't already in scope.
                             // Add it to scope!
-                            let symbol_and_region = (symbol.clone(), region);
+                            let symbol_and_region = (symbol.clone(), region.clone());
 
                             // Add this to both scope.idents *and* shadowable_idents.
                             // The latter is relevant when recursively canonicalizing Variant patterns,

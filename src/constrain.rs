@@ -13,7 +13,6 @@ use types::Constraint::{self, *};
 /// blah mapping =
 ///     nested : Map k v # <-- the same k and v from the top-level annotation
 ///     nested = mapping
-///
 ///     42
 ///     
 /// In elm/compiler this is called RTV - the "Rigid Type Variables" dictionary.
@@ -21,6 +20,7 @@ type BoundTypeVars = ImMap<String, Type>;
 
 pub fn constrain(
     bound_vars: BoundTypeVars,
+    subs: &mut Subs,
     loc_expr: Located<Expr>,
     expected: Expected<Type>,
 ) -> Constraint {
@@ -63,7 +63,7 @@ pub fn constrain_def(
                 flex_vars: state.vars,
                 header: state.headers,
                 header_constraint: And(state.reversed_constraints),
-                body_constraint: constrain(bound_vars, loc_expr, NoExpectation(args.ret_type))
+                body_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(args.ret_type))
             })),
         body_constraint,
         header: panic!("TODO Map.singleton name (A.At region tipe)"),
@@ -84,7 +84,7 @@ pub fn constrain_procedure(
     };
     let args = constrain_args(proc.args.into_iter(), subs, &mut state);
     let body_type = NoExpectation(args.ret_type);
-    let body_constraint = constrain(bound_vars, proc.body, body_type);
+    let body_constraint = constrain(bound_vars, subs, proc.body, body_type);
 
     state.reversed_constraints.reverse();
 

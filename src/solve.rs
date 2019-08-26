@@ -16,14 +16,6 @@
 use subs::{Subs, Variable};
 use types::Constraint::{self, *};
 use types::Type::{self, *};
-use unify::unify;
-
-pub fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
-    match typ {
-        Variable(var) => var,
-
-    }
-}
 
 pub fn solve(subs: &mut Subs, constraint: Constraint) {
     match constraint {
@@ -96,3 +88,11 @@ pub fn solve(subs: &mut Subs, constraint: Constraint) {
         },
     }
 }
+
+fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
+    match typ {
+        Variable(var) => var,
+        _ => panic!("TODO type_to_var")
+    }
+}
+

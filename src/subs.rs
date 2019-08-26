@@ -26,6 +26,12 @@ impl UnifyKey for Variable {
 }
 
 impl Subs {
+    pub fn new() -> Self {
+        Subs {
+            utable: UnificationTable::default()
+        }
+    }
+
     pub fn fresh(&mut self, value: Descriptor) -> Variable {
         self.utable.new_key(value)
     }
