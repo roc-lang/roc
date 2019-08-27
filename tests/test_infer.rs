@@ -82,23 +82,15 @@ mod test_infer {
         infer_eq("0.5", "Num.Num (Num.Fractional *)");
     }
 
-    // #[test]
-    // fn infer_approx() {
-    //     assert_eq!(
-    //         infer("~0.5"),
-    //         Builtin(Approx)
-    //     );
-    // }
-
-    // #[test]
-    // fn infer_string() {
-    //     assert_eq!(
-    //         infer(indoc!(r#"
-    //             "type inference!"
-    //         "#)),
-    //         Builtin(Str)
-    //     );
-    // }
+    #[test]
+    fn infer_string() {
+        infer_eq(
+            indoc!(r#"
+                "type inference!"
+            "#),
+            "String.String"
+        );
+    }
 
     // #[test]
     // fn infer_empty_string() {
