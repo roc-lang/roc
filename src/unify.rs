@@ -2,7 +2,7 @@ use subs::{Descriptor, FlatType};
 use subs::Content::{self, *};
 
 pub fn unify(left: &Descriptor, right: &Descriptor) -> Descriptor {
-    match left.content {
+    let answer = match left.content {
         FlexVar(ref opt_name) => {
             unify_flex(opt_name, &right.content)
         },
@@ -16,7 +16,11 @@ pub fn unify(left: &Descriptor, right: &Descriptor) -> Descriptor {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             from_content(Error)
         }
-    }
+    };
+
+    println!("\nUnifying:\n\n\t{:?}\n\n\t{:?}\n\n\t-----\n\n\t{:?}\n\n", left.content, right.content, answer.content);
+
+    answer
 }
 
 #[inline(always)]
@@ -44,7 +48,7 @@ fn unify_structure(flat_type: &FlatType, other: &Content) -> Descriptor {
 #[inline(always)]
 fn unify_flat_type(left: &FlatType, right: &FlatType) -> Descriptor {
     panic!("TODO");
-        // case (flatType, otherFlatType) of
+        // case (flatType, otherFlatType) oa
         //   (App1 home name args, App1 otherHome otherName otherArgs) | home == otherHome && name == otherName ->
         //       Unify $ \vars ok err ->
         //         let

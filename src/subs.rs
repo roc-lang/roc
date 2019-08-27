@@ -1,13 +1,27 @@
 use ena::unify::{UnificationTable, UnifyKey, UnifyValue, InPlace, NoError};
 use canonicalize::Symbol;
+use std::fmt;
 use unify;
 
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>
 }
 
-#[derive(Copy, Debug, PartialEq, Eq, Clone)]
+#[derive(Copy, PartialEq, Eq, Clone)]
 pub struct Variable(u32);
+
+impl Variable {
+    pub fn new_for_testing_only(num: u32) -> Self {
+        // This is a hack that should only ever be used for testing!
+        Variable(num)
+    }
+}
+
+impl fmt::Debug for Variable {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 impl UnifyKey for Variable {
     type Value = Descriptor;
@@ -116,7 +130,7 @@ pub enum Content {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
-    Apply(Symbol, Vec<Variable>),
+    Apply(String /* module name */, String /* type name */, Vec<Variable>),
     Func(Variable, Variable),
     EmptyRecord,
 }

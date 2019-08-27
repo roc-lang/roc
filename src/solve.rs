@@ -16,12 +16,12 @@
 use subs::{Subs, Variable, Descriptor, Content, FlatType};
 use types::Constraint::{self, *};
 use types::Type::{self, *};
-use types::Builtin;
 
 pub fn solve(subs: &mut Subs, constraint: Constraint) {
+    println!("\nSolving:\n\n\t{:?}\n\n", constraint);
     match constraint {
         True => (),
-        Eq(region, typ, expected_type) => {
+        Eq(typ, expected_type, region) => {
             let actual = type_to_variable(subs, typ);
             let expected = type_to_variable(subs, expected_type.unwrap());
 
@@ -93,15 +93,21 @@ pub fn solve(subs: &mut Subs, constraint: Constraint) {
 fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
-        Builtin(builtin) => {
-            match builtin {
-                Builtin::EmptyRecord => {
-                    let content = Content::Structure(FlatType::EmptyRecord);
+        Apply(module_name, name, args) => {
+            let arg_vars: Vec<Variable> =
+                args.into_iter()
+                    .map(|arg| type_to_variable(subs, arg))
+                    .collect();
 
-                    subs.fresh(Descriptor::from(content))
-                },
-                _ => panic!("type_to_variable builtin")
-            }
+            let flat_type = FlatType::Apply(module_name, name, arg_vars);
+            let content = Content::Structure(flat_type);
+
+            subs.fresh(Descriptor::from(content))
+        },
+        EmptyRec => {
+            let content = Content::Structure(FlatType::EmptyRecord);
+
+            subs.fresh(Descriptor::from(content))
         },
         _ => panic!("TODO type_to_var")
 

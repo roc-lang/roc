@@ -9,12 +9,11 @@ type ModuleName = String;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Type {
-    /// One of the concrete built-in types (e.g. Int)
-    Builtin(Builtin),
+    EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
-    Apply(ModuleName, Box<Type>, Vec<Type>),
+    Apply(ModuleName, String, Vec<Type>),
     Variable(Variable),
     /// A Blank in the editor (a "typed hole" as they're also known)
     Blank,
@@ -22,32 +21,37 @@ pub enum Type {
     Erroneous(Problem),
 }
 
+#[derive(Debug)]
 pub enum Expected<T> {
     NoExpectation(T),
-    ForReason(Region, Reason, T),
+    ForReason(Reason, T, Region),
 }
 
 impl<T> Expected<T> {
     pub fn unwrap(self) -> T {
         match self {
             Expected::NoExpectation(val) => val,
-            Expected::ForReason(_, _, val) => val
+            Expected::ForReason(_, val, _) => val
         }
     }
 }
 
+#[derive(Debug)]
 pub enum Reason {
     OperatorLeftArg(Operator),
     OperatorRightArg(Operator),
+    FractionalLiteral
 }
 
+#[derive(Debug)]
 pub enum Constraint {
-    Eq(Region, Type, Expected<Type>),
+    Eq(Type, Expected<Type>, Region),
     True, // Used for things that always unify, e.g. blanks and runtime errors 
     Let(Box<LetConstraint>),
     And(Vec<Constraint>)
 }
 
+#[derive(Debug)]
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
@@ -67,12 +71,4 @@ pub enum Problem {
     InconsistentCaseBranches,
     CircularType,
     CanonicalizationProblem
-}
-
-
-/// Built-in types
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
-pub enum Builtin {
-    Str, Int, Frac, Approx, 
-    EmptyRecord,
 }

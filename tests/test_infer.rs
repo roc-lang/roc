@@ -14,19 +14,24 @@ mod test_infer {
     use roc::collections::{MutMap, ImMap};
     use roc::types::{Type, Problem};
     use roc::types::Type::*;
-    use roc::types::Builtin::*;
     use roc::subs::Content::{self, *};
-    use roc::subs::FlatType;
+    use roc::subs::{FlatType, Variable};
+    use roc::subs::Subs;
     use roc::region::{Located, Region};
     use roc::infer::infer_expr;
+    use roc::pretty_print_types::content_to_string;
 
 
     // HELPERS
 
-    fn infer(src: &str) -> Content {
+    fn infer_eq(src: &str, expected: &str) {
         let (expr, procedures) = can_expr(src);
+        let mut subs = Subs::new();
 
-        infer_expr(loc(expr), procedures)
+        let content = infer_expr(&mut subs, loc(expr), procedures);
+        let actual_str = content_to_string(content, &mut subs);
+
+        assert_eq!(actual_str, expected.to_string());
     }
 
     fn can_expr(expr_str: &str) -> (Expr, MutMap<Symbol, Procedure>) {
@@ -54,37 +59,28 @@ mod test_infer {
         (loc_expr.value, procedures)
     }
 
-    // fn box_var(var_id: TypeVarId) -> Box<Type> {
-    //     Box::new(TypeVar(var_id))
-    // }
+    fn apply(module_name: &str, type_name: &str, args: Vec<Variable>) -> Content {
+        Structure(FlatType::Apply(module_name.to_string(), type_name.to_string(), args))
+    }
 
-    // fn var(var_id: TypeVarId) -> Type {
-    //     TypeVar(var_id)
-    // }
+    fn var(num: u32) -> Variable {
+        Variable::new_for_testing_only(num)
+    }
 
     #[test]
     fn infer_empty_record() {
-        assert_eq!(
-            infer("{}"),
-            Structure(FlatType::EmptyRecord)
-        );
+        infer_eq("{}", "{}");
     }
 
-    // #[test]
-    // fn infer_int() {
-    //     assert_eq!(
-    //         infer("5"),
-    //         Structure(FlatType::EmptyRecord)
-    //     );
-    // }
+    #[test]
+    fn infer_int() {
+        infer_eq("5", "Num.Num *");
+    }
 
-    // #[test]
-    // fn infer_frac() {
-    //     assert_eq!(
-    //         infer("0.5"),
-    //         Builtin(Frac)
-    //     );
-    // }
+    #[test]
+    fn infer_fractional() {
+        infer_eq("0.5", "Num.Num (Num.Fractional *)");
+    }
 
     // #[test]
     // fn infer_approx() {

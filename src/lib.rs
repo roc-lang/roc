@@ -16,6 +16,7 @@ pub mod constrain;
 pub mod solve;
 pub mod unify;
 pub mod infer;
+pub mod pretty_print_types;
 
 extern crate im_rc;
 extern crate fraction;

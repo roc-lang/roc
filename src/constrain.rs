@@ -3,7 +3,7 @@ use canonicalize::Expr::{self, *};
 use collections::{ImMap, MutMap};
 use region::{Located, Region};
 use subs::{Variable, Subs};
-use types::{Expected, Expected::*, Builtin, LetConstraint};
+use types::{Expected, Expected::*, LetConstraint, Reason};
 use types::Type::{self, *};
 use types::Constraint::{self, *};
 
@@ -25,19 +25,58 @@ pub fn constrain(
     expected: Expected<Type>,
 ) -> Constraint {
     let region = loc_expr.region;
-    let builtin = |b| -> Constraint { Eq(region, Builtin(b), expected) };
 
     match loc_expr.value {
-        Int(_) => { builtin(Builtin::Int) },
-        Frac(_, _) => { builtin(Builtin::Frac) },
-        Approx(_) => { builtin(Builtin::Approx) },
-        Str(_) => { builtin(Builtin::Str) },
-        EmptyStr => { builtin(Builtin::Str) },
-        EmptyRecord => { builtin(Builtin::EmptyRecord) },
-        InterpolatedStr(_, _) => { builtin(Builtin::Str) },
+        Int(_) => { Eq(num(subs.mk_flex_var()), expected, region) },
+        Frac(_, _) => { fractional(subs, expected, region) },
+        Approx(_) => { fractional(subs, expected, region) },
+        Str(_) => { Eq(string(), expected, region) },
+        EmptyStr => { Eq(string(), expected, region) },
+        InterpolatedStr(_, _) => { Eq(string(), expected, region) },
+        EmptyRecord => { Eq(EmptyRec, expected, region) },
         _ => { panic!("TODO constraints") }
     }
 }
+
+fn string() -> Type {
+    builtin_type("String", "String", Vec::new())
+}
+
+fn num(var: Variable) -> Type {
+    builtin_type("Num", "Num", vec![Type::Variable(var)])
+}
+
+fn fractional(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
+    // We'll make a Num var1 and a Fractional var2, 
+    // and then add a constraint that var1 needs to equal Fractional var2
+    let num_var = subs.mk_flex_var(); // Num var1
+    let fractional_var = subs.mk_flex_var(); // Fractional var2
+    let fractional_type = 
+        Type::Apply(
+            "Num".to_string(), 
+            "Fractional".to_string(), 
+            vec![Type::Variable(fractional_var)]
+        );
+    let num_var_type = Type::Variable(num_var);
+    let num_type = 
+        Type::Apply(
+            "Num".to_string(), 
+            "Num".to_string(), 
+            vec![num_var_type.clone()]
+        );
+    let expected_fractional = 
+        ForReason(Reason::FractionalLiteral, fractional_type, region.clone());
+
+    And(vec![
+        Eq(num_type, expected, region.clone()),
+        Eq(num_var_type, expected_fractional, region),
+    ])
+}
+
+fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
+    Type::Apply(module_name.to_string(), type_name.to_string(), args)
+}
+
 
 pub fn constrain_def(
     loc_pattern: Located<Pattern>,
@@ -101,7 +140,7 @@ pub fn constrain_procedure(
             header_constraint,
             body_constraint
         })),
-        Eq(region, args.typ, expected)
+        Eq(args.typ, expected, region)
     ])
 }
 

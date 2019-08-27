@@ -1,12 +1,28 @@
 use std::fmt;
 
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Region {
     pub start_line: u32,
     pub start_col: u32,
 
     pub end_line: u32,
     pub end_col: u32,
+}
+
+impl fmt::Debug for Region {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.start_line == 0 && self.start_col == 0 && self.end_line == 0 && self.end_col == 0 {
+            // In tests, it's super common to set all Located values to 0.
+            // Also in tests, we don't want to bother printing the locations
+            // because it makes failed assertions much harder to read.
+            write!(f, "…")
+        } else {
+            write!(f, "|L {}, C {} - L {}, C {}|",
+                self.start_line, self.start_col,
+                self.end_line, self.end_col,
+            )
+        }
+    }
 }
 
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
@@ -46,11 +62,7 @@ where T: fmt::Debug
             // because it makes failed assertions much harder to read.
             self.value.fmt(f)
         } else {
-            write!(f, "|L {}, C {} - L {}, C {}| {:?}",
-                region.start_line, region.start_col,
-                region.end_line, region.end_col,
-                self.value
-            )
+            write!(f, "{:?} {:?}", region, self.value)
         }
     }
 }
