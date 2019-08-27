@@ -92,15 +92,15 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // fn infer_empty_string() {
-    //     assert_eq!(
-    //         infer(indoc!(r#"
-    //             ""
-    //         "#)),
-    //         Builtin(Str)
-    //     );
-    // }
+    #[test]
+    fn infer_empty_string() {
+        infer_eq(
+            indoc!(r#"
+                ""
+            "#),
+            "String.String"
+        );
+    }
 
     // #[test]
     // fn infer_interpolated_string() {
