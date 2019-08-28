@@ -1,4 +1,4 @@
-use subs::{Descriptor, FlatType};
+use subs::{Descriptor, FlatType, Variable};
 use subs::Content::{self, *};
 
 pub fn unify(left: &Descriptor, right: &Descriptor) -> Descriptor {
@@ -47,56 +47,30 @@ fn unify_structure(flat_type: &FlatType, other: &Content) -> Descriptor {
 
 #[inline(always)]
 fn unify_flat_type(left: &FlatType, right: &FlatType) -> Descriptor {
-    panic!("TODO");
-        // case (flatType, otherFlatType) oa
-        //   (App1 home name args, App1 otherHome otherName otherArgs) | home == otherHome && name == otherName ->
-        //       Unify $ \vars ok err ->
-        //         let
-        //           ok1 vars1 () =
-        //             case merge context otherContent of
-        //               Unify k ->
-        //                 k vars1 ok err
-        //         in
-        //         unifyArgs vars context args otherArgs ok1 err
+    use subs::FlatType::*;
 
-        //   (Fun1 arg1 res1, Fun1 arg2 res2) ->
-        //       do  subUnify arg1 arg2
-        //           subUnify res1 res2
-        //           merge context otherContent
+    match (left, right) {
+        (EmptyRecord, EmptyRecord) => from_content(Structure(left.clone())),
+        (
+            Apply(l_module_name, l_type_name, l_vars),
+            Apply(r_module_name, r_type_name, r_vars)
+        ) if l_module_name == r_module_name && l_type_name == r_type_name => {
+            let vars = unify_vars(l_vars, r_vars);
+            let flat_type = Apply(l_module_name.clone(), l_type_name.clone(), vars);
 
-        //   (EmptyRecord1, EmptyRecord1) ->
-        //       merge context otherContent
+            from_content(Structure(flat_type))
+        },
+        (Func(_, _), Func(_, _)) => panic!("TODO unify_flat_type for Func"),
+        _ => from_content(Error)
+    }
+}
 
-        //   (Record1 fields ext, EmptyRecord1) | Map.null fields ->
-        //       subUnify ext (_second context)
-
-        //   (EmptyRecord1, Record1 fields ext) | Map.null fields ->
-        //       subUnify (_first context) ext
-
-        //   (Record1 fields1 ext1, Record1 fields2 ext2) ->
-        //       Unify $ \vars ok err ->
-        //         do  structure1 <- gatherFields fields1 ext1
-        //             structure2 <- gatherFields fields2 ext2
-        //             case unifyRecord context structure1 structure2 of
-        //               Unify k ->
-        //                 k vars ok err
-
-        //   (Tuple1 a b Nothing, Tuple1 x y Nothing) ->
-        //       do  subUnify a x
-        //           subUnify b y
-        //           merge context otherContent
-
-        //   (Tuple1 a b (Just c), Tuple1 x y (Just z)) ->
-        //       do  subUnify a x
-        //           subUnify b y
-        //           subUnify c z
-        //           merge context otherContent
-
-        //   (Unit1, Unit1) ->
-        //       merge context otherContent
-
-        //   _ ->
-        //       mismatch
+fn unify_vars(left: &Vec<Variable>, right: &Vec<Variable>) -> Vec<Variable> {
+    left.iter().zip(right.iter()).map(|(l_var, r_var)| {
+        let l_descriptor = from_content(Variable(l_var));
+        let r_descriptor = from_content(Variable(r_var));
+        let descriptor = unify(&l_descriptor, &r_descriptor);
+    }).collect()
 }
 
 
