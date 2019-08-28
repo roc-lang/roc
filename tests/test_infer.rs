@@ -117,12 +117,42 @@ mod test_infer {
     }
 
     #[test]
+    fn infer_list_of_lists() {
+        infer_eq(
+            indoc!(r#"
+                [[]]
+            "#),
+            "List.List (List.List *)"
+        );
+    }
+
+    #[test]
+    fn infer_triple_nested_list() {
+        infer_eq(
+            indoc!(r#"
+                [[[]]]
+            "#),
+            "List.List (List.List (List.List *))"
+        );
+    }
+
+    #[test]
     fn infer_list_of_one_num() {
         infer_eq(
             indoc!(r#"
                 [42]
             "#),
             "List.List (Num.Num *)"
+        );
+    }
+
+    #[test]
+    fn infer_triple_nested_num_list() {
+        infer_eq(
+            indoc!(r#"
+                [[[ 5 ]]]
+            "#),
+            "List.List (List.List (List.List (Num.Num *)))"
         );
     }
 
@@ -145,6 +175,17 @@ mod test_infer {
             "List.List String.String"
         );
     }
+
+    #[test]
+    fn infer_triple_nested_string_list() {
+        infer_eq(
+            indoc!(r#"
+                [[[ "foo" ]]]
+            "#),
+            "List.List (List.List (List.List String.String))"
+        );
+    }
+
 
     #[test]
     fn infer_list_of_strings() {
