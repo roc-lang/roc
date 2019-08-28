@@ -130,7 +130,7 @@ pub enum Content {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
-    Apply(String /* module name */, String /* type name */, Vec<Variable>),
+    Apply(String /* module name */, String /* type name */, Vec<Content>),
     Func(Variable, Variable),
     EmptyRecord,
 }

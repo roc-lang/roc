@@ -93,13 +93,17 @@ pub fn solve(subs: &mut Subs, constraint: Constraint) {
 fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
-        Apply(module_name, name, args) => {
-            let arg_vars: Vec<Variable> =
-                args.into_iter()
-                    .map(|arg| type_to_variable(subs, arg))
+        Apply(module_name, name, arg_types) => {
+            let args: Vec<Content> =
+                arg_types.into_iter()
+                    .map(|arg| {
+                        let var = type_to_variable(subs, arg);
+
+                        subs.get(var).content
+                    })
                     .collect();
 
-            let flat_type = FlatType::Apply(module_name, name, arg_vars);
+            let flat_type = FlatType::Apply(module_name, name, args);
             let content = Content::Structure(flat_type);
 
             subs.fresh(Descriptor::from(content))

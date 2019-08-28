@@ -1,4 +1,4 @@
-use subs::{Descriptor, FlatType, Variable};
+use subs::{Descriptor, FlatType};
 use subs::Content::{self, *};
 
 pub fn unify(left: &Descriptor, right: &Descriptor) -> Descriptor {
@@ -52,11 +52,11 @@ fn unify_flat_type(left: &FlatType, right: &FlatType) -> Descriptor {
     match (left, right) {
         (EmptyRecord, EmptyRecord) => from_content(Structure(left.clone())),
         (
-            Apply(l_module_name, l_type_name, l_vars),
-            Apply(r_module_name, r_type_name, r_vars)
+            Apply(l_module_name, l_type_name, l_args),
+            Apply(r_module_name, r_type_name, r_args)
         ) if l_module_name == r_module_name && l_type_name == r_type_name => {
-            let vars = unify_vars(l_vars, r_vars);
-            let flat_type = Apply(l_module_name.clone(), l_type_name.clone(), vars);
+            let args = unify_args(l_args.iter(), r_args.iter());
+            let flat_type = Apply(l_module_name.clone(), l_type_name.clone(), args);
 
             from_content(Structure(flat_type))
         },
@@ -65,11 +65,15 @@ fn unify_flat_type(left: &FlatType, right: &FlatType) -> Descriptor {
     }
 }
 
-fn unify_vars(left: &Vec<Variable>, right: &Vec<Variable>) -> Vec<Variable> {
-    left.iter().zip(right.iter()).map(|(l_var, r_var)| {
-        let l_descriptor = from_content(Variable(l_var));
-        let r_descriptor = from_content(Variable(r_var));
+fn unify_args<'a, I>(left_iter: I, right_iter: I) -> Vec<Content>
+where I: Iterator<Item = &'a Content> 
+{
+    left_iter.zip(right_iter).map(|(l_content, r_content)| {
+        let l_descriptor = from_content(l_content.clone());
+        let r_descriptor = from_content(r_content.clone());
         let descriptor = unify(&l_descriptor, &r_descriptor);
+
+        descriptor.content
     }).collect()
 }
 

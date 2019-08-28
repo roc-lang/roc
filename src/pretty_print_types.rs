@@ -28,8 +28,8 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
     use subs::FlatType::*;
 
     match flat_type {
-        Apply(module_name, type_name, vars) => {
-            let write_parens = use_parens && !vars.is_empty();
+        Apply(module_name, type_name, args) => {
+            let write_parens = use_parens && !args.is_empty();
 
             if write_parens {
                 buf.push_str("(");
@@ -37,9 +37,9 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
 
             buf.push_str(&format!("{}.{}", module_name, type_name));
 
-            for var in vars {
+            for arg in args {
                 buf.push_str(" ");
-                write_content(subs.get(var).content, subs, buf, true);
+                write_content(arg, subs, buf, true);
             }
 
             if write_parens {
