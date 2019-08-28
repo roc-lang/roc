@@ -1,5 +1,4 @@
-use ena::unify::{UnificationTable, UnifyKey, UnifyValue, InPlace, NoError};
-use canonicalize::Symbol;
+use ena::unify::{UnificationTable, UnifyKey, InPlace, NoError};
 use std::fmt;
 use unify;
 
@@ -81,14 +80,6 @@ impl Subs {
     // pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
     //     self.utable.unioned(left, right)
     // }
-}
-
-impl UnifyValue for Descriptor {
-    type Error = NoError;
-
-    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
-        Ok(unify::unify(left, right))
-    }
 }
 
 #[inline(always)]

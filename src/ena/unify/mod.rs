@@ -57,7 +57,7 @@ mod tests;
 /// Clients are expected to provide implementations of this trait; you
 /// can see some examples in the `test` module.
 pub trait UnifyKey: Copy + Clone + Debug + PartialEq {
-    type Value: UnifyValue;
+    type Value: Clone + Debug;
 
     fn index(&self) -> u32;
 
@@ -86,57 +86,6 @@ pub trait UnifyKey: Copy + Clone + Debug + PartialEq {
         b_value: &Self::Value,
     ) -> Option<(Self, Self)> {
         None
-    }
-}
-
-/// Trait implemented for **values** associated with a unification
-/// key. This trait defines how to merge the values from two keys that
-/// are unioned together. This merging can be fallible. If you attempt
-/// to union two keys whose values cannot be merged, then the error is
-/// propagated up and the two keys are not unioned.
-///
-/// This crate provides implementations of `UnifyValue` for `()`
-/// (which is infallible) and `Option<T>` (where `T: UnifyValue`). The
-/// option implementation merges two sum-values using the `UnifyValue`
-/// implementation of `T`.
-///
-/// See also `EqUnifyValue`, which is a convenience trait for cases
-/// where the "merge" operation succeeds only if the two values are
-/// equal.
-pub trait UnifyValue: Clone + Debug {
-    /// Defines the type to return when merging of two values fails.
-    /// If merging is infallible, use the special struct `NoError`
-    /// found in this crate, which unlocks various more convenient
-    /// methods on the unification table.
-    type Error;
-
-    /// Given two values, produce a new value that combines them.
-    /// If that is not possible, produce an error.
-    fn unify_values(value1: &Self, value2: &Self) -> Result<Self, Self::Error>;
-}
-
-/// A convenient helper for unification values which must be equal or
-/// else an error occurs. For example, if you are unifying types in a
-/// simple functional language, this may be appropriate, since (e.g.)
-/// you can't unify a type variable bound to `int` with one bound to
-/// `float` (but you can unify two type variables both bound to
-/// `int`).
-///
-/// Any type which implements `EqUnifyValue` automatially implements
-/// `UnifyValue`; if the two values are equal, merging is permitted.
-/// Otherwise, the error `(v1, v2)` is returned, where `v1` and `v2`
-/// are the two unequal values.
-pub trait EqUnifyValue: Eq + Clone + Debug {}
-
-impl<T: EqUnifyValue> UnifyValue for T {
-    type Error = (T, T);
-
-    fn unify_values(value1: &Self, value2: &Self) -> Result<Self, Self::Error> {
-        if value1 == value2 {
-            Ok(value1.clone())
-        } else {
-            Err((value1.clone(), value2.clone()))
-        }
     }
 }
 
@@ -426,29 +375,40 @@ impl<'tcx, S, K, V> UnificationTable<S>
 where
     S: UnificationStore<Key = K, Value = V>,
     K: UnifyKey<Value = V>,
-    V: UnifyValue,
+    V: Clone + Debug,
 {
-    /// Unions two keys without the possibility of failure; only
-    /// applicable when unify values use `NoError` as their error
-    /// type.
-    pub fn union<K1, K2>(&mut self, a_id: K1, b_id: K2)
+    /// Unions two keys without the possibility of failure.
+    pub fn union<K1, K2, F>(&mut self, unify: F, a_id: K1, b_id: K2)
     where
         K1: Into<K>,
         K2: Into<K>,
-        V: UnifyValue<Error = NoError>,
+        F: FnMut(&mut Self, V, V) -> V
     {
-        self.unify_var_var(a_id, b_id).unwrap();
+        let a_id = a_id.into();
+        let b_id = b_id.into();
+
+        let root_a = self.get_root_key(a_id);
+        let root_b = self.get_root_key(b_id);
+
+        if root_a == root_b {
+            return Ok(());
+        }
+
+        let combined = unify(&mut self, &self.value(root_a).value, &self.value(root_b).value);
+
+        self.unify_roots(root_a, root_b, combined)
     }
 
-    /// Unions a key and a value without the possibility of failure;
-    /// only applicable when unify values use `NoError` as their error
-    /// type.
-    pub fn union_value<K1>(&mut self, id: K1, value: V)
+    /// Unions a key and a value without the possibility of failure.
+    pub fn union_value<K1, F>(&mut self, unify: F, id: K1, b: V)
     where
         K1: Into<K>,
-        V: UnifyValue<Error = NoError>,
+        F: FnMut(&'tcx mut Self, V, V) -> V
     {
-        self.unify_var_value(id, value).unwrap();
+        let id = id.into();
+        let root_a = self.get_root_key(id);
+        let value = unify(&mut self, self.value(root_a).value, b);
+        self.update_value(root_a, |node| node.value = value);
     }
 
     /// Given two keys, indicates whether they have been unioned together.
@@ -469,42 +429,6 @@ where
         self.get_root_key(id)
     }
 
-    /// Unions together two variables, merging their values. If
-    /// merging the values fails, the error is propagated and this
-    /// method has no effect.
-    pub fn unify_var_var<K1, K2>(&mut self, a_id: K1, b_id: K2) -> Result<(), V::Error>
-    where
-        K1: Into<K>,
-        K2: Into<K>,
-    {
-        let a_id = a_id.into();
-        let b_id = b_id.into();
-
-        let root_a = self.get_root_key(a_id);
-        let root_b = self.get_root_key(b_id);
-
-        if root_a == root_b {
-            return Ok(());
-        }
-
-        let combined = V::unify_values(&self.value(root_a).value, &self.value(root_b).value)?;
-
-        Ok(self.unify_roots(root_a, root_b, combined))
-    }
-
-    /// Sets the value of the key `a_id` to `b`, attempting to merge
-    /// with the previous value.
-    pub fn unify_var_value<K1>(&mut self, a_id: K1, b: V) -> Result<(), V::Error>
-    where
-        K1: Into<K>,
-    {
-        let a_id = a_id.into();
-        let root_a = self.get_root_key(a_id);
-        let value = V::unify_values(&self.value(root_a).value, &b)?;
-        self.update_value(root_a, |node| node.value = value);
-        Ok(())
-    }
-
     /// Returns the current value for the given key. If the key has
     /// been union'd, this will give the value from the current root.
     pub fn probe_value<K1>(&mut self, id: K1) -> V
@@ -518,30 +442,3 @@ where
 }
 
 
-///////////////////////////////////////////////////////////////////////////
-
-impl UnifyValue for () {
-    type Error = NoError;
-
-    fn unify_values(_: &(), _: &()) -> Result<(), NoError> {
-        Ok(())
-    }
-}
-
-impl<V: UnifyValue> UnifyValue for Option<V> {
-    type Error = V::Error;
-
-    fn unify_values(a: &Option<V>, b: &Option<V>) -> Result<Self, V::Error> {
-        match (a, b) {
-            (&None, &None) => Ok(None),
-            (&Some(ref v), &None) |
-            (&None, &Some(ref v)) => Ok(Some(v.clone())),
-            (&Some(ref a), &Some(ref b)) => {
-                match V::unify_values(a, b) {
-                    Ok(v) => Ok(Some(v)),
-                    Err(err) => Err(err),
-                }
-            }
-        }
-    }
-}

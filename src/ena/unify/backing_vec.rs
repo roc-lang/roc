@@ -2,9 +2,10 @@
 use dogged::DVec;
 use ena::snapshot_vec as sv;
 use std::ops::{self, Range};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
-use super::{VarValue, UnifyKey, UnifyValue};
+use super::{VarValue, UnifyKey};
 
 #[allow(dead_code)] // rustc BUG
 #[allow(type_alias_bounds)]
@@ -17,7 +18,7 @@ pub trait UnificationStore:
     ops::Index<usize, Output = VarValue<Key<Self>>> + Clone + Default
 {
     type Key: UnifyKey<Value = Self::Value>;
-    type Value: UnifyValue;
+    type Value: Clone + Debug;
     type Snapshot;
 
     fn start_snapshot(&mut self) -> Self::Snapshot;
