@@ -1,7 +1,15 @@
 use subs::{Descriptor, FlatType, Variable, Subs};
 use subs::Content::{self, *};
 
-pub fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descriptor {
+pub fn unify(subs: &mut Subs, left_key: Variable, right_key: Variable) -> Descriptor {
+    let right = subs.get(right_key);
+
+    unify_val(subs, left_key, &right)
+}
+
+pub fn unify_val(subs: &mut Subs, left_key: Variable, right: &Descriptor) -> Descriptor {
+    let left = subs.get(left_key);
+
     let answer = match left.content {
         FlexVar(ref opt_name) => {
             unify_flex(opt_name, &right.content)
@@ -22,6 +30,7 @@ pub fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descript
 
     answer
 }
+
 
 #[inline(always)]
 fn unify_structure(subs: &mut Subs, flat_type: &FlatType, other: &Content) -> Descriptor {
@@ -55,7 +64,7 @@ fn unify_flat_type(subs: &mut Subs, left: &FlatType, right: &FlatType) -> Descri
             Apply(l_module_name, l_type_name, l_args),
             Apply(r_module_name, r_type_name, r_args)
         ) if l_module_name == r_module_name && l_type_name == r_type_name => {
-            let args = unify_args(&mut subs, l_args.iter(), r_args.iter());
+            let args = unify_args(subs, l_args.iter(), r_args.iter());
             let flat_type = Apply(l_module_name.clone(), l_type_name.clone(), args);
 
             from_content(Structure(flat_type))
@@ -70,9 +79,7 @@ where I: Iterator<Item = &'a Variable>
 {
     left_iter.zip(right_iter).map(|(l_var, r_var)| {
         // Look up the descriptors we have for these variables, and unify them.
-        let l_descriptor = subs.get(l_var.clone());
-        let r_descriptor = subs.get(r_var.clone());
-        let descriptor = unify(subs, &l_descriptor, &r_descriptor);
+        let descriptor = unify(subs, l_var.clone(), r_var.clone());
 
         // set r_var to be the unioned value, then union l_var to r_var
         subs.set(r_var.clone(), descriptor);

@@ -1,4 +1,4 @@
-use ena::unify::{UnificationTable, UnifyKey, InPlace, NoError};
+use ena::unify::{UnificationTable, UnifyKey, InPlace};
 use std::fmt;
 use unify;
 
@@ -49,16 +49,27 @@ impl Subs {
         self.utable.new_key(value)
     }
 
+    /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable) {
-        self.utable.union(left, right)
+        let l_root = self.utable.get_root_key(left.into());
+        let r_root = self.utable.get_root_key(right.into());
+
+        if l_root != r_root {
+            let combined = unify::unify(self, l_root, r_root);
+
+            self.utable.unify_roots(l_root, r_root, combined)
+        }
     }
 
     pub fn get(&mut self, key: Variable) -> Descriptor {
         self.utable.probe_value(key)
     }
 
-    pub fn set(&mut self, key: Variable, value: Descriptor) {
-        self.utable.union_value(key, value)
+    pub fn set(&mut self, key: Variable, r_value: Descriptor) {
+        let l_key = self.utable.get_root_key(key.into());
+        let unified = unify::unify_val(self, l_key, &r_value); 
+
+        self.utable.update_value(l_key, |node| node.value = unified);
     }
 
     pub fn mk_flex_var(&mut self) -> Variable {

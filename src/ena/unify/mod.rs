@@ -42,9 +42,6 @@ pub use self::backing_vec::{InPlace, UnificationStore};
 pub use self::backing_vec::Persistent;
 
 
-#[cfg(test)]
-mod tests;
-
 /// This trait is implemented by any type that can serve as a type
 /// variable. We call such variables *unification keys*. For example,
 /// this trait is implemented by `IntVid`, which represents integral
@@ -107,7 +104,7 @@ pub struct NoError {
 #[derive(PartialEq, Clone, Debug)]
 pub struct VarValue<K: UnifyKey> { // FIXME pub
     parent: K, // if equal to self, this is a root
-    value: K::Value, // value assigned (only relevant to root)
+    pub value: K::Value, // value assigned (only relevant to root)
     rank: u32, // max depth (only relevant to root)
 }
 
@@ -260,7 +257,7 @@ impl<S: UnificationStore> UnificationTable<S> {
 
     /// Obtains the current value for a particular key.
     /// Not for end-users; they can use `probe_value`.
-    fn value(&self, key: S::Key) -> &VarValue<S::Key> {
+    pub fn value(&self, key: S::Key) -> &VarValue<S::Key> {
         &self.values[key.index() as usize]
     }
 
@@ -270,7 +267,7 @@ impl<S: UnificationStore> UnificationTable<S> {
     ///
     /// NB. This is a building-block operation and you would probably
     /// prefer to call `probe` below.
-    fn get_root_key(&mut self, vid: S::Key) -> S::Key {
+    pub fn get_root_key(&mut self, vid: S::Key) -> S::Key {
         let redirect = {
             match self.value(vid).parent(vid) {
                 None => return vid,
@@ -287,7 +284,7 @@ impl<S: UnificationStore> UnificationTable<S> {
         root_key
     }
 
-    fn update_value<OP>(&mut self, key: S::Key, op: OP)
+    pub fn update_value<OP>(&mut self, key: S::Key, op: OP)
     where
         OP: FnOnce(&mut VarValue<S::Key>),
     {
@@ -303,7 +300,7 @@ impl<S: UnificationStore> UnificationTable<S> {
     /// really more of a building block. If the values associated with
     /// your key are non-trivial, you would probably prefer to call
     /// `unify_var_var` below.
-    fn unify_roots(&mut self, key_a: S::Key, key_b: S::Key, new_value: S::Value) {
+    pub fn unify_roots(&mut self, key_a: S::Key, key_b: S::Key, new_value: S::Value) {
         debug!("unify(key_a={:?}, key_b={:?})", key_a, key_b);
 
         let rank_a = self.value(key_a).rank;
@@ -377,40 +374,6 @@ where
     K: UnifyKey<Value = V>,
     V: Clone + Debug,
 {
-    /// Unions two keys without the possibility of failure.
-    pub fn union<K1, K2, F>(&mut self, unify: F, a_id: K1, b_id: K2)
-    where
-        K1: Into<K>,
-        K2: Into<K>,
-        F: FnMut(&mut Self, V, V) -> V
-    {
-        let a_id = a_id.into();
-        let b_id = b_id.into();
-
-        let root_a = self.get_root_key(a_id);
-        let root_b = self.get_root_key(b_id);
-
-        if root_a == root_b {
-            return Ok(());
-        }
-
-        let combined = unify(&mut self, &self.value(root_a).value, &self.value(root_b).value);
-
-        self.unify_roots(root_a, root_b, combined)
-    }
-
-    /// Unions a key and a value without the possibility of failure.
-    pub fn union_value<K1, F>(&mut self, unify: F, id: K1, b: V)
-    where
-        K1: Into<K>,
-        F: FnMut(&'tcx mut Self, V, V) -> V
-    {
-        let id = id.into();
-        let root_a = self.get_root_key(id);
-        let value = unify(&mut self, self.value(root_a).value, b);
-        self.update_value(root_a, |node| node.value = value);
-    }
-
     /// Given two keys, indicates whether they have been unioned together.
     pub fn unioned<K1, K2>(&mut self, a_id: K1, b_id: K2) -> bool
     where
