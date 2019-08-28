@@ -17,11 +17,12 @@ pub mod solve;
 pub mod unify;
 pub mod infer;
 pub mod pretty_print_types;
+pub mod ena;
 
 extern crate im_rc;
 extern crate fraction;
 extern crate num;
 extern crate fxhash;
-extern crate ena;
 
 #[macro_use] extern crate combine;
+#[macro_use] extern crate log;

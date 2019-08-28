@@ -5,14 +5,13 @@ authors = ["Richard Feldman <oss@rtfeldman.com>"]
 
 [dependencies]
 dogged = { version = "0.2.0", optional = true }
-log = "0.4"
+log = "0.4.8"
 petgraph = { version = "0.4.5", optional = true }
 combine = "3.8.1"
 im-rc = "13.0.0"
 fraction = "0.6.2"
 num = "0.2.0"
 fxhash = "0.2.1"
-ena = "0.13.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
