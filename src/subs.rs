@@ -55,7 +55,7 @@ impl Subs {
         let r_root = self.utable.get_root_key(right.into());
 
         if l_root != r_root {
-            let combined = unify::unify(self, l_root, r_root);
+            let combined = unify::unify_vars(self, l_root, r_root);
 
             self.utable.unify_roots(l_root, r_root, combined)
         }
@@ -67,7 +67,7 @@ impl Subs {
 
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key.into());
-        let unified = unify::unify_val(self, l_key, &r_value); 
+        let unified = unify::unify_var_val(self, l_key, &r_value); 
 
         self.utable.update_value(l_key, |node| node.value = unified);
     }

@@ -1,15 +1,21 @@
 use subs::{Descriptor, FlatType, Variable, Subs};
 use subs::Content::{self, *};
 
-pub fn unify(subs: &mut Subs, left_key: Variable, right_key: Variable) -> Descriptor {
+#[inline(always)]
+pub fn unify_vars(subs: &mut Subs, left_key: Variable, right_key: Variable) -> Descriptor {
     let right = subs.get(right_key);
 
-    unify_val(subs, left_key, &right)
+    unify_var_val(subs, left_key, &right)
 }
 
-pub fn unify_val(subs: &mut Subs, left_key: Variable, right: &Descriptor) -> Descriptor {
+#[inline(always)]
+pub fn unify_var_val(subs: &mut Subs, left_key: Variable, right: &Descriptor) -> Descriptor {
     let left = subs.get(left_key);
 
+    unify(subs, &left, right)
+}
+
+pub fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descriptor {
     let answer = match left.content {
         FlexVar(ref opt_name) => {
             unify_flex(opt_name, &right.content)
@@ -79,7 +85,7 @@ where I: Iterator<Item = &'a Variable>
 {
     left_iter.zip(right_iter).map(|(l_var, r_var)| {
         // Look up the descriptors we have for these variables, and unify them.
-        let descriptor = unify(subs, l_var.clone(), r_var.clone());
+        let descriptor = unify_vars(subs, l_var.clone(), r_var.clone());
 
         // set r_var to be the unioned value, then union l_var to r_var
         subs.set(r_var.clone(), descriptor);
