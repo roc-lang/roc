@@ -18,6 +18,8 @@ pub enum Expr {
     EmptyStr,
     Str(String),
     Char(char),
+    List(Vec<Located<Expr>>),
+    EmptyList,
 
     // Lookups
     Var(Symbol),
@@ -304,6 +306,24 @@ fn canonicalize(
         expr::Expr::Str(string) => ( Str(string), Output::new()),
         expr::Expr::Char(ch) => ( Char(ch), Output::new()),
         expr::Expr::EmptyStr => ( EmptyStr, Output::new()),
+        expr::Expr::EmptyList => ( EmptyList, Output::new()),
+        expr::Expr::List(elems) => {
+            let mut output = Output::new();
+            let mut can_elems = Vec::with_capacity(elems.len());
+
+            for loc_elem in elems {
+                let ( can_expr, elem_out ) = canonicalize(env, scope, loc_elem);
+
+                output.references = output.references.union(elem_out.references);
+
+                can_elems.push(can_expr);
+            }
+
+            // A list literal is never a tail call!
+            output.tail_call = None;
+
+            ( List(can_elems), output )
+        },
 
         expr::Expr::If(loc_cond, loc_true, loc_false) => {
             // Canonicalize the nested expressions

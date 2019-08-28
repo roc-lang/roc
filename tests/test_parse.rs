@@ -44,6 +44,39 @@ mod test_parse {
         )
     }
 
+    // LIST LITERALS
+
+    #[test]
+    fn empty_list() {
+        assert_fully_parses(
+            indoc!(r#"
+                []
+            "#),
+            EmptyList
+        );
+    }
+
+    #[test]
+    fn single_list() {
+        assert_fully_parses(
+            indoc!(r#"
+                [ 1 ]
+            "#),
+            List(vec![loc(Int(1))])
+        );
+    }
+
+    #[test]
+    fn multi_list() {
+        assert_fully_parses(
+            indoc!(r#"
+                [1 , 2,3]
+            "#),
+            List(vec![loc(Int(1)), loc(Int(2)), loc(Int(3))])
+        );
+    }
+
+
     // STRING LITERALS
 
     fn expect_parsed_str<'a>(expected_str: &'a str, actual_str: &'a str) {

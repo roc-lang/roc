@@ -29,7 +29,9 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
 
     match flat_type {
         Apply(module_name, type_name, vars) => {
-            if use_parens {
+            let write_parens = use_parens && !vars.is_empty();
+
+            if write_parens {
                 buf.push_str("(");
             }
 
@@ -40,7 +42,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
                 write_content(subs.get(var).content, subs, buf, true);
             }
 
-            if use_parens {
+            if write_parens {
                 buf.push_str(")");
             }
         },

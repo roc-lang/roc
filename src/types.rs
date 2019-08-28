@@ -40,7 +40,8 @@ impl<T> Expected<T> {
 pub enum Reason {
     OperatorLeftArg(Operator),
     OperatorRightArg(Operator),
-    FractionalLiteral
+    FractionalLiteral,
+    ElemInList,
 }
 
 #[derive(Debug)]

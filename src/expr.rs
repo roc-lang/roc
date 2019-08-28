@@ -11,6 +11,8 @@ pub enum Expr {
     EmptyStr,
     Str(String),
     Char(char),
+    List(Vec<Located<Expr>>),
+    EmptyList,
 
     // Lookups
     Var(Ident),
@@ -113,7 +115,15 @@ impl Expr {
         let transformed = transform(self);
 
         match transformed {
-            Int(_) | Frac(_, _) | Approx(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | InterpolatedStr(_, _) => transformed,
+            Int(_) | Frac(_, _) | Approx(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | InterpolatedStr(_, _) | EmptyList => transformed,
+            List(elems) => {
+                let new_elems = 
+                    elems.into_iter()
+                        .map(|loc_elem| loc_elem.with_value(loc_elem.value.walk(transform)))
+                        .collect();
+
+                List(new_elems)
+            }
             Assign(assignments, loc_ret) => {
                 Assign(
                     assignments.into_iter().map(|(pattern, loc_expr)|

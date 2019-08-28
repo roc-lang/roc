@@ -102,11 +102,70 @@ mod test_infer {
         );
     }
 
+
+    // LIST 
+
+
+    #[test]
+    fn infer_empty_list() {
+        infer_eq(
+            indoc!(r#"
+                []
+            "#),
+            "List.List *"
+        );
+    }
+
+    #[test]
+    fn infer_list_of_one_num() {
+        infer_eq(
+            indoc!(r#"
+                [42]
+            "#),
+            "List.List (Num.Num *)"
+        );
+    }
+
+    #[test]
+    fn infer_list_of_nums() {
+        infer_eq(
+            indoc!(r#"
+                [ 1, 2, 3 ]
+            "#),
+            "List.List (Num.Num *)"
+        );
+    }
+
+    #[test]
+    fn infer_list_of_one_string() {
+        infer_eq(
+            indoc!(r#"
+                [ "cowabunga" ]
+            "#),
+            "List.List String.String"
+        );
+    }
+
+    #[test]
+    fn infer_list_of_strings() {
+        infer_eq(
+            indoc!(r#"
+                [ "foo", "bar" ]
+            "#),
+            "List.List String.String"
+        );
+    }
+
+
     // #[test]
     // fn infer_interpolated_string() {
-    //     assert_eq!(
-    //         infer_expr(&Expr::InterpolatedStr(vec![], "type inference!".to_string()), MutMap::default()),
-    //         Builtin(Str)
+    //     infer_eq(
+    //         indoc!(r#"
+    //             whatItIs = "great"
+
+    //             "type inference is \(whatItIs)!"
+    //         "#),
+    //         "String.String"
     //     );
     // }
 

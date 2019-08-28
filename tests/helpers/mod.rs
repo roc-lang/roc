@@ -38,8 +38,16 @@ pub fn zero_loc_expr(expr: Expr) -> Expr {
     use roc::expr::Expr::*;
 
     match expr {
-        Int(_) | Frac(_, _) | Approx(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord => expr,
+        Int(_) | Frac(_, _) | Approx(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | EmptyList => expr,
         InterpolatedStr(pairs, string) => InterpolatedStr(pairs.into_iter().map(|( prefix, ident )| ( prefix, zero_loc(ident))).collect(), string),
+        List(elems) => {
+            let zeroed_elems =
+                elems.into_iter().map(|loc_expr|
+                    loc(zero_loc_expr(loc_expr.value))
+                ).collect();
+
+            List(zeroed_elems)
+        },
         Assign(assignments, loc_ret) => {
             let zeroed_assignments =
                 assignments.into_iter().map(|( pattern, loc_expr )|

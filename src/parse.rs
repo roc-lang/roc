@@ -6,7 +6,7 @@ use std::char;
 use parse_state::{IndentablePosition};
 
 use combine::parser::char::{char, string, spaces, digit, hex_digit, HexDigit, alpha_num};
-use combine::parser::repeat::{many, count_min_max, sep_by1, skip_many, skip_many1, skip_until};
+use combine::parser::repeat::{many, count_min_max, sep_by, sep_by1, skip_many, skip_many1, skip_until};
 use combine::parser::item::{any, satisfy_map, value, position, satisfy};
 use combine::parser::combinator::{look_ahead, not_followed_by};
 use combine::{attempt, choice, eof, many1, parser, Parser, optional, between, unexpected_any, unexpected};
@@ -205,6 +205,7 @@ parser! {
         choice((
             closure(min_indent),
             apply_with_parens(min_indent),
+            list(min_indent),
             string("{}").with(value(Expr::EmptyRecord)),
             string_literal(),
             int_or_frac_literal(),
@@ -237,7 +238,6 @@ parser! {
 
         located(choice((
             function_arg_expr(min_indent),
-            apply_with_parens(min_indent),
             assignment(min_indent),
             apply_variant(min_indent),
             func_or_var(min_indent),
@@ -312,6 +312,27 @@ where I: Stream<Item = char, Position = IndentablePosition>,
         )
 }
 
+pub fn list<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    between(char('['), char(']'),
+        sep_by(
+            indented_whitespaces(min_indent)
+                .with(located(expr_body(min_indent)))
+                .skip(indented_whitespaces(min_indent)),
+            char(',')
+        )
+    ).map(|loc_elems: Vec<Located<Expr>>| {
+        if loc_elems.is_empty() {
+            Expr::EmptyList
+        } else {
+            Expr::List(loc_elems)
+        }
+    })
+}
+
+
 pub fn apply_with_parens<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
@@ -322,7 +343,7 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             .skip(indented_whitespaces(min_indent))
     ).and(
         // Parenthetical expressions can optionally be followed by
-        // whitespace and one or more comma-separated expressions,
+        // whitespace and one or more whitespace-separated expressions,
         // meaning this is function application!
         optional(
             attempt(apply_args(min_indent))
