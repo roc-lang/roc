@@ -1,7 +1,7 @@
-use subs::{Descriptor, FlatType};
+use subs::{Descriptor, FlatType, Variable, Subs};
 use subs::Content::{self, *};
 
-pub fn unify(left: &Descriptor, right: &Descriptor) -> Descriptor {
+pub fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descriptor {
     let answer = match left.content {
         FlexVar(ref opt_name) => {
             unify_flex(opt_name, &right.content)
@@ -10,7 +10,7 @@ pub fn unify(left: &Descriptor, right: &Descriptor) -> Descriptor {
             unify_rigid(name, &right.content)
         },
         Structure(ref flat_type) => {
-            unify_structure(flat_type, &right.content)
+            unify_structure(subs, flat_type, &right.content)
         }
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
@@ -24,7 +24,7 @@ pub fn unify(left: &Descriptor, right: &Descriptor) -> Descriptor {
 }
 
 #[inline(always)]
-fn unify_structure(flat_type: &FlatType, other: &Content) -> Descriptor {
+fn unify_structure(subs: &mut Subs, flat_type: &FlatType, other: &Content) -> Descriptor {
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
@@ -36,7 +36,7 @@ fn unify_structure(flat_type: &FlatType, other: &Content) -> Descriptor {
         },
         Structure(ref other_flat_type) => {
             // Type mismatch! Rigid can only unify with flex.
-            unify_flat_type(flat_type, other_flat_type)
+            unify_flat_type(subs, flat_type, other_flat_type)
         },
         Error => {
             // Error propagates.
@@ -46,7 +46,7 @@ fn unify_structure(flat_type: &FlatType, other: &Content) -> Descriptor {
 }
 
 #[inline(always)]
-fn unify_flat_type(left: &FlatType, right: &FlatType) -> Descriptor {
+fn unify_flat_type(subs: &mut Subs, left: &FlatType, right: &FlatType) -> Descriptor {
     use subs::FlatType::*;
 
     match (left, right) {
@@ -55,26 +55,30 @@ fn unify_flat_type(left: &FlatType, right: &FlatType) -> Descriptor {
             Apply(l_module_name, l_type_name, l_args),
             Apply(r_module_name, r_type_name, r_args)
         ) if l_module_name == r_module_name && l_type_name == r_type_name => {
-            panic!("TODO fix this by forking ena");
-            // let args = unify_args(l_args.iter(), r_args.iter());
-            // let flat_type = Apply(l_module_name.clone(), l_type_name.clone(), args);
+            let args = unify_args(&mut subs, l_args.iter(), r_args.iter());
+            let flat_type = Apply(l_module_name.clone(), l_type_name.clone(), args);
 
-            // from_content(Structure(flat_type))
+            from_content(Structure(flat_type))
         },
         (Func(_, _), Func(_, _)) => panic!("TODO unify_flat_type for Func"),
         _ => from_content(Error)
     }
 }
 
-fn unify_args<'a, I>(left_iter: I, right_iter: I) -> Vec<Content>
-where I: Iterator<Item = &'a Content> 
+fn unify_args<'a, I>(subs: &mut Subs, left_iter: I, right_iter: I) -> Vec<Variable>
+where I: Iterator<Item = &'a Variable> 
 {
-    left_iter.zip(right_iter).map(|(l_content, r_content)| {
-        let l_descriptor = from_content(l_content.clone());
-        let r_descriptor = from_content(r_content.clone());
-        let descriptor = unify(&l_descriptor, &r_descriptor);
+    left_iter.zip(right_iter).map(|(l_var, r_var)| {
+        // Look up the descriptors we have for these variables, and unify them.
+        let l_descriptor = subs.get(l_var.clone());
+        let r_descriptor = subs.get(r_var.clone());
+        let descriptor = unify(subs, &l_descriptor, &r_descriptor);
 
-        descriptor.content
+        // set r_var to be the unioned value, then union l_var to r_var
+        subs.set(r_var.clone(), descriptor);
+        subs.union(l_var.clone(), r_var.clone());
+
+        r_var.clone()
     }).collect()
 }
 
