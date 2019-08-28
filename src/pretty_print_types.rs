@@ -39,7 +39,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
 
             for arg in args {
                 buf.push_str(" ");
-                write_content(arg, subs, buf, true);
+                write_content(subs.get(arg).content, subs, buf, true);
             }
 
             if write_parens {

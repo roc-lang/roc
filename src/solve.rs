@@ -94,13 +94,9 @@ fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
         Apply(module_name, name, arg_types) => {
-            let args: Vec<Content> =
+            let args: Vec<Variable> =
                 arg_types.into_iter()
-                    .map(|arg| {
-                        let var = type_to_variable(subs, arg);
-
-                        subs.get(var).content
-                    })
+                    .map(|arg| type_to_variable(subs, arg))
                     .collect();
 
             let flat_type = FlatType::Apply(module_name, name, args);

@@ -55,10 +55,11 @@ fn unify_flat_type(left: &FlatType, right: &FlatType) -> Descriptor {
             Apply(l_module_name, l_type_name, l_args),
             Apply(r_module_name, r_type_name, r_args)
         ) if l_module_name == r_module_name && l_type_name == r_type_name => {
-            let args = unify_args(l_args.iter(), r_args.iter());
-            let flat_type = Apply(l_module_name.clone(), l_type_name.clone(), args);
+            panic!("TODO fix this by forking ena");
+            // let args = unify_args(l_args.iter(), r_args.iter());
+            // let flat_type = Apply(l_module_name.clone(), l_type_name.clone(), args);
 
-            from_content(Structure(flat_type))
+            // from_content(Structure(flat_type))
         },
         (Func(_, _), Func(_, _)) => panic!("TODO unify_flat_type for Func"),
         _ => from_content(Error)

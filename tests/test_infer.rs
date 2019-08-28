@@ -59,7 +59,7 @@ mod test_infer {
         (loc_expr.value, procedures)
     }
 
-    fn apply(module_name: &str, type_name: &str, args: Vec<Content>) -> Content {
+    fn apply(module_name: &str, type_name: &str, args: Vec<Variable>) -> Content {
         Structure(FlatType::Apply(module_name.to_string(), type_name.to_string(), args))
     }
 
