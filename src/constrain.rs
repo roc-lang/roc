@@ -1,6 +1,6 @@
 use canonicalize::{Pattern, Procedure, Symbol};
 use canonicalize::Expr::{self, *};
-use collections::{ImMap, MutMap};
+use collections::ImMap;
 use region::{Located, Region};
 use subs::{Variable, Subs};
 use types::{Expected, Expected::*, LetConstraint, Reason};
@@ -117,10 +117,10 @@ pub fn constrain_def(
     loc_expr: Located<Expr>,
     bound_vars: BoundTypeVars,
     subs: &mut Subs,
-    body_constraint: Constraint
+    ret_constraint: Constraint
 ) -> Constraint {
     let mut state = PatternState {
-        headers: MutMap::default(),
+        assignment_types: ImMap::default(),
         vars: Vec::with_capacity(1),
         reversed_constraints: Vec::with_capacity(1)
     };
@@ -131,16 +131,16 @@ pub fn constrain_def(
     Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
         flex_vars: args.vars,
-        header_constraint:
+        assignments_constraint:
             Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: state.vars,
-                header: state.headers,
-                header_constraint: And(state.reversed_constraints),
-                body_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(args.ret_type))
+                assignment_types: state.assignment_types,
+                assignments_constraint: And(state.reversed_constraints),
+                ret_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(args.ret_type))
             })),
-        body_constraint,
-        header: panic!("TODO Map.singleton name (A.At region tipe)"),
+        ret_constraint,
+        assignment_types: panic!("TODO Map.singleton name (A.At region tipe)"),
     }))
 }
 
@@ -152,17 +152,17 @@ pub fn constrain_procedure(
     expected: Expected<Type>
 ) -> Constraint {
     let mut state = PatternState {
-        headers: MutMap::default(),
+        assignment_types: ImMap::default(),
         vars: Vec::with_capacity(proc.args.len()),
         reversed_constraints: Vec::with_capacity(1)
     };
     let args = constrain_args(proc.args.into_iter(), subs, &mut state);
     let body_type = NoExpectation(args.ret_type);
-    let body_constraint = constrain(bound_vars, subs, proc.body, body_type);
+    let ret_constraint = constrain(bound_vars, subs, proc.body, body_type);
 
     state.reversed_constraints.reverse();
 
-    let header_constraint = And(state.reversed_constraints);
+    let assignments_constraint = And(state.reversed_constraints);
 
     // panic!("TODO occurs check");
 
@@ -170,9 +170,9 @@ pub fn constrain_procedure(
         Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
             flex_vars: state.vars,
-            header: state.headers,
-            header_constraint,
-            body_constraint
+            assignment_types: state.assignment_types,
+            assignments_constraint,
+            ret_constraint
         })),
         Eq(args.typ, expected, region)
     ])
@@ -215,13 +215,13 @@ where I: Iterator<Item = Located<Pattern>>
 }
 
 struct PatternState { 
-    headers: MutMap<Symbol, Located<Type>>,
+    assignment_types: ImMap<Symbol, Located<Type>>,
     vars: Vec<Variable>,
     reversed_constraints: Vec<Constraint>
 }
 
-fn add_to_headers(region: Region, symbol: Symbol, expected: Expected<Type>, state: &mut PatternState) {
-    state.headers.insert(symbol, Located {region, value: expected.unwrap()});
+fn add_to_assignment_types(region: Region, symbol: Symbol, expected: Expected<Type>, state: &mut PatternState) {
+    state.assignment_types.insert(symbol, Located {region, value: expected.unwrap()});
 }
 
 fn add_pattern(loc_pattern: Located<Pattern>, expected: Expected<Type>, state: &mut PatternState) {
@@ -230,7 +230,7 @@ fn add_pattern(loc_pattern: Located<Pattern>, expected: Expected<Type>, state: &
     let region = loc_pattern.region;
 
     match loc_pattern.value {
-        Identifier(symbol) => add_to_headers(region, symbol, expected, state),
+        Identifier(symbol) => add_to_assignment_types(region, symbol, expected, state),
         Underscore => (),
         _ => panic!("TODO other patterns"),
     }

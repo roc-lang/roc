@@ -15,10 +15,11 @@
 
 use subs::{Subs, Variable, Descriptor, Content, FlatType};
 use collections::ImMap;
+use canonicalize::Symbol;
 use types::Constraint::{self, *};
 use types::Type::{self, *};
 
-type Env = ImMap<String, Variable>;
+type Env = ImMap<Symbol, Variable>;
 
 pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
     println!("\nSolving:\n\n\t{:?}\n\n", constraint);
@@ -37,48 +38,31 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
         },
         Let(box_let_constraint) => {
             let let_con = *box_let_constraint;
-            let no_rigid_vars = let_con.rigid_vars.is_empty();
 
             match let_con.ret_constraint {
-                True if no_rigid_vars => {
+                True => {
                     // If the return expression is guaranteed to solve,
-                    // and there are no rigid vars to worry about, 
                     // solve the assignments themselves and move on.
                     solve(env, subs, let_con.assignments_constraint)
                 },
-                body_con => {
-                    if no_rigid_vars && let_con.flex_vars.is_empty() {
-                        // Solve the assignments' constraints first.
-                        solve(env, subs, let_con.assignments_constraint);
+                ret_con => {
+                    // Solve the assignments' constraints first.
+                    solve(env, subs, let_con.assignments_constraint);
 
-                        // Add a variable for each assignment to the env.
-                        let new_env = env.clone();
+                    // Add a variable for each assignment to the env.
+                    let mut new_env = env.clone();
 
-                        for (name, loc_type) in let_con.assignment_types {
-                            let var = type_to_variable(subs, loc_type.value);
+                    for (name, loc_type) in let_con.assignment_types {
+                        let var = type_to_variable(subs, loc_type.value);
 
-                            new_env.insert(name, var);
-                        }
-
-                        // Now solve the body, using the new env which includes
-                        // the assignments' name-to-variable mappings.
-                        solve(&new_env, subs, let_con.ret_constraint);
-
-                        // TODO do an occurs check for each of the assignments!
-                    } else {
-                        let vars = let_con.rigid_vars;
-
-                        vars.extend(let_con.flex_vars);
-
-                        // Add a variable for each assignment to the env.
-                        let new_env = env.clone();
-
-                        for (name, loc_type) in let_con.assignment_types {
-                            let var = type_to_variable(subs, loc_type.value);
-
-                            new_env.insert(name, var);
-                        }
+                        new_env.insert(name, var);
                     }
+
+                    // Now solve the body, using the new env which includes
+                    // the assignments' name-to-variable mappings.
+                    solve(&new_env, subs, ret_con);
+
+                    // TODO do an occurs check for each of the assignments!
                 }
             }
         },
