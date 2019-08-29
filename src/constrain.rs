@@ -19,7 +19,7 @@ use types::Constraint::{self, *};
 type BoundTypeVars = ImMap<String, Type>;
 
 pub fn constrain(
-    bound_vars: BoundTypeVars,
+    bound_vars: &BoundTypeVars,
     subs: &mut Subs,
     loc_expr: Located<Expr>,
     expected: Expected<Type>,
@@ -35,8 +35,21 @@ pub fn constrain(
         InterpolatedStr(_, _) => { Eq(string(), expected, region) },
         EmptyRecord => { Eq(EmptyRec, expected, region) },
         EmptyList => { Eq(empty_list(subs.mk_flex_var()), expected, region) },
-        List(elems) => { list(elems, bound_vars.clone(), subs, expected, region) },
-        _ => { panic!("TODO constraints") }
+        List(elems) => { list(elems, bound_vars, subs, expected, region) },
+        Var(symbol) => Lookup(symbol, expected, region),
+        Assign(assignments, ret_expr) => {
+            if assignments.len() > 1 {
+                panic!("TODO can't handle multiple assignments yet");
+            } else {
+                let ret_con = constrain(bound_vars, subs, *ret_expr, expected);
+                let (loc_pattern, loc_expr) = assignments.first().unwrap_or_else(|| {
+                    panic!("assignments.first() failed")
+                });
+
+                constrain_def(loc_pattern.clone(), loc_expr.clone(), bound_vars, subs, ret_con)
+            }
+        }
+        _ => { panic!("TODO constraints for {:?}", loc_expr.value) }
     }
 }
 
@@ -52,7 +65,7 @@ fn num(var: Variable) -> Type {
     builtin_type("Num", "Num", vec![Type::Variable(var)])
 }
 
-fn list(loc_elems: Vec<Located<Expr>>, bound_vars: BoundTypeVars, subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
+fn list(loc_elems: Vec<Located<Expr>>, bound_vars: &BoundTypeVars, subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
     let list_var = subs.mk_flex_var(); // `v` in the type (List v)
     let list_type = Type::Variable(list_var);
     let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
@@ -61,7 +74,7 @@ fn list(loc_elems: Vec<Located<Expr>>, bound_vars: BoundTypeVars, subs: &mut Sub
         let elem_var = subs.mk_flex_var(); 
         let elem_type = Variable(elem_var);
         let elem_expected = NoExpectation(elem_type.clone());
-        let elem_constraint = constrain(bound_vars.clone(), subs, loc_elem, elem_expected);
+        let elem_constraint = constrain(bound_vars, subs, loc_elem, elem_expected);
         let list_elem_constraint = 
             Eq(
                 list_type.clone(), 
@@ -111,11 +124,10 @@ fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
     Type::Apply(module_name.to_string(), type_name.to_string(), args)
 }
 
-
 pub fn constrain_def(
     loc_pattern: Located<Pattern>,
     loc_expr: Located<Expr>,
-    bound_vars: BoundTypeVars,
+    bound_vars: &BoundTypeVars,
     subs: &mut Subs,
     ret_constraint: Constraint
 ) -> Constraint {
@@ -124,7 +136,18 @@ pub fn constrain_def(
         vars: Vec::with_capacity(1),
         reversed_constraints: Vec::with_capacity(1)
     };
-    let args = constrain_args(std::iter::once(loc_pattern), subs, &mut state);
+    // TODO constrain_args makes a Type::Function - is that really what we want in a Let?
+    let args = constrain_args(std::iter::once(loc_pattern.clone()), subs, &mut state);
+    let mut assignment_types: ImMap<Symbol, Located<Type>> = ImMap::default();
+
+    match loc_pattern.value {
+        Pattern::Identifier(symbol) => {
+            let loc_type = Located {region: loc_pattern.region, value: args.typ};
+
+            assignment_types.insert(symbol, loc_type);
+        },
+        _ => panic!("TODO constrain patterns other than Identifier")
+    }
 
     state.reversed_constraints.reverse();
 
@@ -140,14 +163,13 @@ pub fn constrain_def(
                 ret_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(args.ret_type))
             })),
         ret_constraint,
-        assignment_types: panic!("TODO Map.singleton name (A.At region tipe)"),
+        assignment_types,
     }))
 }
 
 pub fn constrain_procedure(
-    bound_vars: BoundTypeVars,
+    bound_vars: &BoundTypeVars,
     subs: &mut Subs,
-    region: Region,
     proc: Procedure,
     expected: Expected<Type>
 ) -> Constraint {
@@ -174,7 +196,7 @@ pub fn constrain_procedure(
             assignments_constraint,
             ret_constraint
         })),
-        Eq(args.typ, expected, region)
+        Eq(args.typ, expected, proc.definition)
     ])
 }
 
@@ -221,7 +243,7 @@ struct PatternState {
 }
 
 fn add_to_assignment_types(region: Region, symbol: Symbol, expected: Expected<Type>, state: &mut PatternState) {
-    state.assignment_types.insert(symbol, Located {region, value: expected.unwrap()});
+    state.assignment_types.insert(symbol, Located {region, value: expected.get_type()});
 }
 
 fn add_pattern(loc_pattern: Located<Pattern>, expected: Expected<Type>, state: &mut PatternState) {

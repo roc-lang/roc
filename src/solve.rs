@@ -27,7 +27,15 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
         True => (),
         Eq(typ, expected_type, region) => {
             let actual = type_to_variable(subs, typ);
-            let expected = type_to_variable(subs, expected_type.unwrap());
+            let expected = type_to_variable(subs, expected_type.get_type());
+
+            subs.union(actual, expected);
+        },
+        Lookup(symbol, expected_type, region) => {
+            let actual = subs.copy_var(env.get(&symbol).unwrap_or_else(|| {
+                panic!("Could not find symbol {:?} in env {:?}", symbol, env)
+            }));
+            let expected = type_to_variable(subs, expected_type.get_type());
 
             subs.union(actual, expected);
         },
@@ -88,7 +96,17 @@ fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
 
             subs.fresh(Descriptor::from(content))
         },
-        _ => panic!("TODO type_to_var")
+
+        Function(arg_types, ret_type) => {
+            let arg_vars = arg_types.into_iter().map(|arg_type| {
+                type_to_variable(subs, arg_type)
+            }).collect();
+            let ret_var = type_to_variable(subs, *ret_type);
+            let content = Content::Structure(FlatType::Func(arg_vars, ret_var));
+
+            subs.fresh(Descriptor::from(content))
+        },
+        _ => panic!("TODO type_to_var {:?}", typ)
 
         // AppN home name args ->
         // do  argVars <- traverse go args

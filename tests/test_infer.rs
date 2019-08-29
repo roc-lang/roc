@@ -248,6 +248,42 @@ mod test_infer {
         );
     }
 
+    // ASSIGN
+
+    #[test]
+    fn assign_empty_record() {
+        infer_eq(
+            indoc!(r#"
+                foo = {}
+
+                foo
+            "#),
+            "{}"
+        );
+    }
+
+    // CLOSURE
+
+    #[test]
+    fn always_return_empty_record() {
+        infer_eq(
+            indoc!(r#"
+                \_ -> {}
+            "#),
+            "* -> {}"
+        );
+    }
+
+    #[test]
+    fn two_arg_return_empty_record() {
+        infer_eq(
+            indoc!(r#"
+                \_ _ -> {}
+            "#),
+            "*, * -> {}"
+        );
+    }
+
 
     // #[test]
     // fn infer_interpolated_string() {

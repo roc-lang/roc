@@ -47,6 +47,29 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
             }
         },
         EmptyRecord => buf.push_str(EMPTY_RECORD),
-        Func(_, _) => panic!("TODO write_flat_type for Func")
+        Func(args, ret) => {
+            let mut needs_comma = false;
+
+            if use_parens {
+                buf.push_str("(");
+            }
+
+            for arg in args {
+                if needs_comma {
+                    buf.push_str(", ");
+                } else {
+                    needs_comma = true;
+                }
+
+                write_content(subs.get(arg).content, subs, buf, true);
+            }
+
+            buf.push_str(" -> ");
+            write_content(subs.get(ret).content, subs, buf, true);
+
+            if use_parens {
+                buf.push_str(")");
+            }
+        }
     }
 }

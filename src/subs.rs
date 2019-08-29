@@ -77,6 +77,13 @@ impl Subs {
         self.fresh(flex_var_descriptor())
     }
 
+    pub fn copy_var(&mut self, var: &Variable) -> Variable {
+        // TODO understand the purpose of using a "deep copy" approach here,
+        // and perform it if necessary. (Seems to be about setting maxRank?)
+        var.clone()
+    }
+
+
 //     pub fn set_rank(&mut self, key: Variable, rank: usize) {
 //         let mut descriptor = self.utable.probe_value(key);
         
@@ -133,7 +140,7 @@ pub enum Content {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
     Apply(String /* module name */, String /* type name */, Vec<Variable>),
-    Func(Variable, Variable),
+    Func(Vec<Variable>, Variable),
     EmptyRecord,
 }
 

@@ -28,7 +28,7 @@ pub enum Expected<T> {
 }
 
 impl<T> Expected<T> {
-    pub fn unwrap(self) -> T {
+    pub fn get_type(self) -> T {
         match self {
             Expected::NoExpectation(val) => val,
             Expected::ForReason(_, val, _) => val
@@ -47,6 +47,7 @@ pub enum Reason {
 #[derive(Debug)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
+    Lookup(Symbol, Expected<Type>, Region),
     True, // Used for things that always unify, e.g. blanks and runtime errors 
     Let(Box<LetConstraint>),
     And(Vec<Constraint>)
@@ -60,7 +61,6 @@ pub struct LetConstraint {
     pub assignments_constraint: Constraint,
     pub ret_constraint: Constraint,
 }
-      
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Problem {
