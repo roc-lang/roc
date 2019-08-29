@@ -68,22 +68,22 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_empty_record() {
+    fn empty_record() {
         infer_eq("{}", "{}");
     }
 
     #[test]
-    fn infer_int() {
+    fn int_literal() {
         infer_eq("5", "Num.Num *");
     }
 
     #[test]
-    fn infer_fractional() {
+    fn fractional_literal() {
         infer_eq("0.5", "Num.Num (Num.Fractional *)");
     }
 
     #[test]
-    fn infer_string() {
+    fn string_literal() {
         infer_eq(
             indoc!(r#"
                 "type inference!"
@@ -93,7 +93,7 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_empty_string() {
+    fn empty_string() {
         infer_eq(
             indoc!(r#"
                 ""
@@ -107,7 +107,7 @@ mod test_infer {
 
 
     #[test]
-    fn infer_empty_list() {
+    fn empty_list() {
         infer_eq(
             indoc!(r#"
                 []
@@ -117,7 +117,7 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_list_of_lists() {
+    fn list_of_lists() {
         infer_eq(
             indoc!(r#"
                 [[]]
@@ -127,7 +127,7 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_triple_nested_list() {
+    fn triple_nested_list() {
         infer_eq(
             indoc!(r#"
                 [[[]]]
@@ -137,7 +137,17 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_list_of_one_num() {
+    fn nested_empty_list() {
+        infer_eq(
+            indoc!(r#"
+                [ [], [ [] ] ]
+            "#),
+            "List.List (List.List (List.List *))"
+        );
+    }
+
+    #[test]
+    fn list_of_one_num() {
         infer_eq(
             indoc!(r#"
                 [42]
@@ -147,7 +157,7 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_triple_nested_num_list() {
+    fn triple_nested_num_list() {
         infer_eq(
             indoc!(r#"
                 [[[ 5 ]]]
@@ -157,7 +167,7 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_list_of_nums() {
+    fn list_of_nums() {
         infer_eq(
             indoc!(r#"
                 [ 1, 2, 3 ]
@@ -167,7 +177,17 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_list_of_one_string() {
+    fn nested_list_of_nums() {
+        infer_eq(
+            indoc!(r#"
+                [ [ 1 ], [ 2, 3 ] ]
+            "#),
+            "List.List (List.List (Num.Num *))"
+        );
+    }
+
+    #[test]
+    fn list_of_one_string() {
         infer_eq(
             indoc!(r#"
                 [ "cowabunga" ]
@@ -177,7 +197,7 @@ mod test_infer {
     }
 
     #[test]
-    fn infer_triple_nested_string_list() {
+    fn triple_nested_string_list() {
         infer_eq(
             indoc!(r#"
                 [[[ "foo" ]]]
@@ -186,14 +206,45 @@ mod test_infer {
         );
     }
 
-
     #[test]
-    fn infer_list_of_strings() {
+    fn list_of_strings() {
         infer_eq(
             indoc!(r#"
                 [ "foo", "bar" ]
             "#),
             "List.List String.String"
+        );
+    }
+
+    // LIST MISMATCH
+
+    #[test]
+    fn mismatch_heterogeneous_list() {
+        infer_eq(
+            indoc!(r#"
+                [ "foo", 5 ]
+            "#),
+            "List.List <type mismatch>"
+        );
+    }
+
+    #[test]
+    fn mismatch_heterogeneous_nested_list() {
+        infer_eq(
+            indoc!(r#"
+                [ [ "foo", 5 ] ]
+            "#),
+            "List.List (List.List <type mismatch>)"
+        );
+    }
+
+    #[test]
+    fn mismatch_heterogeneous_nested_empty_list() {
+        infer_eq(
+            indoc!(r#"
+                [ [ 1 ], [ [] ] ]
+            "#),
+            "List.List (List.List <type mismatch>)"
         );
     }
 

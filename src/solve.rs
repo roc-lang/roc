@@ -14,10 +14,13 @@
 //     }
 
 use subs::{Subs, Variable, Descriptor, Content, FlatType};
+use collections::ImMap;
 use types::Constraint::{self, *};
 use types::Type::{self, *};
 
-pub fn solve(subs: &mut Subs, constraint: Constraint) {
+type Env = ImMap<String, Variable>;
+
+pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
     println!("\nSolving:\n\n\t{:?}\n\n", constraint);
     match constraint {
         True => (),
@@ -29,63 +32,55 @@ pub fn solve(subs: &mut Subs, constraint: Constraint) {
         },
         And(sub_constraints) => {
             for sub_constraint in sub_constraints {
-                solve(subs, sub_constraint);
+                solve(env, subs, sub_constraint);
             }
         },
         Let(box_let_constraint) => {
             let let_con = *box_let_constraint;
+            let no_rigid_vars = let_con.rigid_vars.is_empty();
 
-//     CLet [] flexs _ headerCon CTrue ->
-//       do  introduce rank pools flexs
-//           solve env rank pools state headerCon
+            match let_con.ret_constraint {
+                True if no_rigid_vars => {
+                    // If the return expression is guaranteed to solve,
+                    // and there are no rigid vars to worry about, 
+                    // solve the assignments themselves and move on.
+                    solve(env, subs, let_con.assignments_constraint)
+                },
+                body_con => {
+                    if no_rigid_vars && let_con.flex_vars.is_empty() {
+                        // Solve the assignments' constraints first.
+                        solve(env, subs, let_con.assignments_constraint);
 
-//     CLet [] [] header headerCon subCon ->
-//       do  state1 <- solve env rank pools state headerCon
-//           locals <- traverse (A.traverse (typeToVariable rank pools)) header
-//           let newEnv = Map.union env (Map.map A.toValue locals)
-//           state2 <- solve newEnv rank pools state1 subCon
-//           foldM occurs state2 $ Map.toList locals
+                        // Add a variable for each assignment to the env.
+                        let new_env = env.clone();
 
-//     CLet rigids flexs header headerCon subCon ->
-//       do
-//           -- work in the next pool to localize header
-//           let nextRank = rank + 1
-//           let poolsLength = MVector.length pools
-//           nextPools <-
-//             if nextRank < poolsLength
-//               then return pools
-//               else MVector.grow pools poolsLength
+                        for (name, loc_type) in let_con.assignment_types {
+                            let var = type_to_variable(subs, loc_type.value);
 
-//           -- introduce variables
-//           let vars = rigids ++ flexs
-//           forM_ vars $ \var ->
-//             UF.modify var $ \(Descriptor content _ mark copy) ->
-//               Descriptor content nextRank mark copy
-//           MVector.write nextPools nextRank vars
+                            new_env.insert(name, var);
+                        }
 
-//           -- run solver in next pool
-//           locals <- traverse (A.traverse (typeToVariable nextRank nextPools)) header
-//           (State savedEnv mark errors) <-
-//             solve env nextRank nextPools state headerCon
+                        // Now solve the body, using the new env which includes
+                        // the assignments' name-to-variable mappings.
+                        solve(&new_env, subs, let_con.ret_constraint);
 
-//           let youngMark = mark
-//           let visitMark = nextMark youngMark
-//           let finalMark = nextMark visitMark
+                        // TODO do an occurs check for each of the assignments!
+                    } else {
+                        let vars = let_con.rigid_vars;
 
-//           -- pop pool
-//           generalize youngMark visitMark nextRank nextPools
-//           MVector.write nextPools nextRank []
+                        vars.extend(let_con.flex_vars);
 
-//           -- check that things went well
-//           mapM_ isGeneric rigids
+                        // Add a variable for each assignment to the env.
+                        let new_env = env.clone();
 
-//           let newEnv = Map.union env (Map.map A.toValue locals)
-//           let tempState = State savedEnv finalMark errors
-//           newState <- solve newEnv rank nextPools tempState subCon
+                        for (name, loc_type) in let_con.assignment_types {
+                            let var = type_to_variable(subs, loc_type.value);
 
-//           foldM occurs newState (Map.toList locals)
-
-
+                            new_env.insert(name, var);
+                        }
+                    }
+                }
+            }
         },
     }
 }

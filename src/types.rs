@@ -2,8 +2,7 @@ use subs::Variable;
 use region::Region;
 use operator::Operator;
 use region::Located;
-use canonicalize::Symbol;
-use collections::MutMap;
+use collections::ImMap;
 
 type ModuleName = String;
 
@@ -56,9 +55,9 @@ pub enum Constraint {
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
-    pub header: MutMap<Symbol, Located<Type>>,
-    pub header_constraint: Constraint,
-    pub body_constraint: Constraint,
+    pub assignment_types: ImMap<String, Located<Type>>,
+    pub assignments_constraint: Constraint,
+    pub ret_constraint: Constraint,
 }
       
 

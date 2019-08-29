@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use std::hash::{Hash, Hasher};
+use std::ops::{Add, Sub, Mul, Neg};
 
 /// Approx is stored as an f64 under the hood.
 ///
@@ -89,15 +90,19 @@ impl<T> Approximation<T> {
     }
 }
 
-impl<T> From<f64> for Approximation<T> {
+impl<Valid> From<f64> for Approximation<Valid> {
     fn from(num: f64) -> Self {
-        Approximation { value: num, phantom: PhantomData }
+        if num.is_finite() {
+            Approximation { value: num, phantom: PhantomData }
+        } else {
+            panic!("Tried to convert {:?} to Float.", num)
+        }
     }
 }
 
-impl<T> From<f32> for Approximation<T> {
+impl<Valid> From<f32> for Approximation<Valid> {
     fn from(num: f32) -> Self {
-        Approximation { value: num as f64, phantom: PhantomData }
+        (num as f64).into()
     }
 }
 
@@ -107,8 +112,39 @@ impl<T> Into<f64> for Approximation<T> {
     }
 }
 
-impl<T> Into<f32> for Approximation<T> {
-    fn into(self) -> f32 {
-        self.value as f32
+impl Add for Approximation<Valid> {
+    type Output = Approximation<Valid>;
+
+    fn add(self, other: Self) -> Self {
+        assert_no_overflow(self.value.add(other.value), "addition")
+    }
+}
+
+impl Mul for Approximation<Valid> {
+    type Output = Approximation<Valid>;
+
+    fn mul(self, other: Self) -> Self {
+        assert_no_overflow(self.value.mul(other.value), "multiplication")
+    }
+}
+
+impl Sub for Approximation<Valid> {
+    type Output = Approximation<Valid>;
+
+    fn sub(self, other: Self) -> Self {
+        assert_no_overflow(self.value.sub(other.value), "subtraction")
+    }
+}
+
+#[inline(always)]
+fn assert_no_overflow(num: f64, op: &'static str) -> Approximation<Valid> {
+    if num.is_finite() {
+        Approximation { value: num, phantom: PhantomData }
+    } else if num.is_infinity() {
+        panic!("Float overflowed during ", op)
+    } else if num.is_negative_infinity() {
+        panic!("Float underflowed during ", op)
+    } else {
+        panic!("Float was NaN during ", op)
     }
 }
