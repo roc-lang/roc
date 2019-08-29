@@ -275,12 +275,22 @@ mod test_infer {
     }
 
     #[test]
-    fn two_arg_return_empty_record() {
+    fn two_arg_return_num() {
         infer_eq(
             indoc!(r#"
-                \_ _ -> {}
+                \_ _ -> 42
             "#),
-            "*, * -> {}"
+            "*, * -> Num.Num *"
+        );
+    }
+
+    #[test]
+    fn three_arg_return_string() {
+        infer_eq(
+            indoc!(r#"
+                \_ _ _ -> "test!"
+            "#),
+            "*, *, * -> String.String"
         );
     }
 

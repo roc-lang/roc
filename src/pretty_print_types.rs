@@ -61,11 +61,11 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
                     needs_comma = true;
                 }
 
-                write_content(subs.get(arg).content, subs, buf, true);
+                write_content(subs.get(arg).content, subs, buf, false);
             }
 
             buf.push_str(" -> ");
-            write_content(subs.get(ret).content, subs, buf, true);
+            write_content(subs.get(ret).content, subs, buf, false);
 
             if use_parens {
                 buf.push_str(")");
