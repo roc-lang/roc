@@ -306,6 +306,29 @@ mod test_canonicalize {
         }.into());
     }
 
+    #[test]
+    fn transitively_used_function() {
+        // This should report that neither a nor b are unused,
+        // since if you never call a function but do return it, that's okay!
+        let (_, output, problems, _) = can_expr(indoc!(r#"
+            a = \_ -> 42
+            b = a
+
+            b
+        "#));
+
+        assert_eq!(problems, Vec::new());
+
+        assert_eq!(output, Out {
+            locals: vec!["a", "b"],
+            globals: vec![],
+            variants: vec![],
+            calls: vec![],
+            tail_call: None
+        }.into());
+    }
+
+
     // ASSIGNMENT REORDERING
 
     #[test]
