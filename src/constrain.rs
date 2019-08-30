@@ -136,12 +136,19 @@ pub fn constrain_def(
         vars: Vec::with_capacity(1),
         reversed_constraints: Vec::with_capacity(1)
     };
-    let args = constrain_args(std::iter::once(loc_pattern.clone()), subs, &mut state);
+    let (mut vars, arg_types) = 
+        patterns_to_variables(std::iter::once(loc_pattern.clone()), subs, &mut state);
+
+    let ret_var = subs.mk_flex_var();
+    let ret_type = Type::Variable(ret_var);
+
+    vars.push(ret_var);
+
     let mut assignment_types: ImMap<Symbol, Located<Type>> = ImMap::default();
 
     match loc_pattern.value {
         Pattern::Identifier(symbol) => {
-            let loc_type = Located {region: loc_pattern.region, value: args.typ};
+            let loc_type = Located {region: loc_pattern.region, value: ret_type.clone()};
 
             assignment_types.insert(symbol, loc_type);
         },
@@ -152,14 +159,14 @@ pub fn constrain_def(
 
     Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
-        flex_vars: args.vars,
+        flex_vars: vars,
         assignments_constraint:
             Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: state.vars,
                 assignment_types: state.assignment_types,
                 assignments_constraint: And(state.reversed_constraints),
-                ret_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(args.ret_type))
+                ret_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(ret_type))
             })),
         assignment_types,
         ret_constraint,
