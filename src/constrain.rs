@@ -137,8 +137,14 @@ pub fn constrain_def(
         vars: Vec::with_capacity(1),
         reversed_constraints: Vec::with_capacity(1)
     };
-    let (vars, _) = 
-        patterns_to_variables(std::iter::once(loc_pattern.clone()), subs, &mut state);
+    let mut vars = Vec::with_capacity(state.vars.capacity());
+    let pattern_var = subs.mk_flex_var();
+    let pattern_type = Type::Variable(pattern_var);
+
+    state.add_pattern(loc_pattern.clone(), NoExpectation(pattern_type.clone()));
+
+    vars.push(pattern_var);
+
     let region = loc_pattern.region;
 
     // Set up types for the expr we're assigned to.
