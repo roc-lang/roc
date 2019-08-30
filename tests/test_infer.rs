@@ -248,20 +248,6 @@ mod test_infer {
         );
     }
 
-    // ASSIGN
-
-    #[test]
-    fn assign_empty_record() {
-        infer_eq(
-            indoc!(r#"
-                foo = {}
-
-                foo
-            "#),
-            "{}"
-        );
-    }
-
     // CLOSURE
 
     #[test]
@@ -289,6 +275,68 @@ mod test_infer {
         infer_eq(
             indoc!(r#"
                 \_ _ _ -> "test!"
+            "#),
+            "*, *, * -> String.String"
+        );
+    }
+
+    // ASSIGN
+
+    #[test]
+    fn assign_empty_record() {
+        infer_eq(
+            indoc!(r#"
+                foo = {}
+
+                foo
+            "#),
+            "{}"
+        );
+    }
+
+    #[test]
+    fn assign_string() {
+        infer_eq(
+            indoc!(r#"
+                str = "thing"
+
+                str
+            "#),
+            "String.String"
+        );
+    }
+
+    #[test]
+    fn assign_1_arg_closure() {
+        infer_eq(
+            indoc!(r#"
+                fn = \_ -> {}
+
+                fn
+            "#),
+            "* -> {}"
+        );
+    }
+
+    #[test]
+    fn assign_2_arg_closure() {
+        infer_eq(
+            indoc!(r#"
+                func = \_ _ -> 42
+
+                func
+            "#),
+            "*, * -> Num.Num *"
+        );
+    }
+
+    #[test]
+    fn assign_3_arg_closure() {
+        infer_eq(
+            indoc!(r#"
+                f = \_ _ _ -> "test!"
+
+                f
             "#),
             "*, *, * -> String.String"
         );
