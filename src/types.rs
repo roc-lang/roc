@@ -39,6 +39,7 @@ pub enum Reason {
     OperatorLeftArg(Operator),
     OperatorRightArg(Operator),
     FractionalLiteral,
+    InterpolatedStringVar,
     ElemInList,
 }
 

@@ -23,7 +23,7 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
-    InterpolatedStr(Vec<(String, Expr)>, String),
+    InterpolatedStr(Vec<(String, Located<Expr>)>, String),
 
     // Pattern Matching
     Case(Box<Located<Expr>>, Vec<(Located<Pattern>, Located<Expr>)>),
@@ -431,7 +431,7 @@ fn canonicalize(
 
         expr::Expr::InterpolatedStr(pairs, suffix) => {
             let mut output = Output::new();
-            let can_pairs: Vec<(String, Expr)> = pairs.into_iter().map(|(string, loc_ident)| {
+            let can_pairs: Vec<(String, Located<Expr>)> = pairs.into_iter().map(|(string, loc_ident)| {
                 // From a language design perspective, we only permit idents in interpolation.
                 // However, in a canonical Expr we store it as a full Expr, not a Symbol.
                 // This is so that we can resolve it to either Var or Unrecognized; if we
@@ -440,7 +440,7 @@ fn canonicalize(
                     match resolve_ident(&env, &scope, loc_ident.value, &mut output.references) {
                         Ok(symbol) => Var(symbol),
                         Err(ident) => {
-                            let loc_ident = Located {region: loc_ident.region, value: ident};
+                            let loc_ident = Located {region: loc_ident.region.clone(), value: ident};
 
                             env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
 
@@ -448,7 +448,7 @@ fn canonicalize(
                         }
                     };
 
-                (string, can_expr)
+                (string, Located { region: loc_ident.region, value: can_expr })
             }).collect();
 
             (InterpolatedStr(can_pairs, suffix), output)

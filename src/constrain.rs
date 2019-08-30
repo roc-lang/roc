@@ -32,7 +32,20 @@ pub fn constrain(
         Approx(_) => { fractional(subs, expected, region) },
         Str(_) => { Eq(string(), expected, region) },
         EmptyStr => { Eq(string(), expected, region) },
-        InterpolatedStr(_, _) => { Eq(string(), expected, region) },
+        InterpolatedStr(pairs, _) => {
+            let mut constraints = Vec::with_capacity(pairs.len() + 1);
+
+            for (_, loc_interpolated_expr) in pairs {
+                let expected_str = ForReason(Reason::InterpolatedStringVar, string(), loc_interpolated_expr.region.clone());
+                let constraint = constrain(bound_vars, subs, loc_interpolated_expr, expected_str);
+
+                constraints.push(constraint);
+            }
+
+            constraints.push(Eq(string(), expected, region));
+
+            And(constraints)
+        },
         EmptyRecord => { Eq(EmptyRec, expected, region) },
         EmptyList => { Eq(empty_list(subs.mk_flex_var()), expected, region) },
         List(elems) => { list(elems, bound_vars, subs, expected, region) },

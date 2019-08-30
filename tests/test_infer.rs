@@ -216,6 +216,21 @@ mod test_infer {
         );
     }
 
+    // INTERPOLATED STRING
+
+    #[test]
+    fn infer_interpolated_string() {
+        infer_eq(
+            indoc!(r#"
+                whatItIs = "great"
+
+                "type inference is \(whatItIs)!"
+            "#),
+            "String.String"
+        );
+    }
+
+
     // LIST MISMATCH
 
     #[test]
@@ -343,17 +358,6 @@ mod test_infer {
     }
 
 
-    // #[test]
-    // fn infer_interpolated_string() {
-    //     infer_eq(
-    //         indoc!(r#"
-    //             whatItIs = "great"
-
-    //             "type inference is \(whatItIs)!"
-    //         "#),
-    //         "String.String"
-    //     );
-    // }
 
     // #[test]
     // fn int_thunk() {
