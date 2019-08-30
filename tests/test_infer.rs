@@ -358,7 +358,7 @@ mod test_infer {
     }
 
     #[test]
-    fn assign_multiple() {
+    fn assign_multiple_functions() {
         infer_eq(
             indoc!(r#"
                 a = \_ _ _ -> "test!"
@@ -370,6 +370,21 @@ mod test_infer {
             "*, *, * -> String.String"
         );
     }
+
+    #[test]
+    fn assign_multiple_strings() {
+        infer_eq(
+            indoc!(r#"
+                a = "test!"
+
+                b = a
+
+                b
+            "#),
+            "String.String"
+        );
+    }
+
 
     // #[test]
     // fn int_thunk() {
