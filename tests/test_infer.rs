@@ -54,7 +54,7 @@ mod test_infer {
         let (loc_expr, _, problems, procedures) =
             canonicalize::canonicalize_declaration(home, name, loc(expr), declared_idents, declared_variants);
 
-        assert_eq!(problems, vec![]);
+        assert_eq!(problems, Vec::new());
 
         (loc_expr.value, procedures)
     }
