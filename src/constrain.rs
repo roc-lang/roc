@@ -161,8 +161,8 @@ pub fn constrain_def(
                 assignments_constraint: And(state.reversed_constraints),
                 ret_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(args.ret_type))
             })),
-        ret_constraint,
         assignment_types,
+        ret_constraint,
     }))
 }
 
@@ -240,7 +240,7 @@ where I: Iterator<Item = Located<Pattern>>
         let pattern_var = subs.mk_flex_var();
         let pattern_type = Type::Variable(pattern_var);
 
-        add_pattern(loc_pattern, NoExpectation(pattern_type.clone()), state);
+        state.add_pattern(loc_pattern, NoExpectation(pattern_type.clone()));
 
         vars.push(pattern_var);
         pattern_types.push(pattern_type);
@@ -256,19 +256,20 @@ struct PatternState {
     reversed_constraints: Vec<Constraint>
 }
 
-fn add_to_assignment_types(region: Region, symbol: Symbol, expected: Expected<Type>, state: &mut PatternState) {
-    state.assignment_types.insert(symbol, Located {region, value: expected.get_type()});
-}
+impl PatternState {
+    pub fn add_pattern(&mut self, loc_pattern: Located<Pattern>, expected: Expected<Type>) {
+        use canonicalize::Pattern::*;
 
-fn add_pattern(loc_pattern: Located<Pattern>, expected: Expected<Type>, state: &mut PatternState) {
-    use canonicalize::Pattern::*;
+        let region = loc_pattern.region;
 
-    let region = loc_pattern.region;
+        match loc_pattern.value {
+            Identifier(symbol) => self.add_to_assignment_types(region, symbol, expected),
+            Underscore => (),
+            _ => panic!("TODO other patterns"),
+        }
+    }
 
-    match loc_pattern.value {
-        Identifier(symbol) => add_to_assignment_types(region, symbol, expected, state),
-        Underscore => (),
-        _ => panic!("TODO other patterns"),
+    fn add_to_assignment_types(&mut self, region: Region, symbol: Symbol, expected: Expected<Type>) {
+        self.assignment_types.insert(symbol, Located {region, value: expected.get_type()});
     }
 }
-
