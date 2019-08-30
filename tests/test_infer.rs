@@ -357,7 +357,19 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn assign_multiple() {
+        infer_eq(
+            indoc!(r#"
+                a = \_ _ _ -> "test!"
 
+                b = a
+
+                b
+            "#),
+            "*, *, * -> String.String"
+        );
+    }
 
     // #[test]
     // fn int_thunk() {

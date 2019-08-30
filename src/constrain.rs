@@ -53,15 +53,23 @@ pub fn constrain(
         Assign(assignments, ret_expr) => {
             let ret_con = constrain(bound_vars, subs, *ret_expr, expected);
 
-            if assignments.len() > 1 {
-                panic!("TODO can't handle multiple assignments yet");
-            }
+            if assignments.len() == 1 {
+                // Don't bother allocating a Vec of them if there's only one!
+                let (loc_pattern, loc_expr) = assignments.into_iter().next().unwrap();
 
-            for (loc_pattern, loc_expr) in assignments {
-                return constrain_def(loc_pattern, loc_expr, bound_vars, subs, ret_con);
-            }
+                constrain_def(loc_pattern, loc_expr, bound_vars, subs, ret_con)
+            } else {
+                let mut constraints = Vec::with_capacity(assignments.len());
 
-            unreachable!();
+                for (loc_pattern, loc_expr) in assignments {
+                    let constraint =
+                        constrain_def(loc_pattern, loc_expr, bound_vars, subs, ret_con.clone());
+
+                    constraints.push(constraint);
+                }
+
+                And(constraints)
+            }
         }
         _ => { panic!("TODO constraints for {:?}", loc_expr.value) }
     }

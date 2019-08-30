@@ -19,7 +19,7 @@ pub enum Type {
     Erroneous(Problem),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expected<T> {
     NoExpectation(T),
     ForReason(Reason, T, Region),
@@ -34,7 +34,7 @@ impl<T> Expected<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Reason {
     OperatorLeftArg(Operator),
     OperatorRightArg(Operator),
@@ -43,7 +43,7 @@ pub enum Reason {
     ElemInList,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
     Lookup(Symbol, Expected<Type>, Region),
@@ -52,7 +52,7 @@ pub enum Constraint {
     And(Vec<Constraint>)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
