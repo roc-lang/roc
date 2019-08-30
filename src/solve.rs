@@ -60,10 +60,16 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
                     // Add a variable for each assignment to the env.
                     let mut new_env = env.clone();
 
-                    for (name, loc_type) in let_con.assignment_types {
-                        let var = type_to_variable(subs, loc_type.value);
+                    for (symbol, loc_type) in let_con.assignment_types {
+                        // We must not overwrite existing symbols! If we do,
+                        // we will overwrite procedure entries, which were
+                        // inserted earlier in solving. (If we allowed 
+                        // shadowing, we'd need to do something fancier here.)
+                        if !new_env.contains_key(&symbol) {
+                            let var = type_to_variable(subs, loc_type.value);
 
-                        new_env.insert(name, var);
+                            new_env.insert(symbol, var);
+                        }
                     }
 
                     // Now solve the body, using the new env which includes
@@ -96,7 +102,6 @@ fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
 
             subs.fresh(Descriptor::from(content))
         },
-
         Function(arg_types, ret_type) => {
             let arg_vars = arg_types.into_iter().map(|arg_type| {
                 type_to_variable(subs, arg_type)

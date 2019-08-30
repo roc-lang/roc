@@ -38,16 +38,17 @@ pub fn constrain(
         List(elems) => { list(elems, bound_vars, subs, expected, region) },
         Var(symbol) => Lookup(symbol, expected, region),
         Assign(assignments, ret_expr) => {
+            let ret_con = constrain(bound_vars, subs, *ret_expr, expected);
+
             if assignments.len() > 1 {
                 panic!("TODO can't handle multiple assignments yet");
-            } else {
-                let ret_con = constrain(bound_vars, subs, *ret_expr, expected);
-                let (loc_pattern, loc_expr) = assignments.first().unwrap_or_else(|| {
-                    panic!("assignments.first() failed")
-                });
-
-                constrain_def(loc_pattern.clone(), loc_expr.clone(), bound_vars, subs, ret_con)
             }
+
+            for (loc_pattern, loc_expr) in assignments {
+                return constrain_def(loc_pattern, loc_expr, bound_vars, subs, ret_con);
+            }
+
+            unreachable!();
         }
         _ => { panic!("TODO constraints for {:?}", loc_expr.value) }
     }
@@ -136,21 +137,26 @@ pub fn constrain_def(
         vars: Vec::with_capacity(1),
         reversed_constraints: Vec::with_capacity(1)
     };
-    let (mut vars, arg_types) = 
+    let (vars, _) = 
         patterns_to_variables(std::iter::once(loc_pattern.clone()), subs, &mut state);
+    let region = loc_pattern.region;
 
-    let ret_var = subs.mk_flex_var();
-    let ret_type = Type::Variable(ret_var);
+    // Set up types for the expr we're assigned to.
+    let expr_var = subs.mk_flex_var();
+    let expr_type = Type::Variable(expr_var);
 
-    vars.push(ret_var);
+    // These types are *only* for the current pattern. In contrast, the ones
+    // in PatternState represent
+    let mut lookup_types: ImMap<Symbol, Located<Type>> = ImMap::default();
 
-    let mut assignment_types: ImMap<Symbol, Located<Type>> = ImMap::default();
-
+    // Any time there's a lookup on this symbol in the outer Let,
+    // it should result in this expression's type. After all, this
+    // is the type to which this symbol is assigned!
     match loc_pattern.value {
         Pattern::Identifier(symbol) => {
-            let loc_type = Located {region: loc_pattern.region, value: ret_type.clone()};
+            let value = expr_type.clone();
 
-            assignment_types.insert(symbol, loc_type);
+            lookup_types.insert(symbol, Located {region, value});
         },
         _ => panic!("TODO constrain patterns other than Identifier")
     }
@@ -161,14 +167,15 @@ pub fn constrain_def(
         rigid_vars: Vec::new(),
         flex_vars: vars,
         assignments_constraint:
+            // This nested constraint represents the actually constrained expr.
             Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: state.vars,
                 assignment_types: state.assignment_types,
                 assignments_constraint: And(state.reversed_constraints),
-                ret_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(ret_type))
+                ret_constraint: constrain(bound_vars, subs, loc_expr, NoExpectation(expr_type))
             })),
-        assignment_types,
+        assignment_types: lookup_types,
         ret_constraint,
     }))
 }
