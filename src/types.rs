@@ -15,8 +15,6 @@ pub enum Type {
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(ModuleName, String, Vec<Type>),
     Variable(Variable),
-    /// A Blank in the editor (a "typed hole" as they're also known)
-    Blank,
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }

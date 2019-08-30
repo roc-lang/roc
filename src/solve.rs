@@ -106,16 +106,11 @@ fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
 
             subs.fresh(Descriptor::from(content))
         },
-        _ => panic!("TODO type_to_var {:?}", typ)
+        Erroneous(problem) => {
+            let content = Content::Structure(FlatType::Erroneous(problem));
 
-        // AppN home name args ->
-        // do  argVars <- traverse go args
-        //     register rank pools (Structure (App1 home name argVars))
-
-        // FunN a b ->
-        // do  aVar <- go a
-        //     bVar <- go b
-        //     register rank pools (Structure (Fun1 aVar bVar))
+            subs.fresh(Descriptor::from(content))
+        }
     }
 }
 

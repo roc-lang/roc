@@ -70,6 +70,9 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
             if use_parens {
                 buf.push_str(")");
             }
+        },
+        Erroneous(problem) => {
+            buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }
     }
 }

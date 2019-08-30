@@ -1,7 +1,9 @@
 use ena::unify::{UnificationTable, UnifyKey, InPlace};
 use std::fmt;
+use types::Problem;
 use unify;
 
+#[derive(Debug)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>
 }
@@ -141,6 +143,7 @@ pub enum Content {
 pub enum FlatType {
     Apply(String /* module name */, String /* type name */, Vec<Variable>),
     Func(Vec<Variable>, Variable),
+    Erroneous(Problem),
     EmptyRecord,
 }
 
