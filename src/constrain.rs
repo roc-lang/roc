@@ -136,7 +136,6 @@ pub fn constrain_def(
         vars: Vec::with_capacity(1),
         reversed_constraints: Vec::with_capacity(1)
     };
-    // TODO constrain_args makes a Type::Function - is that really what we want in a Let?
     let args = constrain_args(std::iter::once(loc_pattern.clone()), subs, &mut state);
     let mut assignment_types: ImMap<Symbol, Located<Type>> = ImMap::default();
 
@@ -178,6 +177,7 @@ pub fn constrain_procedure(
         vars: Vec::with_capacity(proc.args.len()),
         reversed_constraints: Vec::with_capacity(1)
     };
+
     let args = constrain_args(proc.args.into_iter(), subs, &mut state);
     let body_type = NoExpectation(args.ret_type);
     let ret_constraint = constrain(bound_vars, subs, proc.body, body_type);
@@ -213,18 +213,8 @@ fn constrain_args<I>(
 ) -> Args 
 where I: Iterator<Item = Located<Pattern>>
 {
-    let mut vars = Vec::with_capacity(state.vars.capacity());
-    let mut arg_types = Vec::with_capacity(state.vars.capacity());
-
-    for loc_pattern in args {
-        let arg_var = subs.mk_flex_var();
-        let arg_type = Type::Variable(arg_var);
-
-        add_pattern(loc_pattern, NoExpectation(arg_type.clone()), state);
-
-        vars.push(arg_var);
-        arg_types.push(arg_type);
-    }
+    let (mut vars, arg_types) = 
+        patterns_to_variables(args.into_iter(), subs, state);
 
     let ret_var = subs.mk_flex_var();
     let ret_type = Type::Variable(ret_var);
@@ -235,6 +225,30 @@ where I: Iterator<Item = Located<Pattern>>
 
     Args {vars, typ, ret_type}
 }
+
+fn patterns_to_variables<I>(
+    patterns: I,
+    subs: &mut Subs,
+    state: &mut PatternState
+) -> (Vec<Variable>, Vec<Type>) 
+where I: Iterator<Item = Located<Pattern>>
+{
+    let mut vars = Vec::with_capacity(state.vars.capacity());
+    let mut pattern_types = Vec::with_capacity(state.vars.capacity());
+
+    for loc_pattern in patterns {
+        let pattern_var = subs.mk_flex_var();
+        let pattern_type = Type::Variable(pattern_var);
+
+        add_pattern(loc_pattern, NoExpectation(pattern_type.clone()), state);
+
+        vars.push(pattern_var);
+        pattern_types.push(pattern_type);
+    }
+
+    (vars, pattern_types)
+}
+
 
 struct PatternState { 
     assignment_types: ImMap<Symbol, Located<Type>>,
