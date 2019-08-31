@@ -385,6 +385,20 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn assign_multiple_nums() {
+        infer_eq(
+            indoc!(r#"
+                b = a
+
+                a = 42
+
+                b
+            "#),
+            "Num.Num *"
+        );
+    }
+
 
     // #[test]
     // fn int_thunk() {

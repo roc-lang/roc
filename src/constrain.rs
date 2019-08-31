@@ -59,19 +59,103 @@ pub fn constrain(
 
                 constrain_def(loc_pattern, loc_expr, bound_vars, subs, ret_con)
             } else {
-                let mut constraints = Vec::with_capacity(assignments.len());
-
-                for (loc_pattern, loc_expr) in assignments {
-                    let constraint =
-                        constrain_def(loc_pattern, loc_expr, bound_vars, subs, ret_con.clone());
-
-                    constraints.push(constraint);
-                }
-
-                And(constraints)
+                constrain_defs(assignments, bound_vars, subs, ret_con)
             }
         }
         _ => { panic!("TODO constraints for {:?}", loc_expr.value) }
+    }
+}
+
+pub fn constrain_defs(
+    assignments: Vec<(Located<Pattern>, Located<Expr>)>,
+    bound_vars: &BoundTypeVars,
+    subs: &mut Subs,
+    ret_con: Constraint,
+) -> Constraint {
+    let mut rigid_info = Info::with_capacity(assignments.len());
+    let mut flex_info = Info::with_capacity(assignments.len());
+
+    for (loc_pattern, loc_expr) in assignments {
+        let mut state = PatternState {
+            assignment_types: ImMap::default(),
+            vars: Vec::with_capacity(1),
+            reversed_constraints: Vec::with_capacity(1)
+        };
+        let pattern_var = subs.mk_flex_var();
+        let pattern_type = Type::Variable(pattern_var);
+
+        flex_info.vars.push(pattern_var);
+
+        state.add_pattern(loc_pattern.clone(), NoExpectation(pattern_type.clone()));
+        state.reversed_constraints.reverse();
+
+        let assignments_constraint = And(state.reversed_constraints);
+
+        // Set up types for the expr we're assigned to.
+        let expr_var = subs.mk_flex_var();
+        let expr_type = Type::Variable(expr_var);
+
+        // Any time there's a lookup on this symbol in the outer Let,
+        // it should result in this expression's type. After all, this
+        // is the type to which this symbol is assigned!
+        add_pattern_to_lookup_types(
+            loc_pattern, &mut flex_info.assignment_types, expr_type.clone()
+        );
+
+        let expr_con = constrain(
+            bound_vars, subs, loc_expr, NoExpectation(expr_type)
+        );
+        let def_con =
+            Let(Box::new(LetConstraint {
+                rigid_vars: Vec::new(),
+                flex_vars: state.vars,
+                assignment_types: state.assignment_types,
+                assignments_constraint,
+                ret_constraint: expr_con
+            }));
+
+        flex_info.constraints.push(def_con);
+    }
+
+    // Rigid constraint
+    Let(Box::new(LetConstraint {
+        rigid_vars: rigid_info.vars,
+        flex_vars: Vec::new(),
+        assignment_types: rigid_info.assignment_types,
+        assignments_constraint:
+            // Flex constraint
+            Let(Box::new(LetConstraint {
+                rigid_vars: Vec::new(),
+                flex_vars: flex_info.vars,
+                assignment_types: flex_info.assignment_types.clone(),
+                assignments_constraint:
+                    // Final flex constraints
+                    Let(Box::new(LetConstraint {
+                        rigid_vars: Vec::new(),
+                        flex_vars: Vec::new(),
+                        assignment_types: flex_info.assignment_types,
+                        assignments_constraint: True,
+                        ret_constraint: And(flex_info.constraints)
+                    })),
+                ret_constraint: And(vec![And(rigid_info.constraints), ret_con])
+            })),
+        ret_constraint: True,
+    }))
+}
+
+struct Info {
+    pub vars: Vec<Variable>,
+    pub constraints: Vec<Constraint>,
+    pub assignment_types: ImMap<Symbol, Located<Type>>
+}
+
+impl Info {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Info {
+            vars: Vec::with_capacity(capacity),
+            constraints: Vec::with_capacity(capacity),
+            assignment_types: ImMap::default(),
+        }
     }
 }
 
@@ -166,8 +250,6 @@ pub fn constrain_def(
 
     vars.push(pattern_var);
 
-    let region = loc_pattern.region;
-
     // Set up types for the expr we're assigned to.
     let expr_var = subs.mk_flex_var();
     let expr_type = Type::Variable(expr_var);
@@ -179,14 +261,7 @@ pub fn constrain_def(
     // Any time there's a lookup on this symbol in the outer Let,
     // it should result in this expression's type. After all, this
     // is the type to which this symbol is assigned!
-    match loc_pattern.value {
-        Pattern::Identifier(symbol) => {
-            let value = expr_type.clone();
-
-            lookup_types.insert(symbol, Located {region, value});
-        },
-        _ => panic!("TODO constrain patterns other than Identifier")
-    }
+    add_pattern_to_lookup_types(loc_pattern, &mut lookup_types, expr_type.clone());
 
     state.reversed_constraints.reverse();
 
@@ -206,6 +281,24 @@ pub fn constrain_def(
         ret_constraint,
     }))
 }
+
+fn add_pattern_to_lookup_types(
+    loc_pattern: Located<Pattern>,
+    lookup_types: &mut ImMap<Symbol, Located<Type>>,
+    expr_type: Type
+) {
+    let region = loc_pattern.region;
+
+    match loc_pattern.value {
+        Pattern::Identifier(symbol) => {
+            let loc_type = Located {region, value: expr_type};
+
+            lookup_types.insert(symbol, loc_type);
+        },
+        _ => panic!("TODO constrain patterns other than Identifier")
+    }
+}
+
 
 pub fn constrain_procedure(
     bound_vars: &BoundTypeVars,
