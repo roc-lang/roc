@@ -23,6 +23,8 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
+    /// Works the same as Var, but has an important marking purpose.
+    /// See 13623e3f5f65ea2d703cf155f16650c1e8246502 for the bug this fixed.
     FunctionPointer(Symbol),
     InterpolatedStr(Vec<(String, Located<Expr>)>, String),
 
