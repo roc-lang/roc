@@ -389,16 +389,21 @@ mod test_infer {
     fn assign_multiple_nums() {
         infer_eq(
             indoc!(r#"
+                c = b
+
                 b = a
 
                 a = 42
 
-                b
+                c
             "#),
             "Num.Num *"
         );
     }
 
+    // TODO identity function
+    // TODO calling functions
+    // TODO BoundTypeVariables
 
     // #[test]
     // fn int_thunk() {
