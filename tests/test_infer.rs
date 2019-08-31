@@ -399,20 +399,6 @@ mod test_infer {
         );
     }
 
-    // TODO test assignments where some of them have type annotations
-    // TODO test inferring calling a function
-    // TODO test BoundTypeVars
-
-//     #[test]
-//     fn identity() {
-//         infer_eq(
-//             indoc!(r#"
-//                 \val -> val
-//             "#),
-//             "a -> a"
-//         );
-//     }
-
 
     // #[test]
     // fn int_thunk() {
