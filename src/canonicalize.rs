@@ -23,6 +23,7 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
+    FunctionPointer(Symbol), // Works *almost* exactly like Var
     InterpolatedStr(Vec<(String, Located<Expr>)>, String),
 
     // Pattern Matching
@@ -517,7 +518,7 @@ fn canonicalize(
                 // If this is a closure, remember its symbol. We'll use it later!
                 let opt_closure_symbol: Option<&Symbol> =
                     match loc_can_expr.value {
-                        Var(ref symbol) if env.procedures.contains_key(&symbol) => Some(symbol),
+                        FunctionPointer(ref symbol) => Some(symbol),
                         _ => None
                     };
 

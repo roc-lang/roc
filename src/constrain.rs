@@ -49,7 +49,7 @@ pub fn constrain(
         EmptyRecord => { Eq(EmptyRec, expected, region) },
         EmptyList => { Eq(empty_list(subs.mk_flex_var()), expected, region) },
         List(elems) => { list(elems, bound_vars, subs, expected, region) },
-        Var(symbol) => Lookup(symbol, expected, region),
+        Var(symbol) | FunctionPointer(symbol) => Lookup(symbol, expected, region),
         Assign(assignments, ret_expr) => {
             let ret_con = constrain(bound_vars, subs, *ret_expr, expected);
 
