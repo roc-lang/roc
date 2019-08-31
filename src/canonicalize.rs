@@ -23,6 +23,7 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
+    FunctionPointer(Symbol),
     InterpolatedStr(Vec<(String, Located<Expr>)>, String),
 
     // Pattern Matching
@@ -514,41 +515,16 @@ fn canonicalize(
                 // block. Order of assignments doesn't matter, thanks to referential transparency!
                 let (loc_can_expr, can_output) = canonicalize(env, &mut scope, expr);
 
-                // If this is a closure, remember its symbol. We'll use it later!
-                let opt_closure_symbol: Option<&Symbol> =
-                    match loc_can_expr.value {
-                        Var(ref symbol) if env.procedures.contains_key(&symbol) => Some(symbol),
-                        _ => None
-                    };
-
                 // Exclude the current ident from shadowable_idents; you can't shadow yourself!
                 // (However, still include it in scope, because you *can* recursively refer to yourself.)
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
                 let loc_can_pattern = canonicalize_pattern(env, &mut scope, &Assignment, &loc_pattern, &mut shadowable_idents);
-                let mut assigned_symbols = Vec::new();
-
-                // Store the referenced locals in the refs_by_assignment map, so we can later figure out
-                // which assigned names reference each other.
-                for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(&loc_pattern), &scope) {
-                    let refs =
-                        // Functions' references don't count in assignments.
-                        // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-                        // parent commit for the bug this fixed!
-                        if opt_closure_symbol.is_some() {
-                            References::new()
-                        } else {
-                            can_output.references.clone()
-                        };
-
-                    refs_by_assignment.insert(symbol.clone(), (Located {value: ident, region}, refs));
-
-                    assigned_symbols.push(symbol.clone());
-                }
+                let mut renamed_closure_assignment: Option<&Symbol> = None;
 
                 // Give closures names (and tail-recursive status) where appropriate.
-                let can_expr = match (&loc_pattern.value, &loc_can_pattern.value, &opt_closure_symbol) {
+                let can_expr = match (&loc_pattern.value, &loc_can_pattern.value, &loc_can_expr.value) {
                     // First, make sure we are actually assigning an identifier instead of (for example) a variant.
                     //
                     // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
@@ -558,11 +534,11 @@ fn canonicalize(
                     (
                         &expr::Pattern::Identifier(ref name),
                         &Pattern::Identifier(ref assigned_symbol),
-                        &Some(ref anonymous_closure_symbol)
+                        &FunctionPointer(ref symbol)
                     ) => {
                         // Since everywhere in the code it'll be referred to by its assigned name,
                         // remove its generated name from the procedure map. (We'll re-insert it later.)
-                        let mut procedure = env.procedures.remove(&anonymous_closure_symbol).unwrap();
+                        let mut procedure = env.procedures.remove(&symbol).unwrap();
 
                         // The original ident name will be used for debugging and stack traces.
                         procedure.name = Some(name.clone());
@@ -585,12 +561,35 @@ fn canonicalize(
                                 refs.locals = refs.locals.without(assigned_symbol);
                             });
 
+                        renamed_closure_assignment = Some(&assigned_symbol);
+
                         // Return a reference to the assigned symbol, since the auto-generated one no
                         // longer references any entry in the procedure map!
                         Var(assigned_symbol.clone())
                     },
                     _ => loc_can_expr.value
                 };
+
+                let mut assigned_symbols = Vec::new();
+
+                // Store the referenced locals in the refs_by_assignment map, so we can later figure out
+                // which assigned names reference each other.
+                for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(&loc_pattern), &scope) {
+                    println!("* * * symbol: {:?}, is_closure_defn: {:?}", symbol, renamed_closure_assignment);
+                    let refs =
+                        // Functions' references don't count in assignments.
+                        // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                        // parent commit for the bug this fixed!
+                        if renamed_closure_assignment == Some(&symbol) {
+                            References::new()
+                        } else {
+                            can_output.references.clone()
+                        };
+
+                    refs_by_assignment.insert(symbol.clone(), (Located {value: ident, region}, refs));
+
+                    assigned_symbols.push(symbol.clone());
+                }
 
                 for symbol in assigned_symbols {
                     can_assignments_by_symbol.insert(
@@ -741,7 +740,7 @@ fn canonicalize(
             env.register_closure(symbol.clone(), can_args, loc_body_expr, loc_expr.region.clone(), output.references.clone());
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
-            (Var(symbol), output)
+            (FunctionPointer(symbol), output)
         },
 
         expr::Expr::Case(loc_cond, branches) => {
