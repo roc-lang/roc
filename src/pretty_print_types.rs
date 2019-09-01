@@ -47,7 +47,9 @@ fn write_apply(module_name: String, type_name: String, args: Vec<Variable>, subs
     let write_parens = use_parens && !args.is_empty();
 
     // Hardcoded type aliases
-    if module_name == "Num" && type_name == "Num" {
+    if module_name == "String" && type_name == "String" {
+        buf.push_str("String");
+    } else if module_name == "Num" && type_name == "Num" {
         let arg = args.into_iter().next().unwrap_or_else(|| {
             panic!("Num did not have any type parameters somehow.")
         });

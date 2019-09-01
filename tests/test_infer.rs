@@ -88,7 +88,7 @@ mod test_infer {
             indoc!(r#"
                 "type inference!"
             "#),
-            "String.String"
+            "String"
         );
     }
 
@@ -98,7 +98,7 @@ mod test_infer {
             indoc!(r#"
                 ""
             "#),
-            "String.String"
+            "String"
         );
     }
 
@@ -192,7 +192,7 @@ mod test_infer {
             indoc!(r#"
                 [ "cowabunga" ]
             "#),
-            "List String.String"
+            "List String"
         );
     }
 
@@ -202,7 +202,7 @@ mod test_infer {
             indoc!(r#"
                 [[[ "foo" ]]]
             "#),
-            "List (List (List String.String))"
+            "List (List (List String))"
         );
     }
 
@@ -212,7 +212,7 @@ mod test_infer {
             indoc!(r#"
                 [ "foo", "bar" ]
             "#),
-            "List String.String"
+            "List String"
         );
     }
 
@@ -226,7 +226,7 @@ mod test_infer {
 
                 "type inference is \(whatItIs)!"
             "#),
-            "String.String"
+            "String"
         );
     }
 
@@ -291,7 +291,7 @@ mod test_infer {
             indoc!(r#"
                 \_ _ _ -> "test!"
             "#),
-            "*, *, * -> String.String"
+            "*, *, * -> String"
         );
     }
 
@@ -317,7 +317,7 @@ mod test_infer {
 
                 str
             "#),
-            "String.String"
+            "String"
         );
     }
 
@@ -353,7 +353,7 @@ mod test_infer {
 
                 f
             "#),
-            "*, *, * -> String.String"
+            "*, *, * -> String"
         );
     }
 
@@ -367,7 +367,7 @@ mod test_infer {
 
                 b
             "#),
-            "*, *, * -> String.String"
+            "*, *, * -> String"
         );
     }
 
@@ -381,7 +381,7 @@ mod test_infer {
 
                 b
             "#),
-            "String.String"
+            "String"
         );
     }
 
@@ -441,7 +441,7 @@ mod test_infer {
 
 //                 alwaysFoo 42
 //             "#),
-//             "String.String"
+//             "String"
 //         );
 //     }
 
