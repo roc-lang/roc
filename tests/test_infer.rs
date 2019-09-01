@@ -429,6 +429,8 @@ mod test_infer {
 
     // TODO type annotations
     // TODO fix identity inference
+    // TODO type aliases
+    // TODO sum types
     // TODO BoundTypeVariables
     // TODO conditionals
 

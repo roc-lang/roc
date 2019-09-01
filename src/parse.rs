@@ -506,22 +506,100 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     )
 }
 
+/// A type, e.g. `String`
+fn typ<I>(min_indent: u32) -> impl Parser<Input = I, Output = AnnType>
+where I: Stream<Item = char, Position = IndentablePosition>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>
+{
+    typ_(min_indent)
+}
+
+// This macro allows recursive parsers
+parser! {
+    #[inline(always)]
+    fn typ_[I](min_indent_ref: u32)(I) -> AnnType
+        where [ I: Stream<Item = char, Position = IndentablePosition> ]
+    {
+        let min_indent = *min_indent_ref;
+
+        sep_by1(
+            choice((
+                between(char('('), char(')'), typ(min_indent)),
+                string("{}").map(|_| AnnType::EmptyRec),
+                ident().map(|var| AnnType::Variable(var)),
+                variant_name()
+                    .and(many::<Vec<_>, _>(typ(min_indent))).map(|(name, args)| {
+                        AnnType::ApplyUnqualified(name, args)
+                    }),
+            ))
+            .skip(indented_whitespaces(min_indent)),
+            char(',').skip(indented_whitespaces(min_indent))
+        )
+        .and(optional(
+            string("->")
+                .with(indented_whitespaces(min_indent).with(typ(min_indent)))
+        ))
+        .then(|(args, opt_ret): (Vec<AnnType>, Option<AnnType>)| {
+            match opt_ret {
+                None => {
+                    // This is not a function!
+                    if args.len() == 1 {
+                        value(args.into_iter().next().unwrap()).right()
+                    } else {
+                        // If it didn't have a `->`, why did it have a comma?
+                        unexpected_any("comma in non-function type").left()
+                    }
+                },
+                Some(ret) => {
+                    value(AnnType::Function(args, Box::new(ret))).right()
+                }
+            }
+        })
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum AnnType {
+    EmptyRec,
+    Function(Vec<AnnType>, Box<AnnType>),
+    /// Applying a type to some arguments (e.g. Map.Map String Int)
+    ApplyQualified(String, String, Vec<AnnType>),
+    ApplyUnqualified(String, Vec<AnnType>),
+    Variable(String),
+}
+
 pub fn assignment<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
 {
     attempt(
-        located(pattern(min_indent)).and(indentation())
-            .skip(whitespace())
-            .and(
-                char('=').with(indentation())
-                    // If the "=" after the identifier turns out to be
-                    // either "==" or "=>" then this is not a declaration!
-                    .skip(not_followed_by(choice((char('='), char('>')))))
-            )
+        // TODO Allow standalone annotations with no attached imlementation.
+        //      Do this by making both optional, and erroring if both are None.
+        //      Might also need to make the newline optional, and use it to
+        //      determine if they are attached or not.
+        optional(
+            located(ident()).and(indentation())
+                .skip(whitespace())
+                .and(char(':').with(indentation()))
+                .skip(whitespace())
+                .with(typ(min_indent))
+                // There must be exactly 1 newline separating the annotation
+                // and what it's annotating. No more, no fewer!
+                .skip(char('\n'))
+        )
+        .and(
+            located(pattern(min_indent)).and(indentation())
+                .skip(whitespace())
+                .and(
+                    char('=').with(indentation())
+                        // If the "=" after the identifier turns out to be
+                        // either "==" or "=>" then this is not a declaration!
+                        .skip(not_followed_by(choice((char('='), char('>')))))
+                )
+        )
     )
     .skip(whitespace())
-    .then(move |((first_assignment_pattern, original_indent), equals_sign_indent)| {
+    .then(move |(opt_annotation, ((first_assignment_pattern, original_indent), equals_sign_indent))| {
         if original_indent < min_indent {
             unexpected_any("this assignment is outdented too far").left()
         } else if equals_sign_indent < original_indent /* `<` because '=' should be same indent or greater */ {
