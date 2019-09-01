@@ -1,4 +1,4 @@
-use subs::{Subs, Content, FlatType};
+use subs::{Subs, Content, FlatType, Variable};
 
 static WILDCARD: &'static str = "*";
 static EMPTY_RECORD: &'static str = "{}";
@@ -22,7 +22,6 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, use_parens
         Error(_) => buf.push_str("<type mismatch>")
     }
 }
-
 
 fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_parens: bool) {
     use subs::FlatType::*;
@@ -48,31 +47,38 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
         },
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         Func(args, ret) => {
-            let mut needs_comma = false;
-
-            if use_parens {
-                buf.push_str("(");
-            }
-
-            for arg in args {
-                if needs_comma {
-                    buf.push_str(", ");
-                } else {
-                    needs_comma = true;
-                }
-
-                write_content(subs.get(arg).content, subs, buf, false);
-            }
-
-            buf.push_str(" -> ");
-            write_content(subs.get(ret).content, subs, buf, false);
-
-            if use_parens {
-                buf.push_str(")");
-            }
+            write_fn(args, ret, subs, buf, use_parens)
         },
+        Operator(l_arg, r_arg, ret) => {
+            write_fn(vec![l_arg, r_arg], ret, subs, buf, use_parens)
+        }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }
+    }
+}
+
+fn write_fn(args: Vec<Variable>, ret: Variable, subs: &mut Subs, buf: &mut String, use_parens: bool) {
+    let mut needs_comma = false;
+
+    if use_parens {
+        buf.push_str("(");
+    }
+
+    for arg in args {
+        if needs_comma {
+            buf.push_str(", ");
+        } else {
+            needs_comma = true;
+        }
+
+        write_content(subs.get(arg).content, subs, buf, false);
+    }
+
+    buf.push_str(" -> ");
+    write_content(subs.get(ret).content, subs, buf, false);
+
+    if use_parens {
+        buf.push_str(")");
     }
 }

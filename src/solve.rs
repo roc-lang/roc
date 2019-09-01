@@ -111,6 +111,15 @@ fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
 
             subs.fresh(Descriptor::from(content))
         },
+        Operator(box_type) => {
+            let op_type = *box_type;
+            let l_var = type_to_variable(subs, op_type.left);
+            let r_var = type_to_variable(subs, op_type.right);
+            let ret_var = type_to_variable(subs, op_type.ret);
+            let content = Content::Structure(FlatType::Operator(l_var, r_var, ret_var));
+
+            subs.fresh(Descriptor::from(content))
+        },
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem));
 

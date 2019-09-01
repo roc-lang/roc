@@ -1,6 +1,6 @@
 use subs::Variable;
 use region::Region;
-use operator::Operator;
+use operator::{Operator, ArgSide};
 use region::Located;
 use canonicalize::Symbol;
 use collections::ImMap;
@@ -12,11 +12,44 @@ pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
+    Operator(Box<OperatorType>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(ModuleName, String, Vec<Type>),
     Variable(Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
+}
+
+impl Type {
+    pub fn for_operator(op: Operator) -> OperatorType {
+        use self::Operator::*;
+
+        match op {
+            Slash => op_type(Type::float(), Type::float(), Type::float()),
+            _ => panic!("TODO types for operator {:?}", op)
+        }
+    }
+
+    pub fn num(args: Vec<Type>) -> Self {
+        Type::Apply("Num".to_string(), "Num".to_string(), args)
+    }
+
+    pub fn float() -> Self {
+        let floating_point = Type::Apply("Float".to_string(), "FloatingPoint".to_string(), Vec::new());
+
+        Type::num(vec![floating_point])
+    }
+}
+
+fn op_type(left: Type, right: Type, ret: Type) -> OperatorType {
+    OperatorType { left, right, ret }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct OperatorType {
+    pub left: Type,
+    pub right: Type,
+    pub ret: Type
 }
 
 #[derive(Debug, Clone)]
@@ -40,8 +73,8 @@ pub enum Reason {
     NamedFnArg(String /* function name */, u8 /* arg index */),
     AnonymousFnCall(u8 /* arity */),
     NamedFnCall(String /* function name */, u8 /* arity */),
-    OperatorLeftArg(Operator),
-    OperatorRightArg(Operator),
+    OperatorArg(Operator, ArgSide),
+    OperatorRet(Operator),
     FractionalLiteral,
     InterpolatedStringVar,
     ElemInList,

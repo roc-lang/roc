@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use self::Operator::*;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operator {
     // highest precedence
     Caret,
@@ -12,6 +12,12 @@ pub enum Operator {
     Or,
     Pizza
     // lowest precedence
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArgSide {
+    Left, 
+    Right
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

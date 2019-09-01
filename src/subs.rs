@@ -143,6 +143,7 @@ pub enum Content {
 pub enum FlatType {
     Apply(String /* module name */, String /* type name */, Vec<Variable>),
     Func(Vec<Variable>, Variable),
+    Operator(Variable, Variable, Variable),
     Erroneous(Problem),
     EmptyRecord,
 }

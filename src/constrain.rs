@@ -1,6 +1,7 @@
 use canonicalize::{Pattern, Procedure, Symbol};
 use canonicalize::Expr::{self, *};
 use collections::ImMap;
+use operator::{Operator, ArgSide};
 use region::{Located, Region};
 use subs::{Variable, Subs};
 use types::{Expected, Expected::*, LetConstraint, Reason};
@@ -65,8 +66,77 @@ pub fn constrain(
         Call(box_loc_fn_expr, args) => {
             constrain_call(bound_vars, subs, *box_loc_fn_expr, args, expected, region)
         },
+        Expr::Operator(l_box_loc_expr, loc_op, r_box_loc_expr) => {
+            constrain_op(bound_vars, subs, *l_box_loc_expr, loc_op, *r_box_loc_expr, expected, region)
+        }
         _ => { panic!("TODO constraints for {:?}", loc_expr.value) }
     }
+}
+
+fn constrain_op(
+    bound_vars: &BoundTypeVars,
+    subs: &mut Subs,
+    l_loc_expr: Located<Expr>,
+    loc_op: Located<Operator>,
+    r_loc_expr: Located<Expr>,
+    expected: Expected<Type>,
+    region: Region
+) -> Constraint {
+    let op = loc_op.value;
+    let op_types = Type::for_operator(op);
+    let fn_var = subs.mk_flex_var();
+    let ret_var = subs.mk_flex_var();
+    let ret_type = Variable(ret_var);
+    let ret_reason = Reason::OperatorRet(op);
+    let expected_ret_type = ForReason(
+        ret_reason, op_types.ret, region.clone()
+    );
+
+    let (l_var, l_con) = constrain_op_arg(ArgSide::Left, bound_vars, subs, op, op_types.left, l_loc_expr);
+    let (r_var, r_con) = constrain_op_arg(ArgSide::Right, bound_vars, subs, op, op_types.right, r_loc_expr);
+
+    let vars = vec![fn_var, ret_var, l_var, r_var];
+    // TODO occurs check!
+    // return $ exists (funcVar:resultVar:argVars) $ CAnd ...
+    
+
+    And(vec![
+        // the constraint from constrain on l_expr, expecting its hardcoded type
+        l_con,
+        // the constraint from constrain on r_expr, expecting its hardcoded type
+        r_con,
+        // The operator's args and return type should be its hardcoded types
+        Eq(ret_type.clone(), expected_ret_type, region.clone()),
+
+        // Finally, link the operator's return type to the given expected type
+        Eq(ret_type, expected, region)
+
+    ])
+}
+
+#[inline(always)]
+fn constrain_op_arg(
+    arg_side: ArgSide,
+    bound_vars: &BoundTypeVars,
+    subs: &mut Subs,
+    op: Operator,
+    typ: Type,
+    loc_arg: Located<Expr>
+) -> (Variable, Constraint) {
+    let region = loc_arg.region.clone();
+    let arg_var = subs.mk_flex_var();
+    let arg_type = Variable(arg_var);
+    let reason = Reason::OperatorArg(op, arg_side);
+    let expected_arg = ForReason(reason, typ, region.clone());
+    let arg_con = And(vec![
+        // Recursively constrain the variable
+        constrain(bound_vars, subs, loc_arg, NoExpectation(arg_type.clone())),
+
+        // The variable should ultimately equal the hardcoded expected type
+        Eq(arg_type, expected_arg, region)
+    ]);
+
+    (arg_var, arg_con)
 }
 
 fn constrain_call(
@@ -77,14 +147,10 @@ fn constrain_call(
     expected: Expected<Type>,
     region: Region
 ) -> Constraint {
-// constrainCall :: RTV -> A.Region -> Can.Expr -> [Can.Expr] -> Expected Type -> IO Constraint
-// constrainCall rtv region func@(A.At funcRegion _) args expected =
-      // let maybeName = getName func
-
+    // The expression that evaluates to the function being called, e.g. `foo` in
+    // (foo) bar baz
     let fn_var = subs.mk_flex_var();
-    let ret_var = subs.mk_flex_var();
     let fn_type = Variable(fn_var);
-    let ret_type = Variable(ret_var);
     let fn_region = loc_expr.region.clone();
     let fn_expected = NoExpectation(fn_type.clone());
     let fn_con = constrain(bound_vars, subs, loc_expr, fn_expected);
@@ -92,7 +158,17 @@ fn constrain_call(
         // TODO look up the name and use NamedFnArg if possible.
         Reason::AnonymousFnCall(args.len() as u8);
 
-    let mut arg_vars = Vec::with_capacity(args.len());
+    // The function's return type
+    let ret_var = subs.mk_flex_var();
+    let ret_type = Variable(ret_var);
+
+
+    // This will be used in the occurs check
+    let mut vars = Vec::with_capacity(2 + args.len());
+
+    vars.push(fn_var);
+    vars.push(ret_var);
+
     let mut arg_types = Vec::with_capacity(args.len());
     let mut arg_cons = Vec::with_capacity(args.len());
 
@@ -106,13 +182,13 @@ fn constrain_call(
         let expected_arg = ForReason(reason, arg_type.clone(), region.clone());
         let arg_con = constrain(bound_vars, subs, loc_arg, expected_arg);
 
-        arg_vars.push(arg_var);
+        vars.push(arg_var);
         arg_types.push(arg_type);
         arg_cons.push(arg_con);
     }
 
     // TODO occurs check!
-    // return $ exists (funcVar:resultVar:argVars) $ CAnd ...
+    // return $ exists vars $ CAnd ...
     
     let expected_fn_type = ForReason(
         fn_reason, 

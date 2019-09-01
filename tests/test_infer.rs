@@ -468,12 +468,12 @@ mod test_infer {
     // OPERATORS
 
     #[test]
-    fn basic_plus() {
+    fn basic_division() {
         infer_eq(
             indoc!(r#"
-                1 + 1
+                1 / 2
             "#),
-            "Num.Num *"
+            "Num.Num Float.FloatingPoint"
         );
     }
 
