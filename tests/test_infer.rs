@@ -465,6 +465,17 @@ mod test_infer {
 //         );
 //     }
 
+    // OPERATORS
+
+    #[test]
+    fn basic_plus() {
+        infer_eq(
+            indoc!(r#"
+                1 + 1
+            "#),
+            "Num.Num *"
+        );
+    }
 
     // #[test]
     // fn basic_circular_type() {
