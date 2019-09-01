@@ -404,6 +404,18 @@ mod test_infer {
     // CALLING FUNCTIONS
 
     #[test]
+    fn call_returns_num() {
+        infer_eq(
+            indoc!(r#"
+                alwaysFive = \_ -> 5
+
+                alwaysFive "stuff"
+            "#),
+            "Num.Num *"
+        );
+    }
+
+    #[test]
     fn call_returns_list() {
         infer_eq(
             indoc!(r#"
@@ -415,10 +427,22 @@ mod test_infer {
         );
     }
 
-    // TODO calling functions
     // TODO conditionals
     // TODO type annotations
     // TODO BoundTypeVariables
+
+//     #[test]
+//     fn indirect_always() {
+//         infer_eq(
+//             indoc!(r#"
+//                 always = \val -> (\_ -> val)
+//                 alwaysFoo = always "foo"
+
+//                 alwaysFoo 42
+//             "#),
+//             "String.String"
+//         );
+//     }
 
 //     #[test]
 //     fn identity() {
