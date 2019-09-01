@@ -401,53 +401,46 @@ mod test_infer {
         );
     }
 
-    // TODO identity function
+    // CALLING FUNCTIONS
+
+    #[test]
+    fn call_returns_list() {
+        infer_eq(
+            indoc!(r#"
+                enlist = \val -> [ val ]
+
+                enlist 5
+            "#),
+            "List.List (Num.Num *)"
+        );
+    }
+
     // TODO calling functions
+    // TODO conditionals
+    // TODO type annotations
     // TODO BoundTypeVariables
 
-    // #[test]
-    // fn int_thunk() {
-    //     assert_eq!(
-    //         infer(indoc!(r#"
-    //             \_ -> 5
-    //         "#)),
-    //         Function(vec![var(0)], Box::new(Builtin(Int)))
-    //     );
-    // }
-
-    // #[test]
-    // fn string_thunk() {
-    //     assert_eq!(
-    //         infer(indoc!(r#"
-    //             \_ -> "thunk!"
-    //         "#)),
-    //         Function(vec![var(0)], Box::new(Builtin(Str)))
-    //     );
-    // }
+//     #[test]
+//     fn identity() {
+//         infer_eq(
+//             indoc!(r#"
+//                 \val -> val
+//             "#),
+//             "a -> a"
+//         );
+//     }
 
 
-    // #[test]
-    // fn identity_function() {
-    //     assert_eq!(
-    //         infer(indoc!(r#"
-    //             \val -> val
-    //         "#)),
-    //         Function(vec![var(0)], box_var(0))
-    //     );
-    // }
+//     #[test]
+//     fn always_function() {
+//         infer_eq(
+//             indoc!(r#"
+//                 \val -> \_ -> val
+//             "#),
+//             "a -> (* -> a)"
+//         );
+//     }
 
-    // #[test]
-    // fn always_function() {
-    //     assert_eq!(
-    //         infer(indoc!(r#"
-    //             \val -> \_ -> val
-    //         "#)),
-    //         Function(
-    //             vec![var(0)],
-    //             Box::new(Function(vec![var(1)], box_var(0)))
-    //         )
-    //     );
-    // }
 
     // #[test]
     // fn basic_circular_type() {

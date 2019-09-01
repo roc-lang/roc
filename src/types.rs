@@ -36,6 +36,10 @@ impl<T> Expected<T> {
 
 #[derive(Debug, Clone)]
 pub enum Reason {
+    AnonymousFnArg(u8 /* arg index */),
+    NamedFnArg(String /* function name */, u8 /* arg index */),
+    AnonymousFnCall(u8 /* arity */),
+    NamedFnCall(String /* function name */, u8 /* arity */),
     OperatorLeftArg(Operator),
     OperatorRightArg(Operator),
     FractionalLiteral,
@@ -63,7 +67,7 @@ pub struct LetConstraint {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Problem {
-    GenericMismatch(Box<Type>, Box<Type>),
+    GenericMismatch,
     ExtraArguments,
     MissingArguments,
     IfConditionNotBool,

@@ -33,7 +33,7 @@ pub enum Expr {
     Assign(Vec<(Located<Pattern>, Located<Expr>)>, Box<Located<Expr>>),
 
     // Application
-    Apply(Box<Located<Expr>>, Vec<Located<Expr>>),
+    Call(Box<Located<Expr>>, Vec<Located<Expr>>),
     ApplyVariant(Symbol, Option<Vec<Located<Expr>>>),
 
     // Product Types
@@ -372,7 +372,7 @@ fn canonicalize(
                 _ => ()
             };
 
-            let expr = Apply(Box::new(fn_expr), args);
+            let expr = Call(Box::new(fn_expr), args);
 
             for arg_out in outputs {
                 output.references = output.references.union(arg_out.references);
@@ -398,7 +398,7 @@ fn canonicalize(
                 Pizza => {
                     match &right_expr.value {
                         &Var(ref sym) => Some(sym.clone()),
-                        &Apply(ref loc_boxed_expr, _) => {
+                        &Call(ref loc_boxed_expr, _) => {
                             match (*loc_boxed_expr.clone()).value {
                                 Var(sym) => Some(sym),
                                 _ => None

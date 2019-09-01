@@ -19,7 +19,7 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, use_parens
         FlexVar(None) => buf.push_str(WILDCARD),
         RigidVar(name) => buf.push_str(&name),
         Structure(flat_type) => write_flat_type(flat_type, subs, buf, use_parens),
-        Error => buf.push_str("<type mismatch>")
+        Error(_) => buf.push_str("<type mismatch>")
     }
 }
 

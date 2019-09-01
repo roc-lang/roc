@@ -136,7 +136,7 @@ pub enum Content {
     FlexVar(Option<String> /* name */),
     RigidVar(String /* name */),
     Structure(FlatType),
-    Error
+    Error(Problem)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -62,8 +62,70 @@ pub fn constrain(
                 constrain_defs(assignments, bound_vars, subs, ret_con)
             }
         }
+        Call(box_loc_fn_expr, args) => {
+            constrain_call(bound_vars, subs, *box_loc_fn_expr, args, expected, region)
+        },
         _ => { panic!("TODO constraints for {:?}", loc_expr.value) }
     }
+}
+
+fn constrain_call(
+    bound_vars: &BoundTypeVars,
+    subs: &mut Subs,
+    loc_expr: Located<Expr>,
+    args: Vec<Located<Expr>>,
+    expected: Expected<Type>,
+    region: Region
+) -> Constraint {
+// constrainCall :: RTV -> A.Region -> Can.Expr -> [Can.Expr] -> Expected Type -> IO Constraint
+// constrainCall rtv region func@(A.At funcRegion _) args expected =
+      // let maybeName = getName func
+
+    let fn_var = subs.mk_flex_var();
+    let ret_var = subs.mk_flex_var();
+    let fn_type = Variable(fn_var);
+    let ret_type = Variable(ret_var);
+    let fn_region = loc_expr.region.clone();
+    let fn_expected = NoExpectation(fn_type.clone());
+    let fn_con = constrain(bound_vars, subs, loc_expr, fn_expected);
+    let fn_reason =
+        // TODO look up the name and use NamedFnArg if possible.
+        Reason::AnonymousFnCall(args.len() as u8);
+
+    let mut arg_vars = Vec::with_capacity(args.len());
+    let mut arg_types = Vec::with_capacity(args.len());
+    let mut arg_cons = Vec::with_capacity(args.len());
+
+    for (index, loc_arg) in args.into_iter().enumerate() {
+        let region = loc_arg.region.clone();
+        let arg_var = subs.mk_flex_var();
+        let arg_type = Variable(arg_var);
+        let reason = 
+            // TODO look up the name and use NamedFnArg if possible.
+            Reason::AnonymousFnArg(index as u8);
+        let expected_arg = ForReason(reason, arg_type.clone(), region.clone());
+        let arg_con = constrain(bound_vars, subs, loc_arg, expected_arg);
+
+        arg_vars.push(arg_var);
+        arg_types.push(arg_type);
+        arg_cons.push(arg_con);
+    }
+
+    // TODO occurs check!
+    // return $ exists (funcVar:resultVar:argVars) $ CAnd ...
+    
+    let expected_fn_type = ForReason(
+        fn_reason, 
+        Function(arg_types, Box::new(ret_type.clone())),
+        region.clone()
+    );
+
+    And(vec![
+        fn_con,
+        Eq(fn_type, expected_fn_type, fn_region),
+        And(arg_cons),
+        Eq(ret_type, expected, region)
+    ])
 }
 
 pub fn constrain_defs(
