@@ -36,19 +36,8 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     P: Parser<Input = I, Output = O>
 {
     attempt(position().and(parser))
-        // TODO uncommenting this and trying to use its value triggers what appears to be a rustc bug.
-        //
-        // rustc gives this error:
-        // error: reached the recursion limit while instantiating `<combine::combinator::Many<combine::combinator::Sink, combine::combinator::Ignore<combine::combinator::Token<combine::easy::Stream<combine::stream::state::State<&str, parse_state::IndentablePosition>>>>> as combine::Parser>::parse_mode::<combine::parser::FirstMode>`
-        //
-        // I haven't been able to figure out how to implement this another way
-        // that actually compiles. So for now, we set the end equal to the start
-        // and will have to make do without that info.
-        //
-        // .and(position())
-        .map(|( start, val )| {
-            let end = start;
-
+        .and(position())
+        .map(|( (start, val), end )| {
             Located::new(val, Region {
                 start_line: start.line,
                 start_col: start.column,
