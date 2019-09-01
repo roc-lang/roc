@@ -469,6 +469,16 @@ mod test_infer {
     // OPERATORS
 
     #[test]
+    fn div_operator() {
+        infer_eq(
+            indoc!(r#"
+                \l r -> l / r
+            "#),
+            "Num.Num Float.FloatingPoint, Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint"
+        );
+    }
+
+    #[test]
     fn basic_division() {
         infer_eq(
             indoc!(r#"
