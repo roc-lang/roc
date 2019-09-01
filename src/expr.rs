@@ -6,8 +6,7 @@ use std::fmt;
 pub enum Expr {
     // Literals
     Int(i64),
-    Frac(i64, i64),
-    Approx(f64),
+    Float(f64),
     EmptyStr,
     Str(String),
     Char(char),
@@ -99,8 +98,8 @@ impl fmt::Display for VariantName {
 pub enum Pattern {
     Identifier(String),
     Variant(Located<VariantName>, Option<Vec<Located<Pattern>>>),
-    Integer(i64),
-    Fraction(i64, i64),
+    IntLiteral(i64),
+    FloatLiteral(f64),
     ExactString(String),
     EmptyRecordLiteral,
     Underscore,
@@ -115,7 +114,7 @@ impl Expr {
         let transformed = transform(self);
 
         match transformed {
-            Int(_) | Frac(_, _) | Approx(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | InterpolatedStr(_, _) | EmptyList => transformed,
+            Int(_) | Float(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | InterpolatedStr(_, _) | EmptyList => transformed,
             List(elems) => {
                 let new_elems = 
                     elems.into_iter()

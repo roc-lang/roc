@@ -22,7 +22,7 @@ use types::Type::{self, *};
 type Env = ImMap<Symbol, Variable>;
 
 pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
-    println!("\nSolving:\n\n\t{:?}\n\n", constraint);
+    // println!("\nSolving:\n\n\t{:?}\n\n", constraint);
     match constraint {
         True => (),
         Eq(typ, expected_type, region) => {

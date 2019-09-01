@@ -151,6 +151,6 @@ pub enum FlatType {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Builtin {
-    Str, Int, Frac, Approx, 
+    Str, Int, Float,
     EmptyRecord,
 }

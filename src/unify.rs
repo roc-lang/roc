@@ -33,7 +33,7 @@ pub fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descript
         }
     };
 
-    println!("\nUnifying:\n\n\t{:?}\n\n\t{:?}\n\n\t-----\n\n\t{:?}\n\n", left.content, right.content, answer.content);
+    // println!("\nUnifying:\n\n\t{:?}\n\n\t{:?}\n\n\t-----\n\n\t{:?}\n\n", left.content, right.content, answer.content);
 
     answer
 }

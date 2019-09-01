@@ -295,16 +295,12 @@ mod test_parse {
 
     // // NUMBER LITERALS
 
-    fn expect_parsed_approx<'a>(expected: f64, actual: &str) {
-        assert_eq!(Ok((Approx(expected), "".to_string())), parse_without_loc(actual));
+    fn expect_parsed_float<'a>(expected: f64, actual: &str) {
+        assert_eq!(Ok((Float(expected), "".to_string())), parse_without_loc(actual));
     }
 
     fn expect_parsed_int<'a>(expected: i64, actual: &str) {
         assert_eq!(Ok((Int(expected), "".to_string())), parse_without_loc(actual));
-    }
-
-    fn expect_parsed_ratio<'a>(expected_numerator: i64, expected_denominator: i64, actual: &str) {
-        assert_eq!(Ok((Frac(expected_numerator, expected_denominator), "".to_string())), parse_without_loc(actual));
     }
 
     #[test]
@@ -318,25 +314,15 @@ mod test_parse {
     }
 
     #[test]
-    fn positive_approx() {
-        expect_parsed_approx(123.4, "~123.4");
+    fn positive_float() {
+        expect_parsed_float(123.45, "123.45");
+        expect_parsed_float(42.00, "42.00");
     }
 
     #[test]
-    fn negative_approx() {
-        expect_parsed_approx(-123.4, "~-123.4");
-    }
-
-    #[test]
-    fn positive_frac() {
-        expect_parsed_ratio(12345, 100, "123.45");
-        expect_parsed_ratio(4200, 100, "42.00");
-    }
-
-    #[test]
-    fn negative_ratio() {
-        expect_parsed_ratio(-1234567, 1000, "-1234.567");
-        expect_parsed_ratio(-1920, 10, "-192.0");
+    fn negative_float() {
+        expect_parsed_float(-1234.567, "-1234.567");
+        expect_parsed_float(-192.0, "-192.0");
     }
 
     #[test]
@@ -347,10 +333,10 @@ mod test_parse {
 
     #[test]
     fn fracs_with_spaces() {
-        expect_parsed_ratio(-1234567, 1000, "-1_23_4.567");
-        expect_parsed_ratio(-1920, 10, "-19_2.0");
-        expect_parsed_ratio(12345, 100, "1_2_3.45");
-        expect_parsed_ratio(4200, 100, "4_2.00");
+        expect_parsed_float(-1234.567, "-1_23_4.567");
+        expect_parsed_float(-192.0, "-19_2.0");
+        expect_parsed_float(123.45, "1_2_3.45");
+        expect_parsed_float(42.00, "4_2.00");
     }
 
     #[test]
@@ -910,7 +896,7 @@ mod test_parse {
                 Case(
                     loc_box(Int(1)),
                     vec![
-                        ( loc(Integer(2)), loc(Int(3)) ),
+                        ( loc(IntLiteral(2)), loc(Int(3)) ),
                     ]
                 ),
                 "".to_string()
@@ -958,8 +944,8 @@ mod test_parse {
                 Case(
                     loc_box(Int(0)),
                     vec![
-                        ( loc(Integer(2)), loc(call_by_name("foo", vec![loc(Int(9))])) ),
-                        ( loc(Integer(1)), loc(call_by_name("bar", vec![loc(Int(8))])) ),
+                        ( loc(IntLiteral(2)), loc(call_by_name("foo", vec![loc(Int(9))])) ),
+                        ( loc(IntLiteral(1)), loc(call_by_name("bar", vec![loc(Int(8))])) ),
                     ]
                 ),
                 "".to_string()

@@ -28,9 +28,8 @@ pub fn constrain(
     let region = loc_expr.region;
 
     match loc_expr.value {
-        Int(_) => { Eq(num(subs.mk_flex_var()), expected, region) },
-        Frac(_, _) => { fractional(subs, expected, region) },
-        Approx(_) => { fractional(subs, expected, region) },
+        Int(_) => { int_literal(subs, expected, region) },
+        Float(_) => { float_literal(subs, expected, region) },
         Str(_) => { Eq(string(), expected, region) },
         EmptyStr => { Eq(string(), expected, region) },
         InterpolatedStr(pairs, _) => {
@@ -337,33 +336,43 @@ fn list(loc_elems: Vec<Located<Expr>>, bound_vars: &BoundTypeVars, subs: &mut Su
     And(constraints)
 }
 
-fn fractional(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
-    // We'll make a Num var1 and a Fractional var2, 
-    // and then add a constraint that var1 needs to equal Fractional var2
-    let num_var = subs.mk_flex_var(); // Num var1
-    let fractional_var = subs.mk_flex_var(); // Fractional var2
-    let fractional_type = 
-        Type::Apply(
-            "Num".to_string(), 
-            "Fractional".to_string(), 
-            vec![Type::Variable(fractional_var)]
-        );
-    let num_var_type = Type::Variable(num_var);
-    let num_type = 
-        Type::Apply(
-            "Num".to_string(), 
-            "Num".to_string(), 
-            vec![num_var_type.clone()]
-        );
-    let expected_fractional = 
-        ForReason(Reason::FractionalLiteral, fractional_type, region.clone());
+#[inline(always)]
+fn int_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
+    let typ = number_literal_type("Int", "Integer");
+    let reason = Reason::IntLiteral;
+
+    num_literal(typ, reason, subs, expected, region)
+}
+
+#[inline(always)]
+fn float_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
+    let typ = number_literal_type("Float", "FloatingPoint");
+    let reason = Reason::FloatLiteral;
+
+    num_literal(typ, reason, subs, expected, region)
+}
+
+
+#[inline(always)]
+fn num_literal(literal_type: Type, reason: Reason, subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
+    let num_var = subs.mk_flex_var();
+    let num_type = Variable(num_var);
+    let expected_literal = ForReason(reason, literal_type, region.clone());
 
     And(vec![
-        Eq(num_type, expected, region.clone()),
-        Eq(num_var_type, expected_fractional, region),
+        Eq(num_type.clone(), expected_literal, region.clone()),
+        Eq(num_type, expected, region.clone())
     ])
 }
 
+#[inline(always)]
+fn number_literal_type(module_name: &str, type_name: &str) -> Type {
+    builtin_type("Num", "Num", 
+        vec![builtin_type(module_name, type_name, Vec::new())]
+    )
+}
+
+#[inline(always)]
 fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
     Type::Apply(module_name.to_string(), type_name.to_string(), args)
 }

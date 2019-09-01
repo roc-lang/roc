@@ -13,8 +13,7 @@ use self::PatternType::*;
 pub enum Expr {
     // Literals
     Int(i64),
-    Frac(i64, i64),
-    Approx(f64),
+    Float(f64),
     EmptyStr,
     Str(String),
     Char(char),
@@ -72,8 +71,8 @@ pub enum Problem {
 pub enum Pattern {
     Identifier(Symbol),
     Variant(Symbol, Option<Vec<Located<Pattern>>>),
-    Integer(i64),
-    Fraction(i64, i64),
+    IntLiteral(i64),
+    FloatLiteral(f64),
     ExactString(String),
     EmptyRecordLiteral,
     Underscore,
@@ -303,8 +302,7 @@ fn canonicalize(
 
     let (expr, output) = match loc_expr.value {
         expr::Expr::Int(num) => ( Int(num), Output::new() ),
-        expr::Expr::Frac(numerator, denominator) => ( Frac(numerator, denominator), Output::new()),
-        expr::Expr::Approx(num) => ( Approx(num), Output::new()),
+        expr::Expr::Float(num) => ( Float(num), Output::new() ),
         expr::Expr::EmptyRecord => ( EmptyRecord, Output::new()),
         expr::Expr::Str(string) => ( Str(string), Output::new()),
         expr::Expr::Char(ch) => ( Char(ch), Output::new()),
@@ -577,7 +575,6 @@ fn canonicalize(
                 // Store the referenced locals in the refs_by_assignment map, so we can later figure out
                 // which assigned names reference each other.
                 for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(&loc_pattern), &scope) {
-                    println!("* * * symbol: {:?}, is_closure_defn: {:?}", symbol, renamed_closure_assignment);
                     let refs =
                         // Functions' references don't count in assignments.
                         // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
@@ -1024,7 +1021,7 @@ fn add_idents_from_pattern(
                 }
             }
         },
-        &Integer(_) | &Fraction(_, _) | &ExactString(_)
+        &IntLiteral(_) | &FloatLiteral(_) | &ExactString(_)
             | &EmptyRecordLiteral | &Underscore => ()
     }
 }
@@ -1042,7 +1039,7 @@ fn remove_idents(
                 remove_idents(loc_arg.value, idents);
             }
         },
-        Variant(_, None) | Integer(_) | Fraction(_, _) | ExactString(_)
+        Variant(_, None) | IntLiteral(_) | FloatLiteral(_) | ExactString(_)
             | EmptyRecordLiteral | Underscore => {}
     }
 }
@@ -1234,16 +1231,16 @@ fn canonicalize_pattern(
             }
         },
 
-        &Integer(ref num) => {
+        &IntLiteral(ref num) => {
             match pattern_type {
-                CaseBranch => Pattern::Integer(*num),
+                CaseBranch => Pattern::IntLiteral(*num),
                 ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
             }
         },
 
-        &Fraction(ref numerator, ref denominator) => {
+        &FloatLiteral(ref num) => {
             match pattern_type {
-                CaseBranch => Pattern::Fraction(*numerator, *denominator),
+                CaseBranch => Pattern::FloatLiteral(*num),
                 ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
             }
         },

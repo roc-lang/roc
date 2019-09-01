@@ -75,7 +75,8 @@ pub enum Reason {
     NamedFnCall(String /* function name */, u8 /* arity */),
     OperatorArg(Operator, ArgSide),
     OperatorRet(Operator),
-    FractionalLiteral,
+    FloatLiteral,
+    IntLiteral,
     InterpolatedStringVar,
     ElemInList,
 }

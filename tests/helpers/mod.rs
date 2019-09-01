@@ -38,7 +38,7 @@ pub fn zero_loc_expr(expr: Expr) -> Expr {
     use roc::expr::Expr::*;
 
     match expr {
-        Int(_) | Frac(_, _) | Approx(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | EmptyList => expr,
+        Int(_) | Float(_) | EmptyStr | Str(_) | Char(_) | Var(_) | EmptyRecord | EmptyList => expr,
         InterpolatedStr(pairs, string) => InterpolatedStr(pairs.into_iter().map(|( prefix, ident )| ( prefix, zero_loc(ident))).collect(), string),
         List(elems) => {
             let zeroed_elems =
@@ -78,7 +78,7 @@ pub fn zero_loc_pattern(loc_pattern: Located<Pattern>) -> Located<Pattern> {
     let pattern = loc_pattern.value;
 
     match pattern {
-        Identifier(_) | Integer(_) | Fraction(_, _) | ExactString(_) | EmptyRecordLiteral | Underscore => loc(pattern),
+        Identifier(_) | IntLiteral(_) | FloatLiteral(_) | ExactString(_) | EmptyRecordLiteral | Underscore => loc(pattern),
         Variant(loc_name, None) =>
             loc(Variant(loc(loc_name.value), None)),
         Variant(loc_name, Some(opt_located_patterns)) =>

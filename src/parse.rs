@@ -199,9 +199,6 @@ parser! {
             string_literal(),
             int_or_frac_literal(),
             negative_int_or_frac_literal(),
-            char('~').with(
-                negative_approx_literal().or(approx_literal())
-            ),
             char_literal(),
             if_expr(min_indent),
             case_expr(min_indent),
@@ -895,68 +892,6 @@ where I: Stream<Item = char, Position = IndentablePosition>,
     )
 }
 
-pub fn negative_approx_literal<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char, Position = IndentablePosition>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>
-{
-    char('-')
-        .with(digits_before_decimal())
-        .and(optional(char('.').with(digits_after_decimal())))
-        .then(|(int_digits, decimals): (Vec<char>, Option<Vec<char>>)| {
-            // TODO check length of digits and make sure not to overflow
-            let int_str: String = int_digits.into_iter().collect();
-
-            match decimals {
-                Some(nums) => {
-                    let decimal_str: String = nums.into_iter().collect();
-
-                    match format!("-{}.{}", int_str, decimal_str).parse::<f64>() {
-                        Ok(float) => {
-                            value(Expr::Approx(float)).right()
-                        },
-                        Err(_) => {
-                            unexpected_any("looked like a negative number literal but was actually malformed identifier").left()
-                        }
-                    }
-                },
-                None => {
-                    unexpected_any("negative number literal with ~ but without the decimal point that ~ number literals require").left()
-                }
-            }
-        })
-}
-
-pub fn approx_literal<I>() -> impl Parser<Input = I, Output = Expr>
-where I: Stream<Item = char, Position = IndentablePosition>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>
-{
-    digits_before_decimal()
-        .and(optional(char('.').with(digits_after_decimal())))
-        .then(|(int_digits, decimals): (Vec<char>, Option<Vec<char>>)| {
-            // TODO check length of digits and make sure not to overflow
-            let int_str: String = int_digits.into_iter().collect();
-
-            match decimals {
-                Some(nums) => {
-                    let decimal_str: String = nums.into_iter().collect();
-
-                    match format!("{}.{}", int_str, decimal_str).parse::<f64>() {
-                        Ok(float) => {
-                            value(Expr::Approx(float)).right()
-                        },
-                        Err(_) => {
-                            unexpected_any("looked like a negative number literal but was actually malformed identifier").left()
-                        }
-                    }
-                },
-                None => {
-                    unexpected_any("negative number literal with ~ but without the decimal point that ~ number literals require").left()
-                }
-            }
-        })
-}
-
-
 pub fn negative_int_or_frac_literal<I>() -> impl Parser<Input = I, Output = Expr>
 where I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>
@@ -978,21 +913,15 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 (Ok(int_val), None) => {
                     value(Expr::Int(-int_val as i64)).right()
                 },
-                (Ok(int_val), Some(nums)) => {
+                (Ok(_), Some(nums)) => {
                     let decimal_str: String = nums.into_iter().collect();
-                    // calculate numerator and denominator
-                    // e.g. 123.45 == 12345 / 100
-                    let denom = (10 as i64).pow(decimal_str.len() as u32);
 
-                    match decimal_str.parse::<u32>() {
-                        Ok(decimal) => {
-                            // Only the numerator may ever be signed!
-                            let numerator = (int_val * denom) + (decimal as i64);
-
-                            value(Expr::Frac(-numerator, denom)).right()
+                    match format!("{}.{}", int_str, decimal_str).parse::<f64>() {
+                        Ok(float) => {
+                            value(Expr::Float(-float)).right()
                         },
                         Err(_) => {
-                            unexpected_any("non-digit characters after decimal point in a negative number literal").left()
+                            unexpected_any("looked like a negative Float literal but was actually malformed identifier").left()
                         }
                     }
                 },
@@ -1020,16 +949,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                 },
                 (Ok(int_val), Some(nums)) => {
                     let decimal_str: String = nums.into_iter().collect();
-                    // calculate numerator and denominator
-                    // e.g. 123.45 == 12345 / 100
-                    let denom = (10 as i64).pow(decimal_str.len() as u32);
 
-                    match decimal_str.parse::<u32>() {
-                        Ok(decimal) => {
-                            // Only the numerator may ever be signed!
-                            let numerator = (int_val * denom) + (decimal as i64);
-
-                            value(Expr::Frac(numerator, denom)).right()
+                    match format!("{}.{}", int_str, decimal_str).parse::<f64>() {
+                        Ok(float) => {
+                            value(Expr::Float(float)).right()
                         },
                         Err(_) => {
                             unexpected_any("non-digit characters after decimal point in a number literal").left()
@@ -1087,27 +1010,17 @@ where I: Stream<Item = char, Position = IndentablePosition>,
             match ( int_str.parse::<i64>(), decimals ) {
                 (Ok(int_val), None) => {
                     if is_positive {
-                        value(Pattern::Integer(int_val as i64)).right()
+                        value(Pattern::IntLiteral(int_val as i64)).right()
                     } else {
-                        value(Pattern::Integer(-int_val as i64)).right()
+                        value(Pattern::IntLiteral(-int_val as i64)).right()
                     }
                 },
                 (Ok(int_val), Some(nums)) => {
                     let decimal_str: String = nums.into_iter().collect();
-                    // calculate numerator and denominator
-                    // e.g. 123.45 == 12345 / 100
-                    let denom = (10 as i64).pow(decimal_str.len() as u32);
 
-                    match decimal_str.parse::<u32>() {
-                        Ok(decimal) => {
-                            // Only the numerator may ever be signed.
-                            let numerator = (int_val * denom) + (decimal as i64);
-
-                            if is_positive {
-                                value(Pattern::Fraction(numerator, denom)).right()
-                            } else {
-                                value(Pattern::Fraction(-numerator, denom)).right()
-                            }
+                    match format!("{}.{}", int_str, decimal_str).parse::<f64>() {
+                        Ok(float) => {
+                            value(Pattern::FloatLiteral(float)).right()
                         },
                         Err(_) => {
                             unexpected_any("non-digit characters after decimal point in a number literal").left()

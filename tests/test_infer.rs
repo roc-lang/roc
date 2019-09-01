@@ -74,12 +74,12 @@ mod test_infer {
 
     #[test]
     fn int_literal() {
-        infer_eq("5", "Num.Num *");
+        infer_eq("5", "Int");
     }
 
     #[test]
     fn fractional_literal() {
-        infer_eq("0.5", "Num.Num (Num.Fractional *)");
+        infer_eq("0.5", "Float");
     }
 
     #[test]
@@ -112,7 +112,7 @@ mod test_infer {
             indoc!(r#"
                 []
             "#),
-            "List.List *"
+            "List *"
         );
     }
 
@@ -122,7 +122,7 @@ mod test_infer {
             indoc!(r#"
                 [[]]
             "#),
-            "List.List (List.List *)"
+            "List (List *)"
         );
     }
 
@@ -132,7 +132,7 @@ mod test_infer {
             indoc!(r#"
                 [[[]]]
             "#),
-            "List.List (List.List (List.List *))"
+            "List (List (List *))"
         );
     }
 
@@ -142,47 +142,47 @@ mod test_infer {
             indoc!(r#"
                 [ [], [ [] ] ]
             "#),
-            "List.List (List.List (List.List *))"
+            "List (List (List *))"
         );
     }
 
     #[test]
-    fn list_of_one_num() {
+    fn list_of_one_int() {
         infer_eq(
             indoc!(r#"
                 [42]
             "#),
-            "List.List (Num.Num *)"
+            "List Int"
         );
     }
 
     #[test]
-    fn triple_nested_num_list() {
+    fn triple_nested_int_list() {
         infer_eq(
             indoc!(r#"
                 [[[ 5 ]]]
             "#),
-            "List.List (List.List (List.List (Num.Num *)))"
+            "List (List (List Int))"
         );
     }
 
     #[test]
-    fn list_of_nums() {
+    fn list_of_ints() {
         infer_eq(
             indoc!(r#"
                 [ 1, 2, 3 ]
             "#),
-            "List.List (Num.Num *)"
+            "List Int"
         );
     }
 
     #[test]
-    fn nested_list_of_nums() {
+    fn nested_list_of_ints() {
         infer_eq(
             indoc!(r#"
                 [ [ 1 ], [ 2, 3 ] ]
             "#),
-            "List.List (List.List (Num.Num *))"
+            "List (List Int)"
         );
     }
 
@@ -192,7 +192,7 @@ mod test_infer {
             indoc!(r#"
                 [ "cowabunga" ]
             "#),
-            "List.List String.String"
+            "List String.String"
         );
     }
 
@@ -202,7 +202,7 @@ mod test_infer {
             indoc!(r#"
                 [[[ "foo" ]]]
             "#),
-            "List.List (List.List (List.List String.String))"
+            "List (List (List String.String))"
         );
     }
 
@@ -212,7 +212,7 @@ mod test_infer {
             indoc!(r#"
                 [ "foo", "bar" ]
             "#),
-            "List.List String.String"
+            "List String.String"
         );
     }
 
@@ -239,7 +239,7 @@ mod test_infer {
             indoc!(r#"
                 [ "foo", 5 ]
             "#),
-            "List.List <type mismatch>"
+            "List <type mismatch>"
         );
     }
 
@@ -249,7 +249,7 @@ mod test_infer {
             indoc!(r#"
                 [ [ "foo", 5 ] ]
             "#),
-            "List.List (List.List <type mismatch>)"
+            "List (List <type mismatch>)"
         );
     }
 
@@ -259,7 +259,7 @@ mod test_infer {
             indoc!(r#"
                 [ [ 1 ], [ [] ] ]
             "#),
-            "List.List (List.List <type mismatch>)"
+            "List (List <type mismatch>)"
         );
     }
 
@@ -276,12 +276,12 @@ mod test_infer {
     }
 
     #[test]
-    fn two_arg_return_num() {
+    fn two_arg_return_int() {
         infer_eq(
             indoc!(r#"
                 \_ _ -> 42
             "#),
-            "*, * -> Num.Num *"
+            "*, * -> Int"
         );
     }
 
@@ -341,7 +341,7 @@ mod test_infer {
 
                 func
             "#),
-            "*, * -> Num.Num *"
+            "*, * -> Int"
         );
     }
 
@@ -397,7 +397,7 @@ mod test_infer {
 
                 c
             "#),
-            "Num.Num *"
+            "Int"
         );
     }
 
@@ -411,7 +411,7 @@ mod test_infer {
 
                 alwaysFive "stuff"
             "#),
-            "Num.Num *"
+            "Int"
         );
     }
 
@@ -423,7 +423,7 @@ mod test_infer {
 
                 enlist 5
             "#),
-            "List.List (Num.Num *)"
+            "List Int"
         );
     }
 
@@ -474,7 +474,7 @@ mod test_infer {
             indoc!(r#"
                 \l r -> l / r
             "#),
-            "Num.Num Float.FloatingPoint, Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint"
+            "Float, Float -> Float"
         );
     }
 
@@ -484,7 +484,7 @@ mod test_infer {
             indoc!(r#"
                 1 / 2
             "#),
-            "Num.Num Float.FloatingPoint"
+            "Float"
         );
     }
 
@@ -494,7 +494,7 @@ mod test_infer {
     //         indoc!(r#"
     //             1 + 2
     //         "#),
-    //         "Num.Num *"
+    //         "Num *"
     //     );
     // }
 
