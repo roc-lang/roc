@@ -1,6 +1,7 @@
-# The Rust Code of Conduct
+# The Roc Code of Conduct
 
 A version of this document [can be found online](https://www.roc-lang.org/conduct).
+It is based on the Rust Code of Conduct, which [can also be found online](https://www.rust-lang.org/conduct).
 
 ## Conduct
 
