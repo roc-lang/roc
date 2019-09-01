@@ -399,7 +399,10 @@ where I: Stream<Item = char, Position = IndentablePosition>,
                         // Any of these indicates we've hit the end of the argument list.
                         not_followed_by(
                             choice((
+                                string(","),
                                 string(")"),
+                                string("]"),
+                                string("}"),
                                 operator().with(value("")),
                                 string("then"),
                                 string("else"),
