@@ -77,6 +77,18 @@ mod test_parse {
     }
 
     #[test]
+    fn list_as_arg() {
+        assert_fully_parses(
+            indoc!(r#"
+                func [ 1, 2,3 ]
+            "#),
+            call_by_name("func", vec![loc(
+                List(vec![loc(Int(1)), loc(Int(2)), loc(Int(3))])
+            )])
+        );
+    }
+
+    #[test]
     fn list_with_function_call() {
         assert_fully_parses(
             indoc!(r#"
