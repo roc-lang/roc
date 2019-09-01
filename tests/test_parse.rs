@@ -76,6 +76,29 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn list_with_function_call() {
+        assert_fully_parses(
+            indoc!(r#"
+                [ foo 1 ]
+            "#),
+            List(vec![loc(call_by_name("foo", vec![loc(Int(1))]))])
+        );
+    }
+
+    #[test]
+    fn list_with_multiple_function_calls() {
+        assert_fully_parses(
+            indoc!(r#"
+                [ foo 1, bar 2 ]
+            "#),
+            List(vec![
+                 loc(call_by_name("foo", vec![loc(Int(1))])),
+                 loc(call_by_name("bar", vec![loc(Int(2))]))
+            ])
+        );
+    }
+
 
     // STRING LITERALS
 

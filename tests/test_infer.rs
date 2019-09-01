@@ -427,9 +427,10 @@ mod test_infer {
         );
     }
 
-    // TODO conditionals
     // TODO type annotations
+    // TODO fix identity inference
     // TODO BoundTypeVariables
+    // TODO conditionals
 
 //     #[test]
 //     fn indirect_always() {
@@ -478,6 +479,17 @@ mod test_infer {
     }
 
     // #[test]
+    // fn basic_addition() {
+    //     infer_eq(
+    //         indoc!(r#"
+    //             1 + 2
+    //         "#),
+    //         "Num.Num *"
+    //     );
+    // }
+
+
+    // #[test]
     // fn basic_circular_type() {
     //     assert_eq!(
     //         infer(indoc!(r#"
@@ -497,18 +509,19 @@ mod test_infer {
     //     );
     // }
 
-    // #[test]
-    // fn infer_multiply() {
-    //     assert_eq!(
-    //         infer("2 * 3"),
-    //         Builtin(Int)
-    //     );
+     // #[test]
+     // fn no_higher_ranked_types() {
+     //     // This should error because it can't type of alwaysFive
+     //        infer_eq(
+     //        indoc!(r#"
+     //            alwaysFive = \_ -> 5
 
-    //     assert_eq!(
-    //         infer("2.5 * 3.5"),
-    //         Builtin(Frac)
-    //     );
-    // }
+     //            [ alwaysFive "foo", alwaysFive [] ]
+     //        "#),
+     //        "<type mismatch>"
+     //    );
+     // }
+
 
     // #[test]
     // fn infer_basic_case() {
