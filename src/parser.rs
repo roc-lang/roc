@@ -15,7 +15,7 @@ use std::mem;
 type Loc<T> = region::Located<T>;
 
 /// Struct which represents a position in a source file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct State<'a> {
     /// The raw input string.
     pub input: &'a str,
@@ -29,18 +29,9 @@ pub struct State<'a> {
     /// (so no indent is col 1 - this saves an arithmetic operation.)
     pub indent_col: u32,
 
-    /// What we're currently attempting to parse, e.g. 
-    /// "currently attempting to parse a list." This helps error messages!
-    pub attempting: Attempting,
-
     // true at the beginning of each line, then false after encountering 
     // the first nonspace char on that line.
     pub is_indenting: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Attempting {
-    List
 }
 
 /// The length of a short slice. This lets us store certain strings inline
@@ -195,4 +186,113 @@ fn pattern_size() {
     );
 }
 
+
+type ParseResult<'a, Output> = Result<(State<'a>, Output), State<'a>>;
+
+struct Env<'a> {
+    expr_allocator: Arena<Expr<'a>>, 
+    pattern_allocator: Arena<Pattern<'a>>, 
+    state: State<'a>,
+}
+
+trait Parser<'a, Output> {
+    fn parse(&self, &'a Env<'a>) -> ParseResult<'a, Output>;
+}
+
+
+impl<'a, F, Output> Parser<'a, Output> for F
+where F: Fn(&'a Env<'a>) -> ParseResult<'a, Output>,
+{
+    fn parse(&self, env: &'a Env<'a>) -> ParseResult<'a, Output> {
+        self(env)
+    }
+}
+
+fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+where
+    P: Parser<'a, Before>,
+    F: Fn(Before) -> After,
+{
+    move |env|
+        parser
+            .parse(env)
+            .map(|(next_state, output)| (next_state, transform(output)))
+}
+
+/// A keyword with no newlines in it.
+fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
+    // We can't have newlines because we don't attempt to advance the row
+    // in the state, only the column.
+    debug_assert!(!kw.contains("\n"));
+
+    move |env: &'a Env| {
+        let input = env.state.input;
+
+        match input.get(0..kw.len()) {
+            Some(next) if next == kw => {
+                let len = kw.len();
+
+                Ok((State {
+                    input: &input[len..],
+                    column: env.state.column + len as u32,
+                    
+                    ..env.state
+                }, ()))
+            },
+            _ => Err(env.state.clone()),
+        }
+    }
+}
+
+fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
+where
+    P: Parser<'a, A>,
+    F: Fn(&A) -> bool,
+{
+    move |env| {
+        if let Ok((next_state, output)) = parser.parse(env) {
+            if predicate(&output) {
+                return Ok((next_state, output));
+            }
+        }
+
+        Err(env.state.clone())
+    }
+}
+
+fn any<'a>(env: &'a Env) -> ParseResult<'a, char> {
+    let input = env.state.input;
+
+    match input.chars().next() {
+        Some(ch) => {
+            let len = ch.len_utf8();
+            let mut new_state = State {
+                input: &input[len..],
+                
+                ..env.state
+            };
+
+            if ch == '\n' {
+                new_state.line = new_state.line + 1;
+                new_state.column = 0;
+            }
+
+            Ok((new_state, ch))
+        }
+        _ => Err(env.state.clone()),
+    }
+}
+
+fn whitespace<'a>() -> impl Parser<'a, char> {
+    satisfies(any, |ch| ch.is_whitespace())
+}
+
+
+/// What we're currently attempting to parse, e.g. 
+/// "currently attempting to parse a list." This helps error messages!
+#[derive(Debug, Clone, Copy)]
+pub enum Attempting {
+    List,
+    Keyword,
+}
 
