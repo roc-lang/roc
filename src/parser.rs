@@ -1,6 +1,6 @@
 use region;
 use operator::Operator;
-use typed_arena::Arena;
+use bumpalo::Bump;
 use std::mem;
 
 // Strategy:
@@ -51,7 +51,7 @@ type VariantName = str;
 
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
-/// 1. It uses Arena::alloc for all allocations, which returns a reference.
+/// 1. It uses Bump::alloc for all allocations, which returns a reference.
 /// 2. It often stores references into the input string instead of allocating.
 ///
 /// This dramatically reduces allocations during parsing. Once parsing is done,
@@ -187,24 +187,18 @@ fn pattern_size() {
 }
 
 
-type ParseResult<'a, Output> = Result<(State<'a>, Output), State<'a>>;
-
-struct Env<'a> {
-    expr_allocator: Arena<Expr<'a>>, 
-    pattern_allocator: Arena<Pattern<'a>>, 
-    state: State<'a>,
-}
+type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Attempting)>;
 
 trait Parser<'a, Output> {
-    fn parse(&self, &'a Env<'a>) -> ParseResult<'a, Output>;
+    fn parse(&self, &'a Bump, &'a State<'a>, attempting: Attempting) -> ParseResult<'a, Output>;
 }
 
 
 impl<'a, F, Output> Parser<'a, Output> for F
-where F: Fn(&'a Env<'a>) -> ParseResult<'a, Output>,
+where F: Fn(&'a Bump, &'a State<'a>, Attempting) -> ParseResult<'a, Output>,
 {
-    fn parse(&self, env: &'a Env<'a>) -> ParseResult<'a, Output> {
-        self(env)
+    fn parse(&self, arena: &'a Bump, state: &'a State<'a>, attempting: Attempting) -> ParseResult<'a, Output> {
+        self(arena, state, attempting)
     }
 }
 
@@ -213,11 +207,20 @@ where
     P: Parser<'a, Before>,
     F: Fn(Before) -> After,
 {
-    move |env|
+    move |arena, state, attempting|
         parser
-            .parse(env)
+            .parse(arena, state, attempting)
             .map(|(next_state, output)| (next_state, transform(output)))
 }
+
+fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
+where
+    P: Parser<'a, Val>,
+{
+    move |arena, state, _|
+        parser.parse(arena, state, attempting)
+}
+
 
 /// A keyword with no newlines in it.
 fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
@@ -225,8 +228,8 @@ fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
     // in the state, only the column.
     debug_assert!(!kw.contains("\n"));
 
-    move |env: &'a Env| {
-        let input = env.state.input;
+    move |arena: &'a Bump, state: &'a State<'a>, attempting| {
+        let input = state.input;
 
         match input.get(0..kw.len()) {
             Some(next) if next == kw => {
@@ -234,12 +237,12 @@ fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
 
                 Ok((State {
                     input: &input[len..],
-                    column: env.state.column + len as u32,
+                    column: state.column + len as u32,
                     
-                    ..env.state
+                    ..*state
                 }, ()))
             },
-            _ => Err(env.state.clone()),
+            _ => Err((state.clone(), attempting)),
         }
     }
 }
@@ -249,19 +252,19 @@ where
     P: Parser<'a, A>,
     F: Fn(&A) -> bool,
 {
-    move |env| {
-        if let Ok((next_state, output)) = parser.parse(env) {
+    move |arena: &'a Bump, state: &'a State<'a>, attempting| {
+        if let Ok((next_state, output)) = parser.parse(arena, state, attempting) {
             if predicate(&output) {
                 return Ok((next_state, output));
             }
         }
 
-        Err(env.state.clone())
+        Err((state.clone(), attempting))
     }
 }
 
-fn any<'a>(env: &'a Env) -> ParseResult<'a, char> {
-    let input = env.state.input;
+fn any<'a>(arena: &'a Bump, state: &'a State<'a>, attempting: Attempting) -> ParseResult<'a, char> {
+    let input = state.input;
 
     match input.chars().next() {
         Some(ch) => {
@@ -269,7 +272,7 @@ fn any<'a>(env: &'a Env) -> ParseResult<'a, char> {
             let mut new_state = State {
                 input: &input[len..],
                 
-                ..env.state
+                ..*state
             };
 
             if ch == '\n' {
@@ -279,7 +282,7 @@ fn any<'a>(env: &'a Env) -> ParseResult<'a, char> {
 
             Ok((new_state, ch))
         }
-        _ => Err(env.state.clone()),
+        _ => Err((state.clone(), attempting)),
     }
 }
 
@@ -296,3 +299,124 @@ pub enum Attempting {
     Keyword,
 }
 
+// fn string_literal<'a>(arena: &'a Bump, state: &'a State<'a>, attempting: Attempting) -> Expr {
+//     between(char('"'), char('"'),
+//         zero_or_more(
+//             choice((
+//                 // Handle the edge cases where the interpolation happens
+//                 // to be at the very beginning of the string literal,
+//                 // or immediately following the previous interpolation.
+//                 attempt(string("\\("))
+//                     .with(value("".to_string()))
+//                     .and(located(ident()).skip(char(')'))),
+
+//                 // Parse a bunch of non-interpolated characters until we hit \(
+//                 one_or_more(string_body())
+//                     .map(|chars: Vec<char>| chars.into_iter().collect::<String>())
+//                     .and(choice((
+//                         attempt(string("\\(").with(located(ident()).skip(char(')')))),
+//                         // If we never encountered \( then we hit the end of
+//                         // the string literal. Use empty Ident here because
+//                         // we're going to pop this Ident off the array anyhow.
+//                         located(value("".to_string()))
+//                     ))),
+//             ))
+//     )
+//     .map(|mut pairs| {
+//         match pairs.pop() {
+//             None => Expr::EmptyStr,
+//             Some(( trailing_str, located_name )) => {
+//                 let mut ident_pairs = pairs.into_iter().map(|(string, located_name)| {
+//                     ( string, located_name.map(|name| Ident::Unqualified(name.clone())) )
+//                 }).collect::<Vec<(String, Located<Ident>)>>();
+
+//                 if located_name.value.is_empty() {
+//                     if ident_pairs.is_empty() {
+//                         // We didn't find any interpolation at all. This is a string literal!
+//                         Expr::Str(trailing_str.to_string())
+//                     } else {
+//                         Expr::InterpolatedStr(ident_pairs, trailing_str.to_string())
+//                     }
+//                 } else {
+//                     // This is an interpolated string where the interpolation
+//                     // happened to occur at the very end of the literal.
+
+//                     // Put the tuple back.
+//                     ident_pairs.push((
+//                         trailing_str,
+//                         located_name.map(|name| Ident::Unqualified(name.clone()))
+//                     ));
+
+//                     Expr::InterpolatedStr(ident_pairs, "".to_string())
+//                 }
+//             }
+//         }
+//     }))
+// }
+
+
+fn string_literal<'a>(arena: &'a Bump, state: &'a State<'a>, attempting: Attempting) -> impl Parser<'a, ()>  {
+    move |arena: &'a Bump, state: &'a State<'a>, attempting| {
+        let input = state.input;
+
+        if input.first() != Ok('\n') {
+            return Err((input, attempting))
+        }
+
+//         match input.get(0..kw.len()) {
+//             Some(next) if next == kw => {
+//                 let len = kw.len();
+
+//                 Ok((State {
+//                     input: &input[len..],
+//                     column: state.column + len as u32,
+                    
+//                     ..*state
+//                 }, ()))
+//             },
+//             _ => Err((state.clone(), attempting)),
+//         }
+//     }
+
+//     parser(|input: &mut I| {
+//         let (parsed_char, consumed) = try!(any().parse_lazy(input).into());
+//         let mut escaped = satisfy_map(|escaped_char| {
+//             // NOTE! When modifying this, revisit char_body too!
+//             // Their implementations are similar but not the same.
+//             match escaped_char {
+//                 '"' => Some('"'),
+//                 '\\' => Some('\\'),
+//                 't' => Some('\t'),
+//                 'n' => Some('\n'),
+//                 'r' => Some('\r'),
+//                 _ => None,
+//             }
+//         });
+
+//         match parsed_char {
+//             '\\' => {
+//                 if look_ahead(char('(')).parse_stream(input).is_ok() {
+//                     // If we hit a \( then we're doing string interpolation.
+//                     // Bail out after consuming the backslash!
+//                     Err(Consumed::Empty(I::Error::empty(input.position()).into()))
+//                 } else {
+//                     consumed.combine(|_| {
+//                         // Try to parse basic backslash-escaped literals
+//                         // e.g. \t, \n, \r
+//                         escaped.parse_stream(input).or_else(|_|
+//                             // If we didn't find any of those, try \u{...}
+//                             unicode_code_pt().parse_stream(input)
+//                         )
+//                     })
+//                 }
+//             },
+//             '"' => {
+//                 // Never consume a double quote unless it was preceded by a
+//                 // backslash. This means we're at the end of the string literal!
+//                 Err(Consumed::Empty(I::Error::empty(input.position()).into()))
+//             },
+//             _ => Ok((parsed_char, consumed))
+//         }
+//     })
+    }
+}

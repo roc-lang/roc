@@ -24,7 +24,7 @@ extern crate im_rc;
 extern crate fraction;
 extern crate num;
 extern crate fxhash;
-extern crate typed_arena;
+extern crate bumpalo;
 
 #[macro_use] extern crate combine;
 #[macro_use] extern crate log;
