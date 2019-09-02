@@ -86,7 +86,7 @@ pub enum Expr<'a> {
 
     // Pattern Matching
     Case(&'a (Loc<Expr<'a>>, [(Loc<Pattern<'a>>, Loc<Expr<'a>>)])),
-    Closure(&'a (&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>)),
+    Closure(&'a (&'a [Loc<Pattern<'a>>], Loc<Expr<'a>>)),
     /// basically Assign(Vec<(Loc<Pattern>, Loc<Expr>)>, Loc<Expr>)
     Assign(&'a (&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)], Loc<Expr<'a>>)),
 
