@@ -1,4 +1,5 @@
 pub mod expr;
+pub mod parser;
 pub mod parse;
 pub mod parse_state;
 // pub mod eval;
@@ -23,6 +24,7 @@ extern crate im_rc;
 extern crate fraction;
 extern crate num;
 extern crate fxhash;
+extern crate typed_arena;
 
 #[macro_use] extern crate combine;
 #[macro_use] extern crate log;
