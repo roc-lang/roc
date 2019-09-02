@@ -40,9 +40,9 @@ pub struct State<'a> {
 ///
 /// It is calculated this way:
 ///
-/// 1. We need 2 machine words to store a slice, which is what Arena::alloc returns.
-/// 2. We also need a 1-byte tag, but memory alignment means that's +1 word.
-/// 3. Since that word is all padding except for 1 byte, we can use n-1 of its bytes.
+/// 1. Expr needs 2 machine words to store its largest variant.
+/// 2. It also needs a 1-byte tag, but memory alignment expands that to a word.
+/// 3. Since that word is all padding except for 1 byte, we can use n-1 bytes.
 const SHORT_SLICE_LEN: usize = 
     (mem::size_of::<usize>() * 3) - 1; // 23 on 64-bit systems; 11 on 32-bit
 
