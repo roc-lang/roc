@@ -1,3 +1,4 @@
+use bumpalo::collections::string::String;
 use bumpalo::Bump;
 use operator::Operator;
 use region;
@@ -34,17 +35,6 @@ pub struct State<'a> {
     pub is_indenting: bool,
 }
 
-/// The length of a short slice. This lets us store certain strings inline
-/// without having to allocate them on the heat. The number is calibrated to be
-/// as high as possible without causing Expr's memory footprint to increase.
-///
-/// It is calculated this way:
-///
-/// 1. Expr needs 2 machine words to store its largest variant.
-/// 2. It also needs a 1-byte tag, but memory alignment expands that to a word.
-/// 3. Since that word is all padding except for 1 byte, we can use n-1 bytes.
-const SHORT_SLICE_LEN: usize = (mem::size_of::<usize>() * 3) - 1; // 23 on 64-bit systems; 11 on 32-bit
-
 type Ident = str;
 type VariantName = str;
 
@@ -70,8 +60,7 @@ pub enum Expr<'a> {
 
     // String Literals
     EmptyStr,
-    ShortStr([u8; SHORT_SLICE_LEN]),
-    LongStr(&'a str),
+    Str(&'a str),
     /// basically InterpolatedStr(Vec<(String, Loc<Ident>)>, String)
     InterpolatedStr(&'a (&'a [(&'a str, Loc<&'a Ident>)], &'a str)),
 
@@ -80,8 +69,7 @@ pub enum Expr<'a> {
     List(&'a [Loc<Expr<'a>>]),
 
     // Lookups
-    ShortVar([u8; SHORT_SLICE_LEN]),
-    LongVar(&'a Ident),
+    Var(&'a Ident),
 
     // Pattern Matching
     Case(&'a (Loc<Expr<'a>>, [(Loc<Pattern<'a>>, Loc<Expr<'a>>)])),
@@ -105,19 +93,16 @@ pub enum Expr<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
-    ShortIdentifier([u8; SHORT_SLICE_LEN]),
-    LongIdentifier(&'a Ident),
+    Identifier(&'a Ident),
 
     // Variant
-    ShortVariant([u8; SHORT_SLICE_LEN]),
-    LongVariant(&'a VariantName),
+    Variant(&'a VariantName),
     AppliedVariant(&'a (Loc<&'a VariantName>, [Loc<Pattern<'a>>])),
 
     // Literal
     IntLiteral(i64),
     FloatLiteral(f64),
-    ShortStringLiteral([u8; SHORT_SLICE_LEN]),
-    LongStringLiteral(&'a str),
+    StringLiteral(&'a str),
     EmptyRecordLiteral,
     Underscore,
 }
@@ -228,7 +213,7 @@ fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
     // in the state, only the column.
     debug_assert!(!kw.contains("\n"));
 
-    move |arena: &'a Bump, state: &'a State<'a>, attempting| {
+    move |_arena: &'a Bump, state: &'a State<'a>, attempting| {
         let input = state.input;
 
         match input.get(0..kw.len()) {
@@ -299,6 +284,7 @@ fn whitespace<'a>() -> impl Parser<'a, char> {
 pub enum Attempting {
     List,
     Keyword,
+    StringLiteral,
 }
 
 // fn string_literal<'a>(arena: &'a Bump, state: &'a State<'a>, attempting: Attempting) -> Expr {
@@ -356,72 +342,87 @@ pub enum Attempting {
 //     }))
 // }
 
-fn string_literal<'a>(
-    arena: &'a Bump,
-    state: &'a State<'a>,
-    attempting: Attempting,
-) -> impl Parser<'a, ()> {
-    move |arena: &'a Bump, state: &'a State<'a>, attempting| {
-        let input = state.input;
+fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
+    |arena: &'a Bump, state: &'a State<'a>, attempting| {
+        let mut chars = state.input.chars();
 
-        if input.first() != Ok('\n') {
-            return Err((input, attempting));
+        // String literals must start with a quote.
+        // If this doesn't, it must not be a string literal!
+        if chars.next() != Some('"') {
+            return Err((state.clone(), attempting));
         }
 
-        //         match input.get(0..kw.len()) {
-        //             Some(next) if next == kw => {
-        //                 let len = kw.len();
+        // If we have precisely an empty string here, don't bother allocating
+        // a buffer; instead, return EmptyStr immediately.
+        if (&mut chars).peekable().peek() == Some(&'"') {
+            return Ok((
+                State {
+                    input: &state.input[2..],
+                    column: state.column + 2,
 
-        //                 Ok((State {
-        //                     input: &input[len..],
-        //                     column: state.column + len as u32,
+                    ..*state
+                },
+                Expr::EmptyStr,
+            ));
+        }
 
-        //                     ..*state
-        //                 }, ()))
-        //             },
-        //             _ => Err((state.clone(), attempting)),
-        //         }
-        //     }
+        // We'll store the accumulated string in this buffer.
+        let mut buf = String::new_in(arena);
 
-        //     parser(|input: &mut I| {
-        //         let (parsed_char, consumed) = try!(any().parse_lazy(input).into());
-        //         let mut escaped = satisfy_map(|escaped_char| {
-        //             // NOTE! When modifying this, revisit char_body too!
-        //             // Their implementations are similar but not the same.
-        //             match escaped_char {
-        //                 '"' => Some('"'),
-        //                 '\\' => Some('\\'),
-        //                 't' => Some('\t'),
-        //                 'n' => Some('\n'),
-        //                 'r' => Some('\r'),
-        //                 _ => None,
-        //             }
-        //         });
+        while let Some(ch) = chars.next() {
+            match ch {
+                // If it's a backslash, escape things.
+                '\\' => match chars.next() {
+                    Some('\\') => buf.push('\\'),
+                    Some('"') => buf.push('"'),
+                    Some('t') => buf.push('\t'),
+                    Some('n') => buf.push('\n'),
+                    Some('r') => buf.push('\r'),
+                    Some('u') => {
+                        // TODO don't bail out on invalid unicode sequences!
+                        // Instead, parse successfully as a Problem - like,
+                        // this string has a problem with it, but that doesn't
+                        // mean we have to fail parsing.
+                        panic!("TODO handle unicode chars")
+                    }
+                    Some('(') => panic!("TODO handle string interpolation"),
+                    Some(unsupported) => {
+                        // TODO don't bail out here! Instead, parse successfully
+                        // as a Problem - like, this string has a problem with
+                        // it, but that doesn't mean we have to fail parsing.
+                        panic!("TODO bad escaped char {}", unsupported)
+                    }
+                    None => {
+                        // We ran out of characters before finding a closed quote;
+                        // let the loop finish normally, so we end up returning
+                        // the error that the string was not terminated.
+                        //
+                        // (There's the separate problem of a trailing backslash,
+                        // but often that will get fixed in the course of
+                        // addressing the missing closed quote.)
+                        ()
+                    }
+                },
+                '"' => {
+                    // We found a closed quote; this is the end of the string!
+                    let len_with_quotes = buf.len() + 2;
+                    let expr = Expr::Str(buf.into_bump_str());
 
-        //         match parsed_char {
-        //             '\\' => {
-        //                 if look_ahead(char('(')).parse_stream(input).is_ok() {
-        //                     // If we hit a \( then we're doing string interpolation.
-        //                     // Bail out after consuming the backslash!
-        //                     Err(Consumed::Empty(I::Error::empty(input.position()).into()))
-        //                 } else {
-        //                     consumed.combine(|_| {
-        //                         // Try to parse basic backslash-escaped literals
-        //                         // e.g. \t, \n, \r
-        //                         escaped.parse_stream(input).or_else(|_|
-        //                             // If we didn't find any of those, try \u{...}
-        //                             unicode_code_pt().parse_stream(input)
-        //                         )
-        //                     })
-        //                 }
-        //             },
-        //             '"' => {
-        //                 // Never consume a double quote unless it was preceded by a
-        //                 // backslash. This means we're at the end of the string literal!
-        //                 Err(Consumed::Empty(I::Error::empty(input.position()).into()))
-        //             },
-        //             _ => Ok((parsed_char, consumed))
-        //         }
-        //     })
+                    return Ok((
+                        State {
+                            input: &state.input[len_with_quotes..],
+                            column: state.column + len_with_quotes as u32,
+
+                            ..*state
+                        },
+                        expr,
+                    ));
+                }
+                normal_char => buf.push(normal_char),
+            }
+        }
+
+        // We ran out of characters before finding a closed quote
+        Err((state.clone(), Attempting::StringLiteral))
     }
 }
