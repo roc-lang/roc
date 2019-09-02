@@ -1,30 +1,32 @@
 pub mod expr;
-pub mod parser;
 pub mod parse;
 pub mod parse_state;
+pub mod parser;
 // pub mod eval;
-pub mod operator;
-pub mod region;
 pub mod canonicalize;
 pub mod collections;
 pub mod graph;
+pub mod operator;
+pub mod region;
 
 // pub mod string;
 
-pub mod types;
-pub mod subs;
 pub mod constrain;
-pub mod solve;
-pub mod unify;
+pub mod ena;
 pub mod infer;
 pub mod pretty_print_types;
-pub mod ena;
+pub mod solve;
+pub mod subs;
+pub mod types;
+pub mod unify;
 
-extern crate im_rc;
-extern crate fraction;
-extern crate num;
-extern crate fxhash;
 extern crate bumpalo;
+extern crate fraction;
+extern crate fxhash;
+extern crate im_rc;
+extern crate num;
 
-#[macro_use] extern crate combine;
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate combine;
+#[macro_use]
+extern crate log;

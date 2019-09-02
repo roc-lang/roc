@@ -1,13 +1,13 @@
-use region::{Located, Region};
+use self::PatternType::*;
+use collections::{ImMap, ImSet, MutMap, MutSet};
+use expr;
+use expr::{Ident, VariantName};
+use graph::{strongly_connected_component, topological_sort};
+use operator::Associativity::*;
 use operator::Operator;
 use operator::Operator::Pizza;
-use operator::Associativity::*;
-use collections::{ImSet, ImMap, MutMap, MutSet};
+use region::{Located, Region};
 use std::cmp::Ordering;
-use expr::{Ident, VariantName};
-use expr;
-use graph::{topological_sort, strongly_connected_component};
-use self::PatternType::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
@@ -47,7 +47,11 @@ pub enum Expr {
     UnrecognizedFunctionName(Located<expr::Ident>),
     UnrecognizedConstant(Located<expr::Ident>),
     UnrecognizedVariant(Located<expr::VariantName>),
-    CircularAssignment(Vec<Located<expr::Ident>>, Vec<(Located<Pattern>, Located<Expr>)>, Box<Located<Expr>>),
+    CircularAssignment(
+        Vec<Located<expr::Ident>>,
+        Vec<(Located<Pattern>, Located<Expr>)>,
+        Box<Located<Expr>>,
+    ),
 }
 
 /// Problems that can occur in the course of canonicalization.
@@ -81,7 +85,7 @@ pub enum Pattern {
     Shadowed(Located<Ident>),
     UnrecognizedVariant(Located<expr::VariantName>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-    UnsupportedPattern(Located<expr::Pattern>)
+    UnsupportedPattern(Located<expr::Pattern>),
 }
 
 /// A globally unique identifier, used for both vars and variants.
@@ -96,11 +100,9 @@ impl Symbol {
 
     pub fn from_variant(variant_name: &VariantName, home: &str) -> Symbol {
         match &variant_name {
-            &VariantName::Unqualified(ref name) =>
-                Symbol::new(home, name),
+            &VariantName::Unqualified(ref name) => Symbol::new(home, name),
 
-            &VariantName::Qualified(ref path, ref name) =>
-                Symbol::new(path, name),
+            &VariantName::Qualified(ref path, ref name) => Symbol::new(path, name),
         }
     }
 }
@@ -129,7 +131,7 @@ impl Scope {
             // It always begins at 0.
             next_unique_id: 0,
 
-            idents: declared_idents
+            idents: declared_idents,
         }
     }
 
@@ -155,7 +157,12 @@ pub struct Procedure {
 }
 
 impl Procedure {
-    pub fn new(definition: Region, args: Vec<Located<Pattern>>, body: Located<Expr>, references: References) -> Procedure {
+    pub fn new(
+        definition: Region,
+        args: Vec<Located<Pattern>>,
+        body: Located<Expr>,
+        references: References,
+    ) -> Procedure {
         Procedure {
             name: None,
             is_self_tail_recursive: false,
@@ -203,13 +210,20 @@ impl Env {
         args: Vec<Located<Pattern>>,
         body: Located<Expr>,
         definition: Region,
-        references: References
+        references: References,
     ) -> () {
         // We can't if the closure is self tail recursive yet, because it doesn't know its final name yet.
         // (Assign sets that.) Assume this is false, and let Assign change it to true after it sets final name.
         let is_self_tail_recursive = false;
         let name = None; // The Assign logic is also responsible for setting names after the fact.
-        let procedure = Procedure {args, name, body, is_self_tail_recursive, definition, references};
+        let procedure = Procedure {
+            args,
+            name,
+            body,
+            is_self_tail_recursive,
+            definition,
+            references,
+        };
 
         self.procedures.insert(symbol, procedure);
     }
@@ -221,7 +235,12 @@ pub fn canonicalize_declaration(
     loc_expr: Located<expr::Expr>,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
     declared_variants: &ImMap<Symbol, Located<expr::VariantName>>,
-) -> (Located<Expr>, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
+) -> (
+    Located<Expr>,
+    Output,
+    Vec<Problem>,
+    MutMap<Symbol, Procedure>,
+) {
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main$foo$" and its first closure will be named "Main$foo$0"
     let scope_prefix = format!("{}${}$", home, name);
@@ -301,19 +320,19 @@ fn canonicalize(
     use self::Expr::*;
 
     let (expr, output) = match loc_expr.value {
-        expr::Expr::Int(num) => ( Int(num), Output::new() ),
-        expr::Expr::Float(num) => ( Float(num), Output::new() ),
-        expr::Expr::EmptyRecord => ( EmptyRecord, Output::new()),
-        expr::Expr::Str(string) => ( Str(string), Output::new()),
-        expr::Expr::Char(ch) => ( Char(ch), Output::new()),
-        expr::Expr::EmptyStr => ( EmptyStr, Output::new()),
-        expr::Expr::EmptyList => ( EmptyList, Output::new()),
+        expr::Expr::Int(num) => (Int(num), Output::new()),
+        expr::Expr::Float(num) => (Float(num), Output::new()),
+        expr::Expr::EmptyRecord => (EmptyRecord, Output::new()),
+        expr::Expr::Str(string) => (Str(string), Output::new()),
+        expr::Expr::Char(ch) => (Char(ch), Output::new()),
+        expr::Expr::EmptyStr => (EmptyStr, Output::new()),
+        expr::Expr::EmptyList => (EmptyList, Output::new()),
         expr::Expr::List(elems) => {
             let mut output = Output::new();
             let mut can_elems = Vec::with_capacity(elems.len());
 
             for loc_elem in elems {
-                let ( can_expr, elem_out ) = canonicalize(env, scope, loc_elem);
+                let (can_expr, elem_out) = canonicalize(env, scope, loc_elem);
 
                 output.references = output.references.union(elem_out.references);
 
@@ -323,8 +342,8 @@ fn canonicalize(
             // A list literal is never a tail call!
             output.tail_call = None;
 
-            ( List(can_elems), output )
-        },
+            (List(can_elems), output)
+        }
 
         expr::Expr::If(loc_cond, loc_true, loc_false) => {
             // Canonicalize the nested expressions
@@ -333,7 +352,11 @@ fn canonicalize(
             let (false_expr, false_out) = canonicalize(env, scope, *loc_false);
 
             // Incorporate all three expressions into a combined Output value.
-            let expr = If(Box::new(cond_expr), Box::new(true_expr), Box::new(false_expr));
+            let expr = If(
+                Box::new(cond_expr),
+                Box::new(true_expr),
+                Box::new(false_expr),
+            );
             let mut output = cond_out;
 
             // If both branches are tail calling the same symbol, then so is the conditional as a whole.
@@ -348,7 +371,7 @@ fn canonicalize(
             output.references = output.references.union(false_out.references);
 
             (expr, output)
-        },
+        }
 
         expr::Expr::Apply(loc_fn, loc_args) => {
             // Canonicalize the function expression and its arguments
@@ -366,8 +389,8 @@ fn canonicalize(
             match &fn_expr.value {
                 &Var(ref sym) => {
                     output.references.calls.insert(sym.clone());
-                },
-                _ => ()
+                }
+                _ => (),
             };
 
             let expr = Call(Box::new(fn_expr), args);
@@ -380,7 +403,7 @@ fn canonicalize(
             output.tail_call = None;
 
             (expr, output)
-        },
+        }
 
         expr::Expr::Operator(loc_left, op, loc_right) => {
             // Canonicalize the nested expressions
@@ -393,55 +416,62 @@ fn canonicalize(
             // The pizza operator is the only one that can be a tail call,
             // because it's the only one that can call a function by name.
             output.tail_call = match op.value {
-                Pizza => {
-                    match &right_expr.value {
-                        &Var(ref sym) => Some(sym.clone()),
-                        &Call(ref loc_boxed_expr, _) => {
-                            match (*loc_boxed_expr.clone()).value {
-                                Var(sym) => Some(sym),
-                                _ => None
-                            }
-                        }
-                        _ => None
-                    }
+                Pizza => match &right_expr.value {
+                    &Var(ref sym) => Some(sym.clone()),
+                    &Call(ref loc_boxed_expr, _) => match (*loc_boxed_expr.clone()).value {
+                        Var(sym) => Some(sym),
+                        _ => None,
+                    },
+                    _ => None,
                 },
-                _ => None
+                _ => None,
             };
 
             let expr = Operator(Box::new(left_expr), op, Box::new(right_expr));
 
             (expr, output)
-        },
+        }
 
         expr::Expr::Var(ident) => {
             let mut output = Output::new();
-            let can_expr =
-                match resolve_ident(&env, &scope, ident, &mut output.references) {
-                    Ok(symbol) => Var(symbol),
-                    Err(ident) => {
-                        let loc_ident = Located {region: loc_expr.region.clone(), value: ident};
+            let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
+                Ok(symbol) => Var(symbol),
+                Err(ident) => {
+                    let loc_ident = Located {
+                        region: loc_expr.region.clone(),
+                        value: ident,
+                    };
 
-                        env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
+                    env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
 
-                        UnrecognizedConstant(loc_ident)
-                    }
-                };
+                    UnrecognizedConstant(loc_ident)
+                }
+            };
 
             (can_expr, output)
-        },
+        }
 
         expr::Expr::InterpolatedStr(pairs, suffix) => {
             let mut output = Output::new();
-            let can_pairs: Vec<(String, Located<Expr>)> = pairs.into_iter().map(|(string, loc_ident)| {
-                // From a language design perspective, we only permit idents in interpolation.
-                // However, in a canonical Expr we store it as a full Expr, not a Symbol.
-                // This is so that we can resolve it to either Var or Unrecognized; if we
-                // stored it as a Symbol, we couldn't record runtime errors here.
-                let can_expr =
-                    match resolve_ident(&env, &scope, loc_ident.value, &mut output.references) {
+            let can_pairs: Vec<(String, Located<Expr>)> = pairs
+                .into_iter()
+                .map(|(string, loc_ident)| {
+                    // From a language design perspective, we only permit idents in interpolation.
+                    // However, in a canonical Expr we store it as a full Expr, not a Symbol.
+                    // This is so that we can resolve it to either Var or Unrecognized; if we
+                    // stored it as a Symbol, we couldn't record runtime errors here.
+                    let can_expr = match resolve_ident(
+                        &env,
+                        &scope,
+                        loc_ident.value,
+                        &mut output.references,
+                    ) {
                         Ok(symbol) => Var(symbol),
                         Err(ident) => {
-                            let loc_ident = Located {region: loc_ident.region.clone(), value: ident};
+                            let loc_ident = Located {
+                                region: loc_ident.region.clone(),
+                                value: ident,
+                            };
 
                             env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
 
@@ -449,8 +479,15 @@ fn canonicalize(
                         }
                     };
 
-                (string, Located { region: loc_ident.region, value: can_expr })
-            }).collect();
+                    (
+                        string,
+                        Located {
+                            region: loc_ident.region,
+                            value: can_expr,
+                        },
+                    )
+                })
+                .collect();
 
             (InterpolatedStr(can_pairs, suffix), output)
         }
@@ -476,20 +513,22 @@ fn canonicalize(
 
                     Some(can_args)
                 }
-                None => None
+                None => None,
             };
 
-            let can_expr =
-                match resolve_variant_name(&env, variant_name, &mut output.references) {
-                    Ok(symbol) => ApplyVariant(symbol, opt_can_args),
-                    Err(variant_name) => {
-                        let loc_variant = Located {region: loc_expr.region.clone(), value: variant_name};
+            let can_expr = match resolve_variant_name(&env, variant_name, &mut output.references) {
+                Ok(symbol) => ApplyVariant(symbol, opt_can_args),
+                Err(variant_name) => {
+                    let loc_variant = Located {
+                        region: loc_expr.region.clone(),
+                        value: variant_name,
+                    };
 
-                        env.problem(Problem::UnrecognizedVariant(loc_variant.clone()));
+                    env.problem(Problem::UnrecognizedVariant(loc_variant.clone()));
 
-                        UnrecognizedVariant(loc_variant)
-                    }
-                };
+                    UnrecognizedVariant(loc_variant)
+                }
+            };
 
             (can_expr, output)
         }
@@ -502,13 +541,20 @@ fn canonicalize(
 
             // Add the assigned identifiers to scope. If there's a collision, it means there
             // was shadowing, which will be handled later.
-            let assigned_idents: Vec<(Ident, (Symbol, Region))> =
-                idents_from_patterns(assignments.clone().iter().map(|(loc_pattern, _)| loc_pattern), &scope);
+            let assigned_idents: Vec<(Ident, (Symbol, Region))> = idents_from_patterns(
+                assignments
+                    .clone()
+                    .iter()
+                    .map(|(loc_pattern, _)| loc_pattern),
+                &scope,
+            );
 
             scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
-            let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
-            let mut can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> = MutMap::default();
+            let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> =
+                MutMap::default();
+            let mut can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
+                MutMap::default();
 
             for (loc_pattern, expr) in assignments {
                 // Each assignment gets to have all the idents in scope that are assigned in this
@@ -520,11 +566,21 @@ fn canonicalize(
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-                let loc_can_pattern = canonicalize_pattern(env, &mut scope, &Assignment, &loc_pattern, &mut shadowable_idents);
+                let loc_can_pattern = canonicalize_pattern(
+                    env,
+                    &mut scope,
+                    &Assignment,
+                    &loc_pattern,
+                    &mut shadowable_idents,
+                );
                 let mut renamed_closure_assignment: Option<&Symbol> = None;
 
                 // Give closures names (and tail-recursive status) where appropriate.
-                let can_expr = match (&loc_pattern.value, &loc_can_pattern.value, &loc_can_expr.value) {
+                let can_expr = match (
+                    &loc_pattern.value,
+                    &loc_can_pattern.value,
+                    &loc_can_expr.value,
+                ) {
                     // First, make sure we are actually assigning an identifier instead of (for example) a variant.
                     //
                     // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
@@ -534,7 +590,7 @@ fn canonicalize(
                     (
                         &expr::Pattern::Identifier(ref name),
                         &Pattern::Identifier(ref assigned_symbol),
-                        &FunctionPointer(ref symbol)
+                        &FunctionPointer(ref symbol),
                     ) => {
                         // Since everywhere in the code it'll be referred to by its assigned name,
                         // remove its generated name from the procedure map. (We'll re-insert it later.)
@@ -546,7 +602,7 @@ fn canonicalize(
                         // The closure is self tail recursive iff it tail calls itself (by assigned name).
                         procedure.is_self_tail_recursive = match &can_output.tail_call {
                             &None => false,
-                            &Some(ref symbol) => symbol == assigned_symbol
+                            &Some(ref symbol) => symbol == assigned_symbol,
                         };
 
                         // Re-insert the procedure into the map, under its assigned name. This way,
@@ -566,15 +622,17 @@ fn canonicalize(
                         // Return a reference to the assigned symbol, since the auto-generated one no
                         // longer references any entry in the procedure map!
                         Var(assigned_symbol.clone())
-                    },
-                    _ => loc_can_expr.value
+                    }
+                    _ => loc_can_expr.value,
                 };
 
                 let mut assigned_symbols = Vec::new();
 
                 // Store the referenced locals in the refs_by_assignment map, so we can later figure out
                 // which assigned names reference each other.
-                for (ident, (symbol, region)) in idents_from_patterns(std::iter::once(&loc_pattern), &scope) {
+                for (ident, (symbol, region)) in
+                    idents_from_patterns(std::iter::once(&loc_pattern), &scope)
+                {
                     let refs =
                         // Functions' references don't count in assignments.
                         // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
@@ -585,7 +643,16 @@ fn canonicalize(
                             can_output.references.clone()
                         };
 
-                    refs_by_assignment.insert(symbol.clone(), (Located {value: ident, region}, refs));
+                    refs_by_assignment.insert(
+                        symbol.clone(),
+                        (
+                            Located {
+                                value: ident,
+                                region,
+                            },
+                            refs,
+                        ),
+                    );
 
                     assigned_symbols.push(symbol.clone());
                 }
@@ -593,7 +660,13 @@ fn canonicalize(
                 for symbol in assigned_symbols {
                     can_assignments_by_symbol.insert(
                         symbol,
-                        (loc_can_pattern.clone(), Located {region: loc_can_expr.region.clone(), value: can_expr.clone()})
+                        (
+                            loc_can_pattern.clone(),
+                            Located {
+                                region: loc_can_expr.region.clone(),
+                                value: can_expr.clone(),
+                            },
+                        ),
                     );
                 }
             }
@@ -618,7 +691,12 @@ fn canonicalize(
             // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
             for symbol in output.references.locals.clone().into_iter() {
                 // Traverse the graph and look up *all* the references for this local symbol.
-                let refs = references_from_local(symbol, &mut visited_symbols, &refs_by_assignment, &env.procedures);
+                let refs = references_from_local(
+                    symbol,
+                    &mut visited_symbols,
+                    &refs_by_assignment,
+                    &env.procedures,
+                );
 
                 output.references = output.references.union(refs);
             }
@@ -627,7 +705,12 @@ fn canonicalize(
                 // Traverse the graph and look up *all* the references for this call.
                 // Reuse the same visited_symbols as before; if we already visited it, we
                 // won't learn anything new from visiting it again!
-                let refs = references_from_call(symbol, &mut visited_symbols, &refs_by_assignment, &env.procedures);
+                let refs = references_from_call(
+                    symbol,
+                    &mut visited_symbols,
+                    &refs_by_assignment,
+                    &env.procedures,
+                );
 
                 output.references = output.references.union(refs);
             }
@@ -636,7 +719,10 @@ fn canonicalize(
             // we defined went unused by the return expression. If any were unused, report it.
             for (ident, (symbol, region)) in assigned_idents.clone() {
                 if !output.references.has_local(&symbol) {
-                    let loc_ident = Located {region: region.clone(), value: ident.clone()};
+                    let loc_ident = Located {
+                        region: region.clone(),
+                        value: ident.clone(),
+                    };
 
                     env.problem(Problem::UnusedAssignment(loc_ident));
                 }
@@ -652,20 +738,22 @@ fn canonicalize(
                 local_successors(&references, &env.procedures)
             };
 
-            let assigned_symbols: Vec<Symbol> =
-                can_assignments_by_symbol.keys().into_iter().map(Symbol::clone).collect();
+            let assigned_symbols: Vec<Symbol> = can_assignments_by_symbol
+                .keys()
+                .into_iter()
+                .map(Symbol::clone)
+                .collect();
 
             match topological_sort(assigned_symbols.as_slice(), successors) {
                 Ok(sorted_symbols) => {
-                    let can_assignments =
-                        sorted_symbols
-                            .into_iter()
-                            .rev() // Topological sort gives us the reverse of the sorting we want!
-                            .map(|symbol| can_assignments_by_symbol.get(&symbol).unwrap().clone())
-                            .collect();
+                    let can_assignments = sorted_symbols
+                        .into_iter()
+                        .rev() // Topological sort gives us the reverse of the sorting we want!
+                        .map(|symbol| can_assignments_by_symbol.get(&symbol).unwrap().clone())
+                        .collect();
 
                     (Assign(can_assignments, Box::new(ret_expr)), output)
-                },
+                }
                 Err(node_in_cycle) => {
                     // We have one node we know is in the cycle.
                     // We want to show the entire cycle in the error message, so expand it out.
@@ -676,16 +764,29 @@ fn canonicalize(
                             .map(|symbol| refs_by_assignment.get(&symbol).unwrap().0.clone())
                             .collect();
 
-                    loc_idents_in_cycle = sort_cyclic_idents(loc_idents_in_cycle, &mut assigned_idents.iter().map(|(ident, _)| ident));
+                    loc_idents_in_cycle = sort_cyclic_idents(
+                        loc_idents_in_cycle,
+                        &mut assigned_idents.iter().map(|(ident, _)| ident),
+                    );
 
                     env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
 
-                    let can_assignments = can_assignments_by_symbol.values().map(|tuple| tuple.clone()).collect();
+                    let can_assignments = can_assignments_by_symbol
+                        .values()
+                        .map(|tuple| tuple.clone())
+                        .collect();
 
-                    (CircularAssignment(loc_idents_in_cycle, can_assignments, Box::new(ret_expr)), output)
+                    (
+                        CircularAssignment(
+                            loc_idents_in_cycle,
+                            can_assignments,
+                            Box::new(ret_expr),
+                        ),
+                        output,
+                    )
                 }
             }
-        },
+        }
 
         expr::Expr::Closure(loc_arg_patterns, box_loc_body_expr) => {
             // The globally unique symbol that will refer to this closure once it gets converted
@@ -709,14 +810,23 @@ fn canonicalize(
             // it means there was shadowing, which will be handled later.
             scope.idents = union_pairs(scope.idents, arg_idents.iter());
 
-            let can_args: Vec<Located<Pattern>> = loc_arg_patterns.into_iter().map(|loc_pattern| {
-                // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-                // (However, still include it in scope, because you *can* recursively refer to yourself.)
-                let mut shadowable_idents = scope.idents.clone();
-                remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
+            let can_args: Vec<Located<Pattern>> = loc_arg_patterns
+                .into_iter()
+                .map(|loc_pattern| {
+                    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                    // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                    let mut shadowable_idents = scope.idents.clone();
+                    remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-                canonicalize_pattern(env, &mut scope, &FunctionArg, &loc_pattern, &mut shadowable_idents)
-            }).collect();
+                    canonicalize_pattern(
+                        env,
+                        &mut scope,
+                        &FunctionArg,
+                        &loc_pattern,
+                        &mut shadowable_idents,
+                    )
+                })
+                .collect();
             let (loc_body_expr, mut output) = canonicalize(env, &mut scope, *box_loc_body_expr);
 
             // Now that we've collected all the references, check to see if any of the args we defined
@@ -724,7 +834,10 @@ fn canonicalize(
             for (ident, (arg_symbol, region)) in arg_idents {
                 if !output.references.has_local(&arg_symbol) {
                     // The body never referenced this argument we declared. It's an unused argument!
-                    env.problem(Problem::UnusedArgument(Located {region, value: ident}));
+                    env.problem(Problem::UnusedArgument(Located {
+                        region,
+                        value: ident,
+                    }));
                 }
 
                 // We shouldn't ultimately count arguments as referenced locals. Otherwise,
@@ -736,11 +849,17 @@ fn canonicalize(
             // We've finished analyzing the closure. Its references.locals are now the values it closes over,
             // since we removed the only locals it shouldn't close over (its arguments).
             // Register it as a top-level procedure in the Env!
-            env.register_closure(symbol.clone(), can_args, loc_body_expr, loc_expr.region.clone(), output.references.clone());
+            env.register_closure(
+                symbol.clone(),
+                can_args,
+                loc_body_expr,
+                loc_expr.region.clone(),
+                output.references.clone(),
+            );
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
             (FunctionPointer(symbol), output)
-        },
+        }
 
         expr::Expr::Case(loc_cond, branches) => {
             // Canonicalize the conditional
@@ -759,7 +878,13 @@ fn canonicalize(
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-                let loc_can_pattern = canonicalize_pattern(env, &mut scope, &CaseBranch, &loc_pattern, &mut shadowable_idents);
+                let loc_can_pattern = canonicalize_pattern(
+                    env,
+                    &mut scope,
+                    &CaseBranch,
+                    &loc_pattern,
+                    &mut shadowable_idents,
+                );
 
                 // Patterns introduce new idents to the scope!
                 // Add the assigned identifiers to scope. If there's a collision, it means there
@@ -788,7 +913,10 @@ fn canonicalize(
                 // any of the new idents it defined were unused. If any were, report it.
                 for (ident, (symbol, region)) in assigned_idents {
                     if !output.references.has_local(&symbol) {
-                        let loc_ident = Located {region: region.clone(), value: ident.clone()};
+                        let loc_ident = Located {
+                            region: region.clone(),
+                            value: ident.clone(),
+                        };
 
                         env.problem(Problem::UnusedAssignment(loc_ident));
                     }
@@ -820,15 +948,22 @@ fn canonicalize(
     // We aren't going to bother with DCE at the level of local assignments. It's going to be
     // a rounding error anyway (especially given that they'll be surfaced as warnings), LLVM will
     // DCE them in optimized builds, and it's not worth the bookkeeping for dev builds.
-    (Located {region: loc_expr.region.clone(), value: expr}, output)
+    (
+        Located {
+            region: loc_expr.region.clone(),
+            value: expr,
+        },
+        output,
+    )
 }
 
 fn union_pairs<'a, K, V, I>(mut map: ImMap<K, V>, pairs: I) -> ImMap<K, V>
-where I: Iterator<Item=&'a (K, V)>,
+where
+    I: Iterator<Item = &'a (K, V)>,
     K: std::hash::Hash + Eq + Clone,
     K: 'a,
     V: Clone,
-    V: 'a
+    V: 'a,
 {
     for (ref k, ref v) in pairs {
         map.insert(k.clone(), v.clone());
@@ -850,10 +985,7 @@ fn local_successors(
     answer
 }
 
-fn call_successors(
-    call_symbol: &Symbol,
-    procedures: &MutMap<Symbol, Procedure>,
-) -> ImSet<Symbol> {
+fn call_successors(call_symbol: &Symbol, procedures: &MutMap<Symbol, Procedure>) -> ImSet<Symbol> {
     // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 procedures reference each other; may need to track visited procedures!
     match procedures.get(call_symbol) {
         Some(procedure) => {
@@ -862,8 +994,8 @@ fn call_successors(
             answer.insert(call_symbol.clone());
 
             answer
-        },
-        None => ImSet::default()
+        }
+        None => ImSet::default(),
     }
 }
 
@@ -881,7 +1013,12 @@ fn references_from_local<T>(
 
             for local in refs.locals.iter() {
                 if !visited.contains(&local) {
-                    let other_refs = references_from_local(local.clone(), visited, refs_by_assignment, procedures);
+                    let other_refs = references_from_local(
+                        local.clone(),
+                        visited,
+                        refs_by_assignment,
+                        procedures,
+                    );
 
                     answer = answer.union(other_refs);
                 }
@@ -891,7 +1028,8 @@ fn references_from_local<T>(
 
             for call in refs.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs = references_from_call(call.clone(), visited, refs_by_assignment, procedures);
+                    let other_refs =
+                        references_from_call(call.clone(), visited, refs_by_assignment, procedures);
 
                     answer = answer.union(other_refs);
                 }
@@ -900,7 +1038,7 @@ fn references_from_local<T>(
             }
 
             answer
-        },
+        }
         None => {
             // This should never happen! If the local was not recognized, it should not have been
             // added to the local references.
@@ -914,11 +1052,21 @@ fn references_from_local<T>(
 /// while preserving the overall order of the cycle.
 ///
 /// Example: the cycle  (c ---> a ---> b)  becomes  (a ---> b ---> c)
-pub fn sort_cyclic_idents<'a, I>(loc_idents: Vec<Located<Ident>>, ordered_idents: &mut I) -> Vec<Located<Ident>>
-where I: Iterator<Item=&'a Ident>
+pub fn sort_cyclic_idents<'a, I>(
+    loc_idents: Vec<Located<Ident>>,
+    ordered_idents: &mut I,
+) -> Vec<Located<Ident>>
+where
+    I: Iterator<Item = &'a Ident>,
 {
     // Find the first ident in ordered_idents that also appears in loc_idents.
-    let first_ident = ordered_idents.find(|ident| loc_idents.iter().any(|loc_ident| &&loc_ident.value == ident)).unwrap();
+    let first_ident = ordered_idents
+        .find(|ident| {
+            loc_idents
+                .iter()
+                .any(|loc_ident| &&loc_ident.value == ident)
+        })
+        .unwrap();
 
     let mut answer = Vec::with_capacity(loc_idents.len());
     let mut end = Vec::with_capacity(loc_idents.len());
@@ -956,7 +1104,12 @@ fn references_from_call<T>(
 
             for closed_over_local in procedure.references.locals.iter() {
                 if !visited.contains(&closed_over_local) {
-                    let other_refs = references_from_local(closed_over_local.clone(), visited, refs_by_assignment, procedures);
+                    let other_refs = references_from_local(
+                        closed_over_local.clone(),
+                        visited,
+                        refs_by_assignment,
+                        procedures,
+                    );
 
                     answer = answer.union(other_refs);
                 }
@@ -966,7 +1119,8 @@ fn references_from_call<T>(
 
             for call in procedure.references.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs = references_from_call(call.clone(), visited, refs_by_assignment, procedures);
+                    let other_refs =
+                        references_from_call(call.clone(), visited, refs_by_assignment, procedures);
 
                     answer = answer.union(other_refs);
                 }
@@ -975,7 +1129,7 @@ fn references_from_call<T>(
             }
 
             answer
-        },
+        }
         None => {
             // If the call symbol was not in the procedures map, that means we're calling a non-function and
             // will get a type mismatch later. For now, assume no references as a result of the "call."
@@ -984,9 +1138,9 @@ fn references_from_call<T>(
     }
 }
 
-
 fn idents_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Ident, (Symbol, Region))>
-where I: Iterator<Item = &'a Located<expr::Pattern>>
+where
+    I: Iterator<Item = &'a Located<expr::Pattern>>,
 {
     let mut answer = Vec::new();
 
@@ -1001,7 +1155,7 @@ where I: Iterator<Item = &'a Located<expr::Pattern>>
 fn add_idents_from_pattern(
     loc_pattern: &Located<expr::Pattern>,
     scope: &Scope,
-    answer: &mut Vec<(Ident, (Symbol, Region))>
+    answer: &mut Vec<(Ident, (Symbol, Region))>,
 ) {
     use expr::Pattern::*;
 
@@ -1009,38 +1163,43 @@ fn add_idents_from_pattern(
         &Identifier(ref name) => {
             let symbol = scope.symbol(&name);
 
-            answer.push((Ident::Unqualified(name.clone()), (symbol, loc_pattern.region.clone())));
-        },
-        &Variant(_, ref opt_loc_args) => {
-            match opt_loc_args {
-                &None => (),
-                &Some(ref loc_args) => {
-                    for loc_arg in loc_args.iter() {
-                        add_idents_from_pattern(loc_arg, scope, answer);
-                    }
+            answer.push((
+                Ident::Unqualified(name.clone()),
+                (symbol, loc_pattern.region.clone()),
+            ));
+        }
+        &Variant(_, ref opt_loc_args) => match opt_loc_args {
+            &None => (),
+            &Some(ref loc_args) => {
+                for loc_arg in loc_args.iter() {
+                    add_idents_from_pattern(loc_arg, scope, answer);
                 }
             }
         },
-        &IntLiteral(_) | &FloatLiteral(_) | &ExactString(_)
-            | &EmptyRecordLiteral | &Underscore => ()
+        &IntLiteral(_) | &FloatLiteral(_) | &ExactString(_) | &EmptyRecordLiteral | &Underscore => {
+            ()
+        }
     }
 }
 
-fn remove_idents(
-    pattern: expr::Pattern,
-    idents: &mut ImMap<Ident, (Symbol, Region)>
-) {
+fn remove_idents(pattern: expr::Pattern, idents: &mut ImMap<Ident, (Symbol, Region)>) {
     use expr::Pattern::*;
 
     match pattern {
-        Identifier(name) => { idents.remove(&(Ident::Unqualified(name))); },
+        Identifier(name) => {
+            idents.remove(&(Ident::Unqualified(name)));
+        }
         Variant(_, Some(loc_args)) => {
             for loc_arg in loc_args {
                 remove_idents(loc_arg.value, idents);
             }
-        },
-        Variant(_, None) | IntLiteral(_) | FloatLiteral(_) | ExactString(_)
-            | EmptyRecordLiteral | Underscore => {}
+        }
+        Variant(_, None)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | ExactString(_)
+        | EmptyRecordLiteral
+        | Underscore => {}
     }
 }
 
@@ -1050,7 +1209,7 @@ fn resolve_ident(
     env: &Env,
     scope: &Scope,
     ident: Ident,
-    references: &mut References
+    references: &mut References,
 ) -> Result<Symbol, Ident> {
     if scope.idents.contains_key(&ident) {
         let recognized = match ident {
@@ -1087,8 +1246,7 @@ fn resolve_ident(
                     // We couldn't find the unqualified ident in scope. NAMING PROBLEM!
                     Err(Ident::Unqualified(name))
                 }
-
-            },
+            }
             qualified @ Ident::Qualified(_, _) => {
                 // We couldn't find the qualified ident in scope. NAMING PROBLEM!
                 Err(qualified)
@@ -1103,7 +1261,7 @@ fn resolve_ident(
 fn resolve_variant_name(
     env: &Env,
     variant_name: VariantName,
-    references: &mut References
+    references: &mut References,
 ) -> Result<Symbol, VariantName> {
     let symbol = Symbol::from_variant(&variant_name, &env.home);
 
@@ -1125,7 +1283,7 @@ fn resolve_variant_name(
 pub enum PatternType {
     Assignment,
     FunctionArg,
-    CaseBranch
+    CaseBranch,
 }
 
 fn canonicalize_pattern(
@@ -1151,7 +1309,10 @@ fn canonicalize_pattern(
             // be in the collection of shadowable idents because you can't shadow yourself!
             match shadowable_idents.get(&unqualified_ident) {
                 Some((_, region)) => {
-                    let loc_shadowed_ident = Located {region: region.clone(), value: unqualified_ident};
+                    let loc_shadowed_ident = Located {
+                        region: region.clone(),
+                        value: unqualified_ident,
+                    };
 
                     // This is already in scope, meaning it's about to be shadowed.
                     // Shadowing is not allowed!
@@ -1160,14 +1321,18 @@ fn canonicalize_pattern(
                     // Change this Pattern to a Shadowed variant, so that
                     // codegen knows to generate a runtime exception here.
                     Pattern::Shadowed(loc_shadowed_ident)
-                },
+                }
                 None => {
                     // Make sure we aren't shadowing something in the home module's scope.
-                    let qualified_ident = Ident::Qualified(env.home.clone(), unqualified_ident.name());
+                    let qualified_ident =
+                        Ident::Qualified(env.home.clone(), unqualified_ident.name());
 
                     match scope.idents.get(&qualified_ident) {
                         Some((_, region)) => {
-                            let loc_shadowed_ident = Located {region: region.clone(), value: qualified_ident};
+                            let loc_shadowed_ident = Located {
+                                region: region.clone(),
+                                value: qualified_ident,
+                            };
 
                             // This is already in scope, meaning it's about to be shadowed.
                             // Shadowing is not allowed!
@@ -1176,7 +1341,7 @@ fn canonicalize_pattern(
                             // Change this Pattern to a Shadowed variant, so that
                             // codegen knows to generate a runtime exception here.
                             Pattern::Shadowed(loc_shadowed_ident)
-                        },
+                        }
                         None => {
                             let new_ident = qualified_ident.clone();
                             let new_name = qualified_ident.name();
@@ -1190,7 +1355,9 @@ fn canonicalize_pattern(
                             // The latter is relevant when recursively canonicalizing Variant patterns,
                             // which can bring multiple new idents into scope. For example, it's important
                             // that we catch (Blah foo foo) as being an example of shadowing.
-                            scope.idents.insert(new_ident.clone(), symbol_and_region.clone());
+                            scope
+                                .idents
+                                .insert(new_ident.clone(), symbol_and_region.clone());
                             shadowable_idents.insert(new_ident, symbol_and_region);
 
                             Pattern::Identifier(symbol)
@@ -1198,17 +1365,23 @@ fn canonicalize_pattern(
                     }
                 }
             }
-        },
+        }
 
         &Variant(ref loc_name, ref opt_args) => {
             // Canonicalize the variant's arguments, if it has any.
             let opt_can_args: Option<Vec<Located<Pattern>>> = match opt_args {
                 None => None,
                 Some(loc_args) => {
-                    let mut can_args:Vec<Located<Pattern>> = Vec::new();
+                    let mut can_args: Vec<Located<Pattern>> = Vec::new();
 
                     for loc_arg in loc_args {
-                        let loc_can_arg = canonicalize_pattern(env, scope, pattern_type, &loc_arg, shadowable_idents);
+                        let loc_can_arg = canonicalize_pattern(
+                            env,
+                            scope,
+                            pattern_type,
+                            &loc_arg,
+                            shadowable_idents,
+                        );
 
                         can_args.push(loc_can_arg);
                     }
@@ -1229,48 +1402,60 @@ fn canonicalize_pattern(
 
                 Pattern::UnrecognizedVariant(loc_name.clone())
             }
-        },
+        }
 
-        &IntLiteral(ref num) => {
-            match pattern_type {
-                CaseBranch => Pattern::IntLiteral(*num),
-                ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
+        &IntLiteral(ref num) => match pattern_type {
+            CaseBranch => Pattern::IntLiteral(*num),
+            ptype @ Assignment | ptype @ FunctionArg => {
+                unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
             }
         },
 
-        &FloatLiteral(ref num) => {
-            match pattern_type {
-                CaseBranch => Pattern::FloatLiteral(*num),
-                ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
+        &FloatLiteral(ref num) => match pattern_type {
+            CaseBranch => Pattern::FloatLiteral(*num),
+            ptype @ Assignment | ptype @ FunctionArg => {
+                unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
             }
         },
 
-        &ExactString(ref string) => {
-            match pattern_type {
-                CaseBranch => Pattern::ExactString(string.clone()),
-                ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
+        &ExactString(ref string) => match pattern_type {
+            CaseBranch => Pattern::ExactString(string.clone()),
+            ptype @ Assignment | ptype @ FunctionArg => {
+                unsupported_pattern(env, *ptype, &region, &loc_pattern.value)
             }
         },
 
-        &Underscore => {
-            match pattern_type {
-                CaseBranch | FunctionArg => Pattern::Underscore,
-                Assignment => unsupported_pattern(env, Assignment, &region, &loc_pattern.value)
-            }
+        &Underscore => match pattern_type {
+            CaseBranch | FunctionArg => Pattern::Underscore,
+            Assignment => unsupported_pattern(env, Assignment, &region, &loc_pattern.value),
         },
 
         &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
     };
 
-    Located {region, value: pattern}
+    Located {
+        region,
+        value: pattern,
+    }
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
-fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: &Region, pattern: &expr::Pattern) -> Pattern {
-    let loc_problem_pattern = Located {region: region.clone(), value: pattern.clone()};
+fn unsupported_pattern(
+    env: &mut Env,
+    pattern_type: PatternType,
+    region: &Region,
+    pattern: &expr::Pattern,
+) -> Pattern {
+    let loc_problem_pattern = Located {
+        region: region.clone(),
+        value: pattern.clone(),
+    };
 
-    env.problem(Problem::UnsupportedPattern(pattern_type, loc_problem_pattern.clone()));
+    env.problem(Problem::UnsupportedPattern(
+        pattern_type,
+        loc_problem_pattern.clone(),
+    ));
 
     Pattern::UnsupportedPattern(loc_problem_pattern)
 }
@@ -1285,14 +1470,17 @@ pub enum PrecedenceProblem {
     BothNonAssociative(Located<Operator>, Located<Operator>),
 }
 
-fn new_op_expr(left: Box<Located<Expr>>, op: Located<Operator>, right: Box<Located<Expr>>)
-    -> Located<Expr> {
+fn new_op_expr(
+    left: Box<Located<Expr>>,
+    op: Located<Operator>,
+    right: Box<Located<Expr>>,
+) -> Located<Expr> {
     let new_region = Region {
         start_line: left.region.start_line,
         start_col: left.region.start_col,
 
         end_line: right.region.end_line,
-        end_col: right.region.end_col
+        end_col: right.region.end_col,
     };
     let new_expr = Expr::Operator(left, op, right);
 
@@ -1307,8 +1495,7 @@ fn new_op_expr(left: Box<Located<Expr>>, op: Located<Operator>, right: Box<Locat
 /// By design, Roc neither allows custom operators nor has any built-in operators with
 /// the same precedence and different associativity, so this operation always succeeds
 /// and can never produce any user-facing errors.
-fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>)
-    -> Located<Expr> {
+fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>) -> Located<Expr> {
     use self::PrecedenceProblem::*;
 
     // NOTE: A potentially nice performance optimization here would be to use
@@ -1342,23 +1529,27 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>)
                             }
 
                             Ordering::Equal => {
-                                match (next_op.value.associativity(), stack_op.value.associativity()) {
-                                    ( LeftAssociative, LeftAssociative ) => {
+                                match (
+                                    next_op.value.associativity(),
+                                    stack_op.value.associativity(),
+                                ) {
+                                    (LeftAssociative, LeftAssociative) => {
                                         // Inline
                                         let right = arg_stack.pop().unwrap();
                                         let left = arg_stack.pop().unwrap();
 
                                         infixes.next_op = Some(next_op);
-                                        arg_stack.push(Box::new(new_op_expr(left, stack_op, right)));
-                                    },
+                                        arg_stack
+                                            .push(Box::new(new_op_expr(left, stack_op, right)));
+                                    }
 
-                                    ( RightAssociative, RightAssociative ) => {
+                                    (RightAssociative, RightAssociative) => {
                                         // Swap
                                         op_stack.push(stack_op);
                                         op_stack.push(next_op);
-                                    },
+                                    }
 
-                                    ( NonAssociative, NonAssociative ) => {
+                                    (NonAssociative, NonAssociative) => {
                                         // Both operators were non-associative, e.g. (True == False == False).
                                         // We should tell the author to disambiguate by grouping them with parens.
                                         let problem = BothNonAssociative(next_op.clone(), stack_op);
@@ -1369,9 +1560,10 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>)
                                         let left = arg_stack.pop().unwrap();
                                         let broken_expr = new_op_expr(left, next_op, right);
                                         let region = broken_expr.region.clone();
-                                        let value = Expr::InvalidPrecedence(problem, Box::new(broken_expr));
+                                        let value =
+                                            Expr::InvalidPrecedence(problem, Box::new(broken_expr));
 
-                                        return Located {region, value};
+                                        return Located { region, value };
                                     }
 
                                     _ => {
@@ -1388,8 +1580,8 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>)
                                 }
                             }
                         }
-                    },
-                    None => op_stack.push(next_op)
+                    }
+                    None => op_stack.push(next_op),
                 };
             }
         }
@@ -1459,21 +1651,19 @@ impl Iterator for Infixes {
     fn next(&mut self) -> Option<InfixToken> {
         match self.next_op.take() {
             Some(op) => Some(InfixToken::Op(op)),
-            None => {
-                self.remaining_expr.take().map(|boxed_expr| {
-                    let expr = *boxed_expr;
+            None => self.remaining_expr.take().map(|boxed_expr| {
+                let expr = *boxed_expr;
 
-                    match expr.value {
-                        Expr::Operator(left, op, right) => {
-                            self.remaining_expr = Some(right);
-                            self.next_op = Some(op);
+                match expr.value {
+                    Expr::Operator(left, op, right) => {
+                        self.remaining_expr = Some(right);
+                        self.next_op = Some(op);
 
-                            InfixToken::Arg(left)
-                        }
-                        _ => InfixToken::Arg(Box::new(expr)),
+                        InfixToken::Arg(left)
                     }
-                })
-            }
+                    _ => InfixToken::Arg(Box::new(expr)),
+                }
+            }),
         }
     }
 }

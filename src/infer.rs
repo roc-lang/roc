@@ -1,14 +1,18 @@
 use canonicalize::{Expr, Procedure, Symbol};
+use collections::{ImMap, MutMap};
+use constrain::{constrain, constrain_procedure};
 use region::Located;
-use subs::{Subs, Content};
+use solve::solve;
+use subs::{Content, Subs};
+use types::Constraint;
 use types::Expected::*;
 use types::Type::*;
-use types::Constraint;
-use collections::{ImMap, MutMap};
-use solve::solve;
-use constrain::{constrain, constrain_procedure};
 
-pub fn infer_expr(subs: &mut Subs, loc_expr: Located<Expr>, procedures: MutMap<Symbol, Procedure>) -> Content {
+pub fn infer_expr(
+    subs: &mut Subs,
+    loc_expr: Located<Expr>,
+    procedures: MutMap<Symbol, Procedure>,
+) -> Content {
     let bound_vars = ImMap::default();
     let mut env = ImMap::default();
     let mut constraints = Vec::with_capacity(1 + procedures.len());

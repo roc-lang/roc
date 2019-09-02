@@ -17,9 +17,10 @@ impl fmt::Debug for Region {
             // because it makes failed assertions much harder to read.
             write!(f, "…")
         } else {
-            write!(f, "|L {}, C {} - L {}, C {}|",
-                self.start_line, self.start_col,
-                self.end_line, self.end_col,
+            write!(
+                f,
+                "|L {}, C {} - L {}, C {}|",
+                self.start_line, self.start_col, self.end_line, self.end_col,
             )
         }
     }
@@ -39,24 +40,35 @@ impl<T> Located<T> {
 
 impl<T> Located<T> {
     pub fn with_value<U>(&self, value: U) -> Located<U> {
-        Located { region: self.region.clone(), value: value }
+        Located {
+            region: self.region.clone(),
+            value: value,
+        }
     }
 
     pub fn map<U, F>(&self, transform: F) -> Located<U>
-        where F: (FnOnce(&T) -> U)
+    where
+        F: (FnOnce(&T) -> U),
     {
-        Located { region: self.region.clone(), value: transform(&self.value) }
+        Located {
+            region: self.region.clone(),
+            value: transform(&self.value),
+        }
     }
 }
 
-
 impl<T> fmt::Debug for Located<T>
-where T: fmt::Debug
+where
+    T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let region = self.region.clone();
 
-        if region.start_line == 0 && region.start_col == 0 && region.end_line == 0 && region.end_col == 0 {
+        if region.start_line == 0
+            && region.start_col == 0
+            && region.end_line == 0
+            && region.end_col == 0
+        {
             // In tests, it's super common to set all Located values to 0.
             // Also in tests, we don't want to bother printing the locations
             // because it makes failed assertions much harder to read.

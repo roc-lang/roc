@@ -1,11 +1,11 @@
-use ena::unify::{UnificationTable, UnifyKey, InPlace};
+use ena::unify::{InPlace, UnificationTable, UnifyKey};
 use std::fmt;
 use types::Problem;
 use unify;
 
 #[derive(Debug)]
 pub struct Subs {
-    utable: UnificationTable<InPlace<Variable>>
+    utable: UnificationTable<InPlace<Variable>>,
 }
 
 #[derive(Copy, PartialEq, Eq, Clone)]
@@ -43,7 +43,7 @@ impl UnifyKey for Variable {
 impl Subs {
     pub fn new() -> Self {
         Subs {
-            utable: UnificationTable::default()
+            utable: UnificationTable::default(),
         }
     }
 
@@ -69,7 +69,7 @@ impl Subs {
 
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key.into());
-        let unified = unify::unify_var_val(self, l_key, &r_value); 
+        let unified = unify::unify_var_val(self, l_key, &r_value);
 
         self.utable.update_value(l_key, |node| node.value = unified);
     }
@@ -85,17 +85,16 @@ impl Subs {
         var.clone()
     }
 
+    //     pub fn set_rank(&mut self, key: Variable, rank: usize) {
+    //         let mut descriptor = self.utable.probe_value(key);
 
-//     pub fn set_rank(&mut self, key: Variable, rank: usize) {
-//         let mut descriptor = self.utable.probe_value(key);
-        
-//         descriptor.rank = rank;
+    //         descriptor.rank = rank;
 
-//         let result = self.utable.unify_var_value(key, descriptor);
+    //         let result = self.utable.unify_var_value(key, descriptor);
 
-//         // Updating the rank should never fail!
-//         debug_assert_eq!(result, Ok(()));
-//     }
+    //         // Updating the rank should never fail!
+    //         debug_assert_eq!(result, Ok(()));
+    //     }
 
     // pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
     //     self.utable.unioned(left, right)
@@ -113,20 +112,20 @@ fn unnamed_flex_var() -> Content {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Descriptor { 
+pub struct Descriptor {
     pub content: Content,
     pub rank: usize,
     pub mark: u32,
-    pub copy: Option<Variable>
+    pub copy: Option<Variable>,
 }
 
 impl From<Content> for Descriptor {
     fn from(content: Content) -> Self {
-        Descriptor { 
+        Descriptor {
             content,
-            rank: 0, 
+            rank: 0,
             mark: 2, // no mark
-            copy: None
+            copy: None,
         }
     }
 }
@@ -136,21 +135,26 @@ pub enum Content {
     FlexVar(Option<String> /* name */),
     RigidVar(String /* name */),
     Structure(FlatType),
-    Error(Problem)
+    Error(Problem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
-    Apply(String /* module name */, String /* type name */, Vec<Variable>),
+    Apply(
+        String, /* module name */
+        String, /* type name */
+        Vec<Variable>,
+    ),
     Func(Vec<Variable>, Variable),
     Operator(Variable, Variable, Variable),
     Erroneous(Problem),
     EmptyRecord,
 }
 
-
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Builtin {
-    Str, Int, Float,
+    Str,
+    Int,
+    Float,
     EmptyRecord,
 }

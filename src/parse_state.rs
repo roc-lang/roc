@@ -1,7 +1,7 @@
 use combine::lib::fmt;
 
-use combine::stream::Resetable;
 use combine::stream::state::{Positioner, RangePositioner};
+use combine::stream::Resetable;
 
 // Plan:
 //
@@ -21,25 +21,32 @@ pub struct IndentablePosition {
     pub column: u32,
 
     /// Current indentation level, in columns (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_col : u32,
+    pub indent_col: u32,
 
     // true at the beginning of each line, then false after encountering the first nonspace char.
     pub is_indenting: bool,
 }
 
-
 clone_resetable! { () IndentablePosition }
 
 impl Default for IndentablePosition {
     fn default() -> Self {
-        IndentablePosition { line: 1, column: 1, indent_col: 1, is_indenting: true }
+        IndentablePosition {
+            line: 1,
+            column: 1,
+            indent_col: 1,
+            is_indenting: true,
+        }
     }
 }
 
 impl fmt::Display for IndentablePosition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "line: {}, column: {}, indent_col: {}, is_indenting: {}",
-            self.line, self.column, self.indent_col, self.is_indenting)
+        write!(
+            f,
+            "line: {}, column: {}, indent_col: {}, is_indenting: {}",
+            self.line, self.column, self.indent_col, self.is_indenting
+        )
     }
 }
 
@@ -65,10 +72,10 @@ impl Positioner<char> for IndentablePosition {
                 self.line += 1;
                 self.indent_col = 1;
                 self.is_indenting = true;
-            },
+            }
             ' ' => {
                 self.column += 1;
-            },
+            }
             _ => {
                 if self.is_indenting {
                     // As soon as we hit a nonspace char, we're done indenting.

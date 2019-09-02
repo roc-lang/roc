@@ -31,8 +31,8 @@
 //! The best way to see how it is used is to read the `tests.rs` file;
 //! search for e.g. `UnitKey`.
 
-use std::marker;
 use std::fmt::Debug;
+use std::marker;
 use std::ops::Range;
 
 mod backing_vec;
@@ -40,7 +40,6 @@ pub use self::backing_vec::{InPlace, UnificationStore};
 
 #[cfg(feature = "persistent")]
 pub use self::backing_vec::Persistent;
-
 
 /// This trait is implemented by any type that can serve as a type
 /// variable. We call such variables *unification keys*. For example,
@@ -102,10 +101,11 @@ pub struct NoError {
 /// time of the algorithm under control. For more information, see
 /// <http://en.wikipedia.org/wiki/Disjoint-set_data_structure>.
 #[derive(PartialEq, Clone, Debug)]
-pub struct VarValue<K: UnifyKey> { // FIXME pub
-    parent: K, // if equal to self, this is a root
+pub struct VarValue<K: UnifyKey> {
+    // FIXME pub
+    parent: K,           // if equal to self, this is a root
     pub value: K::Value, // value assigned (only relevant to root)
-    rank: u32, // max depth (only relevant to root)
+    rank: u32,           // max depth (only relevant to root)
 }
 
 /// Table of unification keys and their values. You must define a key type K
@@ -230,10 +230,7 @@ impl<S: UnificationStore> UnificationTable<S> {
     /// Clears all unifications that have been performed, resetting to
     /// the initial state. The values of each variable are given by
     /// the closure.
-    pub fn reset_unifications(
-        &mut self,
-        mut value: impl FnMut(S::Key) -> S::Value,
-    ) {
+    pub fn reset_unifications(&mut self, mut value: impl FnMut(S::Key) -> S::Value) {
         self.values.reset_unifications(|i| {
             let key = UnifyKey::from_index(i as u32);
             let value = value(key);
@@ -247,10 +244,7 @@ impl<S: UnificationStore> UnificationTable<S> {
     }
 
     /// Returns the keys of all variables created since the `snapshot`.
-    pub fn vars_since_snapshot(
-        &self,
-        snapshot: &Snapshot<S>,
-    ) -> Range<S::Key> {
+    pub fn vars_since_snapshot(&self, snapshot: &Snapshot<S>) -> Range<S::Key> {
         let range = self.values.values_since_snapshot(&snapshot.snapshot);
         S::Key::from_index(range.start as u32)..S::Key::from_index(range.end as u32)
     }
@@ -305,13 +299,12 @@ impl<S: UnificationStore> UnificationTable<S> {
 
         let rank_a = self.value(key_a).rank;
         let rank_b = self.value(key_b).rank;
-        if let Some((new_root, redirected)) =
-            S::Key::order_roots(
-                key_a,
-                &self.value(key_a).value,
-                key_b,
-                &self.value(key_b).value,
-            ) {
+        if let Some((new_root, redirected)) = S::Key::order_roots(
+            key_a,
+            &self.value(key_a).value,
+            key_b,
+            &self.value(key_b).value,
+        ) {
             // compute the new rank for the new root that they chose;
             // this may not be the optimal choice.
             let new_rank = if new_root == key_a {
@@ -403,5 +396,3 @@ where
         self.value(id).value.clone()
     }
 }
-
-

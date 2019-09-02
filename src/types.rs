@@ -1,9 +1,9 @@
-use subs::Variable;
-use region::Region;
-use operator::{Operator, ArgSide};
-use region::Located;
 use canonicalize::Symbol;
 use collections::ImMap;
+use operator::{ArgSide, Operator};
+use region::Located;
+use region::Region;
+use subs::Variable;
 
 type ModuleName = String;
 
@@ -26,7 +26,7 @@ impl Type {
 
         match op {
             Slash => op_type(Type::float(), Type::float(), Type::float()),
-            _ => panic!("TODO types for operator {:?}", op)
+            _ => panic!("TODO types for operator {:?}", op),
         }
     }
 
@@ -35,7 +35,8 @@ impl Type {
     }
 
     pub fn float() -> Self {
-        let floating_point = Type::Apply("Float".to_string(), "FloatingPoint".to_string(), Vec::new());
+        let floating_point =
+            Type::Apply("Float".to_string(), "FloatingPoint".to_string(), Vec::new());
 
         Type::num(vec![floating_point])
     }
@@ -49,7 +50,7 @@ fn op_type(left: Type, right: Type, ret: Type) -> OperatorType {
 pub struct OperatorType {
     pub left: Type,
     pub right: Type,
-    pub ret: Type
+    pub ret: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -62,7 +63,7 @@ impl<T> Expected<T> {
     pub fn get_type(self) -> T {
         match self {
             Expected::NoExpectation(val) => val,
-            Expected::ForReason(_, val, _) => val
+            Expected::ForReason(_, val, _) => val,
         }
     }
 }
@@ -85,9 +86,9 @@ pub enum Reason {
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
     Lookup(Symbol, Expected<Type>, Region),
-    True, // Used for things that always unify, e.g. blanks and runtime errors 
+    True, // Used for things that always unify, e.g. blanks and runtime errors
     Let(Box<LetConstraint>),
-    And(Vec<Constraint>)
+    And(Vec<Constraint>),
 }
 
 #[derive(Debug, Clone)]
@@ -108,5 +109,5 @@ pub enum Problem {
     InconsistentIfElse,
     InconsistentCaseBranches,
     CircularType,
-    CanonicalizationProblem
+    CanonicalizationProblem,
 }

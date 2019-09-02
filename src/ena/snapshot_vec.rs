@@ -44,10 +44,11 @@ pub struct SnapshotVec<D: SnapshotVecDelegate> {
 }
 
 impl<D> fmt::Debug for SnapshotVec<D>
-    where D: SnapshotVecDelegate,
-          D: fmt::Debug,
-          D::Undo: fmt::Debug,
-          D::Value: fmt::Debug
+where
+    D: SnapshotVecDelegate,
+    D: fmt::Debug,
+    D::Undo: fmt::Debug,
+    D::Value: fmt::Debug,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("SnapshotVec")
@@ -272,7 +273,8 @@ impl<D: SnapshotVecDelegate> Extend<D::Value> for SnapshotVec<D> {
         let final_len = self.values.len();
 
         if self.in_snapshot() {
-            self.undo_log.extend((initial_len..final_len).map(|len| NewElem(len)));
+            self.undo_log
+                .extend((initial_len..final_len).map(|len| NewElem(len)));
         }
     }
 }

@@ -1,26 +1,27 @@
-#[macro_use] extern crate pretty_assertions;
-#[macro_use] extern crate indoc;
+#[macro_use]
+extern crate pretty_assertions;
+#[macro_use]
+extern crate indoc;
 
-extern crate roc;
 extern crate combine;
+extern crate roc;
 
 mod helpers;
 
 #[cfg(test)]
 mod test_infer {
     use helpers::{loc, parse_without_loc};
-    use roc::canonicalize::{self, Expr, Symbol, Procedure};
+    use roc::canonicalize::{self, Expr, Procedure, Symbol};
+    use roc::collections::{ImMap, MutMap};
     use roc::expr::{Ident, VariantName};
-    use roc::collections::{MutMap, ImMap};
-    use roc::types::{Type, Problem};
-    use roc::types::Type::*;
-    use roc::subs::Content::{self, *};
-    use roc::subs::{FlatType, Variable};
-    use roc::subs::Subs;
-    use roc::region::{Located, Region};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::content_to_string;
-
+    use roc::region::{Located, Region};
+    use roc::subs::Content::{self, *};
+    use roc::subs::Subs;
+    use roc::subs::{FlatType, Variable};
+    use roc::types::Type::*;
+    use roc::types::{Problem, Type};
 
     // HELPERS
 
@@ -45,14 +46,23 @@ mod test_infer {
         declared_variants: &ImMap<Symbol, Located<VariantName>>,
     ) -> (Expr, MutMap<Symbol, Procedure>) {
         let (expr, unparsed) = parse_without_loc(expr_str).unwrap_or_else(|errors| {
-                panic!("Parse error trying to parse \"{}\" - {}", expr_str.to_string(), errors.to_string())
+            panic!(
+                "Parse error trying to parse \"{}\" - {}",
+                expr_str.to_string(),
+                errors.to_string()
+            )
         });
 
         assert_eq!(unparsed, "".to_string());
 
         let home = "Test".to_string();
-        let (loc_expr, _, problems, procedures) =
-            canonicalize::canonicalize_declaration(home, name, loc(expr), declared_idents, declared_variants);
+        let (loc_expr, _, problems, procedures) = canonicalize::canonicalize_declaration(
+            home,
+            name,
+            loc(expr),
+            declared_idents,
+            declared_variants,
+        );
 
         assert_eq!(problems, Vec::new());
 
@@ -60,7 +70,11 @@ mod test_infer {
     }
 
     fn apply(module_name: &str, type_name: &str, args: Vec<Variable>) -> Content {
-        Structure(FlatType::Apply(module_name.to_string(), type_name.to_string(), args))
+        Structure(FlatType::Apply(
+            module_name.to_string(),
+            type_name.to_string(),
+            args,
+        ))
     }
 
     fn var(num: u32) -> Variable {
@@ -85,134 +99,158 @@ mod test_infer {
     #[test]
     fn string_literal() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 "type inference!"
-            "#),
-            "String"
+            "#
+            ),
+            "String",
         );
     }
 
     #[test]
     fn empty_string() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 ""
-            "#),
-            "String"
+            "#
+            ),
+            "String",
         );
     }
 
-
-    // LIST 
-
+    // LIST
 
     #[test]
     fn empty_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 []
-            "#),
-            "List *"
+            "#
+            ),
+            "List *",
         );
     }
 
     #[test]
     fn list_of_lists() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [[]]
-            "#),
-            "List (List *)"
+            "#
+            ),
+            "List (List *)",
         );
     }
 
     #[test]
     fn triple_nested_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [[[]]]
-            "#),
-            "List (List (List *))"
+            "#
+            ),
+            "List (List (List *))",
         );
     }
 
     #[test]
     fn nested_empty_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ [], [ [] ] ]
-            "#),
-            "List (List (List *))"
+            "#
+            ),
+            "List (List (List *))",
         );
     }
 
     #[test]
     fn list_of_one_int() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [42]
-            "#),
-            "List Int"
+            "#
+            ),
+            "List Int",
         );
     }
 
     #[test]
     fn triple_nested_int_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [[[ 5 ]]]
-            "#),
-            "List (List (List Int))"
+            "#
+            ),
+            "List (List (List Int))",
         );
     }
 
     #[test]
     fn list_of_ints() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ 1, 2, 3 ]
-            "#),
-            "List Int"
+            "#
+            ),
+            "List Int",
         );
     }
 
     #[test]
     fn nested_list_of_ints() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ [ 1 ], [ 2, 3 ] ]
-            "#),
-            "List (List Int)"
+            "#
+            ),
+            "List (List Int)",
         );
     }
 
     #[test]
     fn list_of_one_string() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ "cowabunga" ]
-            "#),
-            "List String"
+            "#
+            ),
+            "List String",
         );
     }
 
     #[test]
     fn triple_nested_string_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [[[ "foo" ]]]
-            "#),
-            "List (List (List String))"
+            "#
+            ),
+            "List (List (List String))",
         );
     }
 
     #[test]
     fn list_of_strings() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ "foo", "bar" ]
-            "#),
-            "List String"
+            "#
+            ),
+            "List String",
         );
     }
 
@@ -221,45 +259,52 @@ mod test_infer {
     #[test]
     fn infer_interpolated_string() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 whatItIs = "great"
 
                 "type inference is \(whatItIs)!"
-            "#),
-            "String"
+            "#
+            ),
+            "String",
         );
     }
-
 
     // LIST MISMATCH
 
     #[test]
     fn mismatch_heterogeneous_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ "foo", 5 ]
-            "#),
-            "List <type mismatch>"
+            "#
+            ),
+            "List <type mismatch>",
         );
     }
 
     #[test]
     fn mismatch_heterogeneous_nested_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ [ "foo", 5 ] ]
-            "#),
-            "List (List <type mismatch>)"
+            "#
+            ),
+            "List (List <type mismatch>)",
         );
     }
 
     #[test]
     fn mismatch_heterogeneous_nested_empty_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ [ 1 ], [ [] ] ]
-            "#),
-            "List (List <type mismatch>)"
+            "#
+            ),
+            "List (List <type mismatch>)",
         );
     }
 
@@ -268,30 +313,36 @@ mod test_infer {
     #[test]
     fn always_return_empty_record() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 \_ -> {}
-            "#),
-            "* -> {}"
+            "#
+            ),
+            "* -> {}",
         );
     }
 
     #[test]
     fn two_arg_return_int() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 \_ _ -> 42
-            "#),
-            "*, * -> Int"
+            "#
+            ),
+            "*, * -> Int",
         );
     }
 
     #[test]
     fn three_arg_return_string() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 \_ _ _ -> "test!"
-            "#),
-            "*, *, * -> String"
+            "#
+            ),
+            "*, *, * -> String",
         );
     }
 
@@ -300,95 +351,110 @@ mod test_infer {
     #[test]
     fn assign_empty_record() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 foo = {}
 
                 foo
-            "#),
-            "{}"
+            "#
+            ),
+            "{}",
         );
     }
 
     #[test]
     fn assign_string() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 str = "thing"
 
                 str
-            "#),
-            "String"
+            "#
+            ),
+            "String",
         );
     }
 
     #[test]
     fn assign_1_arg_closure() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 fn = \_ -> {}
 
                 fn
-            "#),
-            "* -> {}"
+            "#
+            ),
+            "* -> {}",
         );
     }
 
     #[test]
     fn assign_2_arg_closure() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 func = \_ _ -> 42
 
                 func
-            "#),
-            "*, * -> Int"
+            "#
+            ),
+            "*, * -> Int",
         );
     }
 
     #[test]
     fn assign_3_arg_closure() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 f = \_ _ _ -> "test!"
 
                 f
-            "#),
-            "*, *, * -> String"
+            "#
+            ),
+            "*, *, * -> String",
         );
     }
 
     #[test]
     fn assign_multiple_functions() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 a = \_ _ _ -> "test!"
 
                 b = a
 
                 b
-            "#),
-            "*, *, * -> String"
+            "#
+            ),
+            "*, *, * -> String",
         );
     }
 
     #[test]
     fn assign_multiple_strings() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 a = "test!"
 
                 b = a
 
                 b
-            "#),
-            "String"
+            "#
+            ),
+            "String",
         );
     }
 
     #[test]
     fn assign_multiple_nums() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 c = b
 
                 b = a
@@ -396,8 +462,9 @@ mod test_infer {
                 a = 42
 
                 c
-            "#),
-            "Int"
+            "#
+            ),
+            "Int",
         );
     }
 
@@ -406,24 +473,28 @@ mod test_infer {
     #[test]
     fn call_returns_num() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 alwaysFive = \_ -> 5
 
                 alwaysFive "stuff"
-            "#),
-            "Int"
+            "#
+            ),
+            "Int",
         );
     }
 
     #[test]
     fn call_returns_list() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 enlist = \val -> [ val ]
 
                 enlist 5
-            "#),
-            "List Int"
+            "#
+            ),
+            "List Int",
         );
     }
 
@@ -432,59 +503,62 @@ mod test_infer {
     // TODO BoundTypeVariables
     // TODO conditionals
 
-//     #[test]
-//     fn indirect_always() {
-//         infer_eq(
-//             indoc!(r#"
-//                 always = \val -> (\_ -> val)
-//                 alwaysFoo = always "foo"
+    //     #[test]
+    //     fn indirect_always() {
+    //         infer_eq(
+    //             indoc!(r#"
+    //                 always = \val -> (\_ -> val)
+    //                 alwaysFoo = always "foo"
 
-//                 alwaysFoo 42
-//             "#),
-//             "String"
-//         );
-//     }
+    //                 alwaysFoo 42
+    //             "#),
+    //             "String"
+    //         );
+    //     }
 
-//     #[test]
-//     fn identity() {
-//         infer_eq(
-//             indoc!(r#"
-//                 \val -> val
-//             "#),
-//             "a -> a"
-//         );
-//     }
+    //     #[test]
+    //     fn identity() {
+    //         infer_eq(
+    //             indoc!(r#"
+    //                 \val -> val
+    //             "#),
+    //             "a -> a"
+    //         );
+    //     }
 
-
-//     #[test]
-//     fn always_function() {
-//         infer_eq(
-//             indoc!(r#"
-//                 \val -> \_ -> val
-//             "#),
-//             "a -> (* -> a)"
-//         );
-//     }
+    //     #[test]
+    //     fn always_function() {
+    //         infer_eq(
+    //             indoc!(r#"
+    //                 \val -> \_ -> val
+    //             "#),
+    //             "a -> (* -> a)"
+    //         );
+    //     }
 
     // OPERATORS
 
     #[test]
     fn div_operator() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 \l r -> l / r
-            "#),
-            "Float, Float -> Float"
+            "#
+            ),
+            "Float, Float -> Float",
         );
     }
 
     #[test]
     fn basic_division() {
         infer_eq(
-            indoc!(r#"
+            indoc!(
+                r#"
                 1 / 2
-            "#),
-            "Float"
+            "#
+            ),
+            "Float",
         );
     }
 
@@ -497,7 +571,6 @@ mod test_infer {
     //         "Num *"
     //     );
     // }
-
 
     // #[test]
     // fn basic_circular_type() {
@@ -519,19 +592,18 @@ mod test_infer {
     //     );
     // }
 
-     // #[test]
-     // fn no_higher_ranked_types() {
-     //     // This should error because it can't type of alwaysFive
-     //        infer_eq(
-     //        indoc!(r#"
-     //            alwaysFive = \_ -> 5
+    // #[test]
+    // fn no_higher_ranked_types() {
+    //     // This should error because it can't type of alwaysFive
+    //        infer_eq(
+    //        indoc!(r#"
+    //            alwaysFive = \_ -> 5
 
-     //            [ alwaysFive "foo", alwaysFive [] ]
-     //        "#),
-     //        "<type mismatch>"
-     //    );
-     // }
-
+    //            [ alwaysFive "foo", alwaysFive [] ]
+    //        "#),
+    //        "<type mismatch>"
+    //    );
+    // }
 
     // #[test]
     // fn infer_basic_case() {

@@ -1,11 +1,11 @@
 #[cfg(feature = "persistent")]
 use dogged::DVec;
 use ena::snapshot_vec as sv;
-use std::ops::{self, Range};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::ops::{self, Range};
 
-use super::{VarValue, UnifyKey};
+use super::{UnifyKey, VarValue};
 
 #[allow(dead_code)] // rustc BUG
 #[allow(type_alias_bounds)]
@@ -29,10 +29,7 @@ pub trait UnificationStore:
 
     fn values_since_snapshot(&self, snapshot: &Self::Snapshot) -> Range<usize>;
 
-    fn reset_unifications(
-        &mut self,
-        value: impl FnMut(u32) -> VarValue<Self::Key>,
-    );
+    fn reset_unifications(&mut self, value: impl FnMut(u32) -> VarValue<Self::Key>);
 
     fn len(&self) -> usize;
 
@@ -41,7 +38,8 @@ pub trait UnificationStore:
     fn reserve(&mut self, num_new_values: usize);
 
     fn update<F>(&mut self, index: usize, op: F)
-        where F: FnOnce(&mut VarValue<Self::Key>);
+    where
+        F: FnOnce(&mut VarValue<Self::Key>);
 
     fn tag() -> &'static str {
         Self::Key::tag()
@@ -52,13 +50,15 @@ pub trait UnificationStore:
 /// Not typically used directly.
 #[derive(Clone, Debug)]
 pub struct InPlace<K: UnifyKey> {
-    values: sv::SnapshotVec<Delegate<K>>
+    values: sv::SnapshotVec<Delegate<K>>,
 }
 
 // HACK(eddyb) manual impl avoids `Default` bound on `K`.
 impl<K: UnifyKey> Default for InPlace<K> {
     fn default() -> Self {
-        InPlace { values: sv::SnapshotVec::new() }
+        InPlace {
+            values: sv::SnapshotVec::new(),
+        }
     }
 }
 
@@ -88,10 +88,7 @@ impl<K: UnifyKey> UnificationStore for InPlace<K> {
     }
 
     #[inline]
-    fn reset_unifications(
-        &mut self,
-        mut value: impl FnMut(u32) -> VarValue<Self::Key>,
-    ) {
+    fn reset_unifications(&mut self, mut value: impl FnMut(u32) -> VarValue<Self::Key>) {
         self.values.set_all(|i| value(i as u32));
     }
 
@@ -111,14 +108,16 @@ impl<K: UnifyKey> UnificationStore for InPlace<K> {
 
     #[inline]
     fn update<F>(&mut self, index: usize, op: F)
-        where F: FnOnce(&mut VarValue<Self::Key>)
+    where
+        F: FnOnce(&mut VarValue<Self::Key>),
     {
         self.values.update(index, op)
     }
 }
 
 impl<K> ops::Index<usize> for InPlace<K>
-    where K: UnifyKey
+where
+    K: UnifyKey,
 {
     type Output = VarValue<K>;
     fn index(&self, index: usize) -> &VarValue<K> {
@@ -139,14 +138,16 @@ impl<K: UnifyKey> sv::SnapshotVecDelegate for Delegate<K> {
 #[cfg(feature = "persistent")]
 #[derive(Clone, Debug)]
 pub struct Persistent<K: UnifyKey> {
-    values: DVec<VarValue<K>>
+    values: DVec<VarValue<K>>,
 }
 
 // HACK(eddyb) manual impl avoids `Default` bound on `K`.
 #[cfg(feature = "persistent")]
 impl<K: UnifyKey> Default for Persistent<K> {
     fn default() -> Self {
-        Persistent { values: DVec::new() }
+        Persistent {
+            values: DVec::new(),
+        }
     }
 }
 
@@ -175,14 +176,11 @@ impl<K: UnifyKey> UnificationStore for Persistent<K> {
     }
 
     #[inline]
-    fn reset_unifications(
-        &mut self,
-        mut value: impl FnMut(u32) -> VarValue<Self::Key>,
-    ) {
+    fn reset_unifications(&mut self, mut value: impl FnMut(u32) -> VarValue<Self::Key>) {
         // Without extending dogged, there isn't obviously a more
         // efficient way to do this. But it's pretty dumb. Maybe
         // dogged needs a `map`.
-        for i in 0 .. self.values.len() {
+        for i in 0..self.values.len() {
             self.values[i] = value(i as u32);
         }
     }
@@ -203,7 +201,8 @@ impl<K: UnifyKey> UnificationStore for Persistent<K> {
 
     #[inline]
     fn update<F>(&mut self, index: usize, op: F)
-        where F: FnOnce(&mut VarValue<Self::Key>)
+    where
+        F: FnOnce(&mut VarValue<Self::Key>),
     {
         let p = &mut self.values[index];
         op(p);
@@ -212,7 +211,8 @@ impl<K: UnifyKey> UnificationStore for Persistent<K> {
 
 #[cfg(feature = "persistent")]
 impl<K> ops::Index<usize> for Persistent<K>
-    where K: UnifyKey
+where
+    K: UnifyKey,
 {
     type Output = VarValue<K>;
     fn index(&self, index: usize) -> &VarValue<K> {

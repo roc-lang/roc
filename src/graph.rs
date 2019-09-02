@@ -24,7 +24,7 @@
 
 // Find a topological order in a directed graph if one exists.
 
-use collections::{BuildHasher, MutSet, default_hasher};
+use collections::{default_hasher, BuildHasher, MutSet};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::mem;
@@ -189,8 +189,12 @@ where
     if nodes.is_empty() {
         return Ok(Vec::new());
     }
-    let mut succs_map = HashMap::<N, MutSet<N>, BuildHasher>::with_capacity_and_hasher(nodes.len(), default_hasher());
-    let mut preds_map = HashMap::<N, usize, BuildHasher>::with_capacity_and_hasher(nodes.len(), default_hasher());
+    let mut succs_map = HashMap::<N, MutSet<N>, BuildHasher>::with_capacity_and_hasher(
+        nodes.len(),
+        default_hasher(),
+    );
+    let mut preds_map =
+        HashMap::<N, usize, BuildHasher>::with_capacity_and_hasher(nodes.len(), default_hasher());
     for node in nodes.iter() {
         succs_map.insert(node.clone(), successors(node).into_iter().collect());
         preds_map.insert(node.clone(), 0);
@@ -272,10 +276,11 @@ where
 {
     fn new(nodes: &[N], successors: FN) -> Self {
         Params {
-            preorders: nodes
-                .iter()
-                .map(|n| (n.clone(), None))
-                .collect::<HashMap<N, Option<usize>, BuildHasher>>(),
+            preorders: nodes.iter().map(|n| (n.clone(), None)).collect::<HashMap<
+                N,
+                Option<usize>,
+                BuildHasher,
+            >>(),
             c: 0,
             successors,
             p: Vec::new(),

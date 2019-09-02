@@ -1,5 +1,7 @@
-#[macro_use] extern crate pretty_assertions;
-#[macro_use] extern crate indoc;
+#[macro_use]
+extern crate pretty_assertions;
+#[macro_use]
+extern crate indoc;
 extern crate combine;
 extern crate roc;
 
@@ -7,23 +9,27 @@ mod helpers;
 
 #[cfg(test)]
 mod test_parse {
+    use combine::easy;
+    use combine::stream::state::State;
+    use combine::Parser;
+    use helpers::{loc, loc_box, parse_without_loc, standalone_expr, zero_loc_expr};
     use roc::expr::Expr::*;
     use roc::expr::Pattern::*;
     use roc::expr::{Expr, Ident, VariantName};
     use roc::operator::Operator::*;
-    use roc::region::Located;
     use roc::parse_state::IndentablePosition;
-    use combine::Parser;
-    use combine::easy;
-    use combine::stream::state::State;
-    use helpers::{loc, loc_box, zero_loc_expr, parse_without_loc, standalone_expr};
+    use roc::region::Located;
 
     // PARSE TEST HELPERS
 
-    fn easy_parse_standalone(actual_str: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
+    fn easy_parse_standalone(
+        actual_str: &str,
+    ) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
         let parse_state = State::with_positioner(actual_str, IndentablePosition::default());
 
-        standalone_expr().easy_parse(parse_state).map(|(expr, state)| (expr, state.input))
+        standalone_expr()
+            .easy_parse(parse_state)
+            .map(|(expr, state)| (expr, state.input))
     }
 
     fn assert_fully_parses(actual_str: &str, expected_expr: Expr) {
@@ -40,7 +46,9 @@ mod test_parse {
     fn call_by_name(name: &str, args: Vec<Located<Expr>>) -> Expr {
         Apply(
             loc_box(Var(raw(name))),
-            args.into_iter().map(|loc_expr| loc(zero_loc_expr(loc_expr.value))).collect()
+            args.into_iter()
+                .map(|loc_expr| loc(zero_loc_expr(loc_expr.value)))
+                .collect(),
         )
     }
 
@@ -49,68 +57,80 @@ mod test_parse {
     #[test]
     fn empty_list() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 []
-            "#),
-            EmptyList
+            "#
+            ),
+            EmptyList,
         );
     }
 
     #[test]
     fn single_list() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ 1 ]
-            "#),
-            List(vec![loc(Int(1))])
+            "#
+            ),
+            List(vec![loc(Int(1))]),
         );
     }
 
     #[test]
     fn multi_list() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [1 , 2,3]
-            "#),
-            List(vec![loc(Int(1)), loc(Int(2)), loc(Int(3))])
+            "#
+            ),
+            List(vec![loc(Int(1)), loc(Int(2)), loc(Int(3))]),
         );
     }
 
     #[test]
     fn list_as_arg() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 func [ 1, 2,3 ]
-            "#),
-            call_by_name("func", vec![loc(
-                List(vec![loc(Int(1)), loc(Int(2)), loc(Int(3))])
-            )])
+            "#
+            ),
+            call_by_name(
+                "func",
+                vec![loc(List(vec![loc(Int(1)), loc(Int(2)), loc(Int(3))]))],
+            ),
         );
     }
 
     #[test]
     fn list_with_function_call() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ foo 1 ]
-            "#),
-            List(vec![loc(call_by_name("foo", vec![loc(Int(1))]))])
+            "#
+            ),
+            List(vec![loc(call_by_name("foo", vec![loc(Int(1))]))]),
         );
     }
 
     #[test]
     fn list_with_multiple_function_calls() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 [ foo 1, bar 2 ]
-            "#),
+            "#
+            ),
             List(vec![
-                 loc(call_by_name("foo", vec![loc(Int(1))])),
-                 loc(call_by_name("bar", vec![loc(Int(2))]))
-            ])
+                loc(call_by_name("foo", vec![loc(Int(1))])),
+                loc(call_by_name("bar", vec![loc(Int(2))])),
+            ]),
         );
     }
-
 
     // STRING LITERALS
 
@@ -128,10 +148,13 @@ mod test_parse {
     #[test]
     fn empty_string() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 ""
-            "#),
-            EmptyStr);
+            "#
+            ),
+            EmptyStr,
+        );
     }
 
     #[test]
@@ -158,9 +181,11 @@ mod test_parse {
     fn string_with_escaped_interpolation() {
         assert_fully_parses(
             // This should NOT be string interpolation, because of the \\
-            indoc!(r#"
+            indoc!(
+                r#"
                 "abcd\\(efg)hij"
-            "#),
+            "#
+            ),
             Expr::Str(r#"abcd\(efg)hij"#.to_string()),
         );
     }
@@ -172,25 +197,26 @@ mod test_parse {
     #[test]
     fn string_with_interpolation_at_end() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 "abcd\(efg)"
-            "#),
-            InterpolatedStr(
-                vec![("abcd".to_string(), loc(raw("efg")))],
-                "".to_string()
+            "#
             ),
+            InterpolatedStr(vec![("abcd".to_string(), loc(raw("efg")))], "".to_string()),
         );
     }
 
     #[test]
     fn string_with_interpolation() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 "abcd\(efg)hij"
-            "#),
+            "#
+            ),
             InterpolatedStr(
                 vec![("abcd".to_string(), loc(raw("efg")))],
-                "hij".to_string()
+                "hij".to_string(),
             ),
         );
     }
@@ -296,11 +322,17 @@ mod test_parse {
     // // NUMBER LITERALS
 
     fn expect_parsed_float<'a>(expected: f64, actual: &str) {
-        assert_eq!(Ok((Float(expected), "".to_string())), parse_without_loc(actual));
+        assert_eq!(
+            Ok((Float(expected), "".to_string())),
+            parse_without_loc(actual)
+        );
     }
 
     fn expect_parsed_int<'a>(expected: i64, actual: &str) {
-        assert_eq!(Ok((Int(expected), "".to_string())), parse_without_loc(actual));
+        assert_eq!(
+            Ok((Int(expected), "".to_string())),
+            parse_without_loc(actual)
+        );
     }
 
     #[test]
@@ -345,11 +377,10 @@ mod test_parse {
             // It's important that this isn't mistaken for
             // a declaration like (x = 1)
             parse_without_loc("x == 1"),
-            Ok((Operator(
-                loc_box(var("x")),
-                loc(Equals),
-                loc_box(Int(1))
-            ), "".to_string()))
+            Ok((
+                Operator(loc_box(var("x")), loc(Equals), loc_box(Int(1))),
+                "".to_string()
+            ))
         );
     }
 
@@ -357,38 +388,33 @@ mod test_parse {
     fn comparison_operators() {
         assert_eq!(
             parse_without_loc("x >= 0"),
-            Ok((Operator(
-                loc_box(var("x")),
-                loc(GreaterThanOrEq),
-                loc_box(Int(0))
-            ), "".to_string()))
+            Ok((
+                Operator(loc_box(var("x")), loc(GreaterThanOrEq), loc_box(Int(0))),
+                "".to_string()
+            ))
         );
         assert_eq!(
             parse_without_loc("x > 0"),
-            Ok((Operator(
-                loc_box(var("x")),
-                loc(GreaterThan),
-                loc_box(Int(0))
-            ), "".to_string()))
+            Ok((
+                Operator(loc_box(var("x")), loc(GreaterThan), loc_box(Int(0))),
+                "".to_string()
+            ))
         );
         assert_eq!(
             parse_without_loc("x <= 0"),
-            Ok((Operator(
-                loc_box(var("x")),
-                loc(LessThanOrEq),
-                loc_box(Int(0))
-            ), "".to_string()))
+            Ok((
+                Operator(loc_box(var("x")), loc(LessThanOrEq), loc_box(Int(0))),
+                "".to_string()
+            ))
         );
         assert_eq!(
             parse_without_loc("x < 0"),
-            Ok((Operator(
-                loc_box(var("x")),
-                loc(LessThan),
-                loc_box(Int(0))
-            ), "".to_string()))
+            Ok((
+                Operator(loc_box(var("x")), loc(LessThan), loc_box(Int(0))),
+                "".to_string()
+            ))
         );
     }
-
 
     #[test]
     fn single_operator() {
@@ -398,7 +424,7 @@ mod test_parse {
                 assert_eq!((*v1).value, Int(1234));
                 assert_eq!(op.value, Plus);
                 assert_eq!((*v2).value, Int(567));
-            },
+            }
 
             _ => panic!("Expression didn't parse"),
         }
@@ -406,62 +432,81 @@ mod test_parse {
 
     #[test]
     fn multiple_operators() {
-        assert_eq!(parse_without_loc("1 + 2 ~/ 3"),
-            Ok((Operator(
-                loc_box(Int(1)),
-                loc(Plus),
-                loc_box(Operator(loc_box(Int(2)), loc(TildeSlash), loc_box(Int(3))))
-            ), "".to_string()))
+        assert_eq!(
+            parse_without_loc("1 + 2 ~/ 3"),
+            Ok((
+                Operator(
+                    loc_box(Int(1)),
+                    loc(Plus),
+                    loc_box(Operator(loc_box(Int(2)), loc(TildeSlash), loc_box(Int(3))))
+                ),
+                "".to_string()
+            ))
         );
     }
 
     #[test]
     fn operators_with_parens() {
-        assert_eq!(parse_without_loc("(1 + 2)"),
-            Ok((Operator(
-                loc_box(Int(1)),
-                loc(Plus),
-                loc_box(Int(2))
-            ), "".to_string()))
+        assert_eq!(
+            parse_without_loc("(1 + 2)"),
+            Ok((
+                Operator(loc_box(Int(1)), loc(Plus), loc_box(Int(2))),
+                "".to_string()
+            ))
         );
 
-        assert_eq!(parse_without_loc("(1 - 2)"),
-            Ok((Operator(
-                loc_box(Int(1)),
-                loc(Minus),
-                loc_box(Int(2))
-            ), "".to_string()))
+        assert_eq!(
+            parse_without_loc("(1 - 2)"),
+            Ok((
+                Operator(loc_box(Int(1)), loc(Minus), loc_box(Int(2))),
+                "".to_string()
+            ))
         );
 
-        assert_eq!(parse_without_loc("(1 + 2 * 3)"),
-            Ok((Operator(
-                loc_box(Int(1)),
-                loc(Plus),
-                loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(Int(3))))
-            ), "".to_string()))
+        assert_eq!(
+            parse_without_loc("(1 + 2 * 3)"),
+            Ok((
+                Operator(
+                    loc_box(Int(1)),
+                    loc(Plus),
+                    loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(Int(3))))
+                ),
+                "".to_string()
+            ))
         );
 
-        assert_eq!(parse_without_loc("1 + (2 * 3)"),
-            Ok((Operator(
-                loc_box(Int(1)),
-                loc(Plus),
-                loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(Int(3))))
-            ), "".to_string()))
+        assert_eq!(
+            parse_without_loc("1 + (2 * 3)"),
+            Ok((
+                Operator(
+                    loc_box(Int(1)),
+                    loc(Plus),
+                    loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(Int(3))))
+                ),
+                "".to_string()
+            ))
         );
 
-        assert_eq!(parse_without_loc("(1 + 2)  * 3"),
-            Ok((Operator(
-                loc_box(Operator(loc_box(Int(1)), loc(Plus), loc_box(Int(2)))),
-                loc(Star),
-                loc_box(Int(3)),
-            ), "".to_string()))
+        assert_eq!(
+            parse_without_loc("(1 + 2)  * 3"),
+            Ok((
+                Operator(
+                    loc_box(Operator(loc_box(Int(1)), loc(Plus), loc_box(Int(2)))),
+                    loc(Star),
+                    loc_box(Int(3)),
+                ),
+                "".to_string()
+            ))
         );
     }
 
     // VAR
 
     fn expect_parsed_var<'a>(expected_str: &'a str) {
-        assert_eq!(Ok((var(expected_str), "".to_string())), parse_without_loc(expected_str));
+        assert_eq!(
+            Ok((var(expected_str), "".to_string())),
+            parse_without_loc(expected_str)
+        );
     }
 
     fn expect_parsed_var_error<'a>(actual_str: &'a str) {
@@ -488,9 +533,9 @@ mod test_parse {
 
     #[test]
     fn var_with_parens() {
-        assert_eq!(parse_without_loc("( x)"), Ok(( var("x"), "".to_string() )));
-        assert_eq!(parse_without_loc("(x )"), Ok(( var("x"), "".to_string() )));
-        assert_eq!(parse_without_loc("( x )"), Ok(( var("x"), "".to_string() )));
+        assert_eq!(parse_without_loc("( x)"), Ok((var("x"), "".to_string())));
+        assert_eq!(parse_without_loc("(x )"), Ok((var("x"), "".to_string())));
+        assert_eq!(parse_without_loc("( x )"), Ok((var("x"), "".to_string())));
     }
 
     fn vname(name: &str) -> VariantName {
@@ -515,17 +560,9 @@ mod test_parse {
 
     #[test]
     fn apply() {
-        expect_parsed_apply(
-            "(x) y",
-            var("x"),
-            var("y")
-        );
+        expect_parsed_apply("(x) y", var("x"), var("y"));
 
-        expect_parsed_apply(
-            "(x 5) y",
-            call_by_name("x", vec![loc(Int(5))]),
-            var("y")
-        );
+        expect_parsed_apply("(x 5) y", call_by_name("x", vec![loc(Int(5))]), var("y"));
 
         expect_parsed_apply(
             "(x 5) (y 6)",
@@ -533,18 +570,13 @@ mod test_parse {
             call_by_name("y", vec![loc(Int(6))]),
         );
 
-        expect_parsed_apply(
-            "(5) (6)",
-            Int(5),
-            Int(6)
-        );
+        expect_parsed_apply("(5) (6)", Int(5), Int(6));
     }
 
     #[test]
     fn invalid_apply() {
         expect_parsed_apply_error("(x 5)y");
     }
-
 
     // TODO write a bunch of parenthetical expression tests - try to repeat
     // all of the above tests except with parens too!
@@ -555,99 +587,114 @@ mod test_parse {
     #[test]
     fn single_arg_closure() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 \a -> b
-            "#),
-            Closure(
-                vec![loc(Identifier("a".to_string()))],
-                loc_box(var("b"))
-            )
+            "#
+            ),
+            Closure(vec![loc(Identifier("a".to_string()))], loc_box(var("b"))),
         );
     }
 
     #[test]
     fn multi_arg_closure() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 \a b -> c
-            "#),
+            "#
+            ),
             Closure(
-                vec![loc(Identifier("a".to_string())), loc(Identifier("b".to_string()))],
-                loc_box(var("c"))
-            )
+                vec![
+                    loc(Identifier("a".to_string())),
+                    loc(Identifier("b".to_string())),
+                ],
+                loc_box(var("c")),
+            ),
         );
     }
 
     #[test]
     fn assign_closure() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 foo = \a b -> c
 
                 foo
-            "#),
+            "#
+            ),
             Assign(
                 vec![(
                     loc(Identifier("foo".to_string())),
                     loc(Closure(
-                        vec![loc(Identifier("a".to_string())), loc(Identifier("b".to_string()))],
-                        loc_box(var("c"))
-                    ))
+                        vec![
+                            loc(Identifier("a".to_string())),
+                            loc(Identifier("b".to_string())),
+                        ],
+                        loc_box(var("c")),
+                    )),
                 )],
-                loc_box(var("foo"))
-            )
+                loc_box(var("foo")),
+            ),
         );
     }
 
     #[test]
     fn call_named_closure() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 x = \a b -> 5
 
                 foo 1
-            "#),
+            "#
+            ),
             Assign(
                 vec![(
                     loc(Identifier("x".to_string())),
                     loc(Closure(
-                        vec![loc(Identifier("a".to_string())), loc(Identifier("b".to_string()))],
-                        loc_box(Int(5))
-                    ))
+                        vec![
+                            loc(Identifier("a".to_string())),
+                            loc(Identifier("b".to_string())),
+                        ],
+                        loc_box(Int(5)),
+                    )),
                 )],
-                loc_box(call_by_name("foo", vec![loc(Int(1))]))
-            )
+                loc_box(call_by_name("foo", vec![loc(Int(1))])),
+            ),
         );
     }
 
     #[test]
     fn multiple_assign_call_closure() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 foo = \a b -> 7
                 bar = 5
 
                 baz 1
-            "#),
+            "#
+            ),
             Assign(
                 vec![
                     (
                         loc(Identifier("foo".to_string())),
                         loc(Closure(
-                            vec![loc(Identifier("a".to_string())), loc(Identifier("b".to_string()))],
-                            loc_box(Int(7))
-                        ))
+                            vec![
+                                loc(Identifier("a".to_string())),
+                                loc(Identifier("b".to_string())),
+                            ],
+                            loc_box(Int(7)),
+                        )),
                     ),
-                    (
-                        loc(Identifier("bar".to_string())),
-                        loc(Int(5))
-                    )
+                    (loc(Identifier("bar".to_string())), loc(Int(5))),
                 ],
-                loc_box(call_by_name("baz", vec![loc(Int(1))]))
-            )
+                loc_box(call_by_name("baz", vec![loc(Int(1))])),
+            ),
         );
     }
-
 
     // FUNC
 
@@ -681,48 +728,70 @@ mod test_parse {
 
     #[test]
     fn multi_arg_func() {
-        expect_parsed_func("f 1  23  456", "f", vec![loc(Int(1)), loc(Int(23)), loc(Int(456))]);
+        expect_parsed_func(
+            "f 1  23  456",
+            "f",
+            vec![loc(Int(1)), loc(Int(23)), loc(Int(456))],
+        );
         expect_parsed_func("foo  bar 'z'", "foo", vec![loc(var("bar")), loc(Char('z'))]);
-        expect_parsed_func("foo \"hi\" 1 blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(var("blah"))]);
+        expect_parsed_func(
+            "foo \"hi\" 1 blah",
+            "foo",
+            vec![loc(Str("hi".to_string())), loc(Int(1)), loc(var("blah"))],
+        );
     }
 
     #[test]
     fn multi_arg_func_with_parens() {
-        expect_parsed_func("f (1)  23  456", "f", vec![loc(Int(1)), loc(Int(23)), loc(Int(456))]);
-        expect_parsed_func("foo  bar ('z')", "foo", vec![loc(var("bar")), loc(Char('z'))]);
-        expect_parsed_func("foo 1 (bar \"hi\") 2 (blah)", "foo", vec![
-            loc(Int(1)),
-            loc(call_by_name("bar", vec![loc(Str("hi".to_string()))])),
-            loc(Int(2)),
-            loc(var("blah"))
-        ]);
+        expect_parsed_func(
+            "f (1)  23  456",
+            "f",
+            vec![loc(Int(1)), loc(Int(23)), loc(Int(456))],
+        );
+        expect_parsed_func(
+            "foo  bar ('z')",
+            "foo",
+            vec![loc(var("bar")), loc(Char('z'))],
+        );
+        expect_parsed_func(
+            "foo 1 (bar \"hi\") 2 (blah)",
+            "foo",
+            vec![
+                loc(Int(1)),
+                loc(call_by_name("bar", vec![loc(Str("hi".to_string()))])),
+                loc(Int(2)),
+                loc(var("blah")),
+            ],
+        );
     }
 
     #[test]
     fn multiline_func() {
         expect_parsed_func("f\n 1", "f", vec![loc(Int(1))]);
-        expect_parsed_func("foo  bar\n 'z'", "foo", vec![loc(var("bar")), loc(Char('z'))]);
-        expect_parsed_func("foo \"hi\"\n 1\n blah", "foo", vec![loc(Str("hi".to_string())), loc(Int(1)), loc(var("blah"))]);
+        expect_parsed_func(
+            "foo  bar\n 'z'",
+            "foo",
+            vec![loc(var("bar")), loc(Char('z'))],
+        );
+        expect_parsed_func(
+            "foo \"hi\"\n 1\n blah",
+            "foo",
+            vec![loc(Str("hi".to_string())), loc(Int(1)), loc(var("blah"))],
+        );
     }
 
     #[test]
     fn func_with_operator() {
         assert_eq!(
             parse_without_loc("f 5 + 6"),
-            Ok(
-                (
-                    Operator(
-                        loc_box(
-                            call_by_name("f",
-                                vec![loc(Int(5))],
-                            )
-                        ),
-                        loc(Plus),
-                        loc_box(Int(6))
-                    ),
-                    "".to_string()
-                )
-            )
+            Ok((
+                Operator(
+                    loc_box(call_by_name("f", vec![loc(Int(5))],)),
+                    loc(Plus),
+                    loc_box(Int(6))
+                ),
+                "".to_string()
+            ))
         );
     }
 
@@ -730,19 +799,17 @@ mod test_parse {
     fn func_with_operator_and_multiple_args() {
         assert_eq!(
             parse_without_loc("f 1 2 3 + 6"),
-            Ok(
-                (
-                    Operator(
-                        loc_box(
-                            call_by_name("f",
-                                vec![loc(Int(1)), loc(Int(2)), loc(Int(3))],
-                            )
-                        ),
-                        loc(Plus),
-                        loc_box(Int(6))
-                    ),
-                "".to_string())
-            )
+            Ok((
+                Operator(
+                    loc_box(call_by_name(
+                        "f",
+                        vec![loc(Int(1)), loc(Int(2)), loc(Int(3))],
+                    )),
+                    loc(Plus),
+                    loc_box(Int(6))
+                ),
+                "".to_string()
+            ))
         );
     }
 
@@ -786,7 +853,7 @@ mod test_parse {
             Ok((
                 Case(
                     loc_box(Int(1)),
-                    vec![( loc(Identifier("x".to_string())), loc(Int(2)) )]
+                    vec![(loc(Identifier("x".to_string())), loc(Int(2)))]
                 ),
                 "".to_string()
             ))
@@ -801,14 +868,15 @@ mod test_parse {
                 Case(
                     loc_box(Int(1)),
                     vec![(
-                        loc(Variant(loc(vname("Foo")),
+                        loc(Variant(
+                            loc(vname("Foo")),
                             Some(vec![
                                 loc(Identifier("bar".to_string())),
                                 loc(Identifier("baz".to_string()))
                             ])
                         )),
-                        loc(Int(2)) )
-                    ]
+                        loc(Int(2))
+                    )]
                 ),
                 "".to_string()
             ))
@@ -823,8 +891,8 @@ mod test_parse {
                 Case(
                     loc_box(Int(1)),
                     vec![
-                        ( loc(Identifier("x".to_string())), loc(Int(2)) ),
-                        ( loc(Identifier("y".to_string())), loc(Int(3)) )
+                        (loc(Identifier("x".to_string())), loc(Int(2))),
+                        (loc(Identifier("y".to_string())), loc(Int(3)))
                     ]
                 ),
                 "".to_string()
@@ -840,8 +908,8 @@ mod test_parse {
                 Case(
                     loc_box(var("a")),
                     vec![
-                        ( loc(Identifier("b".to_string())), loc(Int(1)) ),
-                        ( loc(Identifier("c".to_string())), loc(Int(2)) ),
+                        (loc(Identifier("b".to_string())), loc(Int(1))),
+                        (loc(Identifier("c".to_string())), loc(Int(2))),
                     ]
                 ),
                 "".to_string()
@@ -860,8 +928,8 @@ mod test_parse {
                         loc(Case(
                             loc_box(var("x")),
                             vec![
-                                ( loc(Identifier("b".to_string())), loc(Int(1)) ),
-                                ( loc(Identifier("c".to_string())), loc(Int(2)) ),
+                                (loc(Identifier("b".to_string())), loc(Int(1))),
+                                (loc(Identifier("c".to_string())), loc(Int(2))),
                             ]
                         ))
                     )],
@@ -879,9 +947,7 @@ mod test_parse {
             Ok((
                 Case(
                     loc_box(var("a")),
-                    vec![
-                        ( loc(Identifier("b".to_string())), loc(Int(1)) ),
-                    ]
+                    vec![(loc(Identifier("b".to_string())), loc(Int(1))),]
                 ),
                 "".to_string()
             ))
@@ -893,12 +959,7 @@ mod test_parse {
         assert_eq!(
             parse_without_loc("case 1 when 2 then 3"),
             Ok((
-                Case(
-                    loc_box(Int(1)),
-                    vec![
-                        ( loc(IntLiteral(2)), loc(Int(3)) ),
-                    ]
-                ),
+                Case(loc_box(Int(1)), vec![(loc(IntLiteral(2)), loc(Int(3))),]),
                 "".to_string()
             ))
         );
@@ -911,9 +972,7 @@ mod test_parse {
             Ok((
                 Case(
                     loc_box(Int(1)),
-                    vec![
-                        ( loc(Variant(loc(vname("Foo")), None)), loc(Int(3)) ),
-                    ]
+                    vec![(loc(Variant(loc(vname("Foo")), None)), loc(Int(3))),]
                 ),
                 "".to_string()
             ))
@@ -927,9 +986,13 @@ mod test_parse {
             Ok((
                 Case(
                     loc_box(Int(1)),
-                    vec![
-                        ( loc(Variant(loc(vname("Foo")), Some(vec![loc(Identifier("x".to_string()))]))), loc(Int(3)) ),
-                    ]
+                    vec![(
+                        loc(Variant(
+                            loc(vname("Foo")),
+                            Some(vec![loc(Identifier("x".to_string()))])
+                        )),
+                        loc(Int(3))
+                    ),]
                 ),
                 "".to_string()
             ))
@@ -944,8 +1007,14 @@ mod test_parse {
                 Case(
                     loc_box(Int(0)),
                     vec![
-                        ( loc(IntLiteral(2)), loc(call_by_name("foo", vec![loc(Int(9))])) ),
-                        ( loc(IntLiteral(1)), loc(call_by_name("bar", vec![loc(Int(8))])) ),
+                        (
+                            loc(IntLiteral(2)),
+                            loc(call_by_name("foo", vec![loc(Int(9))]))
+                        ),
+                        (
+                            loc(IntLiteral(1)),
+                            loc(call_by_name("bar", vec![loc(Int(8))]))
+                        ),
                     ]
                 ),
                 "".to_string()
@@ -959,15 +1028,10 @@ mod test_parse {
     fn indented_if() {
         assert_eq!(
             parse_without_loc("if 12345 then\n  54321\n  else 1337"),
-            Ok(
-                (
-                    If(
-                        loc_box(Int(12345)),
-                        loc_box(Int(54321)),
-                        loc_box(Int(1337))
-                    ),
-                "".to_string())
-            )
+            Ok((
+                If(loc_box(Int(12345)), loc_box(Int(54321)), loc_box(Int(1337))),
+                "".to_string()
+            ))
         );
     }
 
@@ -975,15 +1039,10 @@ mod test_parse {
     fn if_underscore_separated_number() {
         assert_eq!(
             parse_without_loc("if 12_34_5 then 5_4_32_1 else 1_3_37"),
-            Ok(
-                (
-                    If(
-                        loc_box(Int(12345)),
-                        loc_box(Int(54321)),
-                        loc_box(Int(1337))
-                    ),
-                "".to_string())
-            )
+            Ok((
+                If(loc_box(Int(12345)), loc_box(Int(54321)), loc_box(Int(1337))),
+                "".to_string()
+            ))
         );
     }
 
@@ -991,15 +1050,10 @@ mod test_parse {
     fn single_line_if() {
         assert_eq!(
             parse_without_loc("if foo then 1 else 2"),
-            Ok(
-                (
-                    If(
-                        loc_box(var("foo")),
-                        loc_box(Int(1)),
-                        loc_box(Int(2))
-                    ),
-                "".to_string())
-            )
+            Ok((
+                If(loc_box(var("foo")), loc_box(Int(1)), loc_box(Int(2))),
+                "".to_string()
+            ))
         );
     }
 
@@ -1009,15 +1063,10 @@ mod test_parse {
     fn inline_comment() {
         assert_eq!(
             parse_without_loc("if 12345 then # blah blah\n  54321 #whee!\n  else 1337"),
-            Ok(
-                (
-                    If(
-                        loc_box(Int(12345)),
-                        loc_box(Int(54321)),
-                        loc_box(Int(1337))
-                    ),
-                "".to_string())
-            )
+            Ok((
+                If(loc_box(Int(12345)), loc_box(Int(54321)), loc_box(Int(1337))),
+                "".to_string()
+            ))
         );
     }
 
@@ -1025,17 +1074,13 @@ mod test_parse {
     fn inline_comment_in_assignment() {
         assert_eq!(
             parse_without_loc("foo = 1\n# comment\nbar"),
-            Ok(
-                (
-                    Assign(
-                        vec![(
-                            loc(Identifier("foo".to_string())),
-                            loc(Int(1))
-                        )],
-                        loc_box(var("bar")),
-                    ),
-                "".to_string())
-            )
+            Ok((
+                Assign(
+                    vec![(loc(Identifier("foo".to_string())), loc(Int(1)))],
+                    loc_box(var("bar")),
+                ),
+                "".to_string()
+            ))
         );
     }
 
@@ -1043,15 +1088,10 @@ mod test_parse {
     fn horizontal_line_comment() {
         assert_eq!(
             parse_without_loc("if 12345 then ##### Heading #####\n  54321 #whee!\n  else 1337"),
-            Ok(
-                (
-                    If(
-                        loc_box(Int(12345)),
-                        loc_box(Int(54321)),
-                        loc_box(Int(1337))
-                    ),
-                "".to_string())
-            )
+            Ok((
+                If(loc_box(Int(12345)), loc_box(Int(54321)), loc_box(Int(1337))),
+                "".to_string()
+            ))
         );
     }
 
@@ -1060,16 +1100,13 @@ mod test_parse {
     #[test]
     fn block_comment() {
         assert_eq!(
-            parse_without_loc("if 12345### blah\n\nblah etc\nwhee #comment ###then\n  54321\n  else 1337"),
-            Ok(
-                (
-                    If(
-                        loc_box(Int(12345)),
-                        loc_box(Int(54321)),
-                        loc_box(Int(1337))
-                    ),
-                "".to_string())
-            )
+            parse_without_loc(
+                "if 12345### blah\n\nblah etc\nwhee #comment ###then\n  54321\n  else 1337"
+            ),
+            Ok((
+                If(loc_box(Int(12345)), loc_box(Int(54321)), loc_box(Int(1337))),
+                "".to_string()
+            ))
         );
     }
 
@@ -1079,10 +1116,7 @@ mod test_parse {
     fn basic_variant() {
         assert_eq!(
             parse_without_loc("Abc"),
-            Ok((
-                ApplyVariant(vname("Abc"), None),
-                "".to_string()
-            ))
+            Ok((ApplyVariant(vname("Abc"), None), "".to_string()))
         );
     }
 
@@ -1113,10 +1147,7 @@ mod test_parse {
         // Somehow parsing the variant "Abc" worked but "Foo" failed (?!)
         assert_eq!(
             parse_without_loc("F"),
-            Ok((
-                ApplyVariant(vname("F"), None),
-                "".to_string()
-            ))
+            Ok((ApplyVariant(vname("F"), None), "".to_string()))
         );
     }
 
@@ -1127,25 +1158,17 @@ mod test_parse {
         assert_eq!(
             parse_without_loc("one = Abc\n\ntwo = Bar\n\none"),
             Ok((
-                Assign(vec![
-                    (
-                        loc(Identifier(
-                            "one".to_string()
-                        )),
-                        loc(ApplyVariant(
-                            vname("Abc"),
-                            None
-                        )),
-                    ),
-                    (
-                        loc(Identifier(
-                            "two".to_string()
-                        )),
-                        loc(ApplyVariant(
-                            vname("Bar"),
-                            None
-                        )),
-                    )],
+                Assign(
+                    vec![
+                        (
+                            loc(Identifier("one".to_string())),
+                            loc(ApplyVariant(vname("Abc"), None)),
+                        ),
+                        (
+                            loc(Identifier("two".to_string())),
+                            loc(ApplyVariant(vname("Bar"), None)),
+                        )
+                    ],
                     loc_box(var("one"))
                 ),
                 "".to_string()
@@ -1162,67 +1185,43 @@ mod test_parse {
                 loc_box(var("y")),
                 loc(Plus),
                 loc_box(call_by_name("f", vec![loc(Int(6))])),
-            )
+            ),
         );
 
         assert_eq!(
             parse_without_loc("(x 5)"),
-            Ok((
-                call_by_name("x", vec![loc(Int(5))]),
-                "".to_string())
-            )
+            Ok((call_by_name("x", vec![loc(Int(5))]), "".to_string()))
         );
 
-        assert_eq!(
-            parse_without_loc("(5)"),
-            Ok((
-                Int(5),
-                "".to_string())
-            )
-        );
+        assert_eq!(parse_without_loc("(5)"), Ok((Int(5), "".to_string())));
 
         assert_eq!(
             parse_without_loc("((1905))"),
-            Ok((
-                Int(1905),
-                "".to_string())
-            )
+            Ok((Int(1905), "".to_string()))
         );
 
         assert_eq!(
             parse_without_loc("6 + (685)"),
             Ok((
-                Operator(
-                    loc_box(Int(6)),
-                    loc(Plus),
-                    loc_box(Int(685))
-                ),
-                "".to_string())
-            )
+                Operator(loc_box(Int(6)), loc(Plus), loc_box(Int(685))),
+                "".to_string()
+            ))
         );
 
         assert_eq!(
             parse_without_loc("12 + 34"),
             Ok((
-                Operator(
-                    loc_box(Int(12)),
-                    loc(Plus),
-                    loc_box(Int(34))
-                ),
-                "".to_string())
-            )
+                Operator(loc_box(Int(12)), loc(Plus), loc_box(Int(34))),
+                "".to_string()
+            ))
         );
 
         assert_eq!(
             parse_without_loc("(51) + 19"),
             Ok((
-                Operator(
-                    loc_box(Int(51)),
-                    loc(Plus),
-                    loc_box(Int(19))
-                ),
-                "".to_string())
-            )
+                Operator(loc_box(Int(51)), loc(Plus), loc_box(Int(19))),
+                "".to_string()
+            ))
         );
 
         assert_eq!(
@@ -1233,8 +1232,8 @@ mod test_parse {
                     loc(Plus),
                     loc_box(Int(123))
                 ),
-                "".to_string())
-            )
+                "".to_string()
+            ))
         );
 
         assert_eq!(
@@ -1243,16 +1242,10 @@ mod test_parse {
                 Operator(
                     loc_box(call_by_name("x", vec![loc(Int(5))])),
                     loc(Plus),
-                    loc_box(
-                        Operator(
-                            loc_box(Int(2)),
-                            loc(Star),
-                            loc_box(var("y"))
-                        )
-                    )
+                    loc_box(Operator(loc_box(Int(2)), loc(Star), loc_box(var("y"))))
                 ),
-                "".to_string())
-            )
+                "".to_string()
+            ))
         );
     }
 
@@ -1263,18 +1256,10 @@ mod test_parse {
         assert_eq!(
             parse_without_loc("abc =\n  y 1\n\nabc"),
             Ok((
-                Assign(vec![(
-                    loc(Identifier(
-                        "abc".to_string()
-                    )),
-                    loc(call_by_name(
-                        "y",
-                        vec![
-                            loc(Int(
-                                1
-                            ))
-                        ]
-                    ))
+                Assign(
+                    vec![(
+                        loc(Identifier("abc".to_string())),
+                        loc(call_by_name("y", vec![loc(Int(1))]))
                     )],
                     loc_box(var("abc"))
                 ),
@@ -1289,18 +1274,24 @@ mod test_parse {
             // let x = 5 in -10
             parse_without_loc("x = 5\n-10"),
             Ok((
-                Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(Int(-10))),
-                "".to_string())
-            )
+                Assign(
+                    vec![(loc(Identifier("x".to_string())), loc(Int(5)))],
+                    loc_box(Int(-10))
+                ),
+                "".to_string()
+            ))
         );
 
         assert_eq!(
             // let x = 5 in 10
             parse_without_loc("x=5\n-10"),
             Ok((
-                Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(Int(-10))),
-                "".to_string())
-            )
+                Assign(
+                    vec![(loc(Identifier("x".to_string())), loc(Int(5)))],
+                    loc_box(Int(-10))
+                ),
+                "".to_string()
+            ))
         );
     }
 
@@ -1315,9 +1306,10 @@ mod test_parse {
                         loc(Identifier("x".to_string())),
                         loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
                     )],
-                    loc_box(Int(-20))),
-                "".to_string())
-            )
+                    loc_box(Int(-20))
+                ),
+                "".to_string()
+            ))
         );
 
         assert_eq!(
@@ -1329,9 +1321,10 @@ mod test_parse {
                         loc(Identifier("x".to_string())),
                         loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
                     )],
-                    loc_box(Int(-20))),
-                "".to_string())
-            )
+                    loc_box(Int(-20))
+                ),
+                "".to_string()
+            ))
         );
 
         assert_eq!(
@@ -1343,9 +1336,10 @@ mod test_parse {
                         loc(Identifier("x".to_string())),
                         loc(Operator(loc_box(Int(5)), loc(Plus), loc_box(Int(10)))),
                     )],
-                    loc_box(Int(-20))),
-                "".to_string())
-            )
+                    loc_box(Int(-20))
+                ),
+                "".to_string()
+            ))
         );
     }
 
@@ -1360,29 +1354,22 @@ mod test_parse {
     #[test]
     fn assign_multiple() {
         assert_fully_parses(
-            indoc!(r#"
+            indoc!(
+                r#"
                 x = 5
                 y = 12
                 z = 7
                 3
-            "#),
+            "#
+            ),
             Assign(
                 vec![
-                    (
-                        loc(Identifier("x".to_string())),
-                        loc(Int(5))
-                    ),
-                    (
-                        loc(Identifier("y".to_string())),
-                        loc(Int(12))
-                    ),
-                    (
-                        loc(Identifier("z".to_string())),
-                        loc(Int(7))
-                    )
+                    (loc(Identifier("x".to_string())), loc(Int(5))),
+                    (loc(Identifier("y".to_string())), loc(Int(12))),
+                    (loc(Identifier("z".to_string())), loc(Int(7))),
                 ],
-                loc_box(Int(3))
-            )
+                loc_box(Int(3)),
+            ),
         );
 
         assert_eq!(
@@ -1393,25 +1380,17 @@ mod test_parse {
                     vec![
                         (
                             loc(Identifier("x".to_string())),
-                            loc(
-                                Operator(
-                                    loc_box(Int(5)), loc(Minus), loc_box(Int(-3))
-                                )
-                            )
+                            loc(Operator(loc_box(Int(5)), loc(Minus), loc_box(Int(-3))))
                         ),
                         (
                             loc(Identifier("y".to_string())),
-                            loc(Operator(
-                                loc_box(Int(12)), loc(Plus), loc_box(Int(7))
-                            ))
+                            loc(Operator(loc_box(Int(12)), loc(Plus), loc_box(Int(7))))
                         )
                     ],
-                    loc_box(Operator(
-                        loc_box(Int(3)), loc(Star), loc_box(Int(-5))
-                    )),
-                    ),
-                "".to_string())
-            )
+                    loc_box(Operator(loc_box(Int(3)), loc(Star), loc_box(Int(-5)))),
+                ),
+                "".to_string()
+            ))
         );
     }
 
@@ -1420,7 +1399,10 @@ mod test_parse {
         assert_eq!(
             parse_without_loc("x=5\nx"),
             Ok((
-                Assign(vec![(loc(Identifier("x".to_string())), loc(Int(5)))], loc_box(var("x"))),
+                Assign(
+                    vec![(loc(Identifier("x".to_string())), loc(Int(5)))],
+                    loc_box(var("x"))
+                ),
                 "".to_string()
             ))
         );
@@ -1460,10 +1442,7 @@ mod test_parse {
         // This was broken because if-expressions were greedily consuming 'i' characters for "if"
         assert_eq!(
             parse_without_loc("x i"),
-            Ok((
-                call_by_name("x", vec![loc(var("i"))]),
-                "".to_string()
-            ))
+            Ok((call_by_name("x", vec![loc(var("i"))]), "".to_string()))
         );
     }
 

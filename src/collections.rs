@@ -14,14 +14,10 @@ pub type BuildHasher = BuildHasherDefault<FxHasher>;
 // FNV is faster but less secure; that's fine, since this compiler
 // doesn't need cryptographically secure hashes, and also is not a
 // server concerned about hash flooding attacks!
-pub type MutMap<K, V> =
-    std::collections::HashMap<K, V, BuildHasher>;
+pub type MutMap<K, V> = std::collections::HashMap<K, V, BuildHasher>;
 
-pub type MutSet<K> =
-    std::collections::HashSet<K, BuildHasher>;
+pub type MutSet<K> = std::collections::HashSet<K, BuildHasher>;
 
-pub type ImMap<K, V> =
-    im_rc::hashmap::HashMap<K, V, BuildHasher>;
+pub type ImMap<K, V> = im_rc::hashmap::HashMap<K, V, BuildHasher>;
 
-pub type ImSet<K> =
-    im_rc::hashset::HashSet<K, BuildHasher>;
+pub type ImSet<K> = im_rc::hashset::HashSet<K, BuildHasher>;

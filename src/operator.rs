@@ -1,23 +1,31 @@
-use std::cmp::Ordering;
 use self::Operator::*;
+use std::cmp::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operator {
     // highest precedence
     Caret,
-    Star, Slash, DoubleSlash, TildeSlash, Percent,
-    Plus, Minus,
-    Equals, LessThan, GreaterThan, LessThanOrEq, GreaterThanOrEq,
+    Star,
+    Slash,
+    DoubleSlash,
+    TildeSlash,
+    Percent,
+    Plus,
+    Minus,
+    Equals,
+    LessThan,
+    GreaterThan,
+    LessThanOrEq,
+    GreaterThanOrEq,
     And,
     Or,
-    Pizza
-    // lowest precedence
+    Pizza, // lowest precedence
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArgSide {
-    Left, 
-    Right
+    Left,
+    Right,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -38,21 +46,23 @@ pub enum Associativity {
     /// non-associative operators:
     ///
     /// comparison: == > >= < <=
-    NonAssociative
+    NonAssociative,
 }
 
 impl Operator {
-	pub fn associativity(&self) -> Associativity {
+    pub fn associativity(&self) -> Associativity {
         use self::Associativity::*;
 
         match self {
-            Pizza | Star | Slash | DoubleSlash | TildeSlash | Percent | Plus | Minus => LeftAssociative,
+            Pizza | Star | Slash | DoubleSlash | TildeSlash | Percent | Plus | Minus => {
+                LeftAssociative
+            }
             And | Or | Caret => RightAssociative,
-            Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => NonAssociative
+            Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => NonAssociative,
         }
     }
 
-	fn precedence(&self) -> u8 {
+    fn precedence(&self) -> u8 {
         match self {
             Caret => 7,
             Star | Slash | DoubleSlash | TildeSlash | Percent => 6,
@@ -60,19 +70,19 @@ impl Operator {
             Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => 4,
             And => 3,
             Or => 2,
-            Pizza => 1
+            Pizza => 1,
         }
-	}
+    }
 }
 
 impl PartialOrd for Operator {
-	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-		Some(self.cmp(other))
-	}
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Ord for Operator {
-	fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.precedence().cmp(&other.precedence())
-	}
+    }
 }
