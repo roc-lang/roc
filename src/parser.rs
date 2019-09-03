@@ -1,4 +1,4 @@
-use bumpalo::collections::{string::String, vec::Vec};
+use bumpalo::collections::string::String;
 use bumpalo::Bump;
 use operator::Operator;
 use region::{self, Located, Region};
@@ -33,21 +33,6 @@ pub struct State<'a> {
     // true at the beginning of each line, then false after encountering
     // the first nonspace char on that line.
     pub is_indenting: bool,
-
-    pub problems: Problems<'a>,
-}
-
-impl<'a> State<'a> {
-    pub fn from_input(input: &'a str, problems: Problems<'a>) -> State<'a> {
-        State {
-            input,
-            problems,
-            line: 0,
-            column: 0,
-            indent_col: 1,
-            is_indenting: true,
-        }
-    }
 }
 
 #[test]
@@ -57,7 +42,19 @@ fn state_size() {
     assert!(std::mem::size_of::<State>() <= std::mem::size_of::<usize>() * 8);
 }
 
-type Problems<'a> = Vec<'a, Located<Problem>>;
+impl<'a> State<'a> {
+    pub fn from_input(input: &'a str) -> State<'a> {
+        State {
+            input,
+            line: 0,
+            column: 0,
+            indent_col: 1,
+            is_indenting: true,
+        }
+    }
+}
+
+type Problems = std::vec::Vec<Located<Problem>>;
 type Ident = str;
 type VariantName = str;
 
@@ -200,21 +197,27 @@ fn pattern_size() {
 pub type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Attempting)>;
 
 pub trait Parser<'a, Output> {
-    fn parse(&self, &'a Bump, &'a mut State<'a>, attempting: Attempting)
-        -> ParseResult<'a, Output>;
+    fn parse(
+        &self,
+        &'a Bump,
+        &'a State<'a>,
+        problems: &mut Problems,
+        attempting: Attempting,
+    ) -> ParseResult<'a, Output>;
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
 where
-    F: Fn(&'a Bump, &'a mut State<'a>, Attempting) -> ParseResult<'a, Output>,
+    F: Fn(&'a Bump, &'a State<'a>, &mut Problems, Attempting) -> ParseResult<'a, Output>,
 {
     fn parse(
         &self,
         arena: &'a Bump,
-        state: &'a mut State<'a>,
+        state: &'a State<'a>,
+        problems: &mut Problems,
         attempting: Attempting,
     ) -> ParseResult<'a, Output> {
-        self(arena, state, attempting)
+        self(arena, state, problems, attempting)
     }
 }
 
@@ -223,9 +226,9 @@ where
     P: Parser<'a, Before>,
     F: Fn(Before) -> After,
 {
-    move |arena, state, attempting| {
+    move |arena, state, problems, attempting| {
         parser
-            .parse(arena, state, attempting)
+            .parse(arena, state, problems, attempting)
             .map(|(next_state, output)| (next_state, transform(output)))
     }
 }
@@ -234,7 +237,7 @@ fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val
 where
     P: Parser<'a, Val>,
 {
-    move |arena, state, _| parser.parse(arena, state, attempting)
+    move |arena, state, problems, _| parser.parse(arena, state, problems, attempting)
 }
 
 /// A keyword with no newlines in it.
@@ -243,7 +246,7 @@ fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
     // in the state, only the column.
     debug_assert!(!kw.contains("\n"));
 
-    move |_arena: &'a Bump, state: &'a mut State<'a>, attempting| {
+    move |_arena: &'a Bump, state: &'a State<'a>, _problems, attempting| {
         let input = state.input;
 
         match input.get(0..kw.len()) {
@@ -270,8 +273,8 @@ where
     P: Parser<'a, A>,
     F: Fn(&A) -> bool,
 {
-    move |arena: &'a Bump, state: &'a mut State<'a>, attempting| {
-        if let Ok((next_state, output)) = parser.parse(arena, state, attempting) {
+    move |arena: &'a Bump, state: &'a State<'a>, problems, attempting| {
+        if let Ok((next_state, output)) = parser.parse(arena, state, problems, attempting) {
             if predicate(&output) {
                 return Ok((next_state, output));
             }
@@ -282,8 +285,9 @@ where
 }
 
 fn any<'a>(
-    arena: &'a Bump,
-    state: &'a mut State<'a>,
+    _arena: &'a Bump,
+    state: &'a State<'a>,
+    _problems: &mut Problems,
     attempting: Attempting,
 ) -> ParseResult<'a, char> {
     let input = state.input;
@@ -383,7 +387,7 @@ pub fn expr<'a>() -> impl Parser<'a, Expr<'a>> {
 }
 
 fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    move |arena: &'a Bump, state: &'a mut State<'a>, attempting| {
+    move |arena: &'a Bump, state: &'a State<'a>, problems: &mut Problems, attempting| {
         let mut chars = state.input.chars();
 
         // String literals must start with a quote.
@@ -418,7 +422,9 @@ fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                     Some('t') => buf.push('\t'),
                     Some('n') => buf.push('\n'),
                     Some('r') => buf.push('\r'),
-                    Some('u') => handle_escaped_unicode(arena, state, &mut chars, &mut buf),
+                    Some('u') => {
+                        handle_escaped_unicode(arena, state, &mut chars, &mut buf, problems)
+                    }
                     Some('(') => panic!("TODO handle string interpolation"),
                     Some(unsupported) => {
                         // TODO don't bail out here! Instead, parse successfully
@@ -480,8 +486,9 @@ fn is_ascii_number(ch: char) -> bool {
 }
 
 fn escaped_unicode_problem<'a>(
+    problems: &mut Problems,
     problem: Problem,
-    state: &'a mut State<'a>,
+    state: &'a State<'a>,
     buf_len: usize,
     hex_str_len: usize,
 ) {
@@ -498,7 +505,7 @@ fn escaped_unicode_problem<'a>(
         end_col,
     };
 
-    state.problems.push(Located {
+    problems.push(Located {
         region,
         value: problem,
     });
@@ -506,9 +513,10 @@ fn escaped_unicode_problem<'a>(
 
 fn handle_escaped_unicode<'a, I>(
     arena: &'a Bump,
-    state: &'a mut State<'a>,
+    state: &'a State<'a>,
     chars: &mut I,
     buf: &mut String<'a>,
+    problems: &mut Problems,
 ) where
     I: Iterator<Item = char>,
 {
@@ -517,6 +525,7 @@ fn handle_escaped_unicode<'a, I>(
     if chars.next() != Some('{') {
         // This is not a blocker. Keep parsing.
         escaped_unicode_problem(
+            problems,
             Problem::MalformedEscapedUnicode,
             state,
             buf.len(),
@@ -537,6 +546,7 @@ fn handle_escaped_unicode<'a, I>(
                     Ok(code_pt) => {
                         if code_pt > 0x10FFFF {
                             escaped_unicode_problem(
+                                problems,
                                 Problem::UnicodeCodePointTooLarge,
                                 state,
                                 buf.len(),
@@ -549,6 +559,7 @@ fn handle_escaped_unicode<'a, I>(
                                 Some(ch) => buf.push(ch),
                                 None => {
                                     escaped_unicode_problem(
+                                        problems,
                                         Problem::InvalidUnicodeCodePoint,
                                         state,
                                         buf.len(),
@@ -560,6 +571,7 @@ fn handle_escaped_unicode<'a, I>(
                     }
                     Err(_) => {
                         escaped_unicode_problem(
+                            problems,
                             Problem::NonHexCharsInUnicodeCodePoint,
                             state,
                             buf.len(),
