@@ -70,4 +70,16 @@ mod test_parser {
             Str("x".into()),
         );
     }
+
+    #[test]
+    fn multi_char_list() {
+        assert_parses_to(
+            indoc!(
+                r#"
+                "foo"
+                "#
+            ),
+            Str("foo".into()),
+        );
+    }
 }
