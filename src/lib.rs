@@ -27,6 +27,6 @@ extern crate im_rc;
 extern crate num;
 
 #[macro_use]
-extern crate combine;
+extern crate combine; // OBSOLETE
 #[macro_use]
 extern crate log;
