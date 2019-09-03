@@ -594,6 +594,10 @@ fn handle_escaped_unicode<'a, 'p, I>(
                         );
                     }
                 }
+
+                // We are now done processing the unicode portion of the string,
+                // so exit the loop without further advancing the iterator.
+                return;
             } else {
                 hex_str.push(hex_char)
             }
