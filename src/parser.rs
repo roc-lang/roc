@@ -108,6 +108,9 @@ pub enum Expr<'a> {
     // Sugar
     If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
     Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
+
+    // Runtime errors
+    MalformedStr(&'a [Located<Problem>]),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -332,7 +335,7 @@ pub enum Attempting {
     List,
     Keyword,
     StringLiteral,
-    EscapedUnicodeChar,
+    UnicodeEscape,
     Expression,
 }
 
@@ -403,6 +406,7 @@ where
     'p: 'a,
 {
     move |arena: &'a Bump, state: &'a State<'a>, problems: &'p mut Problems, attempting| {
+        let initial_problems = problems.len();
         let mut chars = state.input.chars().peekable();
 
         // String literals must start with a quote.
@@ -432,20 +436,8 @@ where
             match ch {
                 // If it's a backslash, escape things.
                 '\\' => match chars.next() {
-                    Some('\\') => buf.push('\\'),
-                    Some('"') => buf.push('"'),
-                    Some('t') => buf.push('\t'),
-                    Some('n') => buf.push('\n'),
-                    Some('r') => buf.push('\r'),
-                    Some('u') => {
-                        handle_escaped_unicode(arena, state, &mut chars, &mut buf, problems)
-                    }
-                    Some('(') => panic!("TODO handle string interpolation"),
-                    Some(unsupported) => {
-                        // TODO don't bail out here! Instead, parse successfully
-                        // as a Problem - like, this string has a problem with
-                        // it, but that doesn't mean we have to fail parsing.
-                        panic!("TODO bad escaped char {}", unsupported)
+                    Some(next_ch) => {
+                        handle_escaped_char(arena, state, next_ch, &mut chars, &mut buf, problems)?
                     }
                     None => {
                         // We ran out of characters before finding a closed quote;
@@ -461,7 +453,14 @@ where
                 '"' => {
                     // We found a closed quote; this is the end of the string!
                     let len_with_quotes = buf.len() + 2;
-                    let expr = Expr::Str(buf.into_bump_str());
+                    let expr = if problems.len() <= initial_problems {
+                        Expr::Str(buf.into_bump_str())
+                    } else {
+                        // Only include the new problems in the Expr.
+                        let first_prob_index = initial_problems - 1;
+
+                        Expr::MalformedStr(&problems[first_prob_index..])
+                    };
 
                     return Ok((
                         State {
@@ -472,6 +471,24 @@ where
                         },
                         expr,
                     ));
+                }
+                '\t' => {
+                    // TODO report the problem and continue.
+                    // Tabs are syntax errors, but maybe the rest of the
+                    // string is fine!
+                    panic!("TODO string had a tab character in it.");
+                }
+                '\r' => {
+                    // TODO report the problem and continue.
+                    // Carriage returns aren't allowed in string literals,
+                    // but maybe the rest of the string is fine!
+                    panic!("TODO string had a tab character in it.");
+                }
+                '\n' => {
+                    // TODO report the problem and then return Err.
+                    // We can't safely assume where the string was supposed
+                    // to end, so this is an unrecoverable error.
+                    panic!("TODO string missing closing quote.");
                 }
                 normal_char => buf.push(normal_char),
             }
@@ -490,6 +507,10 @@ pub enum Problem {
     UnicodeCodePointTooLarge,
     InvalidUnicodeCodePoint,
     MalformedEscapedUnicode,
+    NewlineInLiteral,
+    Tab,
+    CarriageReturn,
+    UnsupportedEscapedChar,
 }
 
 #[inline(always)]
@@ -498,6 +519,31 @@ fn is_ascii_number(ch: char) -> bool {
 
     // the ASCII numbers 0-9
     ascii_val >= 48 && ascii_val <= 57
+}
+
+fn escaped_char_problem<'a, 'p>(
+    problems: &'p mut Problems,
+    problem: Problem,
+    state: &'a State<'a>,
+    buf_len: usize,
+) {
+    let start_line = state.line;
+    let start_col = state.column + buf_len as u32;
+    let end_line = start_line;
+    // +2 due to the `\` and the problematic char
+    let end_col = state.column + 2;
+
+    let region = Region {
+        start_line,
+        start_col,
+        end_line,
+        end_col,
+    };
+
+    problems.push(Located {
+        region,
+        value: problem,
+    });
 }
 
 fn escaped_unicode_problem<'a, 'p>(
@@ -526,19 +572,66 @@ fn escaped_unicode_problem<'a, 'p>(
     });
 }
 
+fn handle_escaped_char<'a, 'p, I>(
+    arena: &'a Bump,
+    state: &'a State<'a>,
+    ch: char,
+    chars: &mut I,
+    buf: &mut String<'a>,
+    problems: &'p mut Problems,
+) -> Result<(), (State<'a>, Attempting)>
+where
+    I: Iterator<Item = char>,
+{
+    match ch {
+        '\\' => buf.push('\\'),
+        '"' => buf.push('"'),
+        't' => buf.push('\t'),
+        'n' => buf.push('\n'),
+        'r' => buf.push('\r'),
+        'u' => handle_escaped_unicode(arena, state, chars, buf, problems)?,
+        '(' => panic!("TODO handle string interpolation"),
+        '\t' => {
+            // Report and continue.
+            // Tabs are syntax errors, but maybe the rest of the string is fine!
+            escaped_char_problem(problems, Problem::Tab, state, buf.len());
+        }
+        '\r' => {
+            // Report and continue.
+            // Carriage returns aren't allowed in string literals,
+            // but maybe the rest of the string is fine!
+            escaped_char_problem(problems, Problem::CarriageReturn, state, buf.len());
+        }
+        '\n' => {
+            // Report and bail out.
+            // We can't safely assume where the string was supposed to end.
+            escaped_char_problem(problems, Problem::NewlineInLiteral, state, buf.len());
+
+            return Err((state.clone(), Attempting::UnicodeEscape));
+        }
+        _ => {
+            // Report and continue.
+            // An unsupported escaped char (e.g. \q) shouldn't halt parsing.
+            escaped_char_problem(problems, Problem::UnsupportedEscapedChar, state, buf.len());
+        }
+    }
+
+    Ok(())
+}
+
 fn handle_escaped_unicode<'a, 'p, I>(
     arena: &'a Bump,
     state: &'a State<'a>,
     chars: &mut I,
     buf: &mut String<'a>,
     problems: &'p mut Problems,
-) where
+) -> Result<(), (State<'a>, Attempting)>
+where
     I: Iterator<Item = char>,
 {
     // \u{00A0} is how you specify a Unicode code point,
     // so we should always see a '{' next.
     if chars.next() != Some('{') {
-        // This is not a blocker. Keep parsing.
         escaped_unicode_problem(
             problems,
             Problem::MalformedEscapedUnicode,
@@ -546,16 +639,21 @@ fn handle_escaped_unicode<'a, 'p, I>(
             buf.len(),
             2, // So far we've parsed `\u`
         );
-    } else {
-        // Stores the accumulated unicode digits
-        let mut hex_str = String::new_in(arena);
 
-        // TODO don't bail out on invalid unicode sequences!
-        // Instead, parse successfully as a Problem - like,
-        // this string has a problem with it, but that doesn't
-        // mean we have to fail parsing.
-        while let Some(hex_char) = chars.next() {
-            if hex_char == '}' {
+        // The rest of the string literal might be fine. Keep parsing!
+        return Ok(());
+    }
+
+    // Stores the accumulated unicode digits
+    let mut hex_str = String::new_in(arena);
+
+    // TODO don't bail out on invalid unicode sequences!
+    // Instead, parse successfully as a Problem - like,
+    // this string has a problem with it, but that doesn't
+    // mean we have to fail parsing.
+    while let Some(hex_char) = chars.next() {
+        match hex_char {
+            '}' => {
                 // Done! Validate and add it to the buffer.
                 match u32::from_str_radix(&hex_str, 16) {
                     Ok(code_pt) => {
@@ -597,10 +695,41 @@ fn handle_escaped_unicode<'a, 'p, I>(
 
                 // We are now done processing the unicode portion of the string,
                 // so exit the loop without further advancing the iterator.
-                return;
-            } else {
-                hex_str.push(hex_char)
+                return Ok(());
             }
+            '\t' => {
+                // Report and continue.
+                // Tabs are syntax errors, but maybe the rest of the string is fine!
+                escaped_unicode_problem(problems, Problem::Tab, state, buf.len(), hex_str.len());
+            }
+            '\r' => {
+                // Report and continue.
+                // Carriage returns aren't allowed in string literals,
+                // but maybe the rest of the string is fine!
+                escaped_unicode_problem(
+                    problems,
+                    Problem::CarriageReturn,
+                    state,
+                    buf.len(),
+                    hex_str.len(),
+                );
+            }
+            '\n' => {
+                // Report and bail out.
+                // We can't safely assume where the string was supposed to end.
+                escaped_unicode_problem(
+                    problems,
+                    Problem::NewlineInLiteral,
+                    state,
+                    buf.len(),
+                    hex_str.len(),
+                );
+
+                return Err((state.clone(), Attempting::UnicodeEscape));
+            }
+            normal_char => hex_str.push(normal_char),
         }
     }
+
+    Ok(())
 }
