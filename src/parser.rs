@@ -403,7 +403,7 @@ where
     'p: 'a,
 {
     move |arena: &'a Bump, state: &'a State<'a>, problems: &'p mut Problems, attempting| {
-        let mut chars = state.input.chars();
+        let mut chars = state.input.chars().peekable();
 
         // String literals must start with a quote.
         // If this doesn't, it must not be a string literal!
@@ -413,7 +413,7 @@ where
 
         // If we have precisely an empty string here, don't bother allocating
         // a buffer; instead, return EmptyStr immediately.
-        if (&mut chars).peekable().peek() == Some(&'"') {
+        if chars.peek() == Some(&'"') {
             return Ok((
                 State {
                     input: &state.input[2..],
