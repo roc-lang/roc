@@ -1,5 +1,8 @@
 use std::fmt;
 
+/// TODO replace Located with this
+pub type Loc<T> = Located<T>;
+
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Region {
     pub start_line: u32,

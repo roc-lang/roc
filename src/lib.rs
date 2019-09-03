@@ -1,12 +1,11 @@
-pub mod expr;
-pub mod parse;
-pub mod parse_state;
-pub mod parser;
 // pub mod eval;
 pub mod canonicalize;
 pub mod collections;
+pub mod deprecated;
+pub mod expr;
 pub mod graph;
 pub mod operator;
+pub mod parse; // DEPRECATED
 pub mod region;
 
 // pub mod string;

@@ -2,7 +2,7 @@ use expr::{Expr, Ident, Pattern, VariantName};
 use operator::Operator;
 use region::{Located, Region};
 
-use parse_state::IndentablePosition;
+use deprecated::parse_state::IndentablePosition;
 use std::char;
 
 use combine::error::{Consumed, ParseError};

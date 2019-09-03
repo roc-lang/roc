@@ -3,9 +3,8 @@ use combine::stream::state::State;
 use combine::stream::Stream;
 use combine::{eof, Parser};
 use roc::collections::MutMap;
+use roc::deprecated::parse_state::IndentablePosition;
 use roc::expr::{Expr, Pattern};
-use roc::parse;
-use roc::parse_state::IndentablePosition;
 use roc::region::{Located, Region};
 use std::hash::Hash;
 
@@ -174,7 +173,7 @@ where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
-    parse::expr().skip(eof())
+    roc::deprecated::parse::expr().skip(eof())
 }
 
 #[allow(dead_code)] // For some reason rustc thinks this isn't used. It is, though, in test_parse.rs

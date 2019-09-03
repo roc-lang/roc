@@ -9,6 +9,47 @@ use operator::Operator::Pizza;
 use region::{Located, Region};
 use std::cmp::Ordering;
 
+// #[derive(Clone, Debug, PartialEq)]
+// pub enum CanExpr {
+//     // Literals
+//     Int(i64),
+//     Float(f64),
+//     EmptyStr,
+//     Str(Box<str>),
+//     Char(char),
+//     List(Vec<Loc<CanExpr>>),
+//     EmptyList,
+//     EmptyRecord,
+// }
+
+// fn _canonicalize<'a>(raw: &'a str, expr: Expr<'a>) -> CanExpr {
+//     use self::CanExpr::*;
+
+//     match expr {
+//         Expr::Int(num) => Int(num),
+//         Expr::Float(num) => Float(num),
+//         Expr::EmptyRecord => EmptyRecord,
+//         Expr::ShortStr(bytes) => {
+//             let boxed: Box<str> = unsafe {
+//                 // This is safe because these bytes were read directly out
+//                 // of a utf-8 string, along appropriate code point boundaries.
+//                 std::str::from_utf8_unchecked(&bytes)
+//             }.into();
+
+//             Str(boxed)
+//         },
+//         Expr::MedStr(offset, len) => {
+//             let boxed: Box<str> = raw[offset..(offset + len as usize)].into();
+
+//             Str(boxed)
+//         }
+//         Expr::LongStr(boxed_str) => Str((*boxed_str).into()),
+//         Expr::EmptyStr => EmptyStr,
+//         Expr::EmptyList => EmptyList,
+//         _ => panic!("disco")
+//     }
+// }
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
