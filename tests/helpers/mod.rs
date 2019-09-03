@@ -17,6 +17,24 @@ pub fn loc<T>(val: T) -> Located<T> {
     Located::new(val, empty_region())
 }
 
+pub fn located<T>(
+    start_line: u32,
+    start_col: u32,
+    end_line: u32,
+    end_col: u32,
+    val: T,
+) -> Located<T> {
+    Located::new(
+        val,
+        Region {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        },
+    )
+}
+
 pub fn empty_region() -> Region {
     Region {
         start_line: 0,

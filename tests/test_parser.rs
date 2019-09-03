@@ -11,6 +11,7 @@ mod helpers;
 #[cfg(test)]
 mod test_parser {
     use bumpalo::Bump;
+    use helpers::located;
     use roc::parser::Expr::{self, *};
     use roc::parser::{Attempting, Parser, Problem, State};
     use roc::region::Located;
@@ -31,7 +32,18 @@ mod test_parser {
         problems
     }
 
-    fn _assert_parse_problems<'a>(
+    fn assert_malformed_str<'a>(input: &'a str, expected_probs: Vec<Located<Problem>>) {
+        let mut problems = Vec::new();
+        let state = State::from_input(&input);
+        let arena = Bump::new();
+        let parser = roc::parser::expr();
+        let answer = parser.parse(&arena, &state, &mut problems, Attempting::Expression);
+        let actual = answer.map(|(_, expr)| expr);
+
+        assert_eq!(Ok(Expr::MalformedStr(expected_probs.as_slice())), actual);
+    }
+
+    fn assert_parse_error<'a>(
         input: &'a str,
         expected_attempting: Attempting,
         expected_probs: Vec<Problem>,
@@ -147,4 +159,107 @@ mod test_parser {
         expect_parsed_str("x\u{00A0}x", r#""x\u{00A0}x""#);
         expect_parsed_str("x\u{101010}x", r#""x\u{101010}x""#);
     }
+
+    #[test]
+    fn string_with_too_large_unicode_escape() {
+        // Should be too big - max size should be 10FFFF.
+        // (Rust has this restriction. I assume it's a good idea.)
+        assert_malformed_str(
+            r#""abc\u{110000}def""#,
+            vec![located(0, 7, 0, 12, Problem::UnicodeCodePointTooLarge)],
+        );
+    }
+
+    #[test]
+    fn string_with_no_unicode_digits() {
+        // No digits specified
+        assert_malformed_str(
+            r#""blah\u{}foo""#,
+            vec![located(0, 5, 0, 8, Problem::NoUnicodeDigits)],
+        );
+    }
+
+    #[test]
+    fn string_with_no_unicode_opening_brace() {
+        // No opening curly brace. It can't be sure if the closing brace
+        // was intended to be a closing brace for the unicode escape, so
+        // report that there were no digits specified.
+        assert_malformed_str(
+            r#""abc\u00A0}def""#,
+            vec![located(0, 4, 0, 5, Problem::NoUnicodeDigits)],
+        );
+    }
+
+    #[test]
+    fn string_with_no_unicode_closing_brace() {
+        // No closing curly brace
+        assert_malformed_str(
+            r#""blah\u{stuff""#,
+            vec![located(0, 5, 0, 12, Problem::MalformedEscapedUnicode)],
+        );
+    }
+
+    #[test]
+    fn string_with_no_unicode_braces() {
+        // No curly braces
+        assert_malformed_str(
+            r#""zzzz\uzzzzz""#,
+            vec![located(0, 5, 0, 6, Problem::NoUnicodeDigits)],
+        );
+    }
+
+    /* #[test] */
+    /* fn string_with_interpolation_at_start() { */
+    /*     assert_fully_parses( */
+    /*         indoc!( */
+    /*             r#" */
+    /*             "\(abc)defg" */
+    /*             "# */
+    /*         ), */
+    /*         InterpolatedStr(vec![("".to_string(), loc(raw("abc")))], "defg".to_string()), */
+    /*     ); */
+    /* } */
+
+    /* #[test] */
+    /* fn string_with_interpolation_at_end() { */
+    /*     assert_fully_parses( */
+    /*         indoc!( */
+    /*             r#" */
+    /*             "abcd\(efg)" */
+    /*         "# */
+    /*         ), */
+    /*         InterpolatedStr(vec![("abcd".to_string(), loc(raw("efg")))], "".to_string()), */
+    /*     ); */
+    /* } */
+
+    /* #[test] */
+    /* fn string_with_interpolation_in_middle() { */
+    /*     assert_fully_parses( */
+    /*         indoc!( */
+    /*             r#" */
+    /*             "abcd\(efg)hij" */
+    /*         "# */
+    /*         ), */
+    /*         InterpolatedStr( */
+    /*             vec![("abcd".to_string(), loc(raw("efg")))], */
+    /*             "hij".to_string(), */
+    /*         ), */
+    /*     ); */
+    /* } */
+
+    /* #[test] */
+    /* fn string_with_multiple_interpolation() { */
+    /* panic!("TODO start, middle, middle again, *and*, end"); */
+    /*     assert_fully_parses( */
+    /*         indoc!( */
+    /*             r#" */
+    /*             "abcd\(efg)hij" */
+    /*         "# */
+    /*         ), */
+    /*         InterpolatedStr( */
+    /*             vec![("abcd".to_string(), loc(raw("efg")))], */
+    /*             "hij".to_string(), */
+    /*         ), */
+    /*     ); */
+    /* } */
 }

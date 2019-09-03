@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use operator::Operator;
 use region::{self, Located, Region};
 use std::char;
+use std::iter::Peekable;
 
 // Strategy:
 //
@@ -421,7 +422,7 @@ where
             return Ok((
                 State {
                     input: &state.input[2..],
-                    column: state.column + 2,
+                    column: state.column + 2, // +2 because `""` has length 2
 
                     ..state.clone()
                 },
@@ -457,9 +458,9 @@ where
                         Expr::Str(buf.into_bump_str())
                     } else {
                         // Only include the new problems in the Expr.
-                        let first_prob_index = initial_problems - 1;
+                        let relevant_problems = &problems[initial_problems..];
 
-                        Expr::MalformedStr(&problems[first_prob_index..])
+                        Expr::MalformedStr(relevant_problems)
                     };
 
                     return Ok((
@@ -501,12 +502,16 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
+    // UNICODE CODE POINT
     /// TODO Invalid hex code - Unicode code points must be specified using hexadecimal characters (the numbers 0-9 and letters A-F)
     NonHexCharsInUnicodeCodePoint,
     /// TODO Invalid Unicode code point. It must be no more than \\u{10FFFF}.
     UnicodeCodePointTooLarge,
     InvalidUnicodeCodePoint,
     MalformedEscapedUnicode,
+    NoUnicodeDigits,
+
+    // STRING LITERAL
     NewlineInLiteral,
     Tab,
     CarriageReturn,
@@ -530,8 +535,8 @@ fn escaped_char_problem<'a, 'p>(
     let start_line = state.line;
     let start_col = state.column + buf_len as u32;
     let end_line = start_line;
-    // +2 due to the `\` and the problematic char
-    let end_col = state.column + 2;
+    // escapes should all be 2 chars long
+    let end_col = state.column + 1;
 
     let region = Region {
         start_line,
@@ -554,10 +559,12 @@ fn escaped_unicode_problem<'a, 'p>(
     hex_str_len: usize,
 ) {
     let start_line = state.line;
-    let start_col = state.column + buf_len as u32;
+    // +1 due to the `"` which precedes buf.
+    let start_col = state.column + buf_len as u32 + 1;
     let end_line = start_line;
-    // +4 due to the `\u{` and `}`
-    let end_col = state.column + hex_str_len as u32 + 4;
+    // +3 due to the `\u{` and another + 1 due to the `}`
+    // -1 to prevent overshooting because end col is inclusive.
+    let end_col = start_col + 3 + hex_str_len as u32 + 1 - 1;
 
     let region = Region {
         start_line,
@@ -572,11 +579,12 @@ fn escaped_unicode_problem<'a, 'p>(
     });
 }
 
+#[inline(always)]
 fn handle_escaped_char<'a, 'p, I>(
     arena: &'a Bump,
     state: &'a State<'a>,
     ch: char,
-    chars: &mut I,
+    chars: &mut Peekable<I>,
     buf: &mut String<'a>,
     problems: &'p mut Problems,
 ) -> Result<(), (State<'a>, Attempting)>
@@ -619,10 +627,11 @@ where
     Ok(())
 }
 
+#[inline(always)]
 fn handle_escaped_unicode<'a, 'p, I>(
     arena: &'a Bump,
     state: &'a State<'a>,
-    chars: &mut I,
+    chars: &mut Peekable<I>,
     buf: &mut String<'a>,
     problems: &'p mut Problems,
 ) -> Result<(), (State<'a>, Attempting)>
@@ -632,17 +641,32 @@ where
     // \u{00A0} is how you specify a Unicode code point,
     // so we should always see a '{' next.
     if chars.next() != Some('{') {
-        escaped_unicode_problem(
-            problems,
-            Problem::MalformedEscapedUnicode,
-            state,
-            buf.len(),
-            2, // So far we've parsed `\u`
-        );
+        let start_line = state.line;
+        // +1 due to the `"` which precedes buf
+        let start_col = state.column + 1 + buf.len() as u32;
+        let end_line = start_line;
+
+        // All we parsed was `\u`, so end on the column after `\`'s column.
+        let end_col = start_col + 1;
+
+        let region = Region {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        };
+
+        problems.push(Located {
+            region,
+            value: Problem::NoUnicodeDigits,
+        });
 
         // The rest of the string literal might be fine. Keep parsing!
         return Ok(());
     }
+
+    // Record the point in the string literal where we started parsing `\u`
+    let start_of_unicode = buf.len();
 
     // Stores the accumulated unicode digits
     let mut hex_str = String::new_in(arena);
@@ -658,13 +682,28 @@ where
                 match u32::from_str_radix(&hex_str, 16) {
                     Ok(code_pt) => {
                         if code_pt > 0x10FFFF {
-                            escaped_unicode_problem(
-                                problems,
-                                Problem::UnicodeCodePointTooLarge,
-                                state,
-                                buf.len(),
-                                hex_str.len(),
-                            );
+                            let start_line = state.line;
+                            // +1 due to the `"` which precedes buf
+                            // +3 due to the `\u{` which precedes the hex digits
+                            let start_col = state.column + 1 + buf.len() as u32 + 3;
+                            let end_line = start_line;
+
+                            // We want to underline only the number. That's the error!
+                            // -1 because we want to end on the last digit, not
+                            // overshoot it.
+                            let end_col = start_col + hex_str.len() as u32 - 1;
+
+                            let region = Region {
+                                start_line,
+                                start_col,
+                                end_line,
+                                end_col,
+                            };
+
+                            problems.push(Located {
+                                region,
+                                value: Problem::UnicodeCodePointTooLarge,
+                            });
                         } else {
                             // If it all checked out, add it to
                             // the main buffer.
@@ -675,7 +714,7 @@ where
                                         problems,
                                         Problem::InvalidUnicodeCodePoint,
                                         state,
-                                        buf.len(),
+                                        start_of_unicode,
                                         hex_str.len(),
                                     );
                                 }
@@ -683,11 +722,17 @@ where
                         }
                     }
                     Err(_) => {
+                        let problem = if hex_str.is_empty() {
+                            Problem::NoUnicodeDigits
+                        } else {
+                            Problem::NonHexCharsInUnicodeCodePoint
+                        };
+
                         escaped_unicode_problem(
                             problems,
-                            Problem::NonHexCharsInUnicodeCodePoint,
+                            problem,
                             state,
-                            buf.len(),
+                            start_of_unicode,
                             hex_str.len(),
                         );
                     }
@@ -700,7 +745,13 @@ where
             '\t' => {
                 // Report and continue.
                 // Tabs are syntax errors, but maybe the rest of the string is fine!
-                escaped_unicode_problem(problems, Problem::Tab, state, buf.len(), hex_str.len());
+                escaped_unicode_problem(
+                    problems,
+                    Problem::Tab,
+                    state,
+                    start_of_unicode,
+                    hex_str.len(),
+                );
             }
             '\r' => {
                 // Report and continue.
@@ -710,7 +761,7 @@ where
                     problems,
                     Problem::CarriageReturn,
                     state,
-                    buf.len(),
+                    start_of_unicode,
                     hex_str.len(),
                 );
             }
@@ -721,13 +772,42 @@ where
                     problems,
                     Problem::NewlineInLiteral,
                     state,
-                    buf.len(),
+                    start_of_unicode,
                     hex_str.len(),
                 );
 
                 return Err((state.clone(), Attempting::UnicodeEscape));
             }
             normal_char => hex_str.push(normal_char),
+        }
+
+        // If we're about to hit the end of the string, and we didn't already
+        // complete parsing a valid unicode escape sequence, this is a malformed
+        // escape sequence - it wasn't terminated!
+        if chars.peek() == Some(&'"') {
+            // Record a problem and exit the loop early, so the string literal
+            // parsing logic can consume the quote and do its job as normal.
+            let start_line = state.line;
+            // +1 due to the `"` which precedes buf.
+            let start_col = state.column + buf.len() as u32 + 1;
+            let end_line = start_line;
+            // +3 due to the `\u{`
+            // -1 to prevent overshooting because end col is inclusive.
+            let end_col = start_col + 3 + hex_str.len() as u32 - 1;
+
+            let region = Region {
+                start_line,
+                start_col,
+                end_line,
+                end_col,
+            };
+
+            problems.push(Located {
+                region,
+                value: Problem::MalformedEscapedUnicode,
+            });
+
+            return Ok(());
         }
     }
 
