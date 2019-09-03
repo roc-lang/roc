@@ -58,4 +58,16 @@ mod test_parser {
             EmptyStr,
         );
     }
+
+    #[test]
+    fn one_char_list() {
+        assert_parses_to(
+            indoc!(
+                r#"
+                "x"
+                "#
+            ),
+            Str("x".into()),
+        );
+    }
 }
