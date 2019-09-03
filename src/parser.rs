@@ -196,35 +196,36 @@ fn pattern_size() {
 
 pub type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Attempting)>;
 
-pub trait Parser<'a, Output> {
+pub trait Parser<'a, 'p, Output> {
     fn parse(
         &self,
         &'a Bump,
         &'a State<'a>,
-        problems: &mut Problems,
+        problems: &'p mut Problems,
         attempting: Attempting,
     ) -> ParseResult<'a, Output>;
 }
 
-impl<'a, F, Output> Parser<'a, Output> for F
+impl<'a, 'p, F, Output> Parser<'a, 'p, Output> for F
 where
-    F: Fn(&'a Bump, &'a State<'a>, &mut Problems, Attempting) -> ParseResult<'a, Output>,
+    F: Fn(&'a Bump, &'a State<'a>, &'p mut Problems, Attempting) -> ParseResult<'a, Output>,
 {
     fn parse(
         &self,
         arena: &'a Bump,
         state: &'a State<'a>,
-        problems: &mut Problems,
+        problems: &'p mut Problems,
         attempting: Attempting,
     ) -> ParseResult<'a, Output> {
         self(arena, state, problems, attempting)
     }
 }
 
-fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+fn map<'a, 'p, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, 'p, After>
 where
-    P: Parser<'a, Before>,
+    P: Parser<'a, 'p, Before>,
     F: Fn(Before) -> After,
+    'p: 'a,
 {
     move |arena, state, problems, attempting| {
         parser
@@ -233,15 +234,19 @@ where
     }
 }
 
-fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
+fn attempt<'a, 'p, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, 'p, Val>
 where
-    P: Parser<'a, Val>,
+    P: Parser<'a, 'p, Val>,
+    'p: 'a,
 {
     move |arena, state, problems, _| parser.parse(arena, state, problems, attempting)
 }
 
 /// A keyword with no newlines in it.
-fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
+fn keyword<'a, 'p>(kw: &'static str) -> impl Parser<'a, 'p, ()>
+where
+    'p: 'a,
+{
     // We can't have newlines because we don't attempt to advance the row
     // in the state, only the column.
     debug_assert!(!kw.contains("\n"));
@@ -268,10 +273,11 @@ fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
     }
 }
 
-fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
+fn satisfies<'a, 'p, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, 'p, A>
 where
-    P: Parser<'a, A>,
+    P: Parser<'a, 'p, A>,
     F: Fn(&A) -> bool,
+    'p: 'a,
 {
     move |arena: &'a Bump, state: &'a State<'a>, problems, attempting| {
         if let Ok((next_state, output)) = parser.parse(arena, state, problems, attempting) {
@@ -284,10 +290,10 @@ where
     }
 }
 
-fn any<'a>(
+fn any<'a, 'p>(
     _arena: &'a Bump,
     state: &'a State<'a>,
-    _problems: &mut Problems,
+    _problems: &'p mut Problems,
     attempting: Attempting,
 ) -> ParseResult<'a, char> {
     let input = state.input;
@@ -312,7 +318,10 @@ fn any<'a>(
     }
 }
 
-fn whitespace<'a>() -> impl Parser<'a, char> {
+fn whitespace<'a, 'p>() -> impl Parser<'a, 'p, char>
+where
+    'p: 'a,
+{
     satisfies(any, |ch| ch.is_whitespace())
 }
 
@@ -382,12 +391,18 @@ pub enum Attempting {
 //     }))
 // }
 
-pub fn expr<'a>() -> impl Parser<'a, Expr<'a>> {
+pub fn expr<'a, 'p>() -> impl Parser<'a, 'p, Expr<'a>>
+where
+    'p: 'a,
+{
     string_literal()
 }
 
-fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    move |arena: &'a Bump, state: &'a State<'a>, problems: &mut Problems, attempting| {
+fn string_literal<'a, 'p>() -> impl Parser<'a, 'p, Expr<'a>>
+where
+    'p: 'a,
+{
+    move |arena: &'a Bump, state: &'a State<'a>, problems: &'p mut Problems, attempting| {
         let mut chars = state.input.chars();
 
         // String literals must start with a quote.
@@ -485,8 +500,8 @@ fn is_ascii_number(ch: char) -> bool {
     ascii_val >= 48 && ascii_val <= 57
 }
 
-fn escaped_unicode_problem<'a>(
-    problems: &mut Problems,
+fn escaped_unicode_problem<'a, 'p>(
+    problems: &'p mut Problems,
     problem: Problem,
     state: &'a State<'a>,
     buf_len: usize,
@@ -511,12 +526,12 @@ fn escaped_unicode_problem<'a>(
     });
 }
 
-fn handle_escaped_unicode<'a, I>(
+fn handle_escaped_unicode<'a, 'p, I>(
     arena: &'a Bump,
     state: &'a State<'a>,
     chars: &mut I,
     buf: &mut String<'a>,
-    problems: &mut Problems,
+    problems: &'p mut Problems,
 ) where
     I: Iterator<Item = char>,
 {

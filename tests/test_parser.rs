@@ -23,15 +23,20 @@ mod test_parser {
         expected_expr: Expr<'a>,
         expected_problems: Vec<Problem>,
     ) {
-        let state = State::from_input(&input);
-        let arena = Bump::new();
-        let mut problems = bumpalo::collections::vec::Vec::new_in(&arena);
-        let attempting = Attempting::Expression;
-        let parser = roc::parser::expr();
-        let answer = parser.parse(&arena, &state, &mut problems, attempting);
-        let actual = answer
-            .map(|(_, expr)| expr)
-            .map_err(|(_, attempting)| attempting);
+        let mut problems = Vec::new();
+
+        {
+            let state = State::from_input(&input);
+            let arena = Bump::new();
+            let attempting = Attempting::Expression;
+            let parser = roc::parser::expr();
+            let answer = parser.parse(&arena, &state, &mut problems, attempting);
+            let actual = answer
+                .map(|(_, expr)| expr)
+                .map_err(|(_, attempting)| attempting);
+
+            assert_eq!(Ok(expected_expr), actual);
+        }
 
         let mut actual_problems: Vec<Problem> = Vec::new();
 
@@ -40,8 +45,6 @@ mod test_parser {
         }
 
         assert_eq!(expected_problems, actual_problems);
-
-        assert_eq!(Ok(expected_expr), actual);
     }
 
     #[test]
