@@ -11,10 +11,8 @@ pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>> {
 
         match chars.next() {
             Some(first_ch) => {
-                if first_ch == '-' {
-                    parse_number_literal(Sign::Negative, first_ch, &mut chars, arena, state)
-                } else if first_ch.is_ascii_digit() {
-                    parse_number_literal(Sign::Positive, first_ch, &mut chars, arena, state)
+                if first_ch == '-' || first_ch.is_ascii_digit() {
+                    parse_number_literal(first_ch, &mut chars, arena, state)
                 } else {
                     Err(unexpected(
                         first_ch,
@@ -31,7 +29,6 @@ pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>> {
 
 #[inline(always)]
 fn parse_number_literal<'a, I>(
-    sign: Sign,
     first_ch: char,
     chars: &mut I,
     arena: &'a Bump,
@@ -40,22 +37,20 @@ fn parse_number_literal<'a, I>(
 where
     I: Iterator<Item = char>,
 {
-    let mut digits_before_decimal = String::with_capacity_in(1, arena);
-    let mut digits_after_decimal = String::new_in(arena);
-    let mut chars_skipped = 0;
+    let mut before_decimal = String::with_capacity_in(1, arena);
+    let mut after_decimal = String::new_in(arena);
     let mut has_decimal_point = false;
+    let mut chars_skipped = 0;
 
-    if sign == Sign::Positive {
-        digits_before_decimal.push(first_ch);
-    }
+    before_decimal.push(first_ch);
 
     while let Some(next_ch) = chars.next() {
         match next_ch {
             digit if next_ch.is_ascii_digit() => {
                 if has_decimal_point {
-                    digits_after_decimal.push(digit);
+                    after_decimal.push(digit);
                 } else {
-                    digits_before_decimal.push(digit);
+                    before_decimal.push(digit);
                 }
             }
             '_' => {
@@ -65,8 +60,7 @@ where
             '.' => {
                 if has_decimal_point {
                     // You only get one decimal point!
-                    let len =
-                        digits_before_decimal.len() + digits_after_decimal.len() + chars_skipped;
+                    let len = before_decimal.len() + after_decimal.len() + chars_skipped;
 
                     return Err(unexpected('.', len, state, Attempting::NumberLiteral));
                 } else {
@@ -75,10 +69,9 @@ where
                 }
             }
             invalid_char => {
-                if digits_before_decimal.is_empty() {
+                if before_decimal.is_empty() {
                     // No digits! We likely parsed a minus sign that's actually an operator.
-                    let len =
-                        digits_before_decimal.len() + digits_after_decimal.len() + chars_skipped;
+                    let len = before_decimal.len() + after_decimal.len() + chars_skipped;
                     return Err(unexpected(
                         invalid_char,
                         len,
@@ -96,35 +89,32 @@ where
     // At this point we have a number, and will definitely succeed.
     // If the number is malformed (too large to fit), we'll succeed with
     // an appropriate Expr which records that.
-    let total_chars_parsed = digits_before_decimal.len() + chars_skipped;
+    let expr = if has_decimal_point {
+        let mut f64_buf = String::with_capacity_in(
+            before_decimal.len()
+            // +1 for the decimal point itself
+            + 1
+            + after_decimal.len(),
+            arena,
+        );
+
+        f64_buf.push_str(&before_decimal);
+        f64_buf.push('.');
+        f64_buf.push_str(&after_decimal);
+
+        match f64_buf.parse::<f64>() {
+            Ok(float) => Expr::Float(float),
+            Err(_) => Expr::MalformedNumber(Problem::TooLarge),
+        }
+    } else {
+        match before_decimal.parse::<i64>() {
+            Ok(int_val) => Expr::Int(int_val),
+            Err(_) => Expr::MalformedNumber(Problem::TooLarge),
+        }
+    };
+
+    let total_chars_parsed = before_decimal.len() + chars_skipped;
     let state = state.advance_without_indenting(total_chars_parsed);
 
-    match digits_before_decimal.parse::<i64>() {
-        Ok(int_val) => {
-            if has_decimal_point {
-                let mut f64_buf = String::with_capacity_in(
-                    digits_before_decimal.len() + 1 + digits_after_decimal.len(),
-                    arena,
-                );
-
-                f64_buf.push_str(&digits_before_decimal);
-                f64_buf.push('.');
-                f64_buf.push_str(&digits_after_decimal);
-
-                match f64_buf.parse::<f64>() {
-                    Ok(float) => Ok((Expr::Float(float), state)),
-                    Err(_) => Ok((Expr::MalformedNumber(Problem::TooLarge), state)),
-                }
-            } else {
-                Ok((Expr::Int(int_val), state))
-            }
-        }
-        Err(_) => Ok((Expr::MalformedNumber(Problem::TooLarge), state)),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Sign {
-    Positive,
-    Negative,
+    Ok((expr, state))
 }
