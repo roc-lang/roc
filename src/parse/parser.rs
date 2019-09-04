@@ -149,17 +149,17 @@ fn state_size() {
 pub type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Attempting)>;
 
 pub trait Parser<'a, Output> {
-    fn parse(&self, &'a Bump, &'a State<'a>, attempting: Attempting) -> ParseResult<'a, Output>;
+    fn parse(&self, &'a Bump, State<'a>, attempting: Attempting) -> ParseResult<'a, Output>;
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
 where
-    F: Fn(&'a Bump, &'a State<'a>, Attempting) -> ParseResult<'a, Output>,
+    F: Fn(&'a Bump, State<'a>, Attempting) -> ParseResult<'a, Output>,
 {
     fn parse(
         &self,
         arena: &'a Bump,
-        state: &'a State<'a>,
+        state: State<'a>,
         attempting: Attempting,
     ) -> ParseResult<'a, Output> {
         self(arena, state, attempting)
@@ -191,7 +191,7 @@ pub fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
     // in the state, only the column.
     debug_assert!(!kw.contains("\n"));
 
-    move |_arena: &'a Bump, state: &'a State<'a>, attempting| {
+    move |_arena: &'a Bump, state: State<'a>, attempting| {
         let input = state.input;
 
         match input.get(0..kw.len()) {
@@ -210,7 +210,7 @@ where
     P: Parser<'a, A>,
     F: Fn(&A) -> bool,
 {
-    move |arena: &'a Bump, state: &'a State<'a>, attempting| {
+    move |arena: &'a Bump, state: State<'a>, attempting| {
         if let Ok((next_state, output)) = parser.parse(arena, state, attempting) {
             if predicate(&output) {
                 return Ok((next_state, output));
@@ -223,7 +223,7 @@ where
 
 pub fn any<'a>(
     _arena: &'a Bump,
-    state: &'a State<'a>,
+    state: State<'a>,
     attempting: Attempting,
 ) -> ParseResult<'a, char> {
     let input = state.input;

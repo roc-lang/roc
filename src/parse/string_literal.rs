@@ -8,14 +8,14 @@ use std::char;
 use std::iter::Peekable;
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    move |arena: &'a Bump, state: &'a State<'a>, attempting: Attempting| {
+    move |arena: &'a Bump, state: State<'a>, attempting: Attempting| {
         let mut problems = Vec::new();
         let mut chars = state.input.chars().peekable();
 
         // String literals must start with a quote.
         // If this doesn't, it must not be a string literal!
         if chars.next() != Some('"') {
-            return Err((state.clone(), attempting));
+            return Err((state, attempting));
         }
 
         // If we have precisely an empty string here, don't bother allocating
@@ -88,14 +88,14 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
         }
 
         // We ran out of characters before finding a closed quote
-        Err((state.clone(), Attempting::StringLiteral))
+        Err((state, Attempting::StringLiteral))
     }
 }
 
 fn escaped_char_problem<'a, 'p>(
     problems: &'p mut Problems,
     problem: Problem,
-    state: &'a State<'a>,
+    state: State<'a>,
     buf_len: usize,
 ) {
     let start_line = state.line;
@@ -120,7 +120,7 @@ fn escaped_char_problem<'a, 'p>(
 fn escaped_unicode_problem<'a, 'p>(
     problems: &'p mut Problems,
     problem: Problem,
-    state: &'a State<'a>,
+    state: State<'a>,
     buf_len: usize,
     hex_str_len: usize,
 ) {
@@ -148,7 +148,7 @@ fn escaped_unicode_problem<'a, 'p>(
 #[inline(always)]
 fn handle_escaped_char<'a, 'p, I>(
     arena: &'a Bump,
-    state: &'a State<'a>,
+    state: State<'a>,
     ch: char,
     chars: &mut Peekable<I>,
     buf: &mut String<'a>,
@@ -181,7 +181,7 @@ where
             // We can't safely assume where the string was supposed to end.
             escaped_char_problem(problems, Problem::NewlineInLiteral, state, buf.len());
 
-            return Err((state.clone(), Attempting::UnicodeEscape));
+            return Err((state, Attempting::UnicodeEscape));
         }
         _ => {
             // Report and continue.
@@ -196,7 +196,7 @@ where
 #[inline(always)]
 fn handle_escaped_unicode<'a, 'p, I>(
     arena: &'a Bump,
-    state: &'a State<'a>,
+    state: State<'a>,
     chars: &mut Peekable<I>,
     buf: &mut String<'a>,
     problems: &'p mut Problems,
@@ -342,7 +342,7 @@ where
                     hex_str.len(),
                 );
 
-                return Err((state.clone(), Attempting::UnicodeEscape));
+                return Err((state, Attempting::UnicodeEscape));
             }
             normal_char => hex_str.push(normal_char),
         }
