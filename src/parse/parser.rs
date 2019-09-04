@@ -252,3 +252,38 @@ fn whitespace<'a>() -> impl Parser<'a, char> {
     // TODO advance the state appropriately, in terms of line, col, indenting, etc.
     satisfies(any, |ch| ch.is_whitespace())
 }
+
+pub fn one_of2<'a, P1, P2, A>(p1: P1, p2: P2) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>, attempting| {
+        if let Ok((next_state, output)) = p1.parse(arena, state, attempting) {
+            Ok((next_state, output))
+        } else if let Ok((next_state, output)) = p2.parse(arena, state, attempting) {
+            Ok((next_state, output))
+        } else {
+            Err((state.clone(), attempting))
+        }
+    }
+}
+
+pub fn one_of3<'a, P1, P2, P3, A>(p1: P1, p2: P2, p3: P3) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>, attempting| {
+        if let Ok((next_state, output)) = p1.parse(arena, state, attempting) {
+            Ok((next_state, output))
+        } else if let Ok((next_state, output)) = p2.parse(arena, state, attempting) {
+            Ok((next_state, output))
+        } else if let Ok((next_state, output)) = p3.parse(arena, state, attempting) {
+            Ok((next_state, output))
+        } else {
+            Err((state.clone(), attempting))
+        }
+    }
+}
