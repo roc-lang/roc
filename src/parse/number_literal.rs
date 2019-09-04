@@ -11,6 +11,7 @@ pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>> {
 
         match chars.next() {
             Some(first_ch) => {
+                // Number literals must start with either an '-' or a digit.
                 if first_ch == '-' || first_ch.is_ascii_digit() {
                     parse_number_literal(first_ch, &mut chars, arena, state)
                 } else {
@@ -42,6 +43,12 @@ where
     let mut has_decimal_point = false;
     let mut chars_skipped = 0;
 
+    // Put the first character into the buffer, even if all we've parsed so
+    // far is a minus sign.
+    //
+    // We have to let i64::parse handle the minus sign (if it's there), because
+    // otherwise if we ask it to parse i64::MIN.to_string() as a positive i64,
+    // it errors because that positive number doesn't fit in an i64!
     before_decimal.push(first_ch);
 
     while let Some(next_ch) = chars.next() {
