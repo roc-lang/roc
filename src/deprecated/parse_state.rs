@@ -18,10 +18,10 @@ pub struct IndentablePosition {
     /// Current line of the input
     pub line: u32,
     /// Current column of the input
-    pub column: u32,
+    pub column: u16,
 
     /// Current indentation level, in columns (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_col: u32,
+    pub indent_col: u16,
 
     // true at the beginning of each line, then false after encountering the first nonspace char.
     pub is_indenting: bool,

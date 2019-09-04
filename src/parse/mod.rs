@@ -7,9 +7,6 @@ use parse::ast::Expr;
 use parse::parser::Parser;
 use parse::string_literal::string_literal;
 
-pub fn expr<'a, 'p>() -> impl Parser<'a, 'p, Expr<'a>>
-where
-    'p: 'a,
-{
+pub fn expr<'a>() -> impl Parser<'a, Expr<'a>> {
     string_literal()
 }

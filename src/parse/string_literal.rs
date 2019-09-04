@@ -99,7 +99,7 @@ fn escaped_char_problem<'a, 'p>(
     buf_len: usize,
 ) {
     let start_line = state.line;
-    let start_col = state.column + buf_len as u32;
+    let start_col = state.column + buf_len as u16;
     let end_line = start_line;
     // escapes should all be 2 chars long
     let end_col = state.column + 1;
@@ -126,11 +126,11 @@ fn escaped_unicode_problem<'a, 'p>(
 ) {
     let start_line = state.line;
     // +1 due to the `"` which precedes buf.
-    let start_col = state.column + buf_len as u32 + 1;
+    let start_col = state.column + buf_len as u16 + 1;
     let end_line = start_line;
     // +3 due to the `\u{` and another + 1 due to the `}`
     // -1 to prevent overshooting because end col is inclusive.
-    let end_col = start_col + 3 + hex_str_len as u32 + 1 - 1;
+    let end_col = start_col + 3 + hex_str_len as u16 + 1 - 1;
 
     let region = Region {
         start_line,
@@ -209,7 +209,7 @@ where
     if chars.next() != Some('{') {
         let start_line = state.line;
         // +1 due to the `"` which precedes buf
-        let start_col = state.column + 1 + buf.len() as u32;
+        let start_col = state.column + 1 + buf.len() as u16;
         let end_line = start_line;
 
         // All we parsed was `\u`, so end on the column after `\`'s column.
@@ -251,13 +251,13 @@ where
                             let start_line = state.line;
                             // +1 due to the `"` which precedes buf
                             // +3 due to the `\u{` which precedes the hex digits
-                            let start_col = state.column + 1 + buf.len() as u32 + 3;
+                            let start_col = state.column + 1 + buf.len() as u16 + 3;
                             let end_line = start_line;
 
                             // We want to underline only the number. That's the error!
                             // -1 because we want to end on the last digit, not
                             // overshoot it.
-                            let end_col = start_col + hex_str.len() as u32 - 1;
+                            let end_col = start_col + hex_str.len() as u16 - 1;
 
                             let region = Region {
                                 start_line,
@@ -355,11 +355,11 @@ where
             // parsing logic can consume the quote and do its job as normal.
             let start_line = state.line;
             // +1 due to the `"` which precedes buf.
-            let start_col = state.column + buf.len() as u32 + 1;
+            let start_col = state.column + buf.len() as u16 + 1;
             let end_line = start_line;
             // +3 due to the `\u{`
             // -1 to prevent overshooting because end col is inclusive.
-            let end_col = start_col + 3 + hex_str.len() as u32 - 1;
+            let end_col = start_col + 3 + hex_str.len() as u16 - 1;
 
             let region = Region {
                 start_line,

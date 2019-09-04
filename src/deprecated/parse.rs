@@ -62,7 +62,7 @@ where
         })
 }
 
-fn indentation<I>() -> impl Parser<Input = I, Output = u32>
+fn indentation<I>() -> impl Parser<Input = I, Output = u16>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -136,7 +136,7 @@ where
         .with(value(()))
 }
 
-fn indented_whitespaces<I>(min_indent: u32) -> impl Parser<Input = I, Output = ()>
+fn indented_whitespaces<I>(min_indent: u16) -> impl Parser<Input = I, Output = ()>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -144,7 +144,7 @@ where
     skip_many(skipped_indented_whitespace_char(min_indent))
 }
 
-fn indented_whitespaces1<I>(min_indent: u32) -> impl Parser<Input = I, Output = ()>
+fn indented_whitespaces1<I>(min_indent: u16) -> impl Parser<Input = I, Output = ()>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -152,7 +152,7 @@ where
     skip_many1(skipped_indented_whitespace_char(min_indent))
 }
 
-fn skipped_indented_whitespace_char<I>(min_indent: u32) -> impl Parser<Input = I, Output = ()>
+fn skipped_indented_whitespace_char<I>(min_indent: u16) -> impl Parser<Input = I, Output = ()>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -186,7 +186,7 @@ where
 /// This is separate from expr_body for the sake of function application,
 /// so it can stop parsing when it reaches an operator (since they have
 /// higher precedence.)
-fn function_arg_expr<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+fn function_arg_expr<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -196,10 +196,10 @@ where
 
 parser! {
     #[inline(always)]
-    fn function_arg_expr_[I](min_indent_ref: u32)(I) -> Expr
+    fn function_arg_expr_[I](min_indent_ref: u16)(I) -> Expr
         where [ I: Stream<Item = char, Position = IndentablePosition> ]
     {
-        // TODO figure out why min_indent_ref has the type &mut u32
+        // TODO figure out why min_indent_ref has the type &mut u16
         let min_indent = *min_indent_ref;
 
         // Rules for expressions that can go in function arguments:
@@ -225,7 +225,7 @@ parser! {
     }
 }
 
-fn expr_body<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+fn expr_body<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -236,10 +236,10 @@ where
 // This macro allows recursive parsers
 parser! {
     #[inline(always)]
-    fn expr_body_[I](min_indent_ref: u32)(I) -> Expr
+    fn expr_body_[I](min_indent_ref: u16)(I) -> Expr
         where [ I: Stream<Item = char, Position = IndentablePosition> ]
     {
-        // TODO figure out why min_indent_ref has the type &mut u32
+        // TODO figure out why min_indent_ref has the type &mut u16
         let min_indent = *min_indent_ref;
 
         located(choice((
@@ -272,7 +272,7 @@ parser! {
     }
 }
 
-pub fn if_expr<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn if_expr<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -296,7 +296,7 @@ where
         })
 }
 
-pub fn case_expr<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn case_expr<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -324,7 +324,7 @@ where
         })
 }
 
-pub fn list<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn list<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -348,7 +348,7 @@ where
     })
 }
 
-pub fn apply_with_parens<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn apply_with_parens<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -376,7 +376,7 @@ where
 }
 
 #[inline(always)]
-fn function_arg<I>(min_indent: u32) -> impl Parser<Input = I, Output = Located<Expr>>
+fn function_arg<I>(min_indent: u16) -> impl Parser<Input = I, Output = Located<Expr>>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -405,7 +405,7 @@ where
     )))
 }
 
-pub fn apply_args<I>(min_indent: u32) -> impl Parser<Input = I, Output = Vec<Located<Expr>>>
+pub fn apply_args<I>(min_indent: u16) -> impl Parser<Input = I, Output = Vec<Located<Expr>>>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -493,7 +493,7 @@ where
 }
 
 pub fn nested_assignment<I>(
-    min_indent: u32,
+    min_indent: u16,
 ) -> impl Parser<Input = I, Output = (Located<Pattern>, Located<Expr>)>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
@@ -530,7 +530,7 @@ where
     )
 }
 
-pub fn assignment<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn assignment<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -570,7 +570,7 @@ where
     })
 }
 
-pub fn func_or_var<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn func_or_var<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -594,7 +594,7 @@ where
 }
 
 /// e.g. \x y => expr
-pub fn closure<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn closure<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -616,7 +616,7 @@ where
 
 parser! {
     #[inline(always)]
-    fn pattern[I](min_indent_ref: u32)(I) -> Pattern
+    fn pattern[I](min_indent_ref: u16)(I) -> Pattern
         where [ I: Stream<Item = char, Position = IndentablePosition> ]
     {
         let min_indent = *min_indent_ref;
@@ -631,7 +631,7 @@ parser! {
     }
 }
 
-pub fn apply_variant<I>(min_indent: u32) -> impl Parser<Input = I, Output = Expr>
+pub fn apply_variant<I>(min_indent: u16) -> impl Parser<Input = I, Output = Expr>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -643,7 +643,7 @@ where
         })
 }
 
-pub fn match_variant<I>(min_indent: u32) -> impl Parser<Input = I, Output = Pattern>
+pub fn match_variant<I>(min_indent: u16) -> impl Parser<Input = I, Output = Pattern>
 where
     I: Stream<Item = char, Position = IndentablePosition>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
