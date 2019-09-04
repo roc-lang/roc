@@ -1,6 +1,5 @@
 use bumpalo::Bump;
 use parse::ast::Attempting;
-use parse::problems::Problems;
 use std::char;
 
 // Strategy:
@@ -21,22 +20,15 @@ pub struct State<'a> {
     /// Current line of the input
     pub line: u32,
     /// Current column of the input
-    pub column: u32,
+    pub column: u16,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_col: u32,
+    pub indent_col: u16,
 
     // true at the beginning of each line, then false after encountering
     // the first nonspace char on that line.
     pub is_indenting: bool,
-}
-
-#[test]
-fn state_size() {
-    // State should always be under 8 machine words, so it fits in a typical
-    // cache line.
-    assert!(std::mem::size_of::<State>() <= std::mem::size_of::<usize>() * 8);
 }
 
 impl<'a> State<'a> {
@@ -49,58 +41,154 @@ impl<'a> State<'a> {
             is_indenting: true,
         }
     }
+
+    /// Increments the line, then resets column, indent_col, and is_indenting.
+    /// This does *not* advance the input.
+    pub fn newline(&self) -> Self {
+        let line = self
+            .line
+            .checked_add(1)
+            .unwrap_or_else(panic_max_line_count_exceeded);
+
+        State {
+            input: self.input,
+            line,
+            column: 0,
+            indent_col: 1,
+            is_indenting: true,
+        }
+    }
+
+    /// Use advance_spaces to advance with indenting.
+    /// This assumes we are *not* advancing with spaces, or at least that
+    /// any spaces on the line were preceded by non-spaces - which would mean
+    /// they weren't eligible to indent anyway.
+    pub fn advance_without_indenting(&self, quantity: usize) -> Self {
+        let column_usize = (self.column as usize)
+            .checked_add(quantity)
+            .unwrap_or_else(panic_max_line_length_exceeded);
+
+        if column_usize > std::u16::MAX as usize {
+            panic_max_line_length_exceeded();
+        }
+
+        State {
+            input: &self.input[quantity..],
+            line: self.line,
+            column: column_usize as u16,
+            indent_col: self.indent_col,
+            // Once we hit a nonspace character, we are no longer indenting.
+            is_indenting: false,
+        }
+    }
+    /// Advance the parser while also indenting as appropriate.
+    /// This assumes we are only advancing with spaces, since they can indent.
+    pub fn advance_spaces(&self, spaces: usize) -> Self {
+        // We'll cast this to u16 later.
+        debug_assert!(spaces <= std::u16::MAX as usize);
+
+        let column_usize = (self.column as usize)
+            .checked_add(spaces)
+            .unwrap_or_else(panic_max_line_length_exceeded);
+
+        if column_usize > std::u16::MAX as usize {
+            panic_max_line_length_exceeded();
+        }
+
+        // Spaces don't affect is_indenting; if we were previously indneting,
+        // we still are, and if we already finished indenting, we're still done.
+        let is_indenting = self.is_indenting;
+
+        // If we're indenting, spaces indent us further.
+        let indent_col = if is_indenting {
+            // This doesn't need to be checked_add because it's always true that
+            // indent_col <= col, so if this could possibly overflow, we would
+            // already have panicked from the column calculation.
+            //
+            // Leaving a debug_assert! in case this invariant someday disappers.
+            debug_assert!(std::u16::MAX - self.indent_col >= spaces as u16);
+
+            self.indent_col + spaces as u16
+        } else {
+            self.indent_col
+        };
+
+        State {
+            input: &self.input[spaces..],
+            line: self.line,
+            column: column_usize as u16,
+            indent_col,
+            is_indenting,
+        }
+    }
+}
+
+#[inline(never)]
+fn panic_max_line_count_exceeded() -> u32 {
+    panic!(
+        "Maximum line count exceeded. Roc only supports compiling files with at most {} lines.",
+        std::u32::MAX
+    )
+}
+
+#[inline(never)]
+fn panic_max_line_length_exceeded() -> usize {
+    panic!(
+"Maximum line length exceeded. Roc only supports compiling files whose lines each contain no more than {} characters.",
+        std::u16::MAX
+    )
+}
+
+#[test]
+fn state_size() {
+    // State should always be under 8 machine words, so it fits in a typical
+    // cache line.
+    assert!(std::mem::size_of::<State>() <= std::mem::size_of::<usize>() * 8);
 }
 
 pub type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Attempting)>;
 
 pub trait Parser<'a, 'p, Output> {
-    fn parse(
-        &self,
-        &'a Bump,
-        &'a State<'a>,
-        problems: &'p mut Problems,
-        attempting: Attempting,
-    ) -> ParseResult<'a, Output>;
+    fn parse(&self, &'a Bump, &'a State<'a>, attempting: Attempting) -> ParseResult<'a, Output>;
 }
 
 impl<'a, 'p, F, Output> Parser<'a, 'p, Output> for F
 where
-    F: Fn(&'a Bump, &'a State<'a>, &'p mut Problems, Attempting) -> ParseResult<'a, Output>,
+    F: Fn(&'a Bump, &'a State<'a>, Attempting) -> ParseResult<'a, Output>,
 {
     fn parse(
         &self,
         arena: &'a Bump,
         state: &'a State<'a>,
-        problems: &'p mut Problems,
         attempting: Attempting,
     ) -> ParseResult<'a, Output> {
-        self(arena, state, problems, attempting)
+        self(arena, state, attempting)
     }
 }
 
-fn map<'a, 'p, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, 'p, After>
+pub fn map<'a, 'p, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, 'p, After>
 where
     P: Parser<'a, 'p, Before>,
     F: Fn(Before) -> After,
     'p: 'a,
 {
-    move |arena, state, problems, attempting| {
+    move |arena, state, attempting| {
         parser
-            .parse(arena, state, problems, attempting)
+            .parse(arena, state, attempting)
             .map(|(next_state, output)| (next_state, transform(output)))
     }
 }
 
-fn attempt<'a, 'p, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, 'p, Val>
+pub fn attempt<'a, 'p, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, 'p, Val>
 where
     P: Parser<'a, 'p, Val>,
     'p: 'a,
 {
-    move |arena, state, problems, _| parser.parse(arena, state, problems, attempting)
+    move |arena, state, _| parser.parse(arena, state, attempting)
 }
 
 /// A keyword with no newlines in it.
-fn keyword<'a, 'p>(kw: &'static str) -> impl Parser<'a, 'p, ()>
+pub fn keyword<'a, 'p>(kw: &'static str) -> impl Parser<'a, 'p, ()>
 where
     'p: 'a,
 {
@@ -108,36 +196,28 @@ where
     // in the state, only the column.
     debug_assert!(!kw.contains("\n"));
 
-    move |_arena: &'a Bump, state: &'a State<'a>, _problems, attempting| {
+    move |_arena: &'a Bump, state: &'a State<'a>, attempting| {
         let input = state.input;
 
         match input.get(0..kw.len()) {
             Some(next) if next == kw => {
                 let len = kw.len();
 
-                Ok((
-                    State {
-                        input: &input[len..],
-                        column: state.column + len as u32,
-
-                        ..state.clone()
-                    },
-                    (),
-                ))
+                Ok((state.advance_without_indenting(len), ()))
             }
             _ => Err((state.clone(), attempting)),
         }
     }
 }
 
-fn satisfies<'a, 'p, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, 'p, A>
+pub fn satisfies<'a, 'p, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, 'p, A>
 where
     P: Parser<'a, 'p, A>,
     F: Fn(&A) -> bool,
     'p: 'a,
 {
-    move |arena: &'a Bump, state: &'a State<'a>, problems, attempting| {
-        if let Ok((next_state, output)) = parser.parse(arena, state, problems, attempting) {
+    move |arena: &'a Bump, state: &'a State<'a>, attempting| {
+        if let Ok((next_state, output)) = parser.parse(arena, state, attempting) {
             if predicate(&output) {
                 return Ok((next_state, output));
             }
@@ -147,10 +227,9 @@ where
     }
 }
 
-fn any<'a, 'p>(
+pub fn any<'a, 'p>(
     _arena: &'a Bump,
     state: &'a State<'a>,
-    _problems: &'p mut Problems,
     attempting: Attempting,
 ) -> ParseResult<'a, char> {
     let input = state.input;
@@ -179,13 +258,6 @@ fn whitespace<'a, 'p>() -> impl Parser<'a, 'p, char>
 where
     'p: 'a,
 {
+    // TODO advance the state appropriately, in terms of line, col, indenting, etc.
     satisfies(any, |ch| ch.is_whitespace())
-}
-
-#[inline(always)]
-fn is_ascii_number(ch: char) -> bool {
-    let ascii_val = ch as u8;
-
-    // the ASCII numbers 0-9
-    ascii_val >= 48 && ascii_val <= 57
 }

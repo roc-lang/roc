@@ -57,7 +57,7 @@ pub enum Expr<'a> {
     Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
 
     // Runtime errors
-    MalformedStr(&'a [Loc<Problem>]),
+    MalformedStr(Box<[Loc<Problem>]>),
 }
 
 #[derive(Clone, Debug, PartialEq)]

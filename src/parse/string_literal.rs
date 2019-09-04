@@ -11,11 +11,8 @@ pub fn string_literal<'a, 'p>() -> impl Parser<'a, 'p, Expr<'a>>
 where
     'p: 'a,
 {
-    move |arena: &'a Bump,
-          state: &'a State<'a>,
-          problems: &'p mut Problems,
-          attempting: Attempting| {
-        let initial_problems = problems.len();
+    move |arena: &'a Bump, state: &'a State<'a>, attempting: Attempting| {
+        let mut problems = Vec::new();
         let mut chars = state.input.chars().peekable();
 
         // String literals must start with a quote.
@@ -28,12 +25,8 @@ where
         // a buffer; instead, return EmptyStr immediately.
         if chars.peek() == Some(&'"') {
             return Ok((
-                State {
-                    input: &state.input[2..],
-                    column: state.column + 2, // +2 because `""` has length 2
-
-                    ..state.clone()
-                },
+                // 2 because `""` has length 2
+                state.advance_without_indenting(2),
                 Expr::EmptyStr,
             ));
         }
@@ -45,9 +38,14 @@ where
             match ch {
                 // If it's a backslash, escape things.
                 '\\' => match chars.next() {
-                    Some(next_ch) => {
-                        handle_escaped_char(arena, state, next_ch, &mut chars, &mut buf, problems)?
-                    }
+                    Some(next_ch) => handle_escaped_char(
+                        arena,
+                        state,
+                        next_ch,
+                        &mut chars,
+                        &mut buf,
+                        &mut problems,
+                    )?,
                     None => {
                         // We ran out of characters before finding a closed quote;
                         // let the loop finish normally, so we end up returning
@@ -62,24 +60,13 @@ where
                 '"' => {
                     // We found a closed quote; this is the end of the string!
                     let len_with_quotes = buf.len() + 2;
-                    let expr = if problems.len() <= initial_problems {
+                    let expr = if problems.is_empty() {
                         Expr::Str(buf.into_bump_str())
                     } else {
-                        // Only include the new problems in the Expr.
-                        let relevant_problems = &problems[initial_problems..];
-
-                        Expr::MalformedStr(relevant_problems)
+                        Expr::MalformedStr(problems.into_boxed_slice())
                     };
 
-                    return Ok((
-                        State {
-                            input: &state.input[len_with_quotes..],
-                            column: state.column + len_with_quotes as u32,
-
-                            ..state.clone()
-                        },
-                        expr,
-                    ));
+                    return Ok((state.advance_without_indenting(len_with_quotes), expr));
                 }
                 '\t' => {
                     // TODO report the problem and continue.

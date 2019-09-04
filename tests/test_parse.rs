@@ -19,57 +19,27 @@ mod test_parser {
     use roc::parse::problems::Problem;
     use roc::region::Located;
 
-    fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) -> Vec<Located<Problem>> {
-        let mut problems = Vec::new();
-
-        {
-            let state = State::from_input(&input);
-            let arena = Bump::new();
-            let parser = parse::expr();
-            let answer = parser.parse(&arena, &state, &mut problems, Attempting::Expression);
-            let actual = answer.map(|(_, expr)| expr);
-
-            assert_eq!(Ok(expected_expr), actual);
-        }
-
-        problems
-    }
-
-    fn assert_malformed_str<'a>(input: &'a str, expected_probs: Vec<Located<Problem>>) {
-        let mut problems = Vec::new();
+    fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
         let state = State::from_input(&input);
         let arena = Bump::new();
         let parser = parse::expr();
-        let answer = parser.parse(&arena, &state, &mut problems, Attempting::Expression);
+        let answer = parser.parse(&arena, &state, Attempting::Expression);
         let actual = answer.map(|(_, expr)| expr);
 
-        assert_eq!(Ok(Expr::MalformedStr(expected_probs.as_slice())), actual);
+        assert_eq!(Ok(expected_expr), actual);
     }
 
-    fn assert_parse_error<'a>(
-        input: &'a str,
-        expected_attempting: Attempting,
-        expected_probs: Vec<Problem>,
-    ) {
-        let mut problems = Vec::new();
-
-        {
-            let state = State::from_input(&input);
-            let arena = Bump::new();
-            let parser = parse::expr();
-            let answer = parser.parse(&arena, &state, &mut problems, Attempting::Expression);
-            let actual = answer.map_err(|(_, attempting)| attempting);
-
-            assert_eq!(Err(expected_attempting), actual);
-        }
+    fn assert_malformed_str<'a>(input: &'a str, expected_probs: Vec<Located<Problem>>) {
+        let state = State::from_input(&input);
+        let arena = Bump::new();
+        let parser = parse::expr();
+        let answer = parser.parse(&arena, &state, Attempting::Expression);
+        let actual = answer.map(|(_, expr)| expr);
 
         assert_eq!(
-            expected_probs,
-            problems
-                .into_iter()
-                .map(|loc_prob| loc_prob.value)
-                .collect::<Vec<Problem>>()
-        )
+            Ok(Expr::MalformedStr(expected_probs.into_boxed_slice())),
+            actual
+        );
     }
 
     /* fn raw(string: &str) -> Ident { */
@@ -265,4 +235,13 @@ mod test_parser {
     /*         ), */
     /*     ); */
     /* } */
+
+    // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
+    //
+    // TODO verify that when a string literal contains a newline before the
+    // closing " it correctly updates both the line *and* column in the State.
+    //
+    // TODO verify that exceeding maximum line length panics
+    // TODO verify that exceeding maximum line count panics
+
 }

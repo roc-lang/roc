@@ -3,7 +3,7 @@ pub mod parser;
 pub mod problems;
 pub mod string_literal;
 
-use parse::ast::{Attempting, Expr};
+use parse::ast::Expr;
 use parse::parser::Parser;
 use parse::string_literal::string_literal;
 
