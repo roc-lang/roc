@@ -148,11 +148,11 @@ fn state_size() {
 
 pub type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Attempting)>;
 
-pub trait Parser<'a, 'p, Output> {
+pub trait Parser<'a, Output> {
     fn parse(&self, &'a Bump, &'a State<'a>, attempting: Attempting) -> ParseResult<'a, Output>;
 }
 
-impl<'a, 'p, F, Output> Parser<'a, 'p, Output> for F
+impl<'a, F, Output> Parser<'a, Output> for F
 where
     F: Fn(&'a Bump, &'a State<'a>, Attempting) -> ParseResult<'a, Output>,
 {
@@ -166,11 +166,10 @@ where
     }
 }
 
-pub fn map<'a, 'p, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, 'p, After>
+pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where
-    P: Parser<'a, 'p, Before>,
+    P: Parser<'a, Before>,
     F: Fn(Before) -> After,
-    'p: 'a,
 {
     move |arena, state, attempting| {
         parser
@@ -179,19 +178,15 @@ where
     }
 }
 
-pub fn attempt<'a, 'p, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, 'p, Val>
+pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
 where
-    P: Parser<'a, 'p, Val>,
-    'p: 'a,
+    P: Parser<'a, Val>,
 {
     move |arena, state, _| parser.parse(arena, state, attempting)
 }
 
 /// A keyword with no newlines in it.
-pub fn keyword<'a, 'p>(kw: &'static str) -> impl Parser<'a, 'p, ()>
-where
-    'p: 'a,
-{
+pub fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
     // We can't have newlines because we don't attempt to advance the row
     // in the state, only the column.
     debug_assert!(!kw.contains("\n"));
@@ -210,11 +205,10 @@ where
     }
 }
 
-pub fn satisfies<'a, 'p, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, 'p, A>
+pub fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
 where
-    P: Parser<'a, 'p, A>,
+    P: Parser<'a, A>,
     F: Fn(&A) -> bool,
-    'p: 'a,
 {
     move |arena: &'a Bump, state: &'a State<'a>, attempting| {
         if let Ok((next_state, output)) = parser.parse(arena, state, attempting) {
@@ -227,7 +221,7 @@ where
     }
 }
 
-pub fn any<'a, 'p>(
+pub fn any<'a>(
     _arena: &'a Bump,
     state: &'a State<'a>,
     attempting: Attempting,
@@ -254,10 +248,7 @@ pub fn any<'a, 'p>(
     }
 }
 
-fn whitespace<'a, 'p>() -> impl Parser<'a, 'p, char>
-where
-    'p: 'a,
-{
+fn whitespace<'a>() -> impl Parser<'a, char> {
     // TODO advance the state appropriately, in terms of line, col, indenting, etc.
     satisfies(any, |ch| ch.is_whitespace())
 }

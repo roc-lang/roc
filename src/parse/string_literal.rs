@@ -7,10 +7,7 @@ use region::{Loc, Region};
 use std::char;
 use std::iter::Peekable;
 
-pub fn string_literal<'a, 'p>() -> impl Parser<'a, 'p, Expr<'a>>
-where
-    'p: 'a,
-{
+pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
     move |arena: &'a Bump, state: &'a State<'a>, attempting: Attempting| {
         let mut problems = Vec::new();
         let mut chars = state.input.chars().peekable();
