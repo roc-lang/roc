@@ -241,7 +241,16 @@ mod test_parser {
     // TODO verify that when a string literal contains a newline before the
     // closing " it correctly updates both the line *and* column in the State.
     //
-    // TODO verify that exceeding maximum line length panics
-    // TODO verify that exceeding maximum line count panics
+    // TODO verify that exceeding maximum line length does NOT panic
+    // TODO verify that exceeding maximum line count does NOT panic
+
+    // NUMBER LITERALS
+
+    #[test]
+    fn positive_int() {
+        assert_parses_to("1", Int(1));
+        assert_parses_to("42", Int(42));
+        assert_parses_to(&std::i64::MAX.to_string(), Int(std::i64::MAX));
+    }
 
 }
