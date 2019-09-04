@@ -20,20 +20,20 @@ mod test_parser {
     use roc::region::Located;
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
-        let state = State::from_input(&input);
+        let state = State::new(&input, Attempting::Expression);
         let arena = Bump::new();
         let parser = parse::expr();
-        let answer = parser.parse(&arena, &state, Attempting::Expression);
+        let answer = parser.parse(&arena, state);
         let actual = answer.map(|(_, expr)| expr);
 
         assert_eq!(Ok(expected_expr), actual);
     }
 
     fn assert_malformed_str<'a>(input: &'a str, expected_probs: Vec<Located<Problem>>) {
-        let state = State::from_input(&input);
+        let state = State::new(&input, Attempting::Expression);
         let arena = Bump::new();
         let parser = parse::expr();
-        let answer = parser.parse(&arena, &state, Attempting::Expression);
+        let answer = parser.parse(&arena, state);
         let actual = answer.map(|(_, expr)| expr);
 
         assert_eq!(

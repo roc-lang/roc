@@ -1,5 +1,7 @@
+use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::Attempting;
+use region::Region;
 use std::char;
 
 // Strategy:
@@ -29,16 +31,19 @@ pub struct State<'a> {
     // true at the beginning of each line, then false after encountering
     // the first nonspace char on that line.
     pub is_indenting: bool,
+
+    pub attempting: Attempting,
 }
 
 impl<'a> State<'a> {
-    pub fn from_input(input: &'a str) -> State<'a> {
+    pub fn new(input: &'a str, attempting: Attempting) -> State<'a> {
         State {
             input,
             line: 0,
             column: 0,
             indent_col: 1,
             is_indenting: true,
+            attempting,
         }
     }
 
@@ -56,6 +61,7 @@ impl<'a> State<'a> {
             column: 0,
             indent_col: 1,
             is_indenting: true,
+            attempting: self.attempting,
         }
     }
 
@@ -79,6 +85,7 @@ impl<'a> State<'a> {
             indent_col: self.indent_col,
             // Once we hit a nonspace character, we are no longer indenting.
             is_indenting: false,
+            attempting: self.attempting,
         }
     }
     /// Advance the parser while also indenting as appropriate.
@@ -119,6 +126,7 @@ impl<'a> State<'a> {
             column: column_usize as u16,
             indent_col,
             is_indenting,
+            attempting: self.attempting,
         }
     }
 }
@@ -146,23 +154,27 @@ fn state_size() {
     assert!(std::mem::size_of::<State>() <= std::mem::size_of::<usize>() * 8);
 }
 
-pub type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Attempting)>;
+pub type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Fail)>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fail {
+    Unexpected(char, Region, Attempting),
+    PredicateFailed(Attempting),
+    LineTooLong(u32 /* which line was too long */),
+    TooManyLines,
+    Eof(Region, Attempting),
+}
 
 pub trait Parser<'a, Output> {
-    fn parse(&self, &'a Bump, State<'a>, attempting: Attempting) -> ParseResult<'a, Output>;
+    fn parse(&self, &'a Bump, State<'a>) -> ParseResult<'a, Output>;
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
 where
-    F: Fn(&'a Bump, State<'a>, Attempting) -> ParseResult<'a, Output>,
+    F: Fn(&'a Bump, State<'a>) -> ParseResult<'a, Output>,
 {
-    fn parse(
-        &self,
-        arena: &'a Bump,
-        state: State<'a>,
-        attempting: Attempting,
-    ) -> ParseResult<'a, Output> {
-        self(arena, state, attempting)
+    fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Output> {
+        self(arena, state)
     }
 }
 
@@ -171,9 +183,9 @@ where
     P: Parser<'a, Before>,
     F: Fn(Before) -> After,
 {
-    move |arena, state, attempting| {
+    move |arena, state| {
         parser
-            .parse(arena, state, attempting)
+            .parse(arena, state)
             .map(|(next_state, output)| (next_state, transform(output)))
     }
 }
@@ -182,25 +194,111 @@ pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a,
 where
     P: Parser<'a, Val>,
 {
-    move |arena, state, _| parser.parse(arena, state, attempting)
+    move |arena, state| {
+        parser.parse(
+            arena,
+            State {
+                attempting,
+                ..state
+            },
+        )
+    }
 }
 
-/// A keyword with no newlines in it.
-pub fn keyword<'a>(kw: &'static str) -> impl Parser<'a, ()> {
+pub fn one_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
+where
+    P: Parser<'a, A>,
+{
+    move |arena, state| match parser.parse(arena, state) {
+        Ok((next_state, first_output)) => {
+            let mut state = next_state;
+            let mut buf = Vec::with_capacity_in(1, arena);
+
+            buf.push(first_output);
+
+            loop {
+                match parser.parse(arena, state) {
+                    Ok((next_state, next_output)) => {
+                        state = next_state;
+                        buf.push(next_output);
+                    }
+                    Err((new_state, _)) => return Ok((new_state, buf)),
+                }
+            }
+        }
+        Err((new_state, _)) => {
+            let attempting = new_state.attempting;
+
+            Err(unexpected_eof(0, new_state, attempting))
+        }
+    }
+}
+
+pub fn unexpected_eof<'a>(
+    chars_consumed: usize,
+    state: State<'a>,
+    attempting: Attempting,
+) -> (State<'a>, Fail) {
+    checked_unexpected(chars_consumed, state, |region| {
+        Fail::Eof(region, attempting)
+    })
+}
+
+pub fn unexpected<'a>(
+    ch: char,
+    chars_consumed: usize,
+    state: State<'a>,
+    attempting: Attempting,
+) -> (State<'a>, Fail) {
+    checked_unexpected(chars_consumed, state, |region| {
+        Fail::Unexpected(ch, region, attempting)
+    })
+}
+
+/// Check for line overflow, then compute a new Region based on chars_consumed
+/// and provide it as a way to construct a Problem.
+/// If maximum line length was exceeded, return a Problem indicating as much.
+#[inline(always)]
+fn checked_unexpected<'a, F>(
+    chars_consumed: usize,
+    state: State<'a>,
+    problem_from_region: F,
+) -> (State<'a>, Fail)
+where
+    F: FnOnce(Region) -> Fail,
+{
+    match (state.column as usize).checked_add(chars_consumed) {
+        Some(end_col) if end_col <= std::u16::MAX as usize => {
+            let region = Region {
+                start_col: state.column,
+                end_col: end_col as u16,
+                start_line: state.line,
+                end_line: state.line,
+            };
+
+            (state, problem_from_region(region))
+        }
+        _ => {
+            let line = state.line;
+
+            (state, Fail::LineTooLong(line))
+        }
+    }
+}
+
+/// A string with no newlines in it.
+pub fn string<'a>(string: &'static str) -> impl Parser<'a, ()> {
     // We can't have newlines because we don't attempt to advance the row
     // in the state, only the column.
-    debug_assert!(!kw.contains("\n"));
+    debug_assert!(!string.contains("\n"));
 
-    move |_arena: &'a Bump, state: State<'a>, attempting| {
+    move |_arena: &'a Bump, state: State<'a>| {
         let input = state.input;
+        let len = string.len();
 
-        match input.get(0..kw.len()) {
-            Some(next) if next == kw => {
-                let len = kw.len();
-
-                Ok((state.advance_without_indenting(len), ()))
-            }
-            _ => Err((state.clone(), attempting)),
+        match input.get(0..len) {
+            Some(next_str) if next_str == string => Ok((state.advance_without_indenting(len), ())),
+            _ => Err(unexpected_eof(len, state, Attempting::Keyword)),
         }
     }
 }
@@ -210,80 +308,81 @@ where
     P: Parser<'a, A>,
     F: Fn(&A) -> bool,
 {
-    move |arena: &'a Bump, state: State<'a>, attempting| {
-        if let Ok((next_state, output)) = parser.parse(arena, state, attempting) {
+    move |arena: &'a Bump, state: State<'a>| {
+        if let Ok((next_state, output)) = parser.parse(arena, state.clone()) {
             if predicate(&output) {
                 return Ok((next_state, output));
             }
         }
 
-        Err((state.clone(), attempting))
+        let fail = Fail::PredicateFailed(state.attempting);
+        Err((state, fail))
     }
 }
 
-pub fn any<'a>(
-    _arena: &'a Bump,
-    state: State<'a>,
-    attempting: Attempting,
-) -> ParseResult<'a, char> {
-    let input = state.input;
+// pub fn any<'a>(
+//     _arena: &'a Bump,
+//     state: State<'a>,
+//     attempting: Attempting,
+// ) -> ParseResult<'a, char> {
+//     let input = state.input;
 
-    match input.chars().next() {
-        Some(ch) => {
-            let len = ch.len_utf8();
-            let mut new_state = State {
-                input: &input[len..],
+//     match input.chars().next() {
+//         Some(ch) => {
+//             let len = ch.len_utf8();
+//             let mut new_state = State {
+//                 input: &input[len..],
 
-                ..state.clone()
-            };
+//                 ..state.clone()
+//             };
 
-            if ch == '\n' {
-                new_state.line = new_state.line + 1;
-                new_state.column = 0;
-            }
+//             if ch == '\n' {
+//                 new_state.line = new_state.line + 1;
+//                 new_state.column = 0;
+//             }
 
-            Ok((new_state, ch))
-        }
-        _ => Err((state.clone(), attempting)),
-    }
-}
+//             Ok((new_state, ch))
+//         }
+//         _ => Err((state.clone(), attempting)),
+//     }
+// }
 
-fn whitespace<'a>() -> impl Parser<'a, char> {
-    // TODO advance the state appropriately, in terms of line, col, indenting, etc.
-    satisfies(any, |ch| ch.is_whitespace())
-}
+// fn whitespace<'a>() -> impl Parser<'a, char> {
+//     // TODO advance the state appropriately, in terms of line, col, indenting, etc.
+//     satisfies(any, |ch| ch.is_whitespace())
+// }
 
-pub fn one_of2<'a, P1, P2, A>(p1: P1, p2: P2) -> impl Parser<'a, A>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, A>,
-{
-    move |arena: &'a Bump, state: State<'a>, attempting| {
-        if let Ok((next_state, output)) = p1.parse(arena, state, attempting) {
-            Ok((next_state, output))
-        } else if let Ok((next_state, output)) = p2.parse(arena, state, attempting) {
-            Ok((next_state, output))
-        } else {
-            Err((state.clone(), attempting))
-        }
-    }
-}
+// pub fn one_of2<'a, P1, P2, A>(p1: P1, p2: P2) -> impl Parser<'a, A>
+// where
+//     P1: Parser<'a, A>,
+//     P2: Parser<'a, A>,
+// {
+//     move |arena: &'a Bump, state: State<'a>, attempting| {
+//         if let Ok((next_state, output)) = p1.parse(arena, state, attempting) {
+//             Ok((next_state, output))
+//         } else if let Ok((next_state, output)) = p2.parse(arena, state, attempting) {
+//             Ok((next_state, output))
+//         } else {
+//             Err((state, attempting))
+//         }
+//     }
+// }
 
-pub fn one_of3<'a, P1, P2, P3, A>(p1: P1, p2: P2, p3: P3) -> impl Parser<'a, A>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, A>,
-    P3: Parser<'a, A>,
-{
-    move |arena: &'a Bump, state: State<'a>, attempting| {
-        if let Ok((next_state, output)) = p1.parse(arena, state, attempting) {
-            Ok((next_state, output))
-        } else if let Ok((next_state, output)) = p2.parse(arena, state, attempting) {
-            Ok((next_state, output))
-        } else if let Ok((next_state, output)) = p3.parse(arena, state, attempting) {
-            Ok((next_state, output))
-        } else {
-            Err((state.clone(), attempting))
-        }
-    }
-}
+// pub fn one_of3<'a, P1, P2, P3, A>(p1: P1, p2: P2, p3: P3) -> impl Parser<'a, A>
+// where
+//     P1: Parser<'a, A>,
+//     P2: Parser<'a, A>,
+//     P3: Parser<'a, A>,
+// {
+//     move |arena: &'a Bump, state: State<'a>, attempting| {
+//         if let Ok((next_state, output)) = p1.parse(arena, state, attempting) {
+//             Ok((next_state, output))
+//         } else if let Ok((next_state, output)) = p2.parse(arena, state, attempting) {
+//             Ok((next_state, output))
+//         } else if let Ok((next_state, output)) = p3.parse(arena, state, attempting) {
+//             Ok((next_state, output))
+//         } else {
+//             Err((state, attempting))
+//         }
+//     }
+// }

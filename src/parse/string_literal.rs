@@ -1,21 +1,27 @@
 use bumpalo::collections::string::String;
 use bumpalo::Bump;
 use parse::ast::{Attempting, Expr};
-use parse::parser::{Parser, State};
+use parse::parser::{unexpected, unexpected_eof, Fail, Parser, State};
 use parse::problems::{Problem, Problems};
 use region::{Loc, Region};
 use std::char;
 use std::iter::Peekable;
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    move |arena: &'a Bump, state: State<'a>, attempting: Attempting| {
+    move |arena: &'a Bump, state: State<'a>| {
         let mut problems = Vec::new();
         let mut chars = state.input.chars().peekable();
 
         // String literals must start with a quote.
         // If this doesn't, it must not be a string literal!
-        if chars.next() != Some('"') {
-            return Err((state, attempting));
+        match chars.next() {
+            Some('"') => (),
+            Some(other_char) => {
+                return Err(unexpected(other_char, 0, state, Attempting::StringLiteral));
+            }
+            None => {
+                return Err(unexpected_eof(0, state, Attempting::StringLiteral));
+            }
         }
 
         // If we have precisely an empty string here, don't bother allocating
@@ -37,7 +43,7 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                 '\\' => match chars.next() {
                     Some(next_ch) => handle_escaped_char(
                         arena,
-                        state,
+                        &state,
                         next_ch,
                         &mut chars,
                         &mut buf,
@@ -88,14 +94,18 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
         }
 
         // We ran out of characters before finding a closed quote
-        Err((state, Attempting::StringLiteral))
+        Err(unexpected_eof(
+            buf.len(),
+            state.clone(),
+            Attempting::StringLiteral,
+        ))
     }
 }
 
 fn escaped_char_problem<'a, 'p>(
     problems: &'p mut Problems,
     problem: Problem,
-    state: State<'a>,
+    state: &State<'a>,
     buf_len: usize,
 ) {
     let start_line = state.line;
@@ -120,7 +130,7 @@ fn escaped_char_problem<'a, 'p>(
 fn escaped_unicode_problem<'a, 'p>(
     problems: &'p mut Problems,
     problem: Problem,
-    state: State<'a>,
+    state: &State<'a>,
     buf_len: usize,
     hex_str_len: usize,
 ) {
@@ -148,12 +158,12 @@ fn escaped_unicode_problem<'a, 'p>(
 #[inline(always)]
 fn handle_escaped_char<'a, 'p, I>(
     arena: &'a Bump,
-    state: State<'a>,
+    state: &State<'a>,
     ch: char,
     chars: &mut Peekable<I>,
     buf: &mut String<'a>,
     problems: &'p mut Problems,
-) -> Result<(), (State<'a>, Attempting)>
+) -> Result<(), (State<'a>, Fail)>
 where
     I: Iterator<Item = char>,
 {
@@ -168,25 +178,29 @@ where
         '\t' => {
             // Report and continue.
             // Tabs are syntax errors, but maybe the rest of the string is fine!
-            escaped_char_problem(problems, Problem::Tab, state, buf.len());
+            escaped_char_problem(problems, Problem::Tab, &state, buf.len());
         }
         '\r' => {
             // Report and continue.
             // Carriage returns aren't allowed in string literals,
             // but maybe the rest of the string is fine!
-            escaped_char_problem(problems, Problem::CarriageReturn, state, buf.len());
+            escaped_char_problem(problems, Problem::CarriageReturn, &state, buf.len());
         }
         '\n' => {
             // Report and bail out.
             // We can't safely assume where the string was supposed to end.
-            escaped_char_problem(problems, Problem::NewlineInLiteral, state, buf.len());
+            escaped_char_problem(problems, Problem::NewlineInLiteral, &state, buf.len());
 
-            return Err((state, Attempting::UnicodeEscape));
+            return Err(unexpected_eof(
+                buf.len(),
+                state.clone(),
+                Attempting::UnicodeEscape,
+            ));
         }
         _ => {
             // Report and continue.
             // An unsupported escaped char (e.g. \q) shouldn't halt parsing.
-            escaped_char_problem(problems, Problem::UnsupportedEscapedChar, state, buf.len());
+            escaped_char_problem(problems, Problem::UnsupportedEscapedChar, &state, buf.len());
         }
     }
 
@@ -196,11 +210,11 @@ where
 #[inline(always)]
 fn handle_escaped_unicode<'a, 'p, I>(
     arena: &'a Bump,
-    state: State<'a>,
+    state: &State<'a>,
     chars: &mut Peekable<I>,
     buf: &mut String<'a>,
     problems: &'p mut Problems,
-) -> Result<(), (State<'a>, Attempting)>
+) -> Result<(), (State<'a>, Fail)>
 where
     I: Iterator<Item = char>,
 {
@@ -279,7 +293,7 @@ where
                                     escaped_unicode_problem(
                                         problems,
                                         Problem::InvalidUnicodeCodePoint,
-                                        state,
+                                        &state,
                                         start_of_unicode,
                                         hex_str.len(),
                                     );
@@ -297,7 +311,7 @@ where
                         escaped_unicode_problem(
                             problems,
                             problem,
-                            state,
+                            &state,
                             start_of_unicode,
                             hex_str.len(),
                         );
@@ -314,7 +328,7 @@ where
                 escaped_unicode_problem(
                     problems,
                     Problem::Tab,
-                    state,
+                    &state,
                     start_of_unicode,
                     hex_str.len(),
                 );
@@ -326,7 +340,7 @@ where
                 escaped_unicode_problem(
                     problems,
                     Problem::CarriageReturn,
-                    state,
+                    &state,
                     start_of_unicode,
                     hex_str.len(),
                 );
@@ -337,12 +351,16 @@ where
                 escaped_unicode_problem(
                     problems,
                     Problem::NewlineInLiteral,
-                    state,
+                    &state,
                     start_of_unicode,
                     hex_str.len(),
                 );
 
-                return Err((state, Attempting::UnicodeEscape));
+                return Err(unexpected_eof(
+                    buf.len(),
+                    state.clone(),
+                    Attempting::UnicodeEscape,
+                ));
             }
             normal_char => hex_str.push(normal_char),
         }

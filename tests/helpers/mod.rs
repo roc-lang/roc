@@ -18,9 +18,9 @@ pub fn loc<T>(val: T) -> Located<T> {
 
 pub fn located<T>(
     start_line: u32,
-    start_col: u32,
+    start_col: u16,
     end_line: u32,
-    end_col: u32,
+    end_col: u16,
     val: T,
 ) -> Located<T> {
     Located::new(

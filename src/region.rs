@@ -5,16 +5,16 @@ pub type Loc<T> = Located<T>;
 
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Region {
-    pub start_col: u16,
-    pub end_col: u16,
     pub start_line: u32,
     pub end_line: u32,
+    pub start_col: u16,
+    pub end_col: u16,
 }
 
 #[test]
 fn region_size() {
     // Region is used all over the place. Avoid increasing its size!
-    assert_eq!(std::mem::size_of::<Region>(), 8);
+    assert_eq!(std::mem::size_of::<Region>(), 12);
 }
 
 impl fmt::Debug for Region {

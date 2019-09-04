@@ -110,6 +110,7 @@ pub enum Attempting {
     List,
     Keyword,
     StringLiteral,
+    NumberLiteral,
     UnicodeEscape,
     Expression,
 }
