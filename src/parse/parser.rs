@@ -154,12 +154,12 @@ fn state_size() {
     assert!(std::mem::size_of::<State>() <= std::mem::size_of::<usize>() * 8);
 }
 
-pub type ParseResult<'a, Output> = Result<(State<'a>, Output), (State<'a>, Fail)>;
+pub type ParseResult<'a, Output> = Result<(Output, State<'a>), (Fail, State<'a>)>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fail {
     Unexpected(char, Region, Attempting),
-    PredicateFailed(Attempting),
+    ConditionFailed(Attempting),
     LineTooLong(u32 /* which line was too long */),
     TooManyLines,
     Eof(Region, Attempting),
@@ -186,7 +186,7 @@ where
     move |arena, state| {
         parser
             .parse(arena, state)
-            .map(|(next_state, output)| (next_state, transform(output)))
+            .map(|(output, next_state)| (transform(output), next_state))
     }
 }
 
@@ -210,7 +210,7 @@ where
     P: Parser<'a, A>,
 {
     move |arena, state| match parser.parse(arena, state) {
-        Ok((next_state, first_output)) => {
+        Ok((first_output, next_state)) => {
             let mut state = next_state;
             let mut buf = Vec::with_capacity_in(1, arena);
 
@@ -218,27 +218,23 @@ where
 
             loop {
                 match parser.parse(arena, state) {
-                    Ok((next_state, next_output)) => {
+                    Ok((next_output, next_state)) => {
                         state = next_state;
                         buf.push(next_output);
                     }
-                    Err((new_state, _)) => return Ok((new_state, buf)),
+                    Err((_, old_state)) => return Ok((buf, old_state)),
                 }
             }
         }
-        Err((new_state, _)) => {
-            let attempting = new_state.attempting;
-
-            Err(unexpected_eof(0, new_state, attempting))
-        }
+        Err((_, new_state)) => Err(unexpected_eof(0, new_state.attempting, new_state)),
     }
 }
 
 pub fn unexpected_eof<'a>(
     chars_consumed: usize,
-    state: State<'a>,
     attempting: Attempting,
-) -> (State<'a>, Fail) {
+    state: State<'a>,
+) -> (Fail, State<'a>) {
     checked_unexpected(chars_consumed, state, |region| {
         Fail::Eof(region, attempting)
     })
@@ -249,7 +245,7 @@ pub fn unexpected<'a>(
     chars_consumed: usize,
     state: State<'a>,
     attempting: Attempting,
-) -> (State<'a>, Fail) {
+) -> (Fail, State<'a>) {
     checked_unexpected(chars_consumed, state, |region| {
         Fail::Unexpected(ch, region, attempting)
     })
@@ -263,7 +259,7 @@ fn checked_unexpected<'a, F>(
     chars_consumed: usize,
     state: State<'a>,
     problem_from_region: F,
-) -> (State<'a>, Fail)
+) -> (Fail, State<'a>)
 where
     F: FnOnce(Region) -> Fail,
 {
@@ -276,13 +272,9 @@ where
                 end_line: state.line,
             };
 
-            (state, problem_from_region(region))
+            (problem_from_region(region), state)
         }
-        _ => {
-            let line = state.line;
-
-            (state, Fail::LineTooLong(line))
-        }
+        _ => (Fail::LineTooLong(state.line), state),
     }
 }
 
@@ -297,8 +289,8 @@ pub fn string<'a>(string: &'static str) -> impl Parser<'a, ()> {
         let len = string.len();
 
         match input.get(0..len) {
-            Some(next_str) if next_str == string => Ok((state.advance_without_indenting(len), ())),
-            _ => Err(unexpected_eof(len, state, Attempting::Keyword)),
+            Some(next_str) if next_str == string => Ok(((), state.advance_without_indenting(len))),
+            _ => Err(unexpected_eof(len, Attempting::Keyword, state)),
         }
     }
 }
@@ -309,14 +301,13 @@ where
     F: Fn(&A) -> bool,
 {
     move |arena: &'a Bump, state: State<'a>| {
-        if let Ok((next_state, output)) = parser.parse(arena, state.clone()) {
+        if let Ok((output, next_state)) = parser.parse(arena, state.clone()) {
             if predicate(&output) {
-                return Ok((next_state, output));
+                return Ok((output, next_state));
             }
         }
 
-        let fail = Fail::PredicateFailed(state.attempting);
-        Err((state, fail))
+        Err((Fail::ConditionFailed(state.attempting), state))
     }
 }
 
@@ -352,37 +343,220 @@ where
 //     satisfies(any, |ch| ch.is_whitespace())
 // }
 
-// pub fn one_of2<'a, P1, P2, A>(p1: P1, p2: P2) -> impl Parser<'a, A>
-// where
-//     P1: Parser<'a, A>,
-//     P2: Parser<'a, A>,
-// {
-//     move |arena: &'a Bump, state: State<'a>, attempting| {
-//         if let Ok((next_state, output)) = p1.parse(arena, state, attempting) {
-//             Ok((next_state, output))
-//         } else if let Ok((next_state, output)) = p2.parse(arena, state, attempting) {
-//             Ok((next_state, output))
-//         } else {
-//             Err((state, attempting))
-//         }
-//     }
-// }
+pub fn one_of2<'a, P1, P2, A>(p1: P1, p2: P2) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
+        valid @ Ok(_) => valid,
+        Err((_, state)) => match p2.parse(arena, state) {
+            valid @ Ok(_) => valid,
+            Err((_, state)) => Err((Fail::ConditionFailed(state.attempting), state)),
+        },
+    }
+}
 
-// pub fn one_of3<'a, P1, P2, P3, A>(p1: P1, p2: P2, p3: P3) -> impl Parser<'a, A>
-// where
-//     P1: Parser<'a, A>,
-//     P2: Parser<'a, A>,
-//     P3: Parser<'a, A>,
-// {
-//     move |arena: &'a Bump, state: State<'a>, attempting| {
-//         if let Ok((next_state, output)) = p1.parse(arena, state, attempting) {
-//             Ok((next_state, output))
-//         } else if let Ok((next_state, output)) = p2.parse(arena, state, attempting) {
-//             Ok((next_state, output))
-//         } else if let Ok((next_state, output)) = p3.parse(arena, state, attempting) {
-//             Ok((next_state, output))
-//         } else {
-//             Err((state, attempting))
-//         }
-//     }
-// }
+pub fn one_of3<'a, P1, P2, P3, A>(p1: P1, p2: P2, p3: P3) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
+        valid @ Ok(_) => valid,
+        Err((_, state)) => match p2.parse(arena, state) {
+            valid @ Ok(_) => valid,
+            Err((_, state)) => match p3.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((_, state)) => Err((Fail::ConditionFailed(state.attempting), state)),
+            },
+        },
+    }
+}
+
+pub fn one_of4<'a, P1, P2, P3, P4, A>(p1: P1, p2: P2, p3: P3, p4: P4) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
+        valid @ Ok(_) => valid,
+        Err((_, state)) => match p2.parse(arena, state) {
+            valid @ Ok(_) => valid,
+            Err((_, state)) => match p3.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((_, state)) => match p4.parse(arena, state) {
+                    valid @ Ok(_) => valid,
+                    Err((_, state)) => Err((Fail::ConditionFailed(state.attempting), state)),
+                },
+            },
+        },
+    }
+}
+
+pub fn one_of5<'a, P1, P2, P3, P4, P5, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
+        valid @ Ok(_) => valid,
+        Err((_, state)) => match p2.parse(arena, state) {
+            valid @ Ok(_) => valid,
+            Err((_, state)) => match p3.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((_, state)) => match p4.parse(arena, state) {
+                    valid @ Ok(_) => valid,
+                    Err((_, state)) => match p5.parse(arena, state) {
+                        valid @ Ok(_) => valid,
+                        Err((_, state)) => Err((Fail::ConditionFailed(state.attempting), state)),
+                    },
+                },
+            },
+        },
+    }
+}
+
+pub fn one_of6<'a, P1, P2, P3, P4, P5, P6, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
+        valid @ Ok(_) => valid,
+        Err((_, state)) => match p2.parse(arena, state) {
+            valid @ Ok(_) => valid,
+            Err((_, state)) => match p3.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((_, state)) => match p4.parse(arena, state) {
+                    valid @ Ok(_) => valid,
+                    Err((_, state)) => match p5.parse(arena, state) {
+                        valid @ Ok(_) => valid,
+                        Err((_, state)) => match p6.parse(arena, state) {
+                            valid @ Ok(_) => valid,
+                            Err((_, state)) => {
+                                Err((Fail::ConditionFailed(state.attempting), state))
+                            }
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+pub fn one_of7<'a, P1, P2, P3, P4, P5, P6, P7, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
+        valid @ Ok(_) => valid,
+        Err((_, state)) => match p2.parse(arena, state) {
+            valid @ Ok(_) => valid,
+            Err((_, state)) => match p3.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((_, state)) => match p4.parse(arena, state) {
+                    valid @ Ok(_) => valid,
+                    Err((_, state)) => match p5.parse(arena, state) {
+                        valid @ Ok(_) => valid,
+                        Err((_, state)) => match p6.parse(arena, state) {
+                            valid @ Ok(_) => valid,
+                            Err((_, state)) => match p7.parse(arena, state) {
+                                valid @ Ok(_) => valid,
+                                Err((_, state)) => {
+                                    Err((Fail::ConditionFailed(state.attempting), state))
+                                }
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+pub fn one_of8<'a, P1, P2, P3, P4, P5, P6, P7, P8, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
+        valid @ Ok(_) => valid,
+        Err((_, state)) => match p2.parse(arena, state) {
+            valid @ Ok(_) => valid,
+            Err((_, state)) => match p3.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((_, state)) => match p4.parse(arena, state) {
+                    valid @ Ok(_) => valid,
+                    Err((_, state)) => match p5.parse(arena, state) {
+                        valid @ Ok(_) => valid,
+                        Err((_, state)) => match p6.parse(arena, state) {
+                            valid @ Ok(_) => valid,
+                            Err((_, state)) => match p7.parse(arena, state) {
+                                valid @ Ok(_) => valid,
+                                Err((_, state)) => match p8.parse(arena, state) {
+                                    valid @ Ok(_) => valid,
+                                    Err((_, state)) => {
+                                        Err((Fail::ConditionFailed(state.attempting), state))
+                                    }
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}

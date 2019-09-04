@@ -24,7 +24,7 @@ mod test_parser {
         let arena = Bump::new();
         let parser = parse::expr();
         let answer = parser.parse(&arena, state);
-        let actual = answer.map(|(_, expr)| expr);
+        let actual = answer.map(|(expr, _)| expr);
 
         assert_eq!(Ok(expected_expr), actual);
     }
@@ -34,7 +34,7 @@ mod test_parser {
         let arena = Bump::new();
         let parser = parse::expr();
         let answer = parser.parse(&arena, state);
-        let actual = answer.map(|(_, expr)| expr);
+        let actual = answer.map(|(expr, _)| expr);
 
         assert_eq!(
             Ok(Expr::MalformedStr(expected_probs.into_boxed_slice())),

@@ -20,7 +20,7 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                 return Err(unexpected(other_char, 0, state, Attempting::StringLiteral));
             }
             None => {
-                return Err(unexpected_eof(0, state, Attempting::StringLiteral));
+                return Err(unexpected_eof(0, Attempting::StringLiteral, state));
             }
         }
 
@@ -28,9 +28,9 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
         // a buffer; instead, return EmptyStr immediately.
         if chars.peek() == Some(&'"') {
             return Ok((
+                Expr::EmptyStr,
                 // 2 because `""` has length 2
                 state.advance_without_indenting(2),
-                Expr::EmptyStr,
             ));
         }
 
@@ -69,7 +69,7 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                         Expr::MalformedStr(problems.into_boxed_slice())
                     };
 
-                    return Ok((state.advance_without_indenting(len_with_quotes), expr));
+                    return Ok((expr, state.advance_without_indenting(len_with_quotes)));
                 }
                 '\t' => {
                     // TODO report the problem and continue.
@@ -96,8 +96,8 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
         // We ran out of characters before finding a closed quote
         Err(unexpected_eof(
             buf.len(),
-            state.clone(),
             Attempting::StringLiteral,
+            state.clone(),
         ))
     }
 }
@@ -163,7 +163,7 @@ fn handle_escaped_char<'a, 'p, I>(
     chars: &mut Peekable<I>,
     buf: &mut String<'a>,
     problems: &'p mut Problems,
-) -> Result<(), (State<'a>, Fail)>
+) -> Result<(), (Fail, State<'a>)>
 where
     I: Iterator<Item = char>,
 {
@@ -193,8 +193,8 @@ where
 
             return Err(unexpected_eof(
                 buf.len(),
-                state.clone(),
                 Attempting::UnicodeEscape,
+                state.clone(),
             ));
         }
         _ => {
@@ -214,7 +214,7 @@ fn handle_escaped_unicode<'a, 'p, I>(
     chars: &mut Peekable<I>,
     buf: &mut String<'a>,
     problems: &'p mut Problems,
-) -> Result<(), (State<'a>, Fail)>
+) -> Result<(), (Fail, State<'a>)>
 where
     I: Iterator<Item = char>,
 {
@@ -358,8 +358,8 @@ where
 
                 return Err(unexpected_eof(
                     buf.len(),
-                    state.clone(),
                     Attempting::UnicodeEscape,
+                    state.clone(),
                 ));
             }
             normal_char => hex_str.push(normal_char),

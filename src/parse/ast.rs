@@ -58,6 +58,7 @@ pub enum Expr<'a> {
 
     // Runtime errors
     MalformedStr(Box<[Loc<Problem>]>),
+    MalformedNumber(Problem),
 }
 
 #[derive(Clone, Debug, PartialEq)]

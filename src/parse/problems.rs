@@ -18,4 +18,7 @@ pub enum Problem {
     Tab,
     CarriageReturn,
     UnsupportedEscapedChar,
+
+    // NUMBER LITERAL
+    TooLarge,
 }
