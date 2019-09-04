@@ -253,4 +253,10 @@ mod test_parser {
         assert_parses_to(&std::i64::MAX.to_string(), Int(std::i64::MAX));
     }
 
+    #[test]
+    fn negative_int() {
+        assert_parses_to("-1", Int(-1));
+        assert_parses_to("-42", Int(-42));
+        assert_parses_to(&std::i64::MIN.to_string(), Int(std::i64::MIN));
+    }
 }
