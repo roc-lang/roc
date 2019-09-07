@@ -259,4 +259,55 @@ mod test_parser {
         assert_parses_to("-42", Int(-42));
         assert_parses_to(&std::i64::MIN.to_string(), Int(std::i64::MIN));
     }
+
+    //     fn expect_parsed_float<'a>(expected: f64, actual: &str) {
+    //         assert_eq!(
+    //             Ok((Float(expected), "".to_string())),
+    //             parse_without_loc(actual)
+    //         );
+    //     }
+
+    //     fn expect_parsed_int<'a>(expected: i64, actual: &str) {
+    //         assert_eq!(
+    //             Ok((Int(expected), "".to_string())),
+    //             parse_without_loc(actual)
+    //         );
+    //     }
+
+    //     #[test]
+    //     fn positive_int() {
+    //         expect_parsed_int(1234, "1234");
+    //     }
+
+    //     #[test]
+    //     fn negative_int() {
+    //         expect_parsed_int(-1234, "-1234");
+    //     }
+
+    //     #[test]
+    //     fn positive_float() {
+    //         expect_parsed_float(123.45, "123.45");
+    //         expect_parsed_float(42.00, "42.00");
+    //     }
+
+    //     #[test]
+    //     fn negative_float() {
+    //         expect_parsed_float(-1234.567, "-1234.567");
+    //         expect_parsed_float(-192.0, "-192.0");
+    //     }
+
+    //     #[test]
+    //     fn ints_with_underscores() {
+    //         expect_parsed_int(987654321, "987_6_5_432_1");
+    //         expect_parsed_int(-1234567890, "-1_234_567_890");
+    //     }
+
+    //     #[test]
+    //     fn fracs_with_spaces() {
+    //         expect_parsed_float(-1234.567, "-1_23_4.567");
+    //         expect_parsed_float(-192.0, "-19_2.0");
+    //         expect_parsed_float(123.45, "1_2_3.45");
+    //         expect_parsed_float(42.00, "4_2.00");
+    //     }
+
 }
