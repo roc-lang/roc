@@ -121,7 +121,7 @@ where
     };
 
     let total_chars_parsed = before_decimal.len() + chars_skipped;
-    let state = state.advance_without_indenting(total_chars_parsed);
+    let state = state.advance_without_indenting(total_chars_parsed)?;
 
     Ok((expr, state))
 }

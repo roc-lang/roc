@@ -1,9 +1,9 @@
-use std::mem::{self, MaybeUninit};
-use std::slice;
-use std::ptr;
-use std::fmt;
-use std::str;
 use std::alloc::{self, Layout};
+use std::fmt;
+use std::mem::{self, MaybeUninit};
+use std::ptr;
+use std::slice;
+use std::str;
 
 /// An immutable string whose maximum length is `isize::MAX`. (For convenience,
 /// it still returns its length as `usize` since it can't be negative.)
@@ -17,12 +17,12 @@ use std::alloc::{self, Layout};
 pub struct RocStr(InnerStr);
 
 /// Roc strings are optimized not to do heap allocations when they are between
-/// 0-15 bytes in length on 64-bit little endian systems, 
-/// and 0-7 bytes on systems that are 32-bit, big endian, or both. 
+/// 0-15 bytes in length on 64-bit little endian systems,
+/// and 0-7 bytes on systems that are 32-bit, big endian, or both.
 ///
 /// This optimization relies on the assumption that string lengths are always
 /// less than isize::MAX as opposed to usize::MAX. It relies on this because
-/// it uses the most significant bit in the most significant byte in the length 
+/// it uses the most significant bit in the most significant byte in the length
 /// as a flag for whether it is a short string or a long string. This bit is
 /// unused if lengths are below isize::MAX.
 ///
@@ -35,9 +35,9 @@ pub struct RocStr(InnerStr);
 /// Rust never sends Roc any length values outsize isize::MAX because they'll
 /// be interpreted as negative i64s!
 ///
-/// Anyway, this "is this a short string?" bit is in a convenient location on 
-/// 64-bit little endian systems. This is because of how Rust's &str is 
-/// laid out, and memory alignment.  
+/// Anyway, this "is this a short string?" bit is in a convenient location on
+/// 64-bit little endian systems. This is because of how Rust's &str is
+/// laid out, and memory alignment.
 ///
 /// Rust's &str is laid out as a slice, namely:
 ///
@@ -73,7 +73,8 @@ struct LongStr {
 // The bit pattern for an empty string. (1 and then all 0s.)
 // Any other bit pattern means this is not an empty string!
 #[cfg(target_pointer_width = "64")]
-const EMPTY_STRING: usize = 0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
+const EMPTY_STRING: usize =
+    0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
 
 #[cfg(target_pointer_width = "32")]
 const EMPTY_STRING: usize = 0b1000_0000_0000_0000;
@@ -91,7 +92,7 @@ impl RocStr {
                 length: EMPTY_STRING,
                 // empty strings only ever have length set.
                 bytes: MaybeUninit::uninit(),
-            }
+            },
         })
     }
 
@@ -176,16 +177,12 @@ impl Clone for LongStr {
         let new_bytes_ptr = unsafe { alloc::alloc(layout) };
 
         unsafe {
-            ptr::copy_nonoverlapping(
-                old_bytes_ptr,
-                new_bytes_ptr,
-                length
-            );
+            ptr::copy_nonoverlapping(old_bytes_ptr, new_bytes_ptr, length);
         }
 
         LongStr {
             bytes: MaybeUninit::new(new_bytes_ptr),
-            length
+            length,
         }
     }
 }
@@ -200,12 +197,10 @@ impl Into<String> for RocStr {
         if flagged_as_short_string(len_msbyte) {
             // Drop the "is this a short string?" flag
             let length: u8 = len_msbyte & 0b0111_1111;
-            let bytes_ptr = unsafe { &self.0.raw } as *const u8 ;
+            let bytes_ptr = unsafe { &self.0.raw } as *const u8;
 
             // These bytes are already aligned, so we can use them directly.
-            let bytes_slice: &[u8] = unsafe {
-                slice::from_raw_parts(bytes_ptr, length as usize)
-            };
+            let bytes_slice: &[u8] = unsafe { slice::from_raw_parts(bytes_ptr, length as usize) };
 
             (unsafe { str::from_utf8_unchecked(bytes_slice) }).to_string()
         } else {
@@ -215,7 +210,7 @@ impl Into<String> for RocStr {
             let string = str_slice.to_string();
             let mut roc_str_mut = self;
 
-            // Drop will deallocate the bytes, which we don't want in this case. 
+            // Drop will deallocate the bytes, which we don't want in this case.
             // String is using those bytes now!
             mem::forget(self);
 
@@ -238,11 +233,7 @@ impl From<String> for RocStr {
                 // Copy the raw bytes from the string into the buffer.
                 unsafe {
                     // Write into the buffer's bytes
-                    ptr::copy_nonoverlapping(
-                        string.as_ptr(),
-                        buffer.as_ptr() as *mut u8,
-                        str_len
-                    );
+                    ptr::copy_nonoverlapping(string.as_ptr(), buffer.as_ptr() as *mut u8, str_len);
                 }
 
                 // Set the last byte in the buffer to be the length (with flag).
@@ -257,19 +248,22 @@ impl From<String> for RocStr {
                 };
 
                 panic!("TODO: use mem::forget on the string and steal its bytes!");
-                RocStr(InnerStr {long})
+                RocStr(InnerStr { long })
             }
         }
     }
 }
 
-
 impl Clone for RocStr {
     fn clone(&self) -> Self {
         let inner = if flagged_as_short_string(self.len_msbyte()) {
-            InnerStr { raw: (unsafe { self.0.raw }).clone() }
+            InnerStr {
+                raw: (unsafe { self.0.raw }).clone(),
+            }
         } else {
-            InnerStr { long: (unsafe { self.0.long }).clone() }
+            InnerStr {
+                long: (unsafe { self.0.long }).clone(),
+            }
         };
 
         RocStr(inner)
@@ -278,7 +272,7 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
-        // If this is a LongStr, we need to deallocate its bytes. 
+        // If this is a LongStr, we need to deallocate its bytes.
         // Otherwise we would have a memory leak!
         if !flagged_as_short_string(self.len_msbyte()) {
             let bytes_ptr = unsafe { self.0.long.bytes.assume_init() };
@@ -291,7 +285,9 @@ impl Drop for RocStr {
 
                 // We don't need to call drop_in_place. We know bytes_ptr points to
                 // a plain u8 array, so there will for sure be no destructor to run.
-                unsafe { alloc::dealloc(bytes_ptr as *mut u8, layout); }
+                unsafe {
+                    alloc::dealloc(bytes_ptr as *mut u8, layout);
+                }
             }
         }
     }

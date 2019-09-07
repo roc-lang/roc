@@ -49,19 +49,23 @@ impl<'a> State<'a> {
 
     /// Increments the line, then resets column, indent_col, and is_indenting.
     /// This does *not* advance the input.
-    pub fn newline(&self) -> Self {
-        let line = self
-            .line
-            .checked_add(1)
-            .unwrap_or_else(panic_max_line_count_exceeded);
-
-        State {
-            input: self.input,
-            line,
-            column: 0,
-            indent_col: 1,
-            is_indenting: true,
-            attempting: self.attempting,
+    pub fn newline(&self) -> Result<Self, (Fail, Self)> {
+        match self.line.checked_add(1) {
+            Some(line) => Ok(State {
+                input: self.input,
+                line,
+                column: 0,
+                indent_col: 1,
+                is_indenting: true,
+                attempting: self.attempting,
+            }),
+            None => Err((
+                Fail {
+                    reason: FailReason::TooManyLines,
+                    attempting: self.attempting,
+                },
+                self.clone(),
+            )),
         }
     }
 
@@ -69,82 +73,70 @@ impl<'a> State<'a> {
     /// This assumes we are *not* advancing with spaces, or at least that
     /// any spaces on the line were preceded by non-spaces - which would mean
     /// they weren't eligible to indent anyway.
-    pub fn advance_without_indenting(&self, quantity: usize) -> Self {
-        let column_usize = (self.column as usize)
-            .checked_add(quantity)
-            .unwrap_or_else(panic_max_line_length_exceeded);
-
-        if column_usize > std::u16::MAX as usize {
-            panic_max_line_length_exceeded();
-        }
-
-        State {
-            input: &self.input[quantity..],
-            line: self.line,
-            column: column_usize as u16,
-            indent_col: self.indent_col,
-            // Once we hit a nonspace character, we are no longer indenting.
-            is_indenting: false,
-            attempting: self.attempting,
+    pub fn advance_without_indenting(&self, quantity: usize) -> Result<Self, (Fail, Self)> {
+        match (self.column as usize).checked_add(quantity) {
+            Some(column_usize) if column_usize <= std::u16::MAX as usize => {
+                Ok(State {
+                    input: &self.input[quantity..],
+                    line: self.line,
+                    column: column_usize as u16,
+                    indent_col: self.indent_col,
+                    // Once we hit a nonspace character, we are no longer indenting.
+                    is_indenting: false,
+                    attempting: self.attempting,
+                })
+            }
+            _ => Err((
+                Fail {
+                    reason: FailReason::LineTooLong(self.line),
+                    attempting: self.attempting,
+                },
+                self.clone(),
+            )),
         }
     }
     /// Advance the parser while also indenting as appropriate.
     /// This assumes we are only advancing with spaces, since they can indent.
-    pub fn advance_spaces(&self, spaces: usize) -> Self {
-        // We'll cast this to u16 later.
-        debug_assert!(spaces <= std::u16::MAX as usize);
+    pub fn advance_spaces(&self, spaces: usize) -> Result<Self, (Fail, Self)> {
+        match (self.column as usize).checked_add(spaces) {
+            Some(column_usize) if column_usize <= std::u16::MAX as usize => {
+                // Spaces don't affect is_indenting; if we were previously indneting,
+                // we still are, and if we already finished indenting, we're still done.
+                let is_indenting = self.is_indenting;
 
-        let column_usize = (self.column as usize)
-            .checked_add(spaces)
-            .unwrap_or_else(panic_max_line_length_exceeded);
+                // If we're indenting, spaces indent us further.
+                let indent_col = if is_indenting {
+                    // This doesn't need to be checked_add because it's always true that
+                    // indent_col <= col, so if this could possibly overflow, we would
+                    // already have errored out from the column calculation.
+                    //
+                    // Leaving debug assertions in case this invariant someday disappers.
+                    debug_assert!(std::u16::MAX - self.indent_col >= spaces as u16);
+                    debug_assert!(spaces <= std::u16::MAX as usize);
 
-        if column_usize > std::u16::MAX as usize {
-            panic_max_line_length_exceeded();
-        }
+                    self.indent_col + spaces as u16
+                } else {
+                    self.indent_col
+                };
 
-        // Spaces don't affect is_indenting; if we were previously indneting,
-        // we still are, and if we already finished indenting, we're still done.
-        let is_indenting = self.is_indenting;
-
-        // If we're indenting, spaces indent us further.
-        let indent_col = if is_indenting {
-            // This doesn't need to be checked_add because it's always true that
-            // indent_col <= col, so if this could possibly overflow, we would
-            // already have panicked from the column calculation.
-            //
-            // Leaving a debug_assert! in case this invariant someday disappers.
-            debug_assert!(std::u16::MAX - self.indent_col >= spaces as u16);
-
-            self.indent_col + spaces as u16
-        } else {
-            self.indent_col
-        };
-
-        State {
-            input: &self.input[spaces..],
-            line: self.line,
-            column: column_usize as u16,
-            indent_col,
-            is_indenting,
-            attempting: self.attempting,
+                Ok(State {
+                    input: &self.input[spaces..],
+                    line: self.line,
+                    column: column_usize as u16,
+                    indent_col,
+                    is_indenting,
+                    attempting: self.attempting,
+                })
+            }
+            _ => Err((
+                Fail {
+                    reason: FailReason::LineTooLong(self.line),
+                    attempting: self.attempting,
+                },
+                self.clone(),
+            )),
         }
     }
-}
-
-#[inline(never)]
-fn panic_max_line_count_exceeded() -> u32 {
-    panic!(
-        "Maximum line count exceeded. Roc only supports compiling files with at most {} lines.",
-        std::u32::MAX
-    )
-}
-
-#[inline(never)]
-fn panic_max_line_length_exceeded() -> usize {
-    panic!(
-"Maximum line length exceeded. Roc only supports compiling files whose lines each contain no more than {} characters.",
-        std::u16::MAX
-    )
 }
 
 #[test]
@@ -157,12 +149,18 @@ fn state_size() {
 pub type ParseResult<'a, Output> = Result<(Output, State<'a>), (Fail, State<'a>)>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Fail {
-    Unexpected(char, Region, Attempting),
-    ConditionFailed(Attempting),
+pub enum FailReason {
+    Unexpected(char, Region),
+    ConditionFailed,
     LineTooLong(u32 /* which line was too long */),
     TooManyLines,
-    Eof(Region, Attempting),
+    Eof(Region),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fail {
+    pub attempting: Attempting,
+    pub reason: FailReason,
 }
 
 pub trait Parser<'a, Output> {
@@ -235,8 +233,9 @@ pub fn unexpected_eof<'a>(
     attempting: Attempting,
     state: State<'a>,
 ) -> (Fail, State<'a>) {
-    checked_unexpected(chars_consumed, state, |region| {
-        Fail::Eof(region, attempting)
+    checked_unexpected(chars_consumed, state, |region| Fail {
+        reason: FailReason::Eof(region),
+        attempting,
     })
 }
 
@@ -246,8 +245,9 @@ pub fn unexpected<'a>(
     state: State<'a>,
     attempting: Attempting,
 ) -> (Fail, State<'a>) {
-    checked_unexpected(chars_consumed, state, |region| {
-        Fail::Unexpected(ch, region, attempting)
+    checked_unexpected(chars_consumed, state, |region| Fail {
+        reason: FailReason::Unexpected(ch, region),
+        attempting,
     })
 }
 
@@ -274,7 +274,13 @@ where
 
             (problem_from_region(region), state)
         }
-        _ => (Fail::LineTooLong(state.line), state),
+        _ => {
+            let reason = FailReason::LineTooLong(state.line);
+            let attempting = state.attempting;
+            let fail = Fail { reason, attempting };
+
+            (fail, state)
+        }
     }
 }
 
@@ -289,7 +295,7 @@ pub fn string<'a>(string: &'static str) -> impl Parser<'a, ()> {
         let len = string.len();
 
         match input.get(0..len) {
-            Some(next_str) if next_str == string => Ok(((), state.advance_without_indenting(len))),
+            Some(next_str) if next_str == string => Ok(((), state.advance_without_indenting(len)?)),
             _ => Err(unexpected_eof(len, Attempting::Keyword, state)),
         }
     }
@@ -307,7 +313,13 @@ where
             }
         }
 
-        Err((Fail::ConditionFailed(state.attempting), state))
+        Err((
+            Fail {
+                reason: FailReason::ConditionFailed,
+                attempting: state.attempting,
+            },
+            state,
+        ))
     }
 }
 
@@ -348,12 +360,22 @@ where
     P1: Parser<'a, A>,
     P2: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
-        valid @ Ok(_) => valid,
-        Err((_, state)) => match p2.parse(arena, state) {
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
             valid @ Ok(_) => valid,
-            Err((_, state)) => Err((Fail::ConditionFailed(state.attempting), state)),
-        },
+            Err((_, state)) => match p2.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_attempting,
+                        ..fail
+                    },
+                    state,
+                )),
+            },
+        }
     }
 }
 
@@ -363,15 +385,25 @@ where
     P2: Parser<'a, A>,
     P3: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
-        valid @ Ok(_) => valid,
-        Err((_, state)) => match p2.parse(arena, state) {
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
             valid @ Ok(_) => valid,
-            Err((_, state)) => match p3.parse(arena, state) {
+            Err((_, state)) => match p2.parse(arena, state) {
                 valid @ Ok(_) => valid,
-                Err((_, state)) => Err((Fail::ConditionFailed(state.attempting), state)),
+                Err((_, state)) => match p3.parse(arena, state) {
+                    valid @ Ok(_) => valid,
+                    Err((fail, state)) => Err((
+                        Fail {
+                            attempting: original_attempting,
+                            ..fail
+                        },
+                        state,
+                    )),
+                },
             },
-        },
+        }
     }
 }
 
@@ -382,18 +414,28 @@ where
     P3: Parser<'a, A>,
     P4: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
-        valid @ Ok(_) => valid,
-        Err((_, state)) => match p2.parse(arena, state) {
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
             valid @ Ok(_) => valid,
-            Err((_, state)) => match p3.parse(arena, state) {
+            Err((_, state)) => match p2.parse(arena, state) {
                 valid @ Ok(_) => valid,
-                Err((_, state)) => match p4.parse(arena, state) {
+                Err((_, state)) => match p3.parse(arena, state) {
                     valid @ Ok(_) => valid,
-                    Err((_, state)) => Err((Fail::ConditionFailed(state.attempting), state)),
+                    Err((_, state)) => match p4.parse(arena, state) {
+                        valid @ Ok(_) => valid,
+                        Err((fail, state)) => Err((
+                            Fail {
+                                attempting: original_attempting,
+                                ..fail
+                            },
+                            state,
+                        )),
+                    },
                 },
             },
-        },
+        }
     }
 }
 
@@ -411,21 +453,31 @@ where
     P4: Parser<'a, A>,
     P5: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
-        valid @ Ok(_) => valid,
-        Err((_, state)) => match p2.parse(arena, state) {
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
             valid @ Ok(_) => valid,
-            Err((_, state)) => match p3.parse(arena, state) {
+            Err((_, state)) => match p2.parse(arena, state) {
                 valid @ Ok(_) => valid,
-                Err((_, state)) => match p4.parse(arena, state) {
+                Err((_, state)) => match p3.parse(arena, state) {
                     valid @ Ok(_) => valid,
-                    Err((_, state)) => match p5.parse(arena, state) {
+                    Err((_, state)) => match p4.parse(arena, state) {
                         valid @ Ok(_) => valid,
-                        Err((_, state)) => Err((Fail::ConditionFailed(state.attempting), state)),
+                        Err((_, state)) => match p5.parse(arena, state) {
+                            valid @ Ok(_) => valid,
+                            Err((fail, state)) => Err((
+                                Fail {
+                                    attempting: original_attempting,
+                                    ..fail
+                                },
+                                state,
+                            )),
+                        },
                     },
                 },
             },
-        },
+        }
     }
 }
 
@@ -445,26 +497,34 @@ where
     P5: Parser<'a, A>,
     P6: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
-        valid @ Ok(_) => valid,
-        Err((_, state)) => match p2.parse(arena, state) {
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
             valid @ Ok(_) => valid,
-            Err((_, state)) => match p3.parse(arena, state) {
+            Err((_, state)) => match p2.parse(arena, state) {
                 valid @ Ok(_) => valid,
-                Err((_, state)) => match p4.parse(arena, state) {
+                Err((_, state)) => match p3.parse(arena, state) {
                     valid @ Ok(_) => valid,
-                    Err((_, state)) => match p5.parse(arena, state) {
+                    Err((_, state)) => match p4.parse(arena, state) {
                         valid @ Ok(_) => valid,
-                        Err((_, state)) => match p6.parse(arena, state) {
+                        Err((_, state)) => match p5.parse(arena, state) {
                             valid @ Ok(_) => valid,
-                            Err((_, state)) => {
-                                Err((Fail::ConditionFailed(state.attempting), state))
-                            }
+                            Err((_, state)) => match p6.parse(arena, state) {
+                                valid @ Ok(_) => valid,
+                                Err((fail, state)) => Err((
+                                    Fail {
+                                        attempting: original_attempting,
+                                        ..fail
+                                    },
+                                    state,
+                                )),
+                            },
                         },
                     },
                 },
             },
-        },
+        }
     }
 }
 
@@ -486,29 +546,37 @@ where
     P6: Parser<'a, A>,
     P7: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
-        valid @ Ok(_) => valid,
-        Err((_, state)) => match p2.parse(arena, state) {
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
             valid @ Ok(_) => valid,
-            Err((_, state)) => match p3.parse(arena, state) {
+            Err((_, state)) => match p2.parse(arena, state) {
                 valid @ Ok(_) => valid,
-                Err((_, state)) => match p4.parse(arena, state) {
+                Err((_, state)) => match p3.parse(arena, state) {
                     valid @ Ok(_) => valid,
-                    Err((_, state)) => match p5.parse(arena, state) {
+                    Err((_, state)) => match p4.parse(arena, state) {
                         valid @ Ok(_) => valid,
-                        Err((_, state)) => match p6.parse(arena, state) {
+                        Err((_, state)) => match p5.parse(arena, state) {
                             valid @ Ok(_) => valid,
-                            Err((_, state)) => match p7.parse(arena, state) {
+                            Err((_, state)) => match p6.parse(arena, state) {
                                 valid @ Ok(_) => valid,
-                                Err((_, state)) => {
-                                    Err((Fail::ConditionFailed(state.attempting), state))
-                                }
+                                Err((_, state)) => match p7.parse(arena, state) {
+                                    valid @ Ok(_) => valid,
+                                    Err((fail, state)) => Err((
+                                        Fail {
+                                            attempting: original_attempting,
+                                            ..fail
+                                        },
+                                        state,
+                                    )),
+                                },
                             },
                         },
                     },
                 },
             },
-        },
+        }
     }
 }
 
@@ -532,31 +600,39 @@ where
     P7: Parser<'a, A>,
     P8: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| match p1.parse(arena, state) {
-        valid @ Ok(_) => valid,
-        Err((_, state)) => match p2.parse(arena, state) {
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
             valid @ Ok(_) => valid,
-            Err((_, state)) => match p3.parse(arena, state) {
+            Err((_, state)) => match p2.parse(arena, state) {
                 valid @ Ok(_) => valid,
-                Err((_, state)) => match p4.parse(arena, state) {
+                Err((_, state)) => match p3.parse(arena, state) {
                     valid @ Ok(_) => valid,
-                    Err((_, state)) => match p5.parse(arena, state) {
+                    Err((_, state)) => match p4.parse(arena, state) {
                         valid @ Ok(_) => valid,
-                        Err((_, state)) => match p6.parse(arena, state) {
+                        Err((_, state)) => match p5.parse(arena, state) {
                             valid @ Ok(_) => valid,
-                            Err((_, state)) => match p7.parse(arena, state) {
+                            Err((_, state)) => match p6.parse(arena, state) {
                                 valid @ Ok(_) => valid,
-                                Err((_, state)) => match p8.parse(arena, state) {
+                                Err((_, state)) => match p7.parse(arena, state) {
                                     valid @ Ok(_) => valid,
-                                    Err((_, state)) => {
-                                        Err((Fail::ConditionFailed(state.attempting), state))
-                                    }
+                                    Err((_, state)) => match p8.parse(arena, state) {
+                                        valid @ Ok(_) => valid,
+                                        Err((fail, state)) => Err((
+                                            Fail {
+                                                attempting: original_attempting,
+                                                ..fail
+                                            },
+                                            state,
+                                        )),
+                                    },
                                 },
                             },
                         },
                     },
                 },
             },
-        },
+        }
     }
 }

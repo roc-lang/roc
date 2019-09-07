@@ -30,7 +30,7 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
             return Ok((
                 Expr::EmptyStr,
                 // 2 because `""` has length 2
-                state.advance_without_indenting(2),
+                state.advance_without_indenting(2)?,
             ));
         }
 
@@ -69,31 +69,25 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                         Expr::MalformedStr(problems.into_boxed_slice())
                     };
 
-                    return Ok((expr, state.advance_without_indenting(len_with_quotes)));
+                    let next_state = state.advance_without_indenting(len_with_quotes)?;
+
+                    return Ok((expr, next_state));
                 }
                 '\t' => {
-                    // TODO report the problem and continue.
-                    // Tabs are syntax errors, but maybe the rest of the
-                    // string is fine!
-                    panic!("TODO string had a tab character in it.");
+                    // Report the problem and continue. Tabs are syntax errors,
+                    // but maybe the rest of the string is fine!
+                    problems.push(loc_char(Problem::Tab, &state, buf.len()));
                 }
                 '\r' => {
-                    // TODO report the problem and continue.
                     // Carriage returns aren't allowed in string literals,
                     // but maybe the rest of the string is fine!
-                    panic!("TODO string had a tab character in it.");
-                }
-                '\0' => {
-                    // TODO report the problem and continue.
-                    // Null characters aren't allowed in string literals,
-                    // but maybe the rest of the string is fine!
-                    panic!("TODO string had a \\0 character in it.");
+                    problems.push(loc_char(Problem::CarriageReturn, &state, buf.len()));
                 }
                 '\n' => {
-                    // TODO report the problem and then return Err.
+                    // We hit a newline before a close quote.
                     // We can't safely assume where the string was supposed
                     // to end, so this is an unrecoverable error.
-                    panic!("TODO string missing closing quote.");
+                    return Err(unexpected('\n', 0, state, Attempting::StringLiteral));
                 }
                 normal_char => buf.push(normal_char),
             }
@@ -108,12 +102,24 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
     }
 }
 
-fn escaped_char_problem<'a, 'p>(
-    problems: &'p mut Problems,
-    problem: Problem,
-    state: &State<'a>,
-    buf_len: usize,
-) {
+fn loc_char<'a, V>(value: V, state: &State<'a>, buf_len: usize) -> Loc<V> {
+    let start_line = state.line;
+    let start_col = state.column + buf_len as u16;
+    let end_line = start_line;
+    // All invalid chars should have a length of 1
+    let end_col = state.column + 1;
+
+    let region = Region {
+        start_line,
+        start_col,
+        end_line,
+        end_col,
+    };
+
+    Loc { region, value }
+}
+
+fn loc_escaped_char<'a, V>(value: V, state: &State<'a>, buf_len: usize) -> Loc<V> {
     let start_line = state.line;
     let start_col = state.column + buf_len as u16;
     let end_line = start_line;
@@ -127,19 +133,15 @@ fn escaped_char_problem<'a, 'p>(
         end_col,
     };
 
-    problems.push(Loc {
-        region,
-        value: problem,
-    });
+    Loc { region, value }
 }
 
-fn escaped_unicode_problem<'a, 'p>(
-    problems: &'p mut Problems,
-    problem: Problem,
+fn loc_escaped_unicode<'a, V>(
+    value: V,
     state: &State<'a>,
     buf_len: usize,
     hex_str_len: usize,
-) {
+) -> Loc<V> {
     let start_line = state.line;
     // +1 due to the `"` which precedes buf.
     let start_col = state.column + buf_len as u16 + 1;
@@ -155,10 +157,7 @@ fn escaped_unicode_problem<'a, 'p>(
         end_col,
     };
 
-    problems.push(Loc {
-        region,
-        value: problem,
-    });
+    Loc { region, value }
 }
 
 #[inline(always)]
@@ -179,29 +178,29 @@ where
         't' => buf.push('\t'),
         'n' => buf.push('\n'),
         'r' => buf.push('\r'),
+        '0' => buf.push('\0'), // We explicitly support null characters, as we
+        // can't be sure we won't receive them from Rust.
         'u' => handle_escaped_unicode(arena, state, chars, buf, problems)?,
         '(' => panic!("TODO handle string interpolation"),
         '\t' => {
             // Report and continue.
             // Tabs are syntax errors, but maybe the rest of the string is fine!
-            escaped_char_problem(problems, Problem::Tab, &state, buf.len());
+            problems.push(loc_escaped_char(Problem::Tab, &state, buf.len()));
         }
         '\r' => {
             // Report and continue.
             // Carriage returns aren't allowed in string literals,
             // but maybe the rest of the string is fine!
-            escaped_char_problem(problems, Problem::CarriageReturn, &state, buf.len());
-        }
-        '\0' => {
-            // Report and continue.
-            // Null characters aren't allowed in string literals,
-            // but maybe the rest of the string is fine!
-            escaped_char_problem(problems, Problem::NullChar, &state, buf.len());
+            problems.push(loc_escaped_char(Problem::CarriageReturn, &state, buf.len()));
         }
         '\n' => {
             // Report and bail out.
             // We can't safely assume where the string was supposed to end.
-            escaped_char_problem(problems, Problem::NewlineInLiteral, &state, buf.len());
+            problems.push(loc_escaped_char(
+                Problem::NewlineInLiteral,
+                &state,
+                buf.len(),
+            ));
 
             return Err(unexpected_eof(
                 buf.len(),
@@ -212,7 +211,11 @@ where
         _ => {
             // Report and continue.
             // An unsupported escaped char (e.g. \q) shouldn't halt parsing.
-            escaped_char_problem(problems, Problem::UnsupportedEscapedChar, &state, buf.len());
+            problems.push(loc_escaped_char(
+                Problem::UnsupportedEscapedChar,
+                &state,
+                buf.len(),
+            ));
         }
     }
 
@@ -302,13 +305,12 @@ where
                             match char::from_u32(code_pt) {
                                 Some(ch) => buf.push(ch),
                                 None => {
-                                    escaped_unicode_problem(
-                                        problems,
+                                    problems.push(loc_escaped_unicode(
                                         Problem::InvalidUnicodeCodePoint,
                                         &state,
                                         start_of_unicode,
                                         hex_str.len(),
-                                    );
+                                    ));
                                 }
                             }
                         }
@@ -320,13 +322,12 @@ where
                             Problem::NonHexCharsInUnicodeCodePoint
                         };
 
-                        escaped_unicode_problem(
-                            problems,
+                        problems.push(loc_escaped_unicode(
                             problem,
                             &state,
                             start_of_unicode,
                             hex_str.len(),
-                        );
+                        ));
                     }
                 }
 
@@ -337,36 +338,33 @@ where
             '\t' => {
                 // Report and continue.
                 // Tabs are syntax errors, but maybe the rest of the string is fine!
-                escaped_unicode_problem(
-                    problems,
+                problems.push(loc_escaped_unicode(
                     Problem::Tab,
                     &state,
                     start_of_unicode,
                     hex_str.len(),
-                );
+                ));
             }
             '\r' => {
                 // Report and continue.
                 // Carriage returns aren't allowed in string literals,
                 // but maybe the rest of the string is fine!
-                escaped_unicode_problem(
-                    problems,
+                problems.push(loc_escaped_unicode(
                     Problem::CarriageReturn,
                     &state,
                     start_of_unicode,
                     hex_str.len(),
-                );
+                ));
             }
             '\n' => {
                 // Report and bail out.
                 // We can't safely assume where the string was supposed to end.
-                escaped_unicode_problem(
-                    problems,
+                problems.push(loc_escaped_unicode(
                     Problem::NewlineInLiteral,
                     &state,
                     start_of_unicode,
                     hex_str.len(),
-                );
+                ));
 
                 return Err(unexpected_eof(
                     buf.len(),

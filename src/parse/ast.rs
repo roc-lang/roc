@@ -114,4 +114,5 @@ pub enum Attempting {
     NumberLiteral,
     UnicodeEscape,
     Expression,
+    Module,
 }

@@ -11,6 +11,17 @@ pub struct Region {
     pub end_col: u16,
 }
 
+impl Region {
+    pub fn zero() -> Self {
+        Region {
+            start_line: 0,
+            end_line: 0,
+            start_col: 0,
+            end_col: 0,
+        }
+    }
+}
+
 #[test]
 fn region_size() {
     // Region is used all over the place. Avoid increasing its size!
