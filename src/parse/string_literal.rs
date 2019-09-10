@@ -83,6 +83,12 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                     // but maybe the rest of the string is fine!
                     panic!("TODO string had a tab character in it.");
                 }
+                '\0' => {
+                    // TODO report the problem and continue.
+                    // Null characters aren't allowed in string literals,
+                    // but maybe the rest of the string is fine!
+                    panic!("TODO string had a \\0 character in it.");
+                }
                 '\n' => {
                     // TODO report the problem and then return Err.
                     // We can't safely assume where the string was supposed
@@ -185,6 +191,12 @@ where
             // Carriage returns aren't allowed in string literals,
             // but maybe the rest of the string is fine!
             escaped_char_problem(problems, Problem::CarriageReturn, &state, buf.len());
+        }
+        '\0' => {
+            // Report and continue.
+            // Null characters aren't allowed in string literals,
+            // but maybe the rest of the string is fine!
+            escaped_char_problem(problems, Problem::NullChar, &state, buf.len());
         }
         '\n' => {
             // Report and bail out.
