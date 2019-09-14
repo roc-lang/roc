@@ -298,13 +298,21 @@ mod test_parser {
     fn positive_int() {
         assert_parses_to("1", Int(1));
         assert_parses_to("42", Int(42));
-        assert_parses_to(i64::MAX.to_string().as_str(), Int(i64::MAX));
     }
 
     #[test]
     fn negative_int() {
         assert_parses_to("-1", Int(-1));
         assert_parses_to("-42", Int(-42));
+    }
+
+    #[test]
+    fn highest_int() {
+        assert_parses_to(i64::MAX.to_string().as_str(), Int(i64::MAX));
+    }
+
+    #[test]
+    fn lowest_int() {
         assert_parses_to(i64::MIN.to_string().as_str(), Int(i64::MIN));
     }
 
