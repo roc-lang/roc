@@ -110,8 +110,8 @@ where
         f64_buf.push_str(&after_decimal);
 
         match f64_buf.parse::<f64>() {
-            Ok(float) => Expr::Float(float),
-            Err(_) => Expr::MalformedNumber(Problem::OutsideSupportedRange),
+            Ok(float) if float.is_finite() => Expr::Float(float),
+            _ => Expr::MalformedNumber(Problem::OutsideSupportedRange),
         }
     } else {
         match before_decimal.parse::<i64>() {
