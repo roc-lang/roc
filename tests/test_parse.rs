@@ -6,6 +6,11 @@ extern crate bumpalo;
 extern crate combine; // OBSOLETE
 extern crate roc;
 
+extern crate quickcheck;
+
+#[macro_use(quickcheck)]
+extern crate quickcheck_macros;
+
 mod helpers;
 
 #[cfg(test)]
@@ -296,6 +301,11 @@ mod test_parser {
         assert_parses_to("-1", Int(-1));
         assert_parses_to("-42", Int(-42));
         assert_parses_to(i64::MIN.to_string().as_str(), Int(std::i64::MIN));
+    }
+
+    #[quickcheck]
+    fn all_i64_values_parse(num: i64) {
+        assert_parses_to(num.to_string().as_str(), Int(num));
     }
 
     #[test]
