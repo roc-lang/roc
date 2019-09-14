@@ -94,8 +94,8 @@ where
     }
 
     // At this point we have a number, and will definitely succeed.
-    // If the number is malformed (too large to fit), we'll succeed with
-    // an appropriate Expr which records that.
+    // If the number is malformed (outside the supported range),
+    // we'll succeed with an appropriate Expr which records that.
     let expr = if has_decimal_point {
         let mut f64_buf = String::with_capacity_in(
             before_decimal.len()

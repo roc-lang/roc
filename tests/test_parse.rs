@@ -298,14 +298,14 @@ mod test_parser {
     fn positive_int() {
         assert_parses_to("1", Int(1));
         assert_parses_to("42", Int(42));
-        assert_parses_to(i64::MAX.to_string().as_str(), Int(std::i64::MAX));
+        assert_parses_to(i64::MAX.to_string().as_str(), Int(i64::MAX));
     }
 
     #[test]
     fn negative_int() {
         assert_parses_to("-1", Int(-1));
         assert_parses_to("-42", Int(-42));
-        assert_parses_to(i64::MIN.to_string().as_str(), Int(std::i64::MIN));
+        assert_parses_to(i64::MIN.to_string().as_str(), Int(i64::MIN));
     }
 
     #[quickcheck]
@@ -342,8 +342,11 @@ mod test_parser {
         assert_parses_to("1.1", Float(1.1));
         assert_parses_to("42.0", Float(42.0));
         assert_parses_to("42.9", Float(42.9));
-        assert_parses_to(&format!("{}.0", f64::MAX), Float(std::f64::MAX));
-        panic!("TODO stress test maximum float *digits*, not just integer vals");
+    }
+
+    #[test]
+    fn highest_float() {
+        assert_parses_to(&format!("{}.0", f64::MAX), Float(f64::MAX));
     }
 
     #[test]
@@ -352,12 +355,32 @@ mod test_parser {
         assert_parses_to("-1.1", Float(-1.1));
         assert_parses_to("-42.0", Float(-42.0));
         assert_parses_to("-42.9", Float(-42.9));
-        assert_parses_to(f64::MIN.to_string().as_str(), Float(std::f64::MIN));
+    }
+
+    #[test]
+    fn lowest_float() {
+        assert_parses_to(&format!("{}.0", f64::MIN), Float(f64::MIN));
     }
 
     #[quickcheck]
     fn all_f64_values_parse(num: f64) {
         assert_parses_to(num.to_string().as_str(), Float(num));
+    }
+
+    #[test]
+    fn float_too_large() {
+        assert_parses_to(
+            format!("{}1.0", f64::MAX).as_str(),
+            MalformedNumber(Problem::OutsideSupportedRange),
+        );
+    }
+
+    #[test]
+    fn float_too_small() {
+        assert_parses_to(
+            format!("{}1.0", f64::MIN).as_str(),
+            MalformedNumber(Problem::OutsideSupportedRange),
+        );
     }
 
     //     fn expect_parsed_float<'a>(expected: f64, actual: &str) {
