@@ -18,6 +18,7 @@ mod test_parser {
     use roc::parse::parser::{Fail, FailReason, Parser, State};
     use roc::parse::problems::Problem;
     use roc::region::{Located, Region};
+    use std::i64;
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
         let state = State::new(&input, Attempting::Module);
@@ -287,14 +288,30 @@ mod test_parser {
     fn positive_int() {
         assert_parses_to("1", Int(1));
         assert_parses_to("42", Int(42));
-        assert_parses_to(&std::i64::MAX.to_string(), Int(std::i64::MAX));
+        assert_parses_to(i64::MAX.to_string().as_str(), Int(std::i64::MAX));
     }
 
     #[test]
     fn negative_int() {
         assert_parses_to("-1", Int(-1));
         assert_parses_to("-42", Int(-42));
-        assert_parses_to(&std::i64::MIN.to_string(), Int(std::i64::MIN));
+        assert_parses_to(i64::MIN.to_string().as_str(), Int(std::i64::MIN));
+    }
+
+    #[test]
+    fn int_too_large() {
+        assert_parses_to(
+            (i64::MAX as i128 + 1).to_string().as_str(),
+            MalformedNumber(Problem::OutsideSupportedRange),
+        );
+    }
+
+    #[test]
+    fn int_too_small() {
+        assert_parses_to(
+            (i64::MIN as i128 - 1).to_string().as_str(),
+            MalformedNumber(Problem::OutsideSupportedRange),
+        );
     }
 
     //     fn expect_parsed_float<'a>(expected: f64, actual: &str) {

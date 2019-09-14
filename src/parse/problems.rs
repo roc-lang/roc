@@ -21,5 +21,5 @@ pub enum Problem {
     UnsupportedEscapedChar,
 
     // NUMBER LITERAL
-    TooLarge,
+    OutsideSupportedRange,
 }

@@ -111,12 +111,12 @@ where
 
         match f64_buf.parse::<f64>() {
             Ok(float) => Expr::Float(float),
-            Err(_) => Expr::MalformedNumber(Problem::TooLarge),
+            Err(_) => Expr::MalformedNumber(Problem::OutsideSupportedRange),
         }
     } else {
         match before_decimal.parse::<i64>() {
             Ok(int_val) => Expr::Int(int_val),
-            Err(_) => Expr::MalformedNumber(Problem::TooLarge),
+            Err(_) => Expr::MalformedNumber(Problem::OutsideSupportedRange),
         }
     };
 
