@@ -111,12 +111,12 @@ where
 
         match f64_buf.parse::<f64>() {
             Ok(float) if float.is_finite() => Expr::Float(float),
-            _ => Expr::MalformedNumber(Problem::OutsideSupportedRange),
+            _ => Expr::MalformedFloat(Problem::OutsideSupportedRange),
         }
     } else {
         match before_decimal.parse::<i64>() {
             Ok(int_val) => Expr::Int(int_val),
-            Err(_) => Expr::MalformedNumber(Problem::OutsideSupportedRange),
+            Err(_) => Expr::MalformedInt(Problem::OutsideSupportedRange),
         }
     };
 

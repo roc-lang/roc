@@ -317,7 +317,7 @@ mod test_parser {
     fn int_too_large() {
         assert_parses_to(
             (i64::MAX as i128 + 1).to_string().as_str(),
-            MalformedNumber(Problem::OutsideSupportedRange),
+            MalformedInt(Problem::OutsideSupportedRange),
         );
     }
 
@@ -325,7 +325,7 @@ mod test_parser {
     fn int_too_small() {
         assert_parses_to(
             (i64::MIN as i128 - 1).to_string().as_str(),
-            MalformedNumber(Problem::OutsideSupportedRange),
+            MalformedInt(Problem::OutsideSupportedRange),
         );
     }
 
@@ -371,7 +371,7 @@ mod test_parser {
     fn float_too_large() {
         assert_parses_to(
             format!("{}1.0", f64::MAX).as_str(),
-            MalformedNumber(Problem::OutsideSupportedRange),
+            MalformedFloat(Problem::OutsideSupportedRange),
         );
     }
 
@@ -379,7 +379,7 @@ mod test_parser {
     fn float_too_small() {
         assert_parses_to(
             format!("{}1.0", f64::MIN).as_str(),
-            MalformedNumber(Problem::OutsideSupportedRange),
+            MalformedFloat(Problem::OutsideSupportedRange),
         );
     }
 
