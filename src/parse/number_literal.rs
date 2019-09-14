@@ -109,11 +109,20 @@ where
         f64_buf.push('.');
         f64_buf.push_str(&after_decimal);
 
+        // TODO [convert this comment to an issue] - we can get better
+        // performance here by inlining string.parse() for the f64 case,
+        // since we've already done the work of validating that each char
+        // is a digit, plus we also already separately parsed the minus
+        // sign and dot.
         match f64_buf.parse::<f64>() {
             Ok(float) if float.is_finite() => Expr::Float(float),
             _ => Expr::MalformedFloat(Problem::OutsideSupportedRange),
         }
     } else {
+        // TODO [convert this comment to an issue] - we can get better
+        // performance here by inlining string.parse() for the i64 case,
+        // since we've already done the work of validating that each char
+        // is a digit.
         match before_decimal.parse::<i64>() {
             Ok(int_val) => Expr::Int(int_val),
             Err(_) => Expr::MalformedInt(Problem::OutsideSupportedRange),
