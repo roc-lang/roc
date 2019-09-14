@@ -23,7 +23,7 @@ mod test_parser {
     use roc::parse::parser::{Fail, FailReason, Parser, State};
     use roc::parse::problems::Problem;
     use roc::region::{Located, Region};
-    use std::i64;
+    use std::{f64, i64};
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
         let state = State::new(&input, Attempting::Module);
@@ -287,7 +287,12 @@ mod test_parser {
         );
     }
 
-    // NUMBER LITERALS
+    // INT LITERALS
+
+    #[test]
+    fn zero_int() {
+        assert_parses_to("0", Int(0));
+    }
 
     #[test]
     fn positive_int() {
@@ -322,6 +327,37 @@ mod test_parser {
             (i64::MIN as i128 - 1).to_string().as_str(),
             MalformedNumber(Problem::OutsideSupportedRange),
         );
+    }
+
+    // FLOAT LITERALS
+
+    #[test]
+    fn zero_float() {
+        assert_parses_to("0.0", Float(0.0));
+    }
+
+    #[test]
+    fn positive_float() {
+        assert_parses_to("1.0", Float(1.0));
+        assert_parses_to("1.1", Float(1.1));
+        assert_parses_to("42.0", Float(42.0));
+        assert_parses_to("42.9", Float(42.9));
+        assert_parses_to(&format!("{}.0", f64::MAX), Float(std::f64::MAX));
+        panic!("TODO stress test maximum float *digits*, not just integer vals");
+    }
+
+    #[test]
+    fn negative_float() {
+        assert_parses_to("-1.0", Float(-1.0));
+        assert_parses_to("-1.1", Float(-1.1));
+        assert_parses_to("-42.0", Float(-42.0));
+        assert_parses_to("-42.9", Float(-42.9));
+        assert_parses_to(f64::MIN.to_string().as_str(), Float(std::f64::MIN));
+    }
+
+    #[quickcheck]
+    fn all_f64_values_parse(num: f64) {
+        assert_parses_to(num.to_string().as_str(), Float(num));
     }
 
     //     fn expect_parsed_float<'a>(expected: f64, actual: &str) {
