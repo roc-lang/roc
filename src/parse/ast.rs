@@ -150,8 +150,10 @@ pub enum Attempting {
     List,
     Keyword,
     StringLiteral,
+    InterpolatedString,
     NumberLiteral,
     UnicodeEscape,
     Expression,
     Module,
+    Identifier,
 }

@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod ident;
 pub mod number_literal;
 pub mod parser;
 pub mod problems;

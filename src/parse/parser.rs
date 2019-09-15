@@ -151,6 +151,7 @@ pub type ParseResult<'a, Output> = Result<(Output, State<'a>), (Fail, State<'a>)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailReason {
     Unexpected(char, Region),
+    UnexpectedKeyword(Keyword),
     ConditionFailed,
     LineTooLong(u32 /* which line was too long */),
     TooManyLines,
@@ -161,6 +162,28 @@ pub enum FailReason {
 pub struct Fail {
     pub attempting: Attempting,
     pub reason: FailReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Keyword {
+    If,
+    Then,
+    Else,
+    Case,
+    When,
+}
+
+impl Keyword {
+    pub fn from_str(kw: &str) -> Option<Keyword> {
+        match kw {
+            "if" => Some(Keyword::If),
+            "then" => Some(Keyword::Then),
+            "else" => Some(Keyword::Else),
+            "case" => Some(Keyword::Case),
+            "when" => Some(Keyword::When),
+            _ => None,
+        }
+    }
 }
 
 pub trait Parser<'a, Output> {

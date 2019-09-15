@@ -1,6 +1,8 @@
 use bumpalo::collections::string::String;
+use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::{Attempting, Expr};
+use parse::ident;
 use parse::parser::{unexpected, unexpected_eof, Fail, Parser, State};
 use parse::problems::{Problem, Problems};
 use region::{Loc, Region};
@@ -9,7 +11,7 @@ use std::iter::Peekable;
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let mut problems = Vec::new();
+        let mut problems = std::vec::Vec::new();
         let mut chars = state.input.chars().peekable();
 
         // String literals must start with a quote.
@@ -37,18 +39,65 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
         // Stores the accumulated string characters
         let mut buf = String::new_in(arena);
 
+        // This caches the total string length of interpolated_pairs. Every
+        // time we add a new pair to interpolated_pairs, we increment this
+        // by the sum of whatever we parsed in order to obtain that pair.
+        let mut buf_col_offset: usize = 0;
+
+        // Stores interpolated identifiers, if any.
+        let mut interpolated_pairs = Vec::new_in(arena);
+
         while let Some(ch) = chars.next() {
             match ch {
                 // If it's a backslash, escape things.
                 '\\' => match chars.next() {
-                    Some(next_ch) => handle_escaped_char(
-                        arena,
-                        &state,
-                        next_ch,
-                        &mut chars,
-                        &mut buf,
-                        &mut problems,
-                    )?,
+                    Some(next_ch) => {
+                        if let Some(ident) = handle_escaped_char(
+                            arena,
+                            &state,
+                            next_ch,
+                            &mut chars,
+                            &mut buf,
+                            &mut problems,
+                        )? {
+                            // +2 for `\(` and then another +1 for `)` at the end
+                            let parsed_length = buf.len() + 2 + ident.len() + 1;
+
+                            // It's okay if casting fails in this section, because
+                            // we're going to check for line length overflow at the
+                            // end anyway. That will render this region useless,
+                            // but the user wasn't going to see this region
+                            // anyway if the line length overflowed.
+                            let start_line = state.line;
+
+                            // Subtract ident length and another 1 for the `)`
+                            let start_col = state.column
+                                + buf_col_offset as u16
+                                + (parsed_length - ident.len() - 1) as u16;
+                            let ident_region = Region {
+                                start_line,
+                                start_col,
+                                end_line: start_line,
+                                end_col: start_col + ident.len() as u16 - 1,
+                            };
+                            let loc_ident = Loc {
+                                region: ident_region,
+                                value: ident,
+                            };
+
+                            // Push the accumulated string into the pairs list,
+                            // along with the ident that came after it.
+                            interpolated_pairs.push((buf.into_bump_str(), loc_ident));
+
+                            // Reset the buffer so we start working on a new string.
+                            buf = String::new_in(arena);
+
+                            // Advance the cached offset of how many chars we've parsed,
+                            // so the next time we see an interpolated ident, we can
+                            // correctly calculate its region.
+                            buf_col_offset += parsed_length;
+                        }
+                    }
                     None => {
                         // We ran out of characters before finding a closed quote;
                         // let the loop finish normally, so we end up returning
@@ -64,7 +113,16 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                     // We found a closed quote; this is the end of the string!
                     let len_with_quotes = buf.len() + 2;
                     let expr = if problems.is_empty() {
-                        Expr::Str(buf.into_bump_str())
+                        let final_str = buf.into_bump_str();
+
+                        if interpolated_pairs.is_empty() {
+                            Expr::Str(final_str)
+                        } else {
+                            let tuple_ref =
+                                arena.alloc((interpolated_pairs.into_bump_slice(), final_str));
+
+                            Expr::InterpolatedStr(tuple_ref)
+                        }
                     } else {
                         Expr::MalformedStr(problems.into_boxed_slice())
                     };
@@ -161,14 +219,14 @@ fn loc_escaped_unicode<'a, V>(
 }
 
 #[inline(always)]
-fn handle_escaped_char<'a, 'p, I>(
+fn handle_escaped_char<'a, I>(
     arena: &'a Bump,
     state: &State<'a>,
     ch: char,
     chars: &mut Peekable<I>,
     buf: &mut String<'a>,
-    problems: &'p mut Problems,
-) -> Result<(), (Fail, State<'a>)>
+    problems: &mut Problems,
+) -> Result<Option<&'a str>, (Fail, State<'a>)>
 where
     I: Iterator<Item = char>,
 {
@@ -180,8 +238,12 @@ where
         'r' => buf.push('\r'),
         '0' => buf.push('\0'), // We explicitly support null characters, as we
         // can't be sure we won't receive them from Rust.
-        'u' => handle_escaped_unicode(arena, state, chars, buf, problems)?,
-        '(' => panic!("TODO handle string interpolation"),
+        'u' => handle_escaped_unicode(arena, &state, chars, buf, problems)?,
+        '(' => {
+            let ident = parse_interpolated_ident(arena, state, chars)?;
+
+            return Ok(Some(ident));
+        }
         '\t' => {
             // Report and continue.
             // Tabs are syntax errors, but maybe the rest of the string is fine!
@@ -219,16 +281,16 @@ where
         }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 #[inline(always)]
-fn handle_escaped_unicode<'a, 'p, I>(
+fn handle_escaped_unicode<'a, I>(
     arena: &'a Bump,
     state: &State<'a>,
     chars: &mut Peekable<I>,
     buf: &mut String<'a>,
-    problems: &'p mut Problems,
+    problems: &mut Problems,
 ) -> Result<(), (Fail, State<'a>)>
 where
     I: Iterator<Item = char>,
@@ -406,4 +468,24 @@ where
     }
 
     Ok(())
+}
+
+#[inline(always)]
+fn parse_interpolated_ident<'a, I>(
+    arena: &'a Bump,
+    state: &State<'a>,
+    chars: &mut Peekable<I>,
+) -> Result<&'a str, (Fail, State<'a>)>
+where
+    I: Iterator<Item = char>,
+{
+    // This will return Err on invalid identifiers like "if"
+    let ((string, next_char), state) = ident::parse_into(arena, chars, state.clone())?;
+
+    // Make sure we got a closing ) to end the interpolation.
+    match next_char {
+        Some(')') => Ok(string),
+        Some(ch) => Err(unexpected(ch, 0, state, Attempting::InterpolatedString)),
+        None => Err(unexpected_eof(0, Attempting::InterpolatedString, state)),
+    }
 }
