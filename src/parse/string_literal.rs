@@ -328,10 +328,6 @@ where
     // Stores the accumulated unicode digits
     let mut hex_str = String::new_in(arena);
 
-    // TODO don't bail out on invalid unicode sequences!
-    // Instead, parse successfully as a Problem - like,
-    // this string has a problem with it, but that doesn't
-    // mean we have to fail parsing.
     while let Some(hex_char) = chars.next() {
         match hex_char {
             '}' => {
