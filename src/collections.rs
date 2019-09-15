@@ -1,7 +1,5 @@
 use std::hash::BuildHasherDefault;
 
-pub mod str;
-
 pub use fxhash::FxHasher;
 
 #[inline(always)]
