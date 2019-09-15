@@ -102,6 +102,11 @@ fn expr_size() {
         //    We want to have the lifetime and we want to avoid using the unsafe keyword,
         //    but we also want this to only store 1 pointer in the AST node.
         //    Hopefully there's a way!
+        //
+        // It's also possible that going up to 4 machine words might yield even
+        // better performance, due to more data structures being inlinable,
+        // and therefore having fewer pointers to chase. This seems worth
+        // investigating as well.
         std::mem::size_of::<usize>() * 3
     );
 }
@@ -129,6 +134,11 @@ fn pattern_size() {
         //    We want to have the lifetime and we want to avoid using the unsafe keyword,
         //    but we also want this to only store 1 pointer in the AST node.
         //    Hopefully there's a way!
+        //
+        // It's also possible that going up to 4 machine words might yield even
+        // better performance, due to more data structures being inlinable,
+        // and therefore having fewer pointers to chase. This seems worth
+        // investigating as well.
         std::mem::size_of::<usize>() * 3
     );
 }
