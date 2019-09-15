@@ -88,6 +88,20 @@ fn expr_size() {
     // an 8-byte cache line will only fit 2 of these regardless.
     assert_eq!(
         std::mem::size_of::<Expr>(),
+        // TODO [move this comment to an issue] We should be able to get this
+        // down to 2, which would mean we could fit 4 of these nodes in a single
+        // 64-byte cache line instead of only being able to fit 2.
+        //
+        // Doing this would require, among other things:
+        // 1. Making a str replacement where the length is stored as u32 instead of usize,
+        //    to leave room for the tagged union's u8 tag.
+        //    (Alternatively could store it as (&'a &'a str), but ew.)
+        // 2. Figuring out why &'a (Foo, Bar) by default takes up 24 bytes in Rust.
+        //    I assume it's because the struct is being stored inline instead of
+        //    as a pointer, but in this case we actually do want the pointer!
+        //    We want to have the lifetime and we want to avoid using the unsafe keyword,
+        //    but we also want this to only store 1 pointer in the AST node.
+        //    Hopefully there's a way!
         std::mem::size_of::<usize>() * 3
     );
 }
@@ -101,6 +115,20 @@ fn pattern_size() {
     // an 8-byte cache line will only fit 2 of these regardless.
     assert_eq!(
         std::mem::size_of::<Pattern>(),
+        // TODO [move this comment to an issue] We should be able to get this
+        // down to 2, which would mean we could fit 4 of these nodes in a single
+        // 64-byte cache line instead of only being able to fit 2.
+        //
+        // Doing this would require, among other things:
+        // 1. Making a str replacement where the length is stored as u32 instead of usize,
+        //    to leave room for the tagged union's u8 tag.
+        //    (Alternatively could store it as (&'a &'a str), but ew.)
+        // 2. Figuring out why &'a (Foo, Bar) by default takes up 24 bytes in Rust.
+        //    I assume it's because the struct is being stored inline instead of
+        //    as a pointer, but in this case we actually do want the pointer!
+        //    We want to have the lifetime and we want to avoid using the unsafe keyword,
+        //    but we also want this to only store 1 pointer in the AST node.
+        //    Hopefully there's a way!
         std::mem::size_of::<usize>() * 3
     );
 }
