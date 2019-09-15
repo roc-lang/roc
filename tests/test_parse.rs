@@ -195,16 +195,14 @@ mod test_parser {
 
     #[test]
     fn string_with_interpolation_at_start() {
-        let (args, ret) = (vec![("", located(0, 2, 0, 4, "abc"))], "defg");
-        let arena = Bump::new();
-        let actual = parse_with(
-            &arena,
-            indoc!(
-                r#"
+        let input = indoc!(
+            r#"
                  "\(abc)defg"
                  "#
-            ),
         );
+        let (args, ret) = (vec![("", located(0, 2, 0, 4, "abc"))], "defg");
+        let arena = Bump::new();
+        let actual = parse_with(&arena, input);
 
         assert_eq!(
             Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
@@ -212,48 +210,87 @@ mod test_parser {
         );
     }
 
-    //     #[test]
-    //     fn string_with_interpolation_at_end() {
-    //         assert_fully_parses(
-    //             indoc!(
-    //                 r#"
-    //                  "abcd\(efg)"
-    //              "#
-    //             ),
-    //             InterpolatedStr(vec![("abcd".to_string(), loc(raw("efg")))], "".to_string()),
-    //         );
-    //     }
+    #[test]
+    fn string_with_interpolation_at_end() {
+        let input = indoc!(
+            r#"
+                 "abcd\(efg)"
+                 "#
+        );
+        let (args, ret) = (vec![("abcd", located(0, 6, 0, 8, "efg"))], "");
+        let arena = Bump::new();
+        let actual = parse_with(&arena, input);
 
-    //     #[test]
-    //     fn string_with_interpolation_in_middle() {
-    //         assert_fully_parses(
-    //             indoc!(
-    //                 r#"
-    //                  "abcd\(efg)hij"
-    //              "#
-    //             ),
-    //             InterpolatedStr(
-    //                 vec![("abcd".to_string(), loc(raw("efg")))],
-    //                 "hij".to_string(),
-    //             ),
-    //         );
-    //     }
+        assert_eq!(
+            Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
+            actual
+        );
+    }
 
-    //     #[test]
-    //     fn string_with_multiple_interpolation() {
-    //         panic!("TODO start, middle, middle again, *and*, end");
-    //         assert_fully_parses(
-    //             indoc!(
-    //                 r#"
-    //                  "abcd\(efg)hij"
-    //              "#
-    //             ),
-    //             InterpolatedStr(
-    //                 vec![("abcd".to_string(), loc(raw("efg")))],
-    //                 "hij".to_string(),
-    //             ),
-    //         );
-    //     }
+    #[test]
+    fn string_with_interpolation_in_middle() {
+        let input = indoc!(
+            r#"
+                 "abc\(defg)hij"
+                 "#
+        );
+        let (args, ret) = (vec![("abc", located(0, 5, 0, 8, "defg"))], "hij");
+        let arena = Bump::new();
+        let actual = parse_with(&arena, input);
+
+        assert_eq!(
+            Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
+            actual
+        );
+    }
+
+    #[test]
+    fn string_with_two_interpolations_in_middle() {
+        let input = indoc!(
+            r#"
+                 "abc\(defg)hi\(jkl)mn"
+                 "#
+        );
+        let (args, ret) = (
+            vec![
+                ("abc", located(0, 5, 0, 8, "defg")),
+                ("hi", located(0, 14, 0, 16, "jkl")),
+            ],
+            "mn",
+        );
+        let arena = Bump::new();
+        let actual = parse_with(&arena, input);
+
+        assert_eq!(
+            Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
+            actual
+        );
+    }
+
+    #[test]
+    fn string_with_four_interpolations() {
+        let input = indoc!(
+            r#"
+                 "\(abc)def\(ghi)jkl\(mno)pqrs\(tuv)"
+                 "#
+        );
+        let (args, ret) = (
+            vec![
+                ("", located(0, 2, 0, 4, "abc")),
+                ("def", located(0, 11, 0, 13, "ghi")),
+                ("jkl", located(0, 20, 0, 22, "mno")),
+                ("pqrs", located(0, 30, 0, 32, "tuv")),
+            ],
+            "",
+        );
+        let arena = Bump::new();
+        let actual = parse_with(&arena, input);
+
+        assert_eq!(
+            Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
+            actual
+        );
+    }
 
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
     //
