@@ -257,9 +257,6 @@ mod test_parser {
     //
     // TODO verify that when a string literal contains a newline before the
     // closing " it correctly updates both the line *and* column in the State.
-    //
-    // TODO verify that exceeding maximum line length does NOT panic
-    // TODO verify that exceeding maximum line count does NOT panic
 
     #[test]
     fn empty_source_file() {
