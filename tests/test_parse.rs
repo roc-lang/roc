@@ -59,10 +59,6 @@ mod test_parser {
         );
     }
 
-    /* fn raw(string: &str) -> Ident { */
-    /*     Ident::Unqualified(string.to_string()) */
-    /* } */
-
     // STRING LITERALS
 
     fn expect_parsed_str(input: &str, expected: &str) {
@@ -198,60 +194,68 @@ mod test_parser {
         );
     }
 
-    /* #[test] */
-    /* fn string_with_interpolation_at_start() { */
-    /*     assert_fully_parses( */
-    /*         indoc!( */
-    /*             r#" */
-    /*             "\(abc)defg" */
-    /*             "# */
-    /*         ), */
-    /*         InterpolatedStr(vec![("".to_string(), loc(raw("abc")))], "defg".to_string()), */
-    /*     ); */
-    /* } */
+    #[test]
+    fn string_with_interpolation_at_start() {
+        let input = indoc!(
+            r#"
+                 "\(abc)defg"
+                 "#
+        );
+        let (args, ret) = (vec![("", located(0, 2, 0, 4, "abc"))], "defg");
+        let arena = Bump::new();
+        let state = State::new(&input, Attempting::Module);
+        let parser = parse::expr();
+        let answer = parser.parse(&arena, state);
+        let actual = answer.map(|(expr, _)| expr);
 
-    /* #[test] */
-    /* fn string_with_interpolation_at_end() { */
-    /*     assert_fully_parses( */
-    /*         indoc!( */
-    /*             r#" */
-    /*             "abcd\(efg)" */
-    /*         "# */
-    /*         ), */
-    /*         InterpolatedStr(vec![("abcd".to_string(), loc(raw("efg")))], "".to_string()), */
-    /*     ); */
-    /* } */
+        assert_eq!(
+            Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
+            actual
+        );
+    }
 
-    /* #[test] */
-    /* fn string_with_interpolation_in_middle() { */
-    /*     assert_fully_parses( */
-    /*         indoc!( */
-    /*             r#" */
-    /*             "abcd\(efg)hij" */
-    /*         "# */
-    /*         ), */
-    /*         InterpolatedStr( */
-    /*             vec![("abcd".to_string(), loc(raw("efg")))], */
-    /*             "hij".to_string(), */
-    /*         ), */
-    /*     ); */
-    /* } */
+    //     #[test]
+    //     fn string_with_interpolation_at_end() {
+    //         assert_fully_parses(
+    //             indoc!(
+    //                 r#"
+    //                  "abcd\(efg)"
+    //              "#
+    //             ),
+    //             InterpolatedStr(vec![("abcd".to_string(), loc(raw("efg")))], "".to_string()),
+    //         );
+    //     }
 
-    /* #[test] */
-    /* fn string_with_multiple_interpolation() { */
-    /* panic!("TODO start, middle, middle again, *and*, end"); */
-    /*     assert_fully_parses( */
-    /*         indoc!( */
-    /*             r#" */
-    /*             "abcd\(efg)hij" */
-    /*         "# */
-    /*         ), */
-    /*         InterpolatedStr( */
-    /*             vec![("abcd".to_string(), loc(raw("efg")))], */
-    /*             "hij".to_string(), */
-    /*         ), */
-    /*     ); */
-    /* } */
+    //     #[test]
+    //     fn string_with_interpolation_in_middle() {
+    //         assert_fully_parses(
+    //             indoc!(
+    //                 r#"
+    //                  "abcd\(efg)hij"
+    //              "#
+    //             ),
+    //             InterpolatedStr(
+    //                 vec![("abcd".to_string(), loc(raw("efg")))],
+    //                 "hij".to_string(),
+    //             ),
+    //         );
+    //     }
+
+    //     #[test]
+    //     fn string_with_multiple_interpolation() {
+    //         panic!("TODO start, middle, middle again, *and*, end");
+    //         assert_fully_parses(
+    //             indoc!(
+    //                 r#"
+    //                  "abcd\(efg)hij"
+    //              "#
+    //             ),
+    //             InterpolatedStr(
+    //                 vec![("abcd".to_string(), loc(raw("efg")))],
+    //                 "hij".to_string(),
+    //             ),
+    //         );
+    //     }
 
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
     //
