@@ -10,9 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_canonicalize {
-    use helpers::{
-        empty_region, loc, loc_box, mut_map_from_pairs, parse_without_loc, zero_loc_expr,
-    };
+    use helpers::{loc, loc_box, mut_map_from_pairs, parse_without_loc, zero_loc_expr};
     use roc::canonicalize;
     use roc::canonicalize::Expr::*;
     use roc::canonicalize::Pattern::*;
@@ -142,7 +140,7 @@ mod test_canonicalize {
                 Procedure {
                     name: Some("func".to_string()),
                     is_self_tail_recursive: false,
-                    definition: empty_region(),
+                    definition: Region::zero(),
                     args: vec![loc(Pattern::Identifier(sym("arg")))],
                     body: loc(Expr::Operator(
                         loc_box(Expr::Var(sym("arg"))),

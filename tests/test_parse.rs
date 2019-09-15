@@ -6,6 +6,11 @@ extern crate bumpalo;
 extern crate combine; // OBSOLETE
 extern crate roc;
 
+extern crate quickcheck;
+
+#[macro_use(quickcheck)]
+extern crate quickcheck_macros;
+
 mod helpers;
 
 #[cfg(test)]
@@ -15,18 +20,30 @@ mod test_parser {
     use roc::parse;
     use roc::parse::ast::Attempting;
     use roc::parse::ast::Expr::{self, *};
-    use roc::parse::parser::{Parser, State};
+    use roc::parse::parser::{Fail, FailReason, Parser, State};
     use roc::parse::problems::Problem;
-    use roc::region::Located;
+    use roc::region::{Located, Region};
+    use std::{f64, i64};
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
-        let state = State::new(&input, Attempting::Expression);
+        let state = State::new(&input, Attempting::Module);
         let arena = Bump::new();
         let parser = parse::expr();
         let answer = parser.parse(&arena, state);
         let actual = answer.map(|(expr, _)| expr);
 
         assert_eq!(Ok(expected_expr), actual);
+    }
+
+    fn assert_parsing_fails<'a>(input: &'a str, reason: FailReason, attempting: Attempting) {
+        let state = State::new(&input, Attempting::Module);
+        let arena = Bump::new();
+        let parser = parse::expr();
+        let answer = parser.parse(&arena, state);
+        let actual = answer.map_err(|(fail, _)| fail);
+        let expected_fail = Fail { reason, attempting };
+
+        assert_eq!(Err(expected_fail), actual);
     }
 
     fn assert_malformed_str<'a>(input: &'a str, expected_probs: Vec<Located<Problem>>) {
@@ -244,20 +261,151 @@ mod test_parser {
     // TODO verify that exceeding maximum line length does NOT panic
     // TODO verify that exceeding maximum line count does NOT panic
 
-    // NUMBER LITERALS
+    #[test]
+    fn empty_source_file() {
+        assert_parsing_fails("", FailReason::Eof(Region::zero()), Attempting::Expression);
+    }
+
+    #[test]
+    fn first_line_too_long() {
+        let max_line_length = std::u16::MAX as usize;
+
+        // the string literal "ZZZZZZZZZ" but with way more Zs
+        let too_long_str_body: String = (1..max_line_length)
+            .into_iter()
+            .map(|_| "Z".to_string())
+            .collect();
+        let too_long_str = format!("\"{}\"", too_long_str_body);
+
+        // Make sure it's longer than our maximum line length
+        assert_eq!(too_long_str.len(), max_line_length + 1);
+
+        assert_parsing_fails(
+            &too_long_str,
+            FailReason::LineTooLong(0),
+            Attempting::Expression,
+        );
+    }
+
+    // INT LITERALS
+
+    #[test]
+    fn zero_int() {
+        assert_parses_to("0", Int(0));
+    }
 
     #[test]
     fn positive_int() {
         assert_parses_to("1", Int(1));
         assert_parses_to("42", Int(42));
-        assert_parses_to(&std::i64::MAX.to_string(), Int(std::i64::MAX));
     }
 
     #[test]
     fn negative_int() {
         assert_parses_to("-1", Int(-1));
         assert_parses_to("-42", Int(-42));
-        assert_parses_to(&std::i64::MIN.to_string(), Int(std::i64::MIN));
+    }
+
+    #[test]
+    fn highest_int() {
+        assert_parses_to(i64::MAX.to_string().as_str(), Int(i64::MAX));
+    }
+
+    #[test]
+    fn lowest_int() {
+        assert_parses_to(i64::MIN.to_string().as_str(), Int(i64::MIN));
+    }
+
+    #[test]
+    fn int_with_underscore() {
+        assert_parses_to("1_2_34_567", Int(1234567));
+        assert_parses_to("-1_2_34_567", Int(-1234567));
+        // The following cases are silly. They aren't supported on purpose,
+        // but there would be a performance cost to explicitly disallowing them,
+        // which doesn't seem like it would benefit anyone.
+        assert_parses_to("1_", Int(1));
+        assert_parses_to("1__23", Int(123));
+    }
+
+    #[quickcheck]
+    fn all_i64_values_parse(num: i64) {
+        assert_parses_to(num.to_string().as_str(), Int(num));
+    }
+
+    #[test]
+    fn int_too_large() {
+        assert_parses_to(
+            (i64::MAX as i128 + 1).to_string().as_str(),
+            MalformedInt(Problem::OutsideSupportedRange),
+        );
+    }
+
+    #[test]
+    fn int_too_small() {
+        assert_parses_to(
+            (i64::MIN as i128 - 1).to_string().as_str(),
+            MalformedInt(Problem::OutsideSupportedRange),
+        );
+    }
+
+    // FLOAT LITERALS
+
+    #[test]
+    fn zero_float() {
+        assert_parses_to("0.0", Float(0.0));
+    }
+
+    #[test]
+    fn positive_float() {
+        assert_parses_to("1.0", Float(1.0));
+        assert_parses_to("1.1", Float(1.1));
+        assert_parses_to("42.0", Float(42.0));
+        assert_parses_to("42.9", Float(42.9));
+    }
+
+    #[test]
+    fn highest_float() {
+        assert_parses_to(&format!("{}.0", f64::MAX), Float(f64::MAX));
+    }
+
+    #[test]
+    fn negative_float() {
+        assert_parses_to("-1.0", Float(-1.0));
+        assert_parses_to("-1.1", Float(-1.1));
+        assert_parses_to("-42.0", Float(-42.0));
+        assert_parses_to("-42.9", Float(-42.9));
+    }
+
+    #[test]
+    fn lowest_float() {
+        assert_parses_to(&format!("{}.0", f64::MIN), Float(f64::MIN));
+    }
+
+    #[test]
+    fn float_with_underscores() {
+        assert_parses_to("1_23_456.0_1_23_456", Float(123456.0123456));
+        assert_parses_to("-1_23_456.0_1_23_456", Float(-123456.0123456));
+    }
+
+    #[quickcheck]
+    fn all_f64_values_parse(num: f64) {
+        assert_parses_to(num.to_string().as_str(), Float(num));
+    }
+
+    #[test]
+    fn float_too_large() {
+        assert_parses_to(
+            format!("{}1.0", f64::MAX).as_str(),
+            MalformedFloat(Problem::OutsideSupportedRange),
+        );
+    }
+
+    #[test]
+    fn float_too_small() {
+        assert_parses_to(
+            format!("{}1.0", f64::MIN).as_str(),
+            MalformedFloat(Problem::OutsideSupportedRange),
+        );
     }
 
     //     fn expect_parsed_float<'a>(expected: f64, actual: &str) {

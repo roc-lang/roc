@@ -17,8 +17,9 @@ pub enum Problem {
     NewlineInLiteral,
     Tab,
     CarriageReturn,
+    NullChar,
     UnsupportedEscapedChar,
 
     // NUMBER LITERAL
-    TooLarge,
+    OutsideSupportedRange,
 }

@@ -13,7 +13,7 @@ pub fn loc_box<T>(val: T) -> Box<Located<T>> {
 }
 
 pub fn loc<T>(val: T) -> Located<T> {
-    Located::new(val, empty_region())
+    Located::new(val, Region::zero())
 }
 
 pub fn located<T>(
@@ -32,16 +32,6 @@ pub fn located<T>(
             end_col,
         },
     )
-}
-
-pub fn empty_region() -> Region {
-    Region {
-        start_line: 0,
-        start_col: 0,
-
-        end_line: 0,
-        end_col: 0,
-    }
 }
 
 pub fn zero_loc<T>(located_val: Located<T>) -> Located<T> {

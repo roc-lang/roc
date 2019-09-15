@@ -94,8 +94,8 @@ where
     }
 
     // At this point we have a number, and will definitely succeed.
-    // If the number is malformed (too large to fit), we'll succeed with
-    // an appropriate Expr which records that.
+    // If the number is malformed (outside the supported range),
+    // we'll succeed with an appropriate Expr which records that.
     let expr = if has_decimal_point {
         let mut f64_buf = String::with_capacity_in(
             before_decimal.len()
@@ -109,19 +109,28 @@ where
         f64_buf.push('.');
         f64_buf.push_str(&after_decimal);
 
+        // TODO [convert this comment to an issue] - we can get better
+        // performance here by inlining string.parse() for the f64 case,
+        // since we've already done the work of validating that each char
+        // is a digit, plus we also already separately parsed the minus
+        // sign and dot.
         match f64_buf.parse::<f64>() {
-            Ok(float) => Expr::Float(float),
-            Err(_) => Expr::MalformedNumber(Problem::TooLarge),
+            Ok(float) if float.is_finite() => Expr::Float(float),
+            _ => Expr::MalformedFloat(Problem::OutsideSupportedRange),
         }
     } else {
+        // TODO [convert this comment to an issue] - we can get better
+        // performance here by inlining string.parse() for the i64 case,
+        // since we've already done the work of validating that each char
+        // is a digit.
         match before_decimal.parse::<i64>() {
             Ok(int_val) => Expr::Int(int_val),
-            Err(_) => Expr::MalformedNumber(Problem::TooLarge),
+            Err(_) => Expr::MalformedInt(Problem::OutsideSupportedRange),
         }
     };
 
     let total_chars_parsed = before_decimal.len() + chars_skipped;
-    let state = state.advance_without_indenting(total_chars_parsed);
+    let state = state.advance_without_indenting(total_chars_parsed)?;
 
     Ok((expr, state))
 }
