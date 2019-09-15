@@ -25,33 +25,32 @@ mod test_parser {
     use roc::region::{Located, Region};
     use std::{f64, i64};
 
-    fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
+    fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
         let state = State::new(&input, Attempting::Module);
-        let arena = Bump::new();
         let parser = parse::expr();
         let answer = parser.parse(&arena, state);
-        let actual = answer.map(|(expr, _)| expr);
+
+        answer.map(|(expr, _)| expr).map_err(|(fail, _)| fail)
+    }
+
+    fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
+        let arena = Bump::new();
+        let actual = parse_with(&arena, input);
 
         assert_eq!(Ok(expected_expr), actual);
     }
 
     fn assert_parsing_fails<'a>(input: &'a str, reason: FailReason, attempting: Attempting) {
-        let state = State::new(&input, Attempting::Module);
         let arena = Bump::new();
-        let parser = parse::expr();
-        let answer = parser.parse(&arena, state);
-        let actual = answer.map_err(|(fail, _)| fail);
+        let actual = parse_with(&arena, input);
         let expected_fail = Fail { reason, attempting };
 
         assert_eq!(Err(expected_fail), actual);
     }
 
     fn assert_malformed_str<'a>(input: &'a str, expected_probs: Vec<Located<Problem>>) {
-        let state = State::new(&input, Attempting::Expression);
         let arena = Bump::new();
-        let parser = parse::expr();
-        let answer = parser.parse(&arena, state);
-        let actual = answer.map(|(expr, _)| expr);
+        let actual = parse_with(&arena, input);
 
         assert_eq!(
             Ok(Expr::MalformedStr(expected_probs.into_boxed_slice())),
@@ -196,17 +195,16 @@ mod test_parser {
 
     #[test]
     fn string_with_interpolation_at_start() {
-        let input = indoc!(
-            r#"
-                 "\(abc)defg"
-                 "#
-        );
         let (args, ret) = (vec![("", located(0, 2, 0, 4, "abc"))], "defg");
         let arena = Bump::new();
-        let state = State::new(&input, Attempting::Module);
-        let parser = parse::expr();
-        let answer = parser.parse(&arena, state);
-        let actual = answer.map(|(expr, _)| expr);
+        let actual = parse_with(
+            &arena,
+            indoc!(
+                r#"
+                 "\(abc)defg"
+                 "#
+            ),
+        );
 
         assert_eq!(
             Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
