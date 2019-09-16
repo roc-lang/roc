@@ -1,7 +1,7 @@
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use parse::ast::{Attempting, Expr, Lossless};
+use parse::ast::{Attempting, Expr};
 use parse::ident;
 use parse::parser::{unexpected, unexpected_eof, Fail, Parser, State};
 use parse::problems::{Problem, Problems};
@@ -36,11 +36,8 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
             ));
         }
 
-        // Stores the accumulated *parsed* string characters
+        // Stores the accumulated string characters
         let mut buf = String::new_in(arena);
-
-        // Stores the accumulated raw string characters
-        let mut raw_buf = String::new_in(arena);
 
         // This caches the total string length of interpolated_pairs. Every
         // time we add a new pair to interpolated_pairs, we increment this
@@ -51,8 +48,6 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
         let mut interpolated_pairs = Vec::new_in(arena);
 
         while let Some(ch) = chars.next() {
-            raw_buf.push(ch);
-
             match ch {
                 // If it's a backslash, escape things.
                 '\\' => match chars.next() {
@@ -91,18 +86,13 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                                 region: ident_region,
                                 value: expr,
                             };
-                            let lossless_str = Lossless {
-                                value: buf.into_bump_str(),
-                                raw: raw_buf.into_bump_str(),
-                            };
 
                             // Push the accumulated string into the pairs list,
                             // along with the ident that came after it.
-                            interpolated_pairs.push((lossless_str, loc_expr));
+                            interpolated_pairs.push((buf.into_bump_str(), loc_expr));
 
-                            // Reset the buffers so we start working on a new string.
+                            // Reset the buffer so we start working on a new string.
                             buf = String::new_in(arena);
-                            raw_buf = String::new_in(arena);
 
                             // Advance the cached offset of how many chars we've parsed,
                             // so the next time we see an interpolated ident, we can
@@ -125,16 +115,13 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                     // We found a closed quote; this is the end of the string!
                     let len_with_quotes = buf.len() + 2;
                     let expr = if problems.is_empty() {
-                        let ll_final_str = Lossless {
-                            value: buf.into_bump_str(),
-                            raw: raw_buf.into_bump_str(),
-                        };
+                        let final_str = buf.into_bump_str();
 
                         if interpolated_pairs.is_empty() {
-                            Expr::Str(ll_final_str)
+                            Expr::Str(final_str)
                         } else {
                             let tuple_ref =
-                                arena.alloc((interpolated_pairs.into_bump_slice(), ll_final_str));
+                                arena.alloc((interpolated_pairs.into_bump_slice(), final_str));
 
                             Expr::InterpolatedStr(tuple_ref)
                         }

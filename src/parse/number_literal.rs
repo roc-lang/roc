@@ -1,6 +1,6 @@
 use bumpalo::collections::string::String;
 use bumpalo::Bump;
-use parse::ast::{Attempting, Expr, Lossless};
+use parse::ast::{Attempting, Expr};
 use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use parse::problems::Problem;
 use std::char;
@@ -93,10 +93,6 @@ where
         }
     }
 
-    // This needs to be before the expr calculation because we consume
-    // before_decimal later.
-    let total_chars_parsed = before_decimal.len() + chars_skipped;
-
     // At this point we have a number, and will definitely succeed.
     // If the number is malformed (outside the supported range),
     // we'll succeed with an appropriate Expr which records that.
@@ -119,10 +115,7 @@ where
         // is a digit, plus we also already separately parsed the minus
         // sign and dot.
         match f64_buf.parse::<f64>() {
-            Ok(float) if float.is_finite() => Expr::Float(Lossless {
-                value: float,
-                raw: f64_buf.into_bump_str(),
-            }),
+            Ok(float) if float.is_finite() => Expr::Float(float),
             _ => Expr::MalformedFloat(Problem::OutsideSupportedRange),
         }
     } else {
@@ -131,14 +124,12 @@ where
         // since we've already done the work of validating that each char
         // is a digit.
         match before_decimal.parse::<i64>() {
-            Ok(int_val) => Expr::Int(Lossless {
-                value: int_val,
-                raw: before_decimal.into_bump_str(),
-            }),
+            Ok(int_val) => Expr::Int(int_val),
             Err(_) => Expr::MalformedInt(Problem::OutsideSupportedRange),
         }
     };
 
+    let total_chars_parsed = before_decimal.len() + chars_skipped;
     let state = state.advance_without_indenting(total_chars_parsed)?;
 
     Ok((expr, state))
