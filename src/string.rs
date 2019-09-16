@@ -192,7 +192,7 @@ impl Into<String> for RocStr {
     fn into(self) -> String {
         let len_msbyte = self.len_msbyte();
 
-        panic!("I'm not sure this works the way we want it to. Need to review.");
+        // TODO I'm not sure this works the way we want it to. Need to review.
 
         if flagged_as_short_string(len_msbyte) {
             // Drop the "is this a short string?" flag
@@ -208,7 +208,6 @@ impl Into<String> for RocStr {
             // same memory layout as a Rust &str slice.
             let str_slice = unsafe { mem::transmute::<[u8; 16], &str>(self.0.raw) };
             let string = str_slice.to_string();
-            let mut roc_str_mut = self;
 
             // Drop will deallocate the bytes, which we don't want in this case.
             // String is using those bytes now!
@@ -241,14 +240,14 @@ impl From<String> for RocStr {
 
                 RocStr(InnerStr { raw: buffer })
             } else {
-                let bytes_ptr = string.as_bytes().clone().as_ptr();
-                let long = LongStr {
-                    bytes: MaybeUninit::new(bytes_ptr),
-                    length: str_len,
-                };
-
                 panic!("TODO: use mem::forget on the string and steal its bytes!");
-                RocStr(InnerStr { long })
+                // let bytes_ptr = string.as_bytes().clone().as_ptr();
+                // let long = LongStr {
+                //     bytes: MaybeUninit::new(bytes_ptr),
+                //     length: str_len,
+                // };
+
+                // RocStr(InnerStr { long })
             }
         }
     }

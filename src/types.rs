@@ -1,4 +1,4 @@
-use canonicalize::Symbol;
+use can::symbol::Symbol;
 use collections::ImMap;
 use operator::{ArgSide, Operator};
 use region::Located;

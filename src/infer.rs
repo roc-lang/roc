@@ -1,4 +1,6 @@
-use canonicalize::{Expr, Procedure, Symbol};
+use can::expr::Expr;
+use can::procedure::Procedure;
+use can::symbol::Symbol;
 use collections::{ImMap, MutMap};
 use constrain::{constrain, constrain_procedure};
 use region::Located;

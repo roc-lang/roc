@@ -52,7 +52,19 @@ pub struct Located<T> {
 }
 
 impl<T> Located<T> {
-    pub fn new(value: T, region: Region) -> Located<T> {
+    pub fn new(
+        start_line: u32,
+        start_col: u16,
+        end_line: u32,
+        end_col: u16,
+        value: T,
+    ) -> Located<T> {
+        let region = Region {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        };
         Located { value, region }
     }
 }

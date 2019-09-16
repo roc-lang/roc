@@ -75,7 +75,6 @@ impl Subs {
     }
 
     pub fn mk_flex_var(&mut self) -> Variable {
-        /// TODO is "flex" the same as "unbound" and "rigid" the same as "bound"?!
         self.fresh(flex_var_descriptor())
     }
 

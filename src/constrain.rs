@@ -1,5 +1,7 @@
-use canonicalize::Expr::{self, *};
-use canonicalize::{Pattern, Procedure, Symbol};
+use can::expr::Expr::{self, *};
+use can::pattern::Pattern;
+use can::procedure::Procedure;
+use can::symbol::Symbol;
 use collections::ImMap;
 use operator::{ArgSide, Operator};
 use region::{Located, Region};
@@ -93,13 +95,14 @@ fn constrain_op(
 ) -> Constraint {
     let op = loc_op.value;
     let op_types = Type::for_operator(op);
-    let fn_var = subs.mk_flex_var();
+    // TODO use fn_var
+    let _fn_var = subs.mk_flex_var();
     let ret_var = subs.mk_flex_var();
     let ret_type = Variable(ret_var);
     let ret_reason = Reason::OperatorRet(op);
     let expected_ret_type = ForReason(ret_reason, op_types.ret, region.clone());
 
-    let (l_var, l_con) = constrain_op_arg(
+    let (_l_var, l_con) = constrain_op_arg(
         ArgSide::Left,
         bound_vars,
         subs,
@@ -107,7 +110,7 @@ fn constrain_op(
         op_types.left,
         l_loc_expr,
     );
-    let (r_var, r_con) = constrain_op_arg(
+    let (_r_var, r_con) = constrain_op_arg(
         ArgSide::Right,
         bound_vars,
         subs,
@@ -116,8 +119,8 @@ fn constrain_op(
         r_loc_expr,
     );
 
-    let vars = vec![fn_var, ret_var, l_var, r_var];
     // TODO occurs check!
+    // let vars = vec![fn_var, ret_var, l_var, r_var];
     // return $ exists (funcVar:resultVar:argVars) $ CAnd ...
 
     And(vec![
@@ -226,7 +229,7 @@ pub fn constrain_defs(
     subs: &mut Subs,
     ret_con: Constraint,
 ) -> Constraint {
-    let mut rigid_info = Info::with_capacity(assignments.len());
+    let rigid_info = Info::with_capacity(assignments.len());
     let mut flex_info = Info::with_capacity(assignments.len());
 
     for (loc_pattern, loc_expr) in assignments {
@@ -320,7 +323,7 @@ fn string() -> Type {
     builtin_type("String", "String", Vec::new())
 }
 
-fn num(var: Variable) -> Type {
+fn _num(var: Variable) -> Type {
     builtin_type("Num", "Num", vec![Type::Variable(var)])
 }
 
@@ -514,9 +517,9 @@ pub fn constrain_procedure(
 }
 
 struct Args {
-    vars: Vec<Variable>,
-    typ: Type,
-    ret_type: Type,
+    pub vars: Vec<Variable>,
+    pub typ: Type,
+    pub ret_type: Type,
 }
 
 fn constrain_args<I>(args: I, subs: &mut Subs, state: &mut PatternState) -> Args
@@ -571,7 +574,7 @@ struct PatternState {
 
 impl PatternState {
     pub fn add_pattern(&mut self, loc_pattern: Located<Pattern>, expected: Expected<Type>) {
-        use canonicalize::Pattern::*;
+        use can::pattern::Pattern::*;
 
         let region = loc_pattern.region;
 

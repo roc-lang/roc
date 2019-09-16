@@ -3,13 +3,10 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 extern crate bumpalo;
-extern crate combine; // OBSOLETE
 extern crate roc;
 
-mod helpers;
-
 #[cfg(test)]
-mod test_formatter {
+mod test_format {
     use bumpalo::Bump;
     use roc::parse;
     use roc::parse::ast::{Attempting, Expr};
@@ -85,21 +82,28 @@ mod test_formatter {
         ));
     }
 
-    // #[test]
-    // fn basic_string() {
-    //     assert_formats_same(indoc!(
-    //         r#"
-    //         "blah"
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn basic_string() {
+        assert_formats_same(indoc!(
+            r#"
+            "blah"
+            "#
+        ));
+    }
 
-    // #[test]
-    // fn escaped_unicode_string() {
-    //     assert_formats_same(indoc!(
-    //         r#"
-    //         "unicode: \u{A00A}!"
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn escaped_unicode_string() {
+        assert_formats_same(indoc!(
+            r#"
+            "unicode: \u{A00A}!"
+            "#
+        ));
+    }
+
+    // RECORD LITERALS
+
+    #[test]
+    fn empty_record() {
+        assert_formats_same("{}");
+    }
 }

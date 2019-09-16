@@ -11,7 +11,7 @@
 //     , _errors :: [Error.Error]
 //     }
 
-use canonicalize::Symbol;
+use can::symbol::Symbol;
 use collections::ImMap;
 use subs::{Content, Descriptor, FlatType, Subs, Variable};
 use types::Constraint::{self, *};
@@ -23,13 +23,15 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
     // println!("\nSolving:\n\n\t{:?}\n\n", constraint);
     match constraint {
         True => (),
-        Eq(typ, expected_type, region) => {
+        Eq(typ, expected_type, _region) => {
+            // TODO use region?
             let actual = type_to_variable(subs, typ);
             let expected = type_to_variable(subs, expected_type.get_type());
 
             subs.union(actual, expected);
         }
-        Lookup(symbol, expected_type, region) => {
+        Lookup(symbol, expected_type, _region) => {
+            // TODO use region?
             let actual =
                 subs.copy_var(env.get(&symbol).unwrap_or_else(|| {
                     panic!("Could not find symbol {:?} in env {:?}", symbol, env)

@@ -1,7 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::Attempting;
-use region::Region;
+use region::{Located, Region};
 use std::char;
 
 // Strategy:
@@ -190,6 +190,21 @@ pub trait Parser<'a, Output> {
     fn parse(&self, &'a Bump, State<'a>) -> ParseResult<'a, Output>;
 }
 
+pub struct BoxedParser<'a, Output> {
+    parser: &'a (dyn Parser<'a, Output> + 'a),
+}
+
+impl<'a, Output> BoxedParser<'a, Output> {
+    fn new<P>(arena: &'a Bump, parser: P) -> Self
+    where
+        P: Parser<'a, Output> + 'a,
+    {
+        BoxedParser {
+            parser: arena.alloc(parser),
+        }
+    }
+}
+
 impl<'a, F, Output> Parser<'a, Output> for F
 where
     F: Fn(&'a Bump, State<'a>) -> ParseResult<'a, Output>,
@@ -197,6 +212,22 @@ where
     fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Output> {
         self(arena, state)
     }
+}
+
+pub fn val<'a, Val>(value: Val) -> impl Parser<'a, Val>
+where
+    Val: Clone,
+{
+    move |_, state| Ok((value.clone(), state))
+}
+
+/// Needed for recursive parsers
+pub fn lazy<'a, F, P, Val>(get_parser: F) -> impl Parser<'a, Val>
+where
+    F: Fn() -> P,
+    P: Parser<'a, Val>,
+{
+    move |arena, state| get_parser().parse(arena, state)
 }
 
 pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
@@ -208,6 +239,18 @@ where
         parser
             .parse(arena, state)
             .map(|(output, next_state)| (transform(output), next_state))
+    }
+}
+
+pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+where
+    P: Parser<'a, Before>,
+    F: Fn(&'a Bump, Before) -> After,
+{
+    move |arena, state| {
+        parser
+            .parse(arena, state)
+            .map(|(output, next_state)| (transform(arena, output), next_state))
     }
 }
 
@@ -223,6 +266,32 @@ where
                 ..state
             },
         )
+    }
+}
+
+pub fn loc<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
+where
+    P: Parser<'a, Val>,
+{
+    move |arena, state: State<'a>| {
+        let start_col = state.column;
+        let start_line = state.line;
+
+        match parser.parse(arena, state) {
+            Ok((value, state)) => {
+                let end_col = state.column;
+                let end_line = state.line;
+                let region = Region {
+                    start_col,
+                    start_line,
+                    end_col,
+                    end_line,
+                };
+
+                Ok((Located { region, value }, state))
+            }
+            Err((fail, state)) => Err((fail, state)),
+        }
     }
 }
 
@@ -317,6 +386,7 @@ pub fn string<'a>(string: &'static str) -> impl Parser<'a, ()> {
         let input = state.input;
         let len = string.len();
 
+        // TODO do this comparison in one SIMD instruction (on supported systems)
         match input.get(0..len) {
             Some(next_str) if next_str == string => Ok(((), state.advance_without_indenting(len)?)),
             _ => Err(unexpected_eof(len, Attempting::Keyword, state)),
@@ -377,6 +447,46 @@ where
 //     // TODO advance the state appropriately, in terms of line, col, indenting, etc.
 //     satisfies(any, |ch| ch.is_whitespace())
 // }
+
+pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, B>,
+{
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
+            Ok((out1, state)) => match p2.parse(arena, state) {
+                Ok((out2, state)) => Ok(((out1, out2), state)),
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_attempting,
+                        ..fail
+                    },
+                    state,
+                )),
+            },
+            Err((fail, state)) => Err((
+                Fail {
+                    attempting: original_attempting,
+                    ..fail
+                },
+                state,
+            )),
+        }
+    }
+}
+
+pub fn optional<'a, P, T>(parser: P) -> impl Parser<'a, Option<T>>
+where
+    P: Parser<'a, T>,
+{
+    move |arena: &'a Bump, state: State<'a>| match parser.parse(arena, state) {
+        Ok((out1, state)) => Ok((Some(out1), state)),
+        Err((_, state)) => Ok((None, state)),
+    }
+}
 
 pub fn one_of2<'a, P1, P2, A>(p1: P1, p2: P2) -> impl Parser<'a, A>
 where

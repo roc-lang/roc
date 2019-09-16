@@ -1,14 +1,12 @@
-// pub mod eval;
-pub mod canonicalize;
+pub mod can;
 pub mod collections;
-pub mod deprecated;
-pub mod expr;
 pub mod graph;
+pub mod ident;
 pub mod operator;
-pub mod parse; // DEPRECATED
+pub mod parse;
 pub mod region;
 
-// pub mod string;
+pub mod string;
 
 pub mod constrain;
 pub mod ena;
@@ -25,7 +23,5 @@ extern crate fxhash;
 extern crate im_rc;
 extern crate num;
 
-#[macro_use]
-extern crate combine; // OBSOLETE
 #[macro_use]
 extern crate log;
