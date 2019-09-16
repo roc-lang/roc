@@ -1,6 +1,7 @@
 use operator::Operator;
 use parse::problems::Problem;
 use region::Loc;
+use std::fmt::{self, Display, Formatter};
 
 pub type Ident = str;
 pub type VariantName = str;
@@ -156,4 +157,15 @@ pub enum Attempting {
     Expression,
     Module,
     Identifier,
+}
+
+impl<'a> Display for Expr<'a> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use self::Expr::*;
+
+        match self {
+            EmptyStr => write!(f, "\"\""),
+            _ => panic!("TODO"),
+        }
+    }
 }
