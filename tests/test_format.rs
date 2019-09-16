@@ -48,4 +48,58 @@ mod test_formatter {
             "#
         ));
     }
+
+    #[test]
+    fn zero() {
+        assert_formats_same(indoc!(
+            r#"
+            0
+            "#
+        ));
+    }
+
+    #[test]
+    fn zero_point_zero() {
+        assert_formats_same(indoc!(
+            r#"
+            0.0
+            "#
+        ));
+    }
+
+    #[test]
+    fn int_with_underscores() {
+        assert_formats_same(indoc!(
+            r#"
+            1_23_456
+            "#
+        ));
+    }
+
+    #[test]
+    fn float_with_underscores() {
+        assert_formats_same(indoc!(
+            r#"
+            1_23_456.7_89_10
+            "#
+        ));
+    }
+
+    // #[test]
+    // fn basic_string() {
+    //     assert_formats_same(indoc!(
+    //         r#"
+    //         "blah"
+    //         "#
+    //     ));
+    // }
+
+    // #[test]
+    // fn escaped_unicode_string() {
+    //     assert_formats_same(indoc!(
+    //         r#"
+    //         "unicode: \u{A00A}!"
+    //         "#
+    //     ));
+    // }
 }
