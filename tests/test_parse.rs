@@ -200,7 +200,7 @@ mod test_parser {
                  "\(abc)defg"
                  "#
         );
-        let (args, ret) = (vec![("", located(0, 2, 0, 4, "abc"))], "defg");
+        let (args, ret) = (vec![("", located(0, 2, 0, 4, Var("abc")))], "defg");
         let arena = Bump::new();
         let actual = parse_with(&arena, input);
 
@@ -217,7 +217,7 @@ mod test_parser {
                  "abcd\(efg)"
                  "#
         );
-        let (args, ret) = (vec![("abcd", located(0, 6, 0, 8, "efg"))], "");
+        let (args, ret) = (vec![("abcd", located(0, 6, 0, 8, Var("efg")))], "");
         let arena = Bump::new();
         let actual = parse_with(&arena, input);
 
@@ -234,7 +234,7 @@ mod test_parser {
                  "abc\(defg)hij"
                  "#
         );
-        let (args, ret) = (vec![("abc", located(0, 5, 0, 8, "defg"))], "hij");
+        let (args, ret) = (vec![("abc", located(0, 5, 0, 8, Var("defg")))], "hij");
         let arena = Bump::new();
         let actual = parse_with(&arena, input);
 
@@ -253,8 +253,8 @@ mod test_parser {
         );
         let (args, ret) = (
             vec![
-                ("abc", located(0, 5, 0, 8, "defg")),
-                ("hi", located(0, 14, 0, 16, "jkl")),
+                ("abc", located(0, 5, 0, 8, Var("defg"))),
+                ("hi", located(0, 14, 0, 16, Var("jkl"))),
             ],
             "mn",
         );
@@ -276,10 +276,10 @@ mod test_parser {
         );
         let (args, ret) = (
             vec![
-                ("", located(0, 2, 0, 4, "abc")),
-                ("def", located(0, 11, 0, 13, "ghi")),
-                ("jkl", located(0, 20, 0, 22, "mno")),
-                ("pqrs", located(0, 30, 0, 32, "tuv")),
+                ("", located(0, 2, 0, 4, Var("abc"))),
+                ("def", located(0, 11, 0, 13, Var("ghi"))),
+                ("jkl", located(0, 20, 0, 22, Var("mno"))),
+                ("pqrs", located(0, 30, 0, 32, Var("tuv"))),
             ],
             "",
         );
@@ -439,9 +439,10 @@ mod test_parser {
         );
     }
 
+    // TODO test what happens when interpolated strings contain 1+ malformed idents
+    //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
     //
     // TODO verify that when a string literal contains a newline before the
     // closing " it correctly updates both the line *and* column in the State.
-
 }

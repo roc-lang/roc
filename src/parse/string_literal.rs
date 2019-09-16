@@ -60,6 +60,8 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                             &mut buf,
                             &mut problems,
                         )? {
+                            let expr = Expr::Var(ident);
+
                             // +2 for `\(` and then another +1 for `)` at the end
                             let parsed_length = buf.len() + 2 + ident.len() + 1;
 
@@ -80,14 +82,14 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                                 end_line: start_line,
                                 end_col: start_col + ident.len() as u16 - 1,
                             };
-                            let loc_ident = Loc {
+                            let loc_expr = Loc {
                                 region: ident_region,
-                                value: ident,
+                                value: expr,
                             };
 
                             // Push the accumulated string into the pairs list,
                             // along with the ident that came after it.
-                            interpolated_pairs.push((buf.into_bump_str(), loc_ident));
+                            interpolated_pairs.push((buf.into_bump_str(), loc_expr));
 
                             // Reset the buffer so we start working on a new string.
                             buf = String::new_in(arena);

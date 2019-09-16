@@ -28,8 +28,8 @@ pub enum Expr<'a> {
     // String Literals
     EmptyStr,
     Str(&'a str),
-    /// basically InterpolatedStr(Vec<(String, Loc<Ident>)>, String)
-    InterpolatedStr(&'a (&'a [(&'a str, Loc<&'a Ident>)], &'a str)),
+    /// basically InterpolatedStr(Vec<(String, Loc<Expr>)>, String)
+    InterpolatedStr(&'a (&'a [(&'a str, Loc<Expr<'a>>)], &'a str)),
 
     // List literals
     EmptyList,
