@@ -188,23 +188,10 @@ impl Keyword {
 
 pub trait Parser<'a, Output> {
     fn parse(&self, &'a Bump, State<'a>) -> ParseResult<'a, Output>;
-
-    fn arena(&self) -> &'a Bump;
-
-    fn map<F, NewOutput>(self, transform: F) -> BoxedParser<'a, NewOutput>
-    where
-        Self: Sized + 'a,
-        Output: 'a,
-        NewOutput: 'a,
-        F: Fn(Output) -> NewOutput + 'a,
-    {
-        BoxedParser::new(self.arena(), map(self, transform))
-    }
 }
 
 pub struct BoxedParser<'a, Output> {
     parser: &'a (dyn Parser<'a, Output> + 'a),
-    arena: &'a Bump,
 }
 
 impl<'a, Output> BoxedParser<'a, Output> {
@@ -214,18 +201,16 @@ impl<'a, Output> BoxedParser<'a, Output> {
     {
         BoxedParser {
             parser: arena.alloc(parser),
-            arena,
         }
     }
 }
 
-impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
+impl<'a, F, Output> Parser<'a, Output> for F
+where
+    F: Fn(&'a Bump, State<'a>) -> ParseResult<'a, Output>,
+{
     fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Output> {
-        self.parser.parse(arena, state)
-    }
-
-    fn arena(&self) -> &'a Bump {
-        self.arena
+        self(arena, state)
     }
 }
 
@@ -245,7 +230,7 @@ where
     move |arena, state| get_parser().parse(arena, state)
 }
 
-fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where
     P: Parser<'a, Before>,
     F: Fn(Before) -> After,
@@ -257,7 +242,7 @@ where
     }
 }
 
-fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where
     P: Parser<'a, Before>,
     F: Fn(&'a Bump, Before) -> After,
