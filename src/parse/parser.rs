@@ -190,21 +190,6 @@ pub trait Parser<'a, Output> {
     fn parse(&self, &'a Bump, State<'a>) -> ParseResult<'a, Output>;
 }
 
-pub struct BoxedParser<'a, Output> {
-    parser: &'a (dyn Parser<'a, Output> + 'a),
-}
-
-impl<'a, Output> BoxedParser<'a, Output> {
-    fn new<P>(arena: &'a Bump, parser: P) -> Self
-    where
-        P: Parser<'a, Output> + 'a,
-    {
-        BoxedParser {
-            parser: arena.alloc(parser),
-        }
-    }
-}
-
 impl<'a, F, Output> Parser<'a, Output> for F
 where
     F: Fn(&'a Bump, State<'a>) -> ParseResult<'a, Output>,
@@ -219,15 +204,6 @@ where
     Val: Clone,
 {
     move |_, state| Ok((value.clone(), state))
-}
-
-/// Needed for recursive parsers
-pub fn lazy<'a, F, P, Val>(get_parser: F) -> impl Parser<'a, Val>
-where
-    F: Fn() -> P,
-    P: Parser<'a, Val>,
-{
-    move |arena, state| get_parser().parse(arena, state)
 }
 
 pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>

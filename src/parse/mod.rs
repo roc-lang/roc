@@ -11,12 +11,18 @@ use operator::Operator;
 use parse::ast::{Attempting, Expr};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, lazy, loc, map, map_with_arena, one_of3, optional, string, unexpected,
-    unexpected_eof, val, Parser, State,
+    and, attempt, loc, map, map_with_arena, one_of3, optional, string, unexpected, unexpected_eof,
+    ParseResult, Parser, State,
 };
 use parse::string_literal::string_literal;
 
 pub fn expr<'a>() -> impl Parser<'a, Expr<'a>> {
+    // Recursive parsers must not directly invoke functions which return (impl Parser),
+    // as this causes rustc to stack overflow.
+    parse_expr
+}
+
+fn parse_expr<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Expr<'a>> {
     map_with_arena(
         and(
             attempt(
@@ -27,7 +33,7 @@ pub fn expr<'a>() -> impl Parser<'a, Expr<'a>> {
                     string_literal(),
                 )),
             ),
-            optional(and(loc(operator()), loc(val(Expr::Str("blah"))))),
+            optional(and(loc(operator()), loc(parse_expr))),
         ),
         |arena, (loc_expr1, opt_operator)| match opt_operator {
             Some((loc_op, loc_expr2)) => {
@@ -38,15 +44,15 @@ pub fn expr<'a>() -> impl Parser<'a, Expr<'a>> {
             None => loc_expr1.value,
         },
     )
+    .parse(arena, state)
 }
 
 pub fn operator<'a>() -> impl Parser<'a, Operator> {
-    val(Operator::Plus)
-    // one_of3(
-    //     map(string("+"), |_| Operator::Plus),
-    //     map(string("-"), |_| Operator::Minus),
-    //     map(string("*"), |_| Operator::Star),
-    // )
+    one_of3(
+        map(string("+"), |_| Operator::Plus),
+        map(string("-"), |_| Operator::Minus),
+        map(string("*"), |_| Operator::Star),
+    )
 }
 
 pub fn record_literal<'a>() -> impl Parser<'a, Expr<'a>> {

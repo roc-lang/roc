@@ -42,8 +42,6 @@ where
     let mut chars_parsed = 1;
 
     while let Some(next_ch) = chars.next() {
-        chars_parsed += 1;
-
         let err_unexpected = || {
             Err(unexpected(
                 next_ch,
@@ -54,7 +52,7 @@ where
         };
 
         // Returns true iff so far we have parsed the given char and no other chars.
-        let so_far_parsed = |ch| chars_parsed == 2 && first_ch == ch;
+        let so_far_parsed = |ch| chars_parsed == 1 && first_ch == ch;
 
         // We don't support negative escaped ints (e.g. 0x01 is supported but -0x01 is not).
         // If you want that, do something like (negate 0x01).
@@ -96,6 +94,8 @@ where
                 break;
             }
         }
+
+        chars_parsed += 1;
     }
 
     // At this point we have a number, and will definitely succeed.

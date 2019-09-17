@@ -16,10 +16,11 @@ mod helpers;
 mod test_parse {
     use bumpalo::Bump;
     use helpers::parse_with;
+    use roc::operator::Operator::*;
     use roc::parse::ast::Attempting;
     use roc::parse::ast::Expr::{self, *};
     use roc::parse::parser::{Fail, FailReason};
-    use roc::region::Region;
+    use roc::region::{Located, Region};
     use std::{f64, i64};
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
@@ -235,6 +236,50 @@ mod test_parse {
     #[test]
     fn empty_record() {
         assert_parses_to("{}", EmptyRecord);
+    }
+
+    // OPERATORS
+
+    #[test]
+    fn one_plus_two() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("1")),
+            Located::new(0, 1, 0, 2, Plus),
+            Located::new(0, 2, 0, 3, Int("2")),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "1+2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn minus_twelve_minus_five() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 3, Int("-12")),
+            Located::new(0, 3, 0, 4, Minus),
+            Located::new(0, 4, 0, 5, Int("5")),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "-12-5");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn ten_times_eleven() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 2, Int("10")),
+            Located::new(0, 2, 0, 3, Star),
+            Located::new(0, 3, 0, 5, Int("11")),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "10*11");
+
+        assert_eq!(Ok(expected), actual);
     }
 
     // TODO test hex/oct/binary parsing
