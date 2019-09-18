@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod blankspace;
 pub mod ident;
 pub mod keyword;
 pub mod module;
@@ -7,15 +8,15 @@ pub mod parser;
 pub mod problems;
 pub mod string_literal;
 
-use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use operator::Operator;
 use parse::ast::{Attempting, Expr};
+use parse::blankspace::{space0, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, loc, map, map_with_arena, one_of3, one_of4, one_of6, optional, string,
-    unexpected, unexpected_eof, Either, ParseResult, Parser, State,
+    and, attempt, ch, either, loc, map, map_with_arena, one_of3, one_of4, one_of6, optional,
+    skip_first, string, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -55,38 +56,52 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
     attempt(Attempting::Expression, expr_parser).parse(arena, state)
 }
 
-pub fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, &'a [Located<Expr<'a>>]> {
-    move |arena, state| {
+pub fn loc_function_args<'a>(_min_indent: u16) -> impl Parser<'a, &'a [Located<Expr<'a>>]> {
+    move |_arena, _state| {
         panic!("TODO stop early if we see an operator after the whitespace - precedence!");
         // zero_or_more(after(one_or_more(whitespace(min_indent)), function_arg()))
     }
 }
 
-pub fn when<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+pub fn when<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     map(string(keyword::WHEN), |_| {
         panic!("TODO implement WHEN");
     })
 }
 
 pub fn conditional<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    // TODO figure out how to remove this code duplication in a way rustc
+    // accepts. I tried making a helper functions and couldn't resolve the
+    // lifetime errors, so I manually inlined them and moved on.
     one_of4(
-        cond_help(keyword::IF, Expr::If, min_indent),
-        cond_help(keyword::THEN, Expr::Then, min_indent),
-        cond_help(keyword::ELSE, Expr::Else, min_indent),
-        cond_help(keyword::CASE, Expr::Case, min_indent),
-    )
-}
-
-fn cond_help<'a, F>(name: &str, wrap_expr: F, min_indent: u16) -> impl Parser<'a, Expr<'a>>
-where
-    F: Fn(&'a Located<Expr<'a>>) -> Expr<'a>,
-{
-    map(
-        after(
-            after(string(name), skip1_whitespace(min_indent)),
-            loc(expr(min_indent)),
+        map_with_arena(
+            skip_first(
+                string(keyword::IF),
+                loc(space1_before(expr(min_indent), min_indent)),
+            ),
+            |arena, loc_expr| Expr::If(arena.alloc(loc_expr)),
         ),
-        wrap_expr,
+        map_with_arena(
+            skip_first(
+                string(keyword::THEN),
+                loc(space1_before(expr(min_indent), min_indent)),
+            ),
+            |arena, loc_expr| Expr::Then(arena.alloc(loc_expr)),
+        ),
+        map_with_arena(
+            skip_first(
+                string(keyword::ELSE),
+                loc(space1_before(expr(min_indent), min_indent)),
+            ),
+            |arena, loc_expr| Expr::Else(arena.alloc(loc_expr)),
+        ),
+        map_with_arena(
+            skip_first(
+                string(keyword::CASE),
+                loc(space1_before(expr(min_indent), min_indent)),
+            ),
+            |arena, loc_expr| Expr::Case(arena.alloc(loc_expr)),
+        ),
     )
 }
 
@@ -97,7 +112,7 @@ where
 /// 3. The beginning of a defniition (e.g. `foo =`)
 /// 4. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
 pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    let followed_by_equals = after(zero_or_more(whitespace(min_indent), char('=')));
+    let followed_by_equals = and(space0(min_indent), ch('='));
 
     map_with_arena(
         and(
@@ -106,8 +121,9 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         ),
         |arena, (loc_ident, equals_or_loc_args)| {
             match equals_or_loc_args {
-                Either::First(()) => {
+                Either::First((_space_list, ())) => {
                     // We have now parsed the beginning of a def (e.g. `foo =`)
+                    panic!("TODO parse def, making sure to use the space_list we got - don't drop comments!");
                 }
                 Either::Second(loc_args) => {
                     // This appears to be a var, keyword, or function application.

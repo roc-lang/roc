@@ -67,8 +67,20 @@ pub enum Expr<'a> {
     Else(&'a Loc<Expr<'a>>),
     Case(&'a Loc<Expr<'a>>),
 
+    // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a [Space<'a>], &'a Loc<Expr<'a>>),
+    SpaceAfter(&'a Loc<Expr<'a>>, &'a [Space<'a>]),
+
     // Problems
     MalformedIdent(&'a str),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Space<'a> {
+    Newline,
+    LineComment(&'a str),
+    BlockComment(&'a [&'a str]),
 }
 
 #[derive(Clone, Debug, PartialEq)]

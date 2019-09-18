@@ -360,13 +360,21 @@ where
     }
 }
 
+/// A single char.
+pub fn ch<'a>(expected: char) -> impl Parser<'a, ()> {
+    move |_arena, state: State<'a>| match state.input.chars().next() {
+        Some(actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
+        _ => Err(unexpected_eof(1, Attempting::Keyword, state)),
+    }
+}
+
 /// A string with no newlines in it.
 pub fn string<'a>(string: &'static str) -> impl Parser<'a, ()> {
     // We can't have newlines because we don't attempt to advance the row
     // in the state, only the column.
     debug_assert!(!string.contains("\n"));
 
-    move |_arena: &'a Bump, state: State<'a>| {
+    move |_arena, state: State<'a>| {
         let input = state.input;
         let len = string.len();
 
@@ -400,38 +408,6 @@ where
     }
 }
 
-// pub fn any<'a>(
-//     _arena: &'a Bump,
-//     state: State<'a>,
-//     attempting: Attempting,
-// ) -> ParseResult<'a, char> {
-//     let input = state.input;
-
-//     match input.chars().next() {
-//         Some(ch) => {
-//             let len = ch.len_utf8();
-//             let mut new_state = State {
-//                 input: &input[len..],
-
-//                 ..state.clone()
-//             };
-
-//             if ch == '\n' {
-//                 new_state.line = new_state.line + 1;
-//                 new_state.column = 0;
-//             }
-
-//             Ok((new_state, ch))
-//         }
-//         _ => Err((state.clone(), attempting)),
-//     }
-// }
-
-// fn whitespace<'a>() -> impl Parser<'a, char> {
-//     // TODO advance the state appropriately, in terms of line, col, indenting, etc.
-//     satisfies(any, |ch| ch.is_whitespace())
-// }
-
 pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
 where
     P1: Parser<'a, A>,
@@ -443,6 +419,61 @@ where
         match p1.parse(arena, state) {
             Ok((out1, state)) => match p2.parse(arena, state) {
                 Ok((out2, state)) => Ok(((out1, out2), state)),
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_attempting,
+                        ..fail
+                    },
+                    state,
+                )),
+            },
+            Err((fail, state)) => Err((
+                Fail {
+                    attempting: original_attempting,
+                    ..fail
+                },
+                state,
+            )),
+        }
+    }
+}
+
+pub fn either<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, Either<A, B>>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, B>,
+{
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
+            Ok((output, state)) => Ok((Either::First(output), state)),
+            Err((_, state)) => match p2.parse(arena, state) {
+                Ok((output, state)) => Ok((Either::Second(output), state)),
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_attempting,
+                        ..fail
+                    },
+                    state,
+                )),
+            },
+        }
+    }
+}
+
+/// If the first one parses, ignore its output and move on to parse with the second one.
+pub fn skip_first<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, B>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, B>,
+{
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
+            Ok((_, state)) => match p2.parse(arena, state) {
+                Ok((out2, state)) => Ok((out2, state)),
                 Err((fail, state)) => Err((
                     Fail {
                         attempting: original_attempting,

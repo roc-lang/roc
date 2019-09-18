@@ -1,3 +1,5 @@
+use bumpalo::collections::String;
+use bumpalo::Bump;
 use std::hash::BuildHasherDefault;
 
 pub use fxhash::FxHasher;
@@ -21,3 +23,23 @@ pub type MutSet<K> = std::collections::HashSet<K, BuildHasher>;
 pub type ImMap<K, V> = im_rc::hashmap::HashMap<K, V, BuildHasher>;
 
 pub type ImSet<K> = im_rc::hashset::HashSet<K, BuildHasher>;
+
+pub fn arena_join<'a, I>(arena: &'a Bump, strings: &mut I, join_str: &str) -> String<'a>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut buf = String::new_in(arena);
+
+    if let Some(first) = strings.next() {
+        buf.push_str(&first);
+
+        while let Some(string) = strings.next() {
+            buf.reserve(join_str.len() + string.len());
+
+            buf.push_str(join_str);
+            buf.push_str(string);
+        }
+    }
+
+    buf
+}

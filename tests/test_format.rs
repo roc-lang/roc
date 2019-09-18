@@ -14,7 +14,7 @@ mod test_format {
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
         let state = State::new(&input, Attempting::Module);
-        let parser = parse::expr();
+        let parser = parse::expr(0);
         let answer = parser.parse(&arena, state);
 
         answer.map(|(expr, _)| expr).map_err(|(fail, _)| fail)
