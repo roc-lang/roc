@@ -246,8 +246,8 @@ mod test_parse {
         let arena = Bump::new();
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Int("1")),
-            Located::new(0, 1, 0, 2, Plus),
-            Located::new(0, 2, 0, 3, Int("2")),
+            Located::new(0, 0, 1, 2, Plus),
+            Located::new(0, 0, 2, 3, Int("2")),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "1+2");
@@ -260,8 +260,8 @@ mod test_parse {
         let arena = Bump::new();
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Int("1")),
-            Located::new(0, 3, 0, 4, Plus),
-            Located::new(0, 7, 0, 8, Int("2")),
+            Located::new(0, 0, 3, 4, Plus),
+            Located::new(0, 0, 7, 8, Int("2")),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "1  +   2");
@@ -278,8 +278,8 @@ mod test_parse {
         );
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
-            Located::new(1, 0, 1, 1, Plus),
-            Located::new(1, 2, 1, 3, Int("4")),
+            Located::new(1, 1, 0, 1, Plus),
+            Located::new(1, 1, 2, 3, Int("4")),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "3  \n+ 4");
@@ -296,8 +296,8 @@ mod test_parse {
         );
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Int("3")),
-            Located::new(0, 3, 0, 4, Star),
-            Located::new(1, 2, 1, 3, spaced_int),
+            Located::new(0, 0, 3, 4, Star),
+            Located::new(1, 1, 2, 3, spaced_int),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "3  *\n  4");
@@ -314,8 +314,8 @@ mod test_parse {
         );
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
-            Located::new(1, 0, 1, 1, Plus),
-            Located::new(1, 2, 1, 3, Int("4")),
+            Located::new(1, 1, 0, 1, Plus),
+            Located::new(1, 1, 2, 3, Int("4")),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "3  # test!\n+ 4");
@@ -332,7 +332,7 @@ mod test_parse {
         );
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 2, Int("12")),
-            Located::new(0, 4, 0, 5, Star),
+            Located::new(0, 0, 4, 5, Star),
             Located::new(1, 1, 1, 3, spaced_int),
         ));
         let expected = Operator(tuple);
@@ -354,8 +354,8 @@ mod test_parse {
         );
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int1),
-            Located::new(1, 0, 1, 1, Plus),
-            Located::new(3, 2, 3, 3, spaced_int2),
+            Located::new(1, 1, 0, 1, Plus),
+            Located::new(3, 3, 2, 3, spaced_int2),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "3  \n+ \n\n  4");
@@ -368,8 +368,8 @@ mod test_parse {
         let arena = Bump::new();
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 3, Int("-12")),
-            Located::new(0, 3, 0, 4, Minus),
-            Located::new(0, 4, 0, 5, Int("5")),
+            Located::new(0, 0, 3, 4, Minus),
+            Located::new(0, 0, 4, 5, Int("5")),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "-12-5");
@@ -382,8 +382,8 @@ mod test_parse {
         let arena = Bump::new();
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 2, Int("10")),
-            Located::new(0, 2, 0, 3, Star),
-            Located::new(0, 3, 0, 5, Int("11")),
+            Located::new(0, 0, 2, 3, Star),
+            Located::new(0, 0, 3, 5, Int("11")),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "10*11");
@@ -395,14 +395,14 @@ mod test_parse {
     fn multiple_operators() {
         let arena = Bump::new();
         let inner = arena.alloc((
-            Located::new(0, 3, 0, 5, Int("42")),
-            Located::new(0, 5, 0, 6, Plus),
-            Located::new(0, 6, 0, 9, Int("534")),
+            Located::new(0, 0, 3, 5, Int("42")),
+            Located::new(0, 0, 5, 6, Plus),
+            Located::new(0, 0, 6, 9, Int("534")),
         ));
         let outer = arena.alloc((
             Located::new(0, 0, 0, 2, Int("31")),
-            Located::new(0, 2, 0, 3, Star),
-            Located::new(0, 3, 0, 9, Operator(inner)),
+            Located::new(0, 0, 2, 3, Star),
+            Located::new(0, 0, 3, 9, Operator(inner)),
         ));
         let expected = Operator(outer);
         let actual = parse_with(&arena, "31*42+534");
@@ -428,7 +428,7 @@ mod test_parse {
     fn basic_apply() {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
-        let arg = Located::new(0, 5, 0, 6, Int("1"));
+        let arg = Located::new(0, 0, 5, 6, Int("1"));
         let args = bumpalo::vec![in &arena; arg];
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 4, Var(module_parts, "whee")),

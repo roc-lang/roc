@@ -54,8 +54,8 @@ pub struct Located<T> {
 impl<T> Located<T> {
     pub fn new(
         start_line: u32,
-        start_col: u16,
         end_line: u32,
+        start_col: u16,
         end_col: u16,
         value: T,
     ) -> Located<T> {
