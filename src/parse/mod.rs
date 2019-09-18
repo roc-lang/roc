@@ -56,17 +56,15 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
         ),
         |arena, (loc_expr1, opt_operator)| match opt_operator {
             Some(((spaces_before_op, (loc_op, spaces_after_op)), loc_expr2)) => {
-                let region1 = loc_expr1.region.clone();
-                let region2 = loc_expr2.region.clone();
                 let loc_expr1 = if spaces_before_op.is_empty() {
                     loc_expr1
                 } else {
-                    Expr::with_spaces_after(arena.alloc(loc_expr1), spaces_before_op).loc(region1)
+                    Expr::with_spaces_after(arena, loc_expr1, spaces_before_op)
                 };
                 let loc_expr2 = if spaces_after_op.is_empty() {
                     loc_expr2
                 } else {
-                    Expr::with_spaces_after(arena.alloc(loc_expr2), spaces_after_op).loc(region2)
+                    Expr::with_spaces_after(arena, loc_expr2, spaces_after_op)
                 };
                 let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
 

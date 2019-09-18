@@ -1,4 +1,5 @@
 use bumpalo::collections::vec::Vec;
+use bumpalo::Bump;
 use operator::Operator;
 use region::{Loc, Region};
 use std::fmt::{self, Display, Formatter};
@@ -69,8 +70,8 @@ pub enum Expr<'a> {
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a [Space<'a>], &'a Loc<Expr<'a>>),
-    SpaceAfter(&'a Loc<Expr<'a>>, &'a [Space<'a>]),
+    SpaceBefore(&'a [Space<'a>], &'a Expr<'a>),
+    SpaceAfter(&'a Expr<'a>, &'a [Space<'a>]),
 
     // Problems
     MalformedIdent(&'a str),
@@ -197,12 +198,26 @@ impl<'a> Expr<'a> {
         }
     }
 
-    pub fn with_spaces_before(spaces: &'a [Space<'a>], loc_expr: &'a Loc<Expr<'a>>) -> Self {
-        Expr::SpaceBefore(spaces, loc_expr)
+    pub fn with_spaces_before(
+        arena: &'a Bump,
+        spaces: &'a [Space<'a>],
+        loc_expr: Loc<Expr<'a>>,
+    ) -> Loc<Self> {
+        let region = loc_expr.region;
+        let value = Expr::SpaceBefore(spaces, arena.alloc(loc_expr.value));
+
+        Loc { region, value }
     }
 
-    pub fn with_spaces_after(loc_expr: &'a Loc<Expr<'a>>, spaces: &'a [Space<'a>]) -> Self {
-        Expr::SpaceAfter(loc_expr, spaces)
+    pub fn with_spaces_after(
+        arena: &'a Bump,
+        loc_expr: Loc<Expr<'a>>,
+        spaces: &'a [Space<'a>],
+    ) -> Loc<Self> {
+        let region = loc_expr.region;
+        let value = Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces);
+
+        Loc { region, value }
     }
 }
 

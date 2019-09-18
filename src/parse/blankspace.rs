@@ -27,8 +27,8 @@ where
                 loc_expr
             } else {
                 Located {
-                    region: loc_expr.region.clone(),
-                    value: Expr::SpaceBefore(space_list, arena.alloc(loc_expr)),
+                    region: loc_expr.region,
+                    value: Expr::SpaceBefore(space_list, arena.alloc(loc_expr.value)),
                 }
             }
         },
@@ -49,8 +49,8 @@ where
                 loc_expr
             } else {
                 Located {
-                    region: loc_expr.region.clone(),
-                    value: Expr::SpaceBefore(space_list, arena.alloc(loc_expr)),
+                    region: loc_expr.region,
+                    value: Expr::SpaceBefore(space_list, arena.alloc(loc_expr.value)),
                 }
             }
         },
@@ -71,8 +71,8 @@ where
                 loc_expr
             } else {
                 Located {
-                    region: loc_expr.region.clone(),
-                    value: Expr::SpaceAfter(arena.alloc(loc_expr), space_list),
+                    region: loc_expr.region,
+                    value: Expr::SpaceAfter(arena.alloc(loc_expr.value), space_list),
                 }
             }
         },
@@ -93,8 +93,8 @@ where
                 loc_expr
             } else {
                 Located {
-                    region: loc_expr.region.clone(),
-                    value: Expr::SpaceAfter(arena.alloc(loc_expr), space_list),
+                    region: loc_expr.region,
+                    value: Expr::SpaceAfter(arena.alloc(loc_expr.value), space_list),
                 }
             }
         },
