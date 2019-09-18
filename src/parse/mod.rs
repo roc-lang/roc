@@ -30,14 +30,7 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Expr<'a>> {
     let expr_parser = map_with_arena(
         and(
-            loc(one_of6(
-                string_literal(),
-                record_literal(),
-                number_literal(),
-                when(min_indent),
-                conditional(min_indent),
-                ident_etc(min_indent),
-            )),
+            loc(move |arena, state| parse_expr_body_without_operators(min_indent, arena, state)),
             optional(and(
                 and(space0(min_indent), and(loc(operator()), space0(min_indent))),
                 loc(move |arena, state| parse_expr(min_indent, arena, state)),
@@ -66,6 +59,22 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
     );
 
     attempt(Attempting::Expression, expr_parser).parse(arena, state)
+}
+
+fn parse_expr_body_without_operators<'a>(
+    min_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>> {
+    one_of6(
+        string_literal(),
+        record_literal(),
+        number_literal(),
+        when(min_indent),
+        conditional(min_indent),
+        ident_etc(min_indent),
+    )
+    .parse(arena, state)
 }
 
 pub fn loc_function_args<'a>(_min_indent: u16) -> impl Parser<'a, &'a [Located<Expr<'a>>]> {
