@@ -148,12 +148,7 @@ fn spaces<'a>(require_at_least_one: bool, _min_indent: u16) -> impl Parser<'a, &
                         return if require_at_least_one && chars_parsed <= 1 {
                             // We've parsed 1 char and it was not a space,
                             // but we require parsing at least one space!
-                            Err(unexpected(
-                                nonblank,
-                                chars_parsed,
-                                state.clone(),
-                                state.attempting,
-                            ))
+                            Err(unexpected(nonblank, 0, state.clone(), state.attempting))
                         } else {
                             Ok((space_list.into_bump_slice(), state))
                         };

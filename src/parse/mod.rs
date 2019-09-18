@@ -12,12 +12,12 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
 use parse::ast::{Attempting, Expr};
-use parse::blankspace::{space0, space1_before};
+use parse::blankspace::{space0, space0_before, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, char, either, loc, map, map_with_arena, one_of3, one_of4, one_of6, one_or_more,
-    optional, skip_first, string, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
+    and, attempt, char, either, loc, map, map_with_arena, one_of4, one_of6, one_or_more, optional,
+    skip_first, string, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -50,21 +50,19 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
             // First parse the body without operators, then try to parse possible operators after.
             loc(move |arena, state| parse_expr_body_without_operators(min_indent, arena, state)),
             optional(and(
-                and(space0(min_indent), and(loc(operator()), space0(min_indent))),
-                loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                and(space0(min_indent), loc(operator())),
+                space0_before(
+                    move |arena, state| parse_expr(min_indent, arena, state),
+                    min_indent,
+                ),
             )),
         ),
         |arena, (loc_expr1, opt_operator)| match opt_operator {
-            Some(((spaces_before_op, (loc_op, spaces_after_op)), loc_expr2)) => {
+            Some(((spaces_before_op, loc_op), loc_expr2)) => {
                 let loc_expr1 = if spaces_before_op.is_empty() {
                     loc_expr1
                 } else {
                     Expr::with_spaces_after(arena, loc_expr1, spaces_before_op)
-                };
-                let loc_expr2 = if spaces_after_op.is_empty() {
-                    loc_expr2
-                } else {
-                    Expr::with_spaces_after(arena, loc_expr2, spaces_after_op)
                 };
                 let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
 
