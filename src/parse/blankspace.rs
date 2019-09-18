@@ -13,9 +13,9 @@ enum CommentParsing {
     No,
 }
 
-/// Parse the given expression with 0 or more spaces before it.
+/// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceBefore if there were any interesting spaces found.
+/// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
 pub fn space0_before<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
 where
     P: Parser<'a, Expr<'a>>,
@@ -35,9 +35,9 @@ where
     )
 }
 
-/// Parse the given expression with 1 or more spaces before it.
+/// Parses the given expression with 1 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceBefore if there were any interesting spaces found.
+/// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
 pub fn space1_before<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
 where
     P: Parser<'a, Expr<'a>>,
@@ -57,9 +57,9 @@ where
     )
 }
 
-/// Parse the given expression with 0 or more spaces after it.
+/// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceAfter if there were any interesting spaces found.
+/// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
 pub fn space0_after<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
 where
     P: Parser<'a, Expr<'a>>,
@@ -79,9 +79,9 @@ where
     )
 }
 
-/// Parse the given expression with 1 or more spaces after it.
+/// Parses the given expression with 1 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
-/// The Expr will be wrapped in a SpaceAfter if there were any interesting spaces found.
+/// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
 pub fn space1_after<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
 where
     P: Parser<'a, Expr<'a>>,
@@ -101,12 +101,14 @@ where
     )
 }
 
+/// Zero or more (spaces/comments/newlines).
 pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
     spaces(false, min_indent)
 }
 
+/// One or more (spaces/comments/newlines).
 pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
-    // TODO try doing a short-circuit for the typical case: see if there is
+    // TODO try benchmarking a short-circuit for the typical case: see if there is
     // exactly one space followed by char that isn't [' ', '\n', or '#'], and
     // if so, return empty slice. The case where there's exactly 1 space should
     // be by far the most common.
