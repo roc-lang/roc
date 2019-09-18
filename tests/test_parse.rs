@@ -300,7 +300,25 @@ mod test_parse {
             Located::new(1, 2, 1, 3, spaced_int),
         ));
         let expected = Operator(tuple);
-        let actual = parse_with(&arena, "3  *\n 4");
+        let actual = parse_with(&arena, "3  *\n  4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn comment_before_op() {
+        let arena = Bump::new();
+        let spaced_int = SpaceAfter(
+            arena.alloc(Int("3")),
+            bumpalo::vec![in &arena; Space::LineComment(" test!")].into_bump_slice(),
+        );
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, spaced_int),
+            Located::new(1, 0, 1, 1, Plus),
+            Located::new(1, 2, 1, 3, Int("4")),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "3  # test!\n+ 4");
 
         assert_eq!(Ok(expected), actual);
     }
