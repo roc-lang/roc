@@ -1,13 +1,13 @@
 extern crate roc;
 
-use std::fs::File;
-use std::io::prelude::*;
-use roc::expr::Expr;
-use roc::eval::{Evaluated, eval, call};
 use roc::eval::Evaluated::*;
+use roc::eval::{call, eval, Evaluated};
+use roc::expr::Expr;
 use roc::parse;
-use roc::region::{Region, Located};
+use roc::region::{Located, Region};
+use std::fs::File;
 use std::io;
+use std::io::prelude::*;
 
 fn main() -> std::io::Result<()> {
     let argv = std::env::args().into_iter().collect::<Vec<String>>();
@@ -22,7 +22,7 @@ fn main() -> std::io::Result<()> {
             let expr = parse::parse_string(contents.as_str()).unwrap();
 
             process_task(eval(expr))
-        },
+        }
         None => {
             println!("Usage: roc FILENAME.roc");
 
@@ -34,11 +34,14 @@ fn main() -> std::io::Result<()> {
 fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
     match evaluated {
         EvalError(region, problem) => {
-            println!("\n\u{001B}[4mruntime error\u{001B}[24m\n\n{} at {}\n",
-                format!("{}", problem), format!("line {}, column {}", region.start_line, region.start_col));
+            println!(
+                "\n\u{001B}[4mruntime error\u{001B}[24m\n\n{} at {}\n",
+                format!("{}", problem),
+                format!("line {}, column {}", region.start_line, region.start_col)
+            );
 
             Ok(())
-        },
+        }
         ApplyVariant(name, Some(mut vals)) => {
             match name.as_str() {
                 "Echo" => {
@@ -51,9 +54,13 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                                 format!("{}", err),
                                 format!("line {}, column {}", region.start_line, region.start_col)
                             );
-                        },
-                        Some(val) => { panic!("TYPE MISMATCH in Echo: {}", format!("{}", val)); },
-                        None => { panic!("TYPE MISMATCH in Echo: None"); }
+                        }
+                        Some(val) => {
+                            panic!("TYPE MISMATCH in Echo: {}", format!("{}", val));
+                        }
+                        None => {
+                            panic!("TYPE MISMATCH in Echo: None");
+                        }
                     };
 
                     // Print the string to the console, since that's what Echo does!
@@ -62,14 +69,17 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                     // Continue with the callback.
                     let callback = vals.pop().unwrap();
 
-                    process_task(
-                        call(
-                            Region { start_line: 0, start_col: 0, end_line: 0, end_col: 0 },
-                            callback,
-                            vec![with_zero_loc(Expr::EmptyRecord)]
-                        )
-                    )
-                },
+                    process_task(call(
+                        Region {
+                            start_line: 0,
+                            start_col: 0,
+                            end_line: 0,
+                            end_col: 0,
+                        },
+                        callback,
+                        vec![with_zero_loc(Expr::EmptyRecord)],
+                    ))
+                }
                 "Read" => {
                     // Read a line from from stdin, since that's what Read does!
                     let mut input = String::new();
@@ -79,18 +89,21 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                     // Continue with the callback.
                     let callback = vals.pop().unwrap();
 
-                    process_task(
-                        call(
-                            Region { start_line: 0, start_col: 0, end_line: 0, end_col: 0 },
-                            callback,
-                            vec![with_zero_loc(Expr::Str(input.trim().to_string()))]
-                        )
-                    )
-                },
+                    process_task(call(
+                        Region {
+                            start_line: 0,
+                            start_col: 0,
+                            end_line: 0,
+                            end_col: 0,
+                        },
+                        callback,
+                        vec![with_zero_loc(Expr::Str(input.trim().to_string()))],
+                    ))
+                }
                 "Success" => {
                     // We finished all our tasks. Great! No need to print anything.
                     Ok(())
-                },
+                }
                 _ => {
                     // We don't recognize this variant, so display it and exit.
                     display_val(ApplyVariant(name, Some(vals)));
@@ -98,7 +111,7 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
                     Ok(())
                 }
             }
-        },
+        }
         output => {
             // We don't recognize this value, so display it and exit.
             display_val(output);
@@ -109,15 +122,17 @@ fn process_task(evaluated: Evaluated) -> std::io::Result<()> {
 }
 
 fn with_zero_loc<T>(val: T) -> Located<T> {
-    Located::new(val, Region {
-        start_line: 0,
-        start_col: 0,
+    Located::new(
+        val,
+        Region {
+            start_line: 0,
+            start_col: 0,
 
-        end_line: 0,
-        end_col: 0,
-    })
+            end_line: 0,
+            end_col: 0,
+        },
+    )
 }
-
 
 fn display_val(evaluated: Evaluated) {
     println!("\n\u{001B}[4mroc out\u{001B}[24m\n\n{}\n", evaluated);
