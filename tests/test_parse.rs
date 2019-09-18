@@ -422,6 +422,38 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn qualified_var() {
+        let arena = Bump::new();
+        let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
+        let expected = Var(module_parts, "whee");
+        let actual = parse_with(&arena, "One.Two.whee");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // VARIANT
+
+    #[test]
+    fn basic_variant() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let expected = Variant(module_parts, "Whee");
+        let actual = parse_with(&arena, "Whee");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn qualified_variant() {
+        let arena = Bump::new();
+        let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
+        let expected = Variant(module_parts, "Whee");
+        let actual = parse_with(&arena, "One.Two.Whee");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // APPLY
 
     #[test]
