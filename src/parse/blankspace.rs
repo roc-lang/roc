@@ -89,7 +89,7 @@ pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
 }
 
 #[inline(always)]
-fn spaces<'a>(require_at_least_one: bool, min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
+fn spaces<'a>(require_at_least_one: bool, _min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
     move |arena: &'a Bump, state: State<'a>| {
         let mut chars = state.input.chars().peekable();
         let mut space_list = Vec::new_in(arena);

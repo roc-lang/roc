@@ -31,20 +31,32 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
     let expr_parser = map_with_arena(
         and(
             loc(one_of6(
+                string_literal(),
                 record_literal(),
                 number_literal(),
-                string_literal(),
                 when(min_indent),
                 conditional(min_indent),
                 ident_etc(min_indent),
             )),
             optional(and(
-                loc(operator()),
+                and(space0(min_indent), and(loc(operator()), space0(min_indent))),
                 loc(move |arena, state| parse_expr(min_indent, arena, state)),
             )),
         ),
         |arena, (loc_expr1, opt_operator)| match opt_operator {
-            Some((loc_op, loc_expr2)) => {
+            Some(((spaces_before_op, (loc_op, spaces_after_op)), loc_expr2)) => {
+                let region1 = loc_expr1.region.clone();
+                let region2 = loc_expr2.region.clone();
+                let loc_expr1 = if spaces_before_op.is_empty() {
+                    loc_expr1
+                } else {
+                    Expr::with_spaces_after(arena.alloc(loc_expr1), spaces_before_op).loc(region1)
+                };
+                let loc_expr2 = if spaces_after_op.is_empty() {
+                    loc_expr2
+                } else {
+                    Expr::with_spaces_after(arena.alloc(loc_expr2), spaces_after_op).loc(region2)
+                };
                 let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
 
                 Expr::Operator(tuple)
@@ -110,20 +122,28 @@ pub fn conditional<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 /// 1. A standalone variable with trailing whitespace (e.g. because an operator is next)
 /// 2. The beginning of a function call (e.g. `foo bar baz`)
 /// 3. The beginning of a defniition (e.g. `foo =`)
-/// 4. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
+/// 4. The beginning of a type annotation (e.g. `foo :`)
+/// 5. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
 pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    let followed_by_equals = and(space0(min_indent), ch('='));
-
     map_with_arena(
         and(
             loc(ident()),
-            either(followed_by_equals, loc_function_args(min_indent)),
+            either(
+                // Check if this is either a def or type annotation
+                and(space0(min_indent), either(ch('='), ch(':'))),
+                // Check if this is function application
+                loc_function_args(min_indent),
+            ),
         ),
         |arena, (loc_ident, equals_or_loc_args)| {
             match equals_or_loc_args {
-                Either::First((_space_list, ())) => {
+                Either::First((_space_list, Either::First(()))) => {
                     // We have now parsed the beginning of a def (e.g. `foo =`)
-                    panic!("TODO parse def, making sure to use the space_list we got - don't drop comments!");
+                    panic!("TODO parse def, making sure not to drop comments!");
+                }
+                Either::First((_space_list, Either::Second(()))) => {
+                    // We have now parsed the beginning of a type annotation (e.g. `foo :`)
+                    panic!("TODO parse type annotation, making sure not to drop comments!");
                 }
                 Either::Second(loc_args) => {
                     // This appears to be a var, keyword, or function application.

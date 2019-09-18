@@ -2,7 +2,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::Attempting;
 use region::{Located, Region};
-use std::char;
+use std::{char, u16};
 
 // Strategy:
 //
@@ -81,7 +81,7 @@ impl<'a> State<'a> {
     /// they weren't eligible to indent anyway.
     pub fn advance_without_indenting(&self, quantity: usize) -> Result<Self, (Fail, Self)> {
         match (self.column as usize).checked_add(quantity) {
-            Some(column_usize) if column_usize <= std::u16::MAX as usize => {
+            Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
                     input: &self.input[quantity..],
                     line: self.line,
@@ -92,20 +92,14 @@ impl<'a> State<'a> {
                     attempting: self.attempting,
                 })
             }
-            _ => Err((
-                Fail {
-                    reason: FailReason::LineTooLong(self.line),
-                    attempting: self.attempting,
-                },
-                self.clone(),
-            )),
+            _ => Err(line_too_long(self.attempting, self.clone())),
         }
     }
     /// Advance the parser while also indenting as appropriate.
     /// This assumes we are only advancing with spaces, since they can indent.
     pub fn advance_spaces(&self, spaces: usize) -> Result<Self, (Fail, Self)> {
         match (self.column as usize).checked_add(spaces) {
-            Some(column_usize) if column_usize <= std::u16::MAX as usize => {
+            Some(column_usize) if column_usize <= u16::MAX as usize => {
                 // Spaces don't affect is_indenting; if we were previously indneting,
                 // we still are, and if we already finished indenting, we're still done.
                 let is_indenting = self.is_indenting;
@@ -117,8 +111,8 @@ impl<'a> State<'a> {
                     // already have errored out from the column calculation.
                     //
                     // Leaving debug assertions in case this invariant someday disappers.
-                    debug_assert!(std::u16::MAX - self.indent_col >= spaces as u16);
-                    debug_assert!(spaces <= std::u16::MAX as usize);
+                    debug_assert!(u16::MAX - self.indent_col >= spaces as u16);
+                    debug_assert!(spaces <= u16::MAX as usize);
 
                     self.indent_col + spaces as u16
                 } else {
@@ -134,13 +128,7 @@ impl<'a> State<'a> {
                     attempting: self.attempting,
                 })
             }
-            _ => Err((
-                Fail {
-                    reason: FailReason::LineTooLong(self.line),
-                    attempting: self.attempting,
-                },
-                self.clone(),
-            )),
+            _ => Err(line_too_long(self.attempting, self.clone())),
         }
     }
 }
@@ -340,7 +328,12 @@ where
     F: FnOnce(Region) -> Fail,
 {
     match (state.column as usize).checked_add(chars_consumed) {
-        Some(end_col) if end_col <= std::u16::MAX as usize => {
+        // Crucially, this is < u16::MAX and not <= u16::MAX. This means if
+        // column ever gets set to u16::MAX, we will automatically bail out
+        // with LineTooLong - which is exactly what we want! Once a line has
+        // been discovered to be too long, we don't want to parse anything else
+        // until that's fixed.
+        Some(end_col) if end_col < u16::MAX as usize => {
             let region = Region {
                 start_col: state.column,
                 end_col: end_col as u16,
@@ -350,14 +343,31 @@ where
 
             (problem_from_region(region), state)
         }
-        _ => {
-            let reason = FailReason::LineTooLong(state.line);
-            let attempting = state.attempting;
-            let fail = Fail { reason, attempting };
-
-            (fail, state)
-        }
+        _ => line_too_long(state.attempting, state),
     }
+}
+
+fn line_too_long<'a>(attempting: Attempting, state: State<'a>) -> (Fail, State<'a>) {
+    let reason = FailReason::LineTooLong(state.line);
+    let fail = Fail { reason, attempting };
+    // Set column to MAX and advance the parser to end of input.
+    // This way, all future parsers will fail on EOF, and then
+    // unexpected_eof will take them back here - thus propagating
+    // the initial LineTooLong error all the way to the end, even if
+    // (for example) the LineTooLong initially occurs in the middle of
+    // a one_of chain, which would otherwise prevent it from propagating.
+    let column = u16::MAX;
+    let input = state.input.get(0..state.input.len()).unwrap();
+    let state = State {
+        input,
+        line: state.line,
+        indent_col: state.indent_col,
+        is_indenting: state.is_indenting,
+        column,
+        attempting,
+    };
+
+    (fail, state)
 }
 
 /// A single char.

@@ -1,6 +1,6 @@
 use bumpalo::collections::vec::Vec;
 use operator::Operator;
-use region::Loc;
+use region::{Loc, Region};
 use std::fmt::{self, Display, Formatter};
 
 pub type VariantName = str;
@@ -180,6 +180,30 @@ pub enum Attempting {
     Expression,
     Module,
     Identifier,
+}
+
+impl<'a> Expr<'a> {
+    pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {
+        Loc {
+            region,
+            value: self,
+        }
+    }
+
+    pub fn loc(self, region: Region) -> Loc<Self> {
+        Loc {
+            region,
+            value: self,
+        }
+    }
+
+    pub fn with_spaces_before(spaces: &'a [Space<'a>], loc_expr: &'a Loc<Expr<'a>>) -> Self {
+        Expr::SpaceBefore(spaces, loc_expr)
+    }
+
+    pub fn with_spaces_after(loc_expr: &'a Loc<Expr<'a>>, spaces: &'a [Space<'a>]) -> Self {
+        Expr::SpaceAfter(loc_expr, spaces)
+    }
 }
 
 impl<'a> Display for Expr<'a> {

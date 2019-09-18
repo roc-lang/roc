@@ -255,6 +255,62 @@ mod test_parse {
     }
 
     #[test]
+    fn ops_with_spaces() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("1")),
+            Located::new(0, 3, 0, 4, Plus),
+            Located::new(0, 7, 0, 8, Int("2")),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "1  +   2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_before_op() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("3")),
+            Located::new(0, 3, 0, 4, Plus),
+            Located::new(0, 7, 0, 8, Int("4")),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "3  \n+ 4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_after_op() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("3")),
+            Located::new(0, 3, 0, 4, Star),
+            Located::new(0, 7, 0, 8, Int("4")),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "3  *\n 4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn ops_with_newlines() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("3")),
+            Located::new(0, 3, 0, 4, Plus),
+            Located::new(0, 7, 0, 8, Int("4")),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "3  \n+ \n\n4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn minus_twelve_minus_five() {
         let arena = Bump::new();
         let tuple = arena.alloc((
