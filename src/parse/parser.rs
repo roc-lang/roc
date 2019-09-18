@@ -54,11 +54,11 @@ impl<'a> State<'a> {
     }
 
     /// Increments the line, then resets column, indent_col, and is_indenting.
-    /// This does *not* advance the input.
+    /// Advances the input by 1, to consume the newline character.
     pub fn newline(&self) -> Result<Self, (Fail, Self)> {
         match self.line.checked_add(1) {
             Some(line) => Ok(State {
-                input: self.input,
+                input: &self.input[1..],
                 line,
                 column: 0,
                 indent_col: 1,
