@@ -324,6 +324,24 @@ mod test_parse {
     }
 
     #[test]
+    fn comment_after_op() {
+        let arena = Bump::new();
+        let spaced_int = SpaceBefore(
+            bumpalo::vec![in &arena; Space::LineComment(" test!")].into_bump_slice(),
+            arena.alloc(Int("92")),
+        );
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 2, Int("12")),
+            Located::new(0, 4, 0, 5, Star),
+            Located::new(1, 1, 1, 3, spaced_int),
+        ));
+        let expected = Operator(tuple);
+        let actual = parse_with(&arena, "12  * # test!\n 92");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn ops_with_newlines() {
         let arena = Bump::new();
         let spaced_int1 = SpaceAfter(
