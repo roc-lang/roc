@@ -36,25 +36,39 @@ pub enum Expr<'a> {
     // List literals
     EmptyList,
     List(Vec<'a, Loc<Expr<'a>>>),
-    // // Lookups
-    // Var(&'a str),
+    // Lookups
+    Var(&'a [&'a str], &'a str),
+    Variant(&'a [&'a str], &'a str),
 
     // // Pattern Matching
-    // Case(&'a (Loc<Expr<'a>>, [(Loc<Pattern<'a>>, Loc<Expr<'a>>)])),
+    When(&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)]),
     // Closure(&'a (&'a [Loc<Pattern<'a>>], Loc<Expr<'a>>)),
     // /// basically Assign(Vec<(Loc<Pattern>, Loc<Expr>)>, Loc<Expr>)
     // Assign(&'a (&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)], Loc<Expr<'a>>)),
 
-    // // Application
-    // Call(&'a (Loc<Expr<'a>>, [Loc<Expr<'a>>])),
-    // ApplyVariant(&'a (&'a VariantName, [Loc<Expr<'a>>])),
-    // Variant(&'a VariantName),
+    // Application
+    /// To apply by name, do Apply(Var(...), ...)
+    /// To apply a variant by name, do Apply(Variant(...), ...)
+    Apply(&'a (Loc<Expr<'a>>, &'a [Loc<Expr<'a>>])),
+    Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
 
     // Product Types
     EmptyRecord,
-    // // Sugar
-    // If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
-    Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
+    /// e.g. `(expr).foo.bar`
+    Field(&'a Expr<'a>, &'a [&'a str]),
+    /// e.g. `Foo.Bar.baz.qux`
+    QualifiedField(&'a [&'a str], &'a [&'a str]),
+    /// e.g. `.foo`
+    AccessorFunction(&'a str),
+
+    // Conditionals
+    If(&'a Loc<Expr<'a>>),
+    Then(&'a Loc<Expr<'a>>),
+    Else(&'a Loc<Expr<'a>>),
+    Case(&'a Loc<Expr<'a>>),
+
+    // Problems
+    MalformedIdent(&'a str),
 }
 
 #[derive(Clone, Debug, PartialEq)]

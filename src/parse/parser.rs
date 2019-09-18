@@ -35,6 +35,12 @@ pub struct State<'a> {
     pub attempting: Attempting,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Either<First, Second> {
+    First(First),
+    Second(Second),
+}
+
 impl<'a> State<'a> {
     pub fn new(input: &'a str, attempting: Attempting) -> State<'a> {
         State {
@@ -151,7 +157,6 @@ pub type ParseResult<'a, Output> = Result<(Output, State<'a>), (Fail, State<'a>)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailReason {
     Unexpected(char, Region),
-    UnexpectedKeyword(Keyword),
     ConditionFailed,
     LineTooLong(u32 /* which line was too long */),
     TooManyLines,
@@ -162,28 +167,6 @@ pub enum FailReason {
 pub struct Fail {
     pub attempting: Attempting,
     pub reason: FailReason,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Keyword {
-    If,
-    Then,
-    Else,
-    Case,
-    When,
-}
-
-impl Keyword {
-    pub fn from_str(kw: &str) -> Option<Keyword> {
-        match kw {
-            "if" => Some(Keyword::If),
-            "then" => Some(Keyword::Then),
-            "else" => Some(Keyword::Else),
-            "case" => Some(Keyword::Case),
-            "when" => Some(Keyword::When),
-            _ => None,
-        }
-    }
 }
 
 pub trait Parser<'a, Output> {
@@ -268,6 +251,31 @@ where
             }
             Err((fail, state)) => Err((fail, state)),
         }
+    }
+}
+
+pub fn zero_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
+where
+    P: Parser<'a, A>,
+{
+    move |arena, state| match parser.parse(arena, state) {
+        Ok((first_output, next_state)) => {
+            let mut state = next_state;
+            let mut buf = Vec::with_capacity_in(1, arena);
+
+            buf.push(first_output);
+
+            loop {
+                match parser.parse(arena, state) {
+                    Ok((next_output, next_state)) => {
+                        state = next_state;
+                        buf.push(next_output);
+                    }
+                    Err((_, old_state)) => return Ok((buf, old_state)),
+                }
+            }
+        }
+        Err((_, new_state)) => return Ok((Vec::new_in(arena), new_state)),
     }
 }
 

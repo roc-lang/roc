@@ -282,9 +282,30 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn multiple_operators() {
+        let arena = Bump::new();
+        let inner = arena.alloc((
+            Located::new(0, 3, 0, 5, Int("42")),
+            Located::new(0, 5, 0, 6, Plus),
+            Located::new(0, 6, 0, 9, Int("534")),
+        ));
+        let outer = arena.alloc((
+            Located::new(0, 0, 0, 2, Int("31")),
+            Located::new(0, 2, 0, 3, Star),
+            Located::new(0, 3, 0, 9, Operator(inner)),
+        ));
+        let expected = Operator(outer);
+        let actual = parse_with(&arena, "31*42+534");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // TODO test hex/oct/binary parsing
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
+    //
+    // TODO test for non-ASCII variables
     //
     // TODO verify that when a string literal contains a newline before the
     // closing " it correctly updates both the line *and* column in the State.

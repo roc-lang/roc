@@ -898,5 +898,8 @@ mod test_canonicalize {
     //     }
     //
     // TODO test what happens when interpolated strings contain 1+ malformed idents
+    //
     // TODO test hex/oct/binary conversion to numbers
+    //
+    // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
 }
