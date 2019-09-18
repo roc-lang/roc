@@ -18,8 +18,8 @@ mod test_parse {
     use bumpalo::{self, Bump};
     use helpers::parse_with;
     use roc::operator::Operator::*;
-    use roc::parse::ast::Attempting;
     use roc::parse::ast::Expr::{self, *};
+    use roc::parse::ast::{Attempting, Space};
     use roc::parse::parser::{Fail, FailReason};
     use roc::region::{Located, Region};
     use std::{f64, i64};
@@ -272,10 +272,14 @@ mod test_parse {
     #[test]
     fn newline_before_op() {
         let arena = Bump::new();
+        let spaced_int = SpaceAfter(
+            arena.alloc(Int("3")),
+            bumpalo::vec![in &arena; Space::Newline].into_bump_slice(),
+        );
         let tuple = arena.alloc((
-            Located::new(0, 0, 0, 1, Int("3")),
-            Located::new(0, 3, 0, 4, Plus),
-            Located::new(0, 7, 0, 8, Int("4")),
+            Located::new(0, 0, 0, 1, spaced_int),
+            Located::new(1, 0, 1, 1, Plus),
+            Located::new(1, 2, 1, 3, Int("4")),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "3  \n+ 4");
@@ -286,10 +290,14 @@ mod test_parse {
     #[test]
     fn newline_after_op() {
         let arena = Bump::new();
+        let spaced_int = SpaceBefore(
+            bumpalo::vec![in &arena; Space::Newline].into_bump_slice(),
+            arena.alloc(Int("4")),
+        );
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Int("3")),
             Located::new(0, 3, 0, 4, Star),
-            Located::new(0, 7, 0, 8, Int("4")),
+            Located::new(1, 2, 1, 3, spaced_int),
         ));
         let expected = Operator(tuple);
         let actual = parse_with(&arena, "3  *\n 4");
@@ -300,13 +308,21 @@ mod test_parse {
     #[test]
     fn ops_with_newlines() {
         let arena = Bump::new();
+        let spaced_int1 = SpaceAfter(
+            arena.alloc(Int("3")),
+            bumpalo::vec![in &arena; Space::Newline].into_bump_slice(),
+        );
+        let spaced_int2 = SpaceBefore(
+            bumpalo::vec![in &arena; Space::Newline, Space::Newline].into_bump_slice(),
+            arena.alloc(Int("4")),
+        );
         let tuple = arena.alloc((
-            Located::new(0, 0, 0, 1, Int("3")),
-            Located::new(0, 3, 0, 4, Plus),
-            Located::new(0, 7, 0, 8, Int("4")),
+            Located::new(0, 0, 0, 1, spaced_int1),
+            Located::new(1, 0, 1, 1, Plus),
+            Located::new(3, 2, 3, 3, spaced_int2),
         ));
         let expected = Operator(tuple);
-        let actual = parse_with(&arena, "3  \n+ \n\n4");
+        let actual = parse_with(&arena, "3  \n+ \n\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
