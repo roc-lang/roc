@@ -14,7 +14,8 @@ mod helpers;
 
 #[cfg(test)]
 mod test_parse {
-    use bumpalo::Bump;
+    use bumpalo::collections::vec::Vec;
+    use bumpalo::{self, Bump};
     use helpers::parse_with;
     use roc::operator::Operator::*;
     use roc::parse::ast::Attempting;
@@ -353,6 +354,36 @@ mod test_parse {
         ));
         let expected = Operator(outer);
         let actual = parse_with(&arena, "31*42+534");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // VAR
+
+    #[test]
+    fn basic_var() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let expected = Var(module_parts, "whee");
+        let actual = parse_with(&arena, "whee");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // APPLY
+
+    #[test]
+    fn basic_apply() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg = Located::new(0, 5, 0, 6, Int("1"));
+        let args = bumpalo::vec![in &arena; arg];
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 4, Var(module_parts, "whee")),
+            args.into_bump_slice(),
+        ));
+        let expected = Apply(tuple);
+        let actual = parse_with(&arena, "whee 1");
 
         assert_eq!(Ok(expected), actual);
     }

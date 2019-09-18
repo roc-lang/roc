@@ -8,6 +8,7 @@ pub mod parser;
 pub mod problems;
 pub mod string_literal;
 
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
 use parse::ast::{Attempting, Expr};
@@ -15,8 +16,8 @@ use parse::blankspace::{space0, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, ch, either, loc, map, map_with_arena, one_of3, one_of4, one_of6, optional,
-    skip_first, string, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
+    and, attempt, char, either, loc, map, map_with_arena, one_of3, one_of4, one_of6, one_or_more,
+    optional, skip_first, string, unexpected, unexpected_eof, Either, ParseResult, Parser, State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -27,9 +28,26 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     move |arena, state| parse_expr(min_indent, arena, state)
 }
 
+fn parse_expr_body_without_operators<'a>(
+    min_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>> {
+    one_of6(
+        string_literal(),
+        record_literal(),
+        number_literal(),
+        when(min_indent),
+        conditional(min_indent),
+        ident_etc(min_indent),
+    )
+    .parse(arena, state)
+}
+
 fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Expr<'a>> {
     let expr_parser = map_with_arena(
         and(
+            // First parse the body without operators, then try to parse possible operators after.
             loc(move |arena, state| parse_expr_body_without_operators(min_indent, arena, state)),
             optional(and(
                 and(space0(min_indent), and(loc(operator()), space0(min_indent))),
@@ -61,27 +79,10 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
     attempt(Attempting::Expression, expr_parser).parse(arena, state)
 }
 
-fn parse_expr_body_without_operators<'a>(
-    min_indent: u16,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Expr<'a>> {
-    one_of6(
-        string_literal(),
-        record_literal(),
-        number_literal(),
-        when(min_indent),
-        conditional(min_indent),
-        ident_etc(min_indent),
-    )
-    .parse(arena, state)
-}
-
-pub fn loc_function_args<'a>(_min_indent: u16) -> impl Parser<'a, &'a [Located<Expr<'a>>]> {
-    move |_arena, _state| {
-        panic!("TODO stop early if we see an operator after the whitespace - precedence!");
-        // zero_or_more(after(one_or_more(whitespace(min_indent)), function_arg()))
-    }
+fn function_arg<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    // Don't parse operators, because they have a higher precedence than function application.
+    // If we encounter one, we're done parsing function args!
+    move |arena, state| parse_expr_body_without_operators(min_indent, arena, state)
 }
 
 pub fn when<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
@@ -98,32 +99,35 @@ pub fn conditional<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         map_with_arena(
             skip_first(
                 string(keyword::IF),
-                loc(space1_before(expr(min_indent), min_indent)),
+                space1_before(expr(min_indent), min_indent),
             ),
             |arena, loc_expr| Expr::If(arena.alloc(loc_expr)),
         ),
         map_with_arena(
             skip_first(
                 string(keyword::THEN),
-                loc(space1_before(expr(min_indent), min_indent)),
+                space1_before(expr(min_indent), min_indent),
             ),
             |arena, loc_expr| Expr::Then(arena.alloc(loc_expr)),
         ),
         map_with_arena(
             skip_first(
                 string(keyword::ELSE),
-                loc(space1_before(expr(min_indent), min_indent)),
+                space1_before(expr(min_indent), min_indent),
             ),
             |arena, loc_expr| Expr::Else(arena.alloc(loc_expr)),
         ),
         map_with_arena(
             skip_first(
                 string(keyword::CASE),
-                loc(space1_before(expr(min_indent), min_indent)),
+                space1_before(expr(min_indent), min_indent),
             ),
             |arena, loc_expr| Expr::Case(arena.alloc(loc_expr)),
         ),
     )
+}
+pub fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
+    one_or_more(space1_before(function_arg(min_indent), min_indent))
 }
 
 /// When we parse an ident like `foo ` it could be any of these:
@@ -137,47 +141,47 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     map_with_arena(
         and(
             loc(ident()),
-            either(
-                // Check if this is either a def or type annotation
-                and(space0(min_indent), either(ch('='), ch(':'))),
-                // Check if this is function application
+            optional(either(
+                // There may optionally be function args after this ident
                 loc_function_args(min_indent),
-            ),
+                // If there aren't any args, there may be a '=' or ':' after it.
+                // (It's a syntax error to write e.g. `foo bar =` - so if there
+                // were any args, there is definitely no need to parse '=' or ':'!)
+                and(space0(min_indent), either(char('='), char(':'))),
+            )),
         ),
-        |arena, (loc_ident, equals_or_loc_args)| {
-            match equals_or_loc_args {
-                Either::First((_space_list, Either::First(()))) => {
-                    // We have now parsed the beginning of a def (e.g. `foo =`)
-                    panic!("TODO parse def, making sure not to drop comments!");
-                }
-                Either::First((_space_list, Either::Second(()))) => {
-                    // We have now parsed the beginning of a type annotation (e.g. `foo :`)
-                    panic!("TODO parse type annotation, making sure not to drop comments!");
-                }
-                Either::Second(loc_args) => {
-                    // This appears to be a var, keyword, or function application.
-                    let name_expr = match loc_ident.value {
-                        Ident::Var(info) => Expr::Var(info.module_parts, info.value),
-                        Ident::Variant(info) => Expr::Variant(info.module_parts, info.value),
-                        Ident::Field(info) => Expr::QualifiedField(info.module_parts, info.value),
-                        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
-                        Ident::Malformed(string) => Expr::MalformedIdent(string),
+        |arena, (loc_ident, opt_extras)| {
+            // This appears to be a var, keyword, or function application.
+
+            match opt_extras {
+                Some(Either::First(loc_args)) => {
+                    let loc_expr = Located {
+                        region: loc_ident.region,
+                        value: ident_to_expr(loc_ident.value),
                     };
 
-                    if loc_args.is_empty() {
-                        name_expr
-                    } else {
-                        let loc_expr = Located {
-                            region: loc_ident.region,
-                            value: name_expr,
-                        };
-
-                        Expr::Apply(arena.alloc((loc_expr, loc_args)))
-                    }
+                    Expr::Apply(arena.alloc((loc_expr, loc_args.into_bump_slice())))
                 }
+                Some(Either::Second((_space_list, Either::First(())))) => {
+                    panic!("TODO handle def, making sure not to drop comments!");
+                }
+                Some(Either::Second((_space_list, Either::Second(())))) => {
+                    panic!("TODO handle annotation, making sure not to drop comments!");
+                }
+                None => ident_to_expr(loc_ident.value),
             }
         },
     )
+}
+
+fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {
+    match src {
+        Ident::Var(info) => Expr::Var(info.module_parts, info.value),
+        Ident::Variant(info) => Expr::Variant(info.module_parts, info.value),
+        Ident::Field(info) => Expr::QualifiedField(info.module_parts, info.value),
+        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::Malformed(string) => Expr::MalformedIdent(string),
+    }
 }
 
 pub fn operator<'a>() -> impl Parser<'a, Operator> {

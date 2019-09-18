@@ -177,6 +177,19 @@ where
     move |_, state| Ok((value.clone(), state))
 }
 
+pub fn and_then<'a, P1, P2, F, Before, After>(parser: P1, transform: F) -> impl Parser<'a, After>
+where
+    P1: Parser<'a, Before>,
+    P2: Parser<'a, After>,
+    F: Fn(Before) -> P2,
+{
+    move |arena, state| {
+        parser
+            .parse(arena, state)
+            .and_then(|(output, next_state)| transform(output).parse(arena, next_state))
+    }
+}
+
 pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where
     P: Parser<'a, Before>,
@@ -371,10 +384,11 @@ fn line_too_long<'a>(attempting: Attempting, state: State<'a>) -> (Fail, State<'
 }
 
 /// A single char.
-pub fn ch<'a>(expected: char) -> impl Parser<'a, ()> {
+pub fn char<'a>(expected: char) -> impl Parser<'a, ()> {
     move |_arena, state: State<'a>| match state.input.chars().next() {
         Some(actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
-        _ => Err(unexpected_eof(1, Attempting::Keyword, state)),
+        Some(other_ch) => Err(unexpected(other_ch, 0, state, Attempting::Keyword)),
+        _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
 }
 
@@ -391,7 +405,7 @@ pub fn string<'a>(string: &'static str) -> impl Parser<'a, ()> {
         // TODO do this comparison in one SIMD instruction (on supported systems)
         match input.get(0..len) {
             Some(next_str) if next_str == string => Ok(((), state.advance_without_indenting(len)?)),
-            _ => Err(unexpected_eof(len, Attempting::Keyword, state)),
+            _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
         }
     }
 }
