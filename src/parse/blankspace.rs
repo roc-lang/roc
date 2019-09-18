@@ -141,6 +141,8 @@ fn spaces<'a>(require_at_least_one: bool, _min_indent: u16) -> impl Parser<'a, &
                         space_list.push(Space::Newline);
                     }
                     '#' => {
+                        state = state.advance_without_indenting(1)?;
+
                         // We're now parsing a line comment!
                         comment_parsing = CommentParsing::Line;
                     }
