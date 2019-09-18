@@ -181,10 +181,11 @@ fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {
 }
 
 pub fn operator<'a>() -> impl Parser<'a, Operator> {
-    one_of3(
-        map(string("+"), |_| Operator::Plus),
-        map(string("-"), |_| Operator::Minus),
-        map(string("*"), |_| Operator::Star),
+    one_of4(
+        map(char('+'), |_| Operator::Plus),
+        map(char('-'), |_| Operator::Minus),
+        map(char('*'), |_| Operator::Star),
+        map(char('/'), |_| Operator::Slash),
     )
 }
 
