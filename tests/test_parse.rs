@@ -483,9 +483,9 @@ mod test_parse {
     #[test]
     fn basic_field() {
         let arena = Bump::new();
-        let parts = Vec::new_in(&arena).into_bump_slice();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
         let fields = bumpalo::vec![in &arena; "rec", "field"].into_bump_slice();
-        let expected = QualifiedField(parts, fields);
+        let expected = QualifiedField(module_parts, fields);
         let actual = parse_with(&arena, "rec.field");
 
         assert_eq!(Ok(expected), actual);
@@ -494,9 +494,9 @@ mod test_parse {
     #[test]
     fn qualified_field() {
         let arena = Bump::new();
-        let parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
+        let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
         let fields = bumpalo::vec![in &arena; "rec", "field"].into_bump_slice();
-        let expected = QualifiedField(parts, fields);
+        let expected = QualifiedField(module_parts, fields);
         let actual = parse_with(&arena, "One.Two.rec.field");
 
         assert_eq!(Ok(expected), actual);
