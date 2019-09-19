@@ -423,6 +423,16 @@ mod test_parse {
     }
 
     #[test]
+    fn parenthetical_var() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let expected = Var(module_parts, "whee");
+        let actual = parse_with(&arena, "(whee)");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn qualified_var() {
         let arena = Bump::new();
         let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
@@ -456,29 +466,29 @@ mod test_parse {
 
     // FIELD ACCESS
 
-    // #[test]
-    // fn basic_field_expr() {
-    //     let arena = Bump::new();
-    //     let module_parts = Vec::new_in(&arena).into_bump_slice();
-    //     let expr = Var(module_parts, "rec");
-    //     let fields = bumpalo::vec![in &arena; "field"].into_bump_slice();
-    //     let expected = Field(arena.alloc(expr), fields);
-    //     let actual = parse_with(&arena, "(rec).field");
+    #[test]
+    fn basic_field_expr() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let expr = Var(module_parts, "rec");
+        let fields = bumpalo::vec![in &arena; "field"].into_bump_slice();
+        let expected = Field(arena.alloc(expr), fields);
+        let actual = parse_with(&arena, "(rec).field");
 
-    //     assert_eq!(Ok(expected), actual);
-    // }
+        assert_eq!(Ok(expected), actual);
+    }
 
-    // #[test]
-    // fn field_expr_qualified_var() {
-    //     let arena = Bump::new();
-    //     let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
-    //     let expr = Var(module_parts, "rec");
-    //     let fields = bumpalo::vec![in &arena; "field"].into_bump_slice();
-    //     let expected = Field(arena.alloc(expr), fields);
-    //     let actual = parse_with(&arena, "(One.Two.rec).field");
+    #[test]
+    fn field_expr_qualified_var() {
+        let arena = Bump::new();
+        let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
+        let expr = Var(module_parts, "rec");
+        let fields = bumpalo::vec![in &arena; "field"].into_bump_slice();
+        let expected = Field(arena.alloc(expr), fields);
+        let actual = parse_with(&arena, "(One.Two.rec).field");
 
-    //     assert_eq!(Ok(expected), actual);
-    // }
+        assert_eq!(Ok(expected), actual);
+    }
 
     #[test]
     fn basic_field() {
@@ -536,6 +546,23 @@ mod test_parse {
 
         assert_eq!(Ok(expected), actual);
     }
+
+    #[test]
+    fn parenthetical_apply() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg = Located::new(0, 0, 5, 6, Int("1"));
+        let args = bumpalo::vec![in &arena; arg];
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 4, Var(module_parts, "whee")),
+            args.into_bump_slice(),
+        ));
+        let expected = Apply(tuple);
+        let actual = parse_with(&arena, "(whee) 1");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // TODO test hex/oct/binary parsing
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
