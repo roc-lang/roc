@@ -520,6 +520,22 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn apply_two_args() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = Located::new(0, 0, 6, 8, Int("12"));
+        let arg2 = Located::new(0, 0, 10, 12, Int("34"));
+        let args = bumpalo::vec![in &arena; arg1, arg2];
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 4, Var(module_parts, "whee")),
+            args.into_bump_slice(),
+        ));
+        let expected = Apply(tuple);
+        let actual = parse_with(&arena, "whee  12  34");
+
+        assert_eq!(Ok(expected), actual);
+    }
     // TODO test hex/oct/binary parsing
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
