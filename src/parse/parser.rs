@@ -410,6 +410,26 @@ pub fn string<'a>(string: &'static str) -> impl Parser<'a, ()> {
     }
 }
 
+/// Parse zero or more values separated by a delimiter (e.g. a comma) whose
+/// values are discarded
+pub fn sep_by0<'a, P, D, Val>(delimiter: D, parser: P) -> impl Parser<'a, Vec<'a, Val>>
+where
+    D: Parser<'a, ()>,
+    P: Parser<'a, Val>,
+{
+    zero_or_more(skip_first(delimiter, parser))
+}
+
+/// Parse one or more values separated by a delimiter (e.g. a comma) whose
+/// values are discarded
+pub fn sep_by1<'a, P, D, Val>(delimiter: D, parser: P) -> impl Parser<'a, Vec<'a, Val>>
+where
+    D: Parser<'a, ()>,
+    P: Parser<'a, Val>,
+{
+    one_or_more(skip_first(delimiter, parser))
+}
+
 pub fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
 where
     P: Parser<'a, A>,
