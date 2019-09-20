@@ -4,16 +4,7 @@ use parse::ast::Attempting;
 use region::{Located, Region};
 use std::{char, u16};
 
-// Strategy:
-//
-// 1. Let space parsers check indentation. They should expect indentation to only ever increase (right?) when
-//    doing a many_whitespaces or many1_whitespaces. Multline strings can have separate whitespace parsers.
-// 2. For any expression that has subexpressions (e.g. ifs, parens, operators) record their indentation levels
-//    by doing .and(position()) followed by .and_then() which says "I can have a declaration inside me as
-//    long as the entire decl is indented more than me."
-// 3. Make an alternative to RangeStreamOnce where uncons_while barfs on \t (or maybe just do this in whitespaces?)
-
-/// Struct which represents a position in a source file.
+/// A position in a source file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct State<'a> {
     /// The raw input string.
