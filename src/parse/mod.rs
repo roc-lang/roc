@@ -17,7 +17,7 @@ use parse::blankspace::{space0, space0_around, space0_before, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, one_of2, one_of4, one_of8,
+    and, attempt, between, char, either, loc, map, map_with_arena, one_of2, one_of4, one_of9,
     one_or_more, optional, sep_by0, skip_first, skip_second, string, unexpected, unexpected_eof,
     Either, ParseResult, Parser, State,
 };
@@ -36,11 +36,12 @@ fn loc_parse_expr_body_without_operators<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
-    one_of8(
+    one_of9(
         loc_parenthetical_expr(min_indent),
         loc(string_literal()),
         loc(number_literal()),
         loc(record_literal(min_indent)),
+        loc(closure(min_indent)),
         loc(list_literal(min_indent)),
         loc(when(min_indent)),
         loc(conditional(min_indent)),
@@ -156,9 +157,25 @@ fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
 }
 
 fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    map(skip_first(char('\\'), one_or_more(loc_closure_param(min_indent))),
-        |params
-        )
+    map_with_arena(
+        skip_first(
+            char('\\'),
+            and(
+                loc(one_or_more(space0_around(
+                    loc_closure_param(min_indent),
+                    min_indent,
+                ))),
+                skip_first(
+                    string("->"),
+                    space0_before(
+                        loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                        min_indent,
+                    ),
+                ),
+            ),
+        ),
+        |arena, (params, loc_body)| Expr::Closure(arena.alloc((params, loc_body))),
+    )
 }
 
 fn loc_closure_param<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {

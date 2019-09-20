@@ -50,7 +50,7 @@ pub enum Expr<'a> {
 
     // Pattern Matching
     When(&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)]),
-    Closure(&'a (&'a [Loc<Pattern<'a>>], Loc<Expr<'a>>)),
+    Closure(&'a (Loc<Vec<'a, Loc<Pattern<'a>>>>, Loc<Expr<'a>>)),
     // /// basically Assign(Vec<(Loc<Pattern>, Loc<Expr>)>, Loc<Expr>)
     // Assign(&'a (&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)], Loc<Expr<'a>>)),
 
@@ -87,9 +87,9 @@ pub enum Pattern<'a> {
     // Identifier
     Identifier(&'a str),
 
-    // Variant
-    Variant(&'a VariantName),
-    AppliedVariant(&'a (Loc<&'a VariantName>, [Loc<Pattern<'a>>])),
+    // Variant, optionally qualified
+    Variant(&'a [&'a str], &'a VariantName),
+    Apply(&'a (Loc<&'a Pattern<'a>>, [Loc<Pattern<'a>>])),
 
     // Literal
     IntLiteral(i64),
@@ -205,7 +205,7 @@ fn pattern_size() {
         // better performance, due to more data structures being inlinable,
         // and therefore having fewer pointers to chase. This seems worth
         // investigating as well.
-        std::mem::size_of::<usize>() * 4
+        std::mem::size_of::<usize>() * 5
     );
 }
 

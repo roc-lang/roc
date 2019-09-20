@@ -907,3 +907,65 @@ where
         }
     }
 }
+
+pub fn one_of9<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+{
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
+            valid @ Ok(_) => valid,
+            Err((_, state)) => match p2.parse(arena, state) {
+                valid @ Ok(_) => valid,
+                Err((_, state)) => match p3.parse(arena, state) {
+                    valid @ Ok(_) => valid,
+                    Err((_, state)) => match p4.parse(arena, state) {
+                        valid @ Ok(_) => valid,
+                        Err((_, state)) => match p5.parse(arena, state) {
+                            valid @ Ok(_) => valid,
+                            Err((_, state)) => match p6.parse(arena, state) {
+                                valid @ Ok(_) => valid,
+                                Err((_, state)) => match p7.parse(arena, state) {
+                                    valid @ Ok(_) => valid,
+                                    Err((_, state)) => match p8.parse(arena, state) {
+                                        valid @ Ok(_) => valid,
+                                        Err((_, state)) => match p9.parse(arena, state) {
+                                            valid @ Ok(_) => valid,
+                                            Err((fail, state)) => Err((
+                                                Fail {
+                                                    attempting: original_attempting,
+                                                    ..fail
+                                                },
+                                                state,
+                                            )),
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }
+    }
+}
