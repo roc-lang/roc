@@ -324,33 +324,21 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     attempt(Attempting::List, map(fields, Expr::Record))
 }
 
-/// This is for matching variants in patterns
-///
-/// * A record field, e.g. "email" in `.email` or in `email:`
-/// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
-    variant_or_ident(|first_char| first_char.is_uppercase())
-}
-
 /// This could be:
 ///
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
-    variant_or_ident(|first_char| first_char.is_lowercase())
-}
-
-fn variant_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str> where F: Fn(char) -> bool {
+pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
     move |arena, state: State<'a>| {
         let mut chars = state.input.chars();
 
-        // pred will determine if this is a variant or ident (based on capitalization)
+        // Idents must start with a lowercase letter.
         let first_letter = match chars.next() {
-            Some(first_char) => {
-                if pred(first_char) {
-                    first_char
+            Some(ch) => {
+                if ch.is_alphabetic() && ch.is_lowercase() {
+                    ch
                 } else {
-                    return Err(unexpected(first_char, 0, state, Attempting::RecordFieldLabel));
+                    return Err(unexpected(ch, 0, state, Attempting::RecordFieldLabel));
                 }
             }
             None => {
