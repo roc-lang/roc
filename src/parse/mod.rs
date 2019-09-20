@@ -17,7 +17,7 @@ use parse::blankspace::{space0, space0_around, space0_before, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, one_of2, one_of4, one_of9,
+    and, attempt, between, char, either, loc, map, map_with_arena, one_of3, one_of4, one_of9,
     one_or_more, optional, sep_by0, skip_first, skip_second, string, unexpected, unexpected_eof,
     Either, ParseResult, Parser, State,
 };
@@ -159,14 +159,15 @@ fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
 fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     map_with_arena(
         skip_first(
+            // All closures start with a '\' - e.g. (\x -> x + 1)
             char('\\'),
             and(
-                loc(one_or_more(space0_around(
-                    loc_closure_param(min_indent),
-                    min_indent,
-                ))),
+                // Parse the params
+                one_or_more(space0_around(loc_closure_param(min_indent), min_indent)),
                 skip_first(
+                    // Parse the -> which separates params from body
                     string("->"),
+                    // Parse the body
                     space0_before(
                         loc(move |arena, state| parse_expr(min_indent, arena, state)),
                         min_indent,
@@ -187,23 +188,53 @@ fn parse_closure_param<'a>(
     state: State<'a>,
     min_indent: u16,
 ) -> ParseResult<'a, Located<Pattern<'a>>> {
-    one_of2(
-        ident_pattern(),
+    one_of4(
+        // An ident is the most common param, e.g. \foo -> ...
+        loc(ident_pattern()),
+        // You can destructure records in params, e.g. \{ x, y } -> ...
+        loc(record_destructure(min_indent)),
+        // If you wrap it in parens, you can match any arbitrary pattern at all.
+        // e.g. \User.UserId userId -> ...
         between(
             char('('),
-            space0_around(
-                // TODO arbitrary pattern match, not just recursing!
-                move |arena, state| parse_closure_param(arena, state, min_indent),
-                min_indent,
-            ),
+            space0_around(loc(pattern(min_indent)), min_indent),
             char(')'),
         ),
+        // The least common, but still allowed, e.g. \Foo -> ...
+        loc(map(unqualified_variant(), |name| {
+            Pattern::Variant(&[], name)
+        })),
     )
     .parse(arena, state)
 }
 
-fn ident_pattern<'a>() -> impl Parser<'a, Located<Pattern<'a>>> {
-    loc(map(unqualified_ident(), Pattern::Identifier))
+fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
+    one_of3(
+        variant_pattern(),
+        ident_pattern(),
+        record_destructure(min_indent),
+    )
+}
+
+fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
+    map(
+        collection(
+            char('{'),
+            loc(ident_pattern()),
+            char(','),
+            char('}'),
+            min_indent,
+        ),
+        |loc_fields| Pattern::RecordDestructure(loc_fields),
+    )
+}
+
+fn variant_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
+    move |_, _| panic!("TODO support variant patterns, including qualified and/or applied")
+}
+
+fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
+    map(unqualified_ident(), Pattern::Identifier)
 }
 
 pub fn when<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
@@ -341,21 +372,38 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     attempt(Attempting::List, map(fields, Expr::Record))
 }
 
+/// This is mainly for matching variants in closure params, e.g. \Foo -> ...
+fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
+    variant_or_ident(|first_char| first_char.is_uppercase())
+}
+
 /// This could be:
 ///
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+    variant_or_ident(|first_char| first_char.is_lowercase())
+}
+
+fn variant_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str>
+where
+    F: Fn(char) -> bool,
+{
     move |arena, state: State<'a>| {
         let mut chars = state.input.chars();
 
-        // Idents must start with a lowercase letter.
+        // pred will determine if this is a variant or ident (based on capitalization)
         let first_letter = match chars.next() {
-            Some(ch) => {
-                if ch.is_lowercase() {
-                    ch
+            Some(first_char) => {
+                if pred(first_char) {
+                    first_char
                 } else {
-                    return Err(unexpected(ch, 0, state, Attempting::RecordFieldLabel));
+                    return Err(unexpected(
+                        first_char,
+                        0,
+                        state,
+                        Attempting::RecordFieldLabel,
+                    ));
                 }
             }
             None => {
@@ -393,21 +441,26 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
 /// Parse zero or more elements between two braces (e.g. square braces).
 /// Elements can be optionally surrounded by spaces, and are separated by a
 /// delimiter (e.g comma-separated). Braces and delimiters get discarded.
-pub fn collection<'a, Elem, OpeningBrace, ClosingBrace, Sep>(
+pub fn collection<'a, Elem, OpeningBrace, ClosingBrace, Delimiter, S>(
     opening_brace: OpeningBrace,
     elem: Elem,
-    sep: Sep,
+    delimiter: Delimiter,
     closing_brace: ClosingBrace,
     min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>>
+) -> impl Parser<'a, Vec<'a, Located<S>>>
 where
     OpeningBrace: Parser<'a, ()>,
-    Elem: Parser<'a, Located<Expr<'a>>>,
-    Sep: Parser<'a, ()>,
+    Elem: Parser<'a, Located<S>>,
+    Delimiter: Parser<'a, ()>,
+    S: Spaceable<'a>,
+    S: 'a,
     ClosingBrace: Parser<'a, ()>,
 {
     skip_first(
         opening_brace,
-        skip_second(sep_by0(sep, space0_around(elem, min_indent)), closing_brace),
+        skip_second(
+            sep_by0(delimiter, space0_around(elem, min_indent)),
+            closing_brace,
+        ),
     )
 }

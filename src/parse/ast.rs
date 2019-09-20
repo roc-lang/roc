@@ -50,7 +50,7 @@ pub enum Expr<'a> {
 
     // Pattern Matching
     When(&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)]),
-    Closure(&'a (Loc<Vec<'a, Loc<Pattern<'a>>>>, Loc<Expr<'a>>)),
+    Closure(&'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)),
     // /// basically Assign(Vec<(Loc<Pattern>, Loc<Expr>)>, Loc<Expr>)
     // Assign(&'a (&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)], Loc<Expr<'a>>)),
 
@@ -90,6 +90,10 @@ pub enum Pattern<'a> {
     // Variant, optionally qualified
     Variant(&'a [&'a str], &'a VariantName),
     Apply(&'a (Loc<&'a Pattern<'a>>, [Loc<Pattern<'a>>])),
+    /// This is Loc<Pattern> rather than Loc<str> so we can record comments
+    /// around the destructured names, e.g. { x ### x does stuff ###, y }
+    /// In practice, these patterns will always be Identifier
+    RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
 
     // Literal
     IntLiteral(i64),
