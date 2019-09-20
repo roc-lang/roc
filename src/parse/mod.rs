@@ -12,7 +12,7 @@ use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
-use parse::ast::{Attempting, Expr, Spaceable};
+use parse::ast::{Attempting, Expr, Pattern, Spaceable};
 use parse::blankspace::{space0, space0_around, space0_before, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
@@ -155,6 +155,40 @@ fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
     move |arena, state| loc_parse_expr_body_without_operators(min_indent, arena, state)
 }
 
+fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    map(skip_first(char('\\'), one_or_more(loc_closure_param(min_indent))),
+        |params
+        )
+}
+
+fn loc_closure_param<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    move |arena, state| parse_closure_param(arena, state, min_indent)
+}
+
+fn parse_closure_param<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u16,
+) -> ParseResult<'a, Located<Pattern<'a>>> {
+    one_of2(
+        ident_pattern(),
+        between(
+            char('('),
+            space0_around(
+                // TODO arbitrary pattern match, not just recursing!
+                move |arena, state| parse_closure_param(arena, state, min_indent),
+                min_indent,
+            ),
+            char(')'),
+        ),
+    )
+    .parse(arena, state)
+}
+
+fn ident_pattern<'a>() -> impl Parser<'a, Located<Pattern<'a>>> {
+    loc(map(unqualified_ident(), Pattern::Identifier))
+}
+
 pub fn when<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     map(string(keyword::WHEN), |_| {
         panic!("TODO implement WHEN");
@@ -290,21 +324,33 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     attempt(Attempting::List, map(fields, Expr::Record))
 }
 
+/// This is for matching variants in patterns
+///
+/// * A record field, e.g. "email" in `.email` or in `email:`
+/// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
+fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
+    variant_or_ident(|first_char| first_char.is_uppercase())
+}
+
 /// This could be:
 ///
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+    variant_or_ident(|first_char| first_char.is_lowercase())
+}
+
+fn variant_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str> where F: Fn(char) -> bool {
     move |arena, state: State<'a>| {
         let mut chars = state.input.chars();
 
-        // Field labels must start with a lowercase letter.
+        // pred will determine if this is a variant or ident (based on capitalization)
         let first_letter = match chars.next() {
-            Some(ch) => {
-                if ch.is_alphabetic() && ch.is_lowercase() {
-                    ch
+            Some(first_char) => {
+                if pred(first_char) {
+                    first_char
                 } else {
-                    return Err(unexpected(ch, 0, state, Attempting::RecordFieldLabel));
+                    return Err(unexpected(first_char, 0, state, Attempting::RecordFieldLabel));
                 }
             }
             None => {

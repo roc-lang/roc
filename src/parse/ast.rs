@@ -48,9 +48,9 @@ pub enum Expr<'a> {
     Var(&'a [&'a str], &'a str),
     Variant(&'a [&'a str], &'a str),
 
-    // // Pattern Matching
+    // Pattern Matching
     When(&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)]),
-    // Closure(&'a (&'a [Loc<Pattern<'a>>], Loc<Expr<'a>>)),
+    Closure(&'a (&'a [Loc<Pattern<'a>>], Loc<Expr<'a>>)),
     // /// basically Assign(Vec<(Loc<Pattern>, Loc<Expr>)>, Loc<Expr>)
     // Assign(&'a (&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)], Loc<Expr<'a>>)),
 
