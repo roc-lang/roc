@@ -42,7 +42,7 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
                         // literal begins with `"""` and is a block string.
                         return parse_block_string(arena, state, &mut chars);
                     } else {
-                        Expr::EmptyStr
+                        Expr::Str("")
                     }
                 } else {
                     // Start at 1 so we omit the opening `"`.

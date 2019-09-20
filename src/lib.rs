@@ -1,3 +1,5 @@
+#![type_length_limit = "16777216"]
+
 pub mod can;
 pub mod collections;
 pub mod graph;

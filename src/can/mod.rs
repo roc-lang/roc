@@ -11,7 +11,7 @@ use collections::{ImMap, ImSet, MutMap, MutSet};
 use ident::Ident;
 // use graph::{strongly_connected_component, topological_sort};
 use operator::Operator;
-// use operator::Operator::Pizza;
+use operator::Operator::Pizza;
 use parse::ast;
 use region::{Located, Region};
 use std::i64;
@@ -28,7 +28,7 @@ pub mod symbol;
 pub fn canonicalize_declaration<'a>(
     home: String,
     name: &str,
-    loc_expr: Located<ast::Expr<'a>>,
+    loc_expr: &'a Located<ast::Expr<'a>>,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
     declared_variants: &ImMap<Symbol, Located<Box<ast::VariantName>>>,
 ) -> (
@@ -72,33 +72,42 @@ impl Output {
 fn canonicalize<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    loc_expr: Located<ast::Expr<'a>>,
+    loc_expr: &'a Located<ast::Expr<'a>>,
 ) -> (Located<Expr>, Output) {
     use self::Expr::*;
 
-    let (expr, output) = match loc_expr.value {
+    let (expr, output) = match &loc_expr.value {
         ast::Expr::Int(string) => (int_from_parsed(string, &mut env.problems), Output::new()),
         ast::Expr::Float(string) => (float_from_parsed(string, &mut env.problems), Output::new()),
-        ast::Expr::EmptyRecord => (EmptyRecord, Output::new()),
-        ast::Expr::Str(string) => (Str(string.into()), Output::new()),
-        ast::Expr::EmptyStr => (EmptyStr, Output::new()),
-        ast::Expr::EmptyList => (EmptyList, Output::new()),
+        ast::Expr::Record(fields) => {
+            if fields.is_empty() {
+                (EmptyRecord, Output::new())
+            } else {
+                panic!("TODO canonicalize nonempty record");
+            }
+        }
+        ast::Expr::Str(string) => (Str(string.clone().into()), Output::new()),
         ast::Expr::List(elems) => {
             let mut output = Output::new();
-            let mut can_elems = Vec::with_capacity(elems.len());
 
-            for loc_elem in elems.into_iter() {
-                let (can_expr, elem_out) = canonicalize(env, scope, loc_elem);
+            if elems.is_empty() {
+                (EmptyList, output)
+            } else {
+                let mut can_elems = Vec::with_capacity(elems.len());
 
-                output.references = output.references.union(elem_out.references);
+                for loc_elem in elems.iter() {
+                    let (can_expr, elem_out) = canonicalize(env, scope, loc_elem);
 
-                can_elems.push(can_expr);
+                    output.references = output.references.union(elem_out.references);
+
+                    can_elems.push(can_expr);
+                }
+
+                // A list literal is never a tail call!
+                output.tail_call = None;
+
+                (List(can_elems), output)
             }
-
-            // A list literal is never a tail call!
-            output.tail_call = None;
-
-            (List(can_elems), output)
         }
 
         //ast::Expr::If(loc_cond, loc_true, loc_false) => {
@@ -128,86 +137,83 @@ fn canonicalize<'a>(
 
         //    (expr, output)
         //}
+        ast::Expr::Apply((loc_fn, loc_args)) => {
+            // Canonicalize the function expression and its arguments
+            let (fn_expr, mut output) = canonicalize(env, scope, loc_fn);
+            let mut args = Vec::new();
+            let mut outputs = Vec::new();
 
-        //ast::Expr::Apply(loc_fn, loc_args) => {
-        //    // Canonicalize the function expression and its arguments
-        //    let (fn_expr, mut output) = canonicalize(env, scope, *loc_fn);
-        //    let mut args = Vec::new();
-        //    let mut outputs = Vec::new();
+            for loc_arg in loc_args.iter() {
+                let (arg_expr, arg_out) = canonicalize(env, scope, loc_arg);
 
-        //    for loc_arg in loc_args {
-        //        let (arg_expr, arg_out) = canonicalize(env, scope, loc_arg);
+                args.push(arg_expr);
+                outputs.push(arg_out);
+            }
 
-        //        args.push(arg_expr);
-        //        outputs.push(arg_out);
-        //    }
+            match &fn_expr.value {
+                &Var(ref sym) => {
+                    output.references.calls.insert(sym.clone());
+                }
+                _ => (),
+            };
 
-        //    match &fn_expr.value {
-        //        &Var(ref sym) => {
-        //            output.references.calls.insert(sym.clone());
-        //        }
-        //        _ => (),
-        //    };
+            let expr = Call(Box::new(fn_expr), args);
 
-        //    let expr = Call(Box::new(fn_expr), args);
+            for arg_out in outputs {
+                output.references = output.references.union(arg_out.references);
+            }
 
-        //    for arg_out in outputs {
-        //        output.references = output.references.union(arg_out.references);
-        //    }
+            // We're not tail-calling a symbol (by name), we're tail-calling a function value.
+            output.tail_call = None;
 
-        //    // We're not tail-calling a symbol (by name), we're tail-calling a function value.
-        //    output.tail_call = None;
+            (expr, output)
+        }
+        ast::Expr::Operator((loc_left, loc_op, loc_right)) => {
+            // Canonicalize the nested expressions
+            let (left_expr, left_out) = canonicalize(env, scope, loc_left);
+            let (right_expr, mut output) = canonicalize(env, scope, loc_right);
 
-        //    (expr, output)
-        //}
+            // Incorporate both expressions into a combined Output value.
+            output.references = output.references.union(left_out.references);
 
-        //expr::Expr::Operator(loc_left, op, loc_right) => {
-        //    // Canonicalize the nested expressions
-        //    let (left_expr, left_out) = canonicalize(env, scope, *loc_left);
-        //    let (right_expr, mut output) = canonicalize(env, scope, *loc_right);
+            // The pizza operator is the only one that can be a tail call,
+            // because it's the only one that can call a function by name.
+            output.tail_call = match loc_op.value {
+                Pizza => match &right_expr.value {
+                    &Var(ref sym) => Some(sym.clone()),
+                    &Call(ref loc_boxed_expr, _) => match &loc_boxed_expr.value {
+                        Var(sym) => Some(sym.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            };
 
-        //    // Incorporate both expressions into a combined Output value.
-        //    output.references = output.references.union(left_out.references);
+            let expr = Operator(Box::new(left_expr), loc_op.clone(), Box::new(right_expr));
 
-        //    // The pizza operator is the only one that can be a tail call,
-        //    // because it's the only one that can call a function by name.
-        //    output.tail_call = match op.value {
-        //        Pizza => match &right_expr.value {
-        //            &Var(ref sym) => Some(sym.clone()),
-        //            &Call(ref loc_boxed_expr, _) => match (*loc_boxed_expr.clone()).value {
-        //                Var(sym) => Some(sym),
-        //                _ => None,
-        //            },
-        //            _ => None,
-        //        },
-        //        _ => None,
-        //    };
+            (expr, output)
+        }
+        // ast::Expr::Var(ident) => {
+        //     let mut output = Output::new();
+        //     let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
+        //         Ok(symbol) => Var(symbol),
+        //         Err(ident) => {
+        //             let loc_ident = Located {
+        //                 region: loc_expr.region.clone(),
+        //                 value: ident,
+        //             };
 
-        //    let expr = Operator(Box::new(left_expr), op, Box::new(right_expr));
+        //             env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
 
-        //    (expr, output)
-        //}
+        //             RuntimeError(UnrecognizedConstant(loc_ident))
+        //         }
+        //     };
 
-        //expr::Expr::Var(ident) => {
-        //    let mut output = Output::new();
-        //    let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
-        //        Ok(symbol) => Var(symbol),
-        //        Err(ident) => {
-        //            let loc_ident = Located {
-        //                region: loc_expr.region.clone(),
-        //                value: ident,
-        //            };
+        //     (can_expr, output)
+        // }
 
-        //            env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
-
-        //            RuntimeError(UnrecognizedConstant(loc_ident))
-        //        }
-        //    };
-
-        //    (can_expr, output)
-        //}
-
-        //expr::Expr::InterpolatedStr(pairs, suffix) => {
+        //ast::Expr::InterpolatedStr(pairs, suffix) => {
         //    let mut output = Output::new();
         //    let can_pairs: Vec<(String, Located<Expr>)> = pairs
         //        .into_iter()
@@ -248,7 +254,7 @@ fn canonicalize<'a>(
         //    (InterpolatedStr(can_pairs, suffix), output)
         //}
 
-        //expr::Expr::ApplyVariant(variant_name, opt_args) => {
+        //ast::Expr::ApplyVariant(variant_name, opt_args) => {
         //    // Canonicalize the arguments and union their references into our output.
         //    // We'll do this even if the variant name isn't recognized, since we still
         //    // want to report canonicalization problems with the variant's arguments,
@@ -289,7 +295,7 @@ fn canonicalize<'a>(
         //    (can_expr, output)
         //}
 
-        //expr::Expr::Assign(assignments, box_loc_returned) => {
+        //ast::Expr::Assign(assignments, box_loc_returned) => {
         //    // The body expression gets a new scope for canonicalization.
         //    // Shadow `scope` to make sure we don't accidentally use the original one for the
         //    // rest of this block.
@@ -544,7 +550,7 @@ fn canonicalize<'a>(
         //    }
         //}
 
-        //expr::Expr::Closure(loc_arg_patterns, box_loc_body_expr) => {
+        //ast::Expr::Closure(loc_arg_patterns, box_loc_body_expr) => {
         //    // The globally unique symbol that will refer to this closure once it gets converted
         //    // into a top-level procedure for code gen.
         //    //
@@ -617,7 +623,7 @@ fn canonicalize<'a>(
         //    (FunctionPointer(symbol), output)
         //}
 
-        //expr::Expr::Case(loc_cond, branches) => {
+        //ast::Expr::Case(loc_cond, branches) => {
         //    // Canonicalize the conditional
         //    let (can_cond, mut output) = canonicalize(env, scope, *loc_cond);
         //    let mut can_branches = Vec::with_capacity(branches.len());

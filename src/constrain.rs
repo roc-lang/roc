@@ -33,7 +33,6 @@ pub fn constrain(
         Int(_) => int_literal(subs, expected, region),
         Float(_) => float_literal(subs, expected, region),
         Str(_) => Eq(string(), expected, region),
-        EmptyStr => Eq(string(), expected, region),
         InterpolatedStr(pairs, _) => {
             let mut constraints = Vec::with_capacity(pairs.len() + 1);
 
@@ -320,7 +319,7 @@ fn empty_list(var: Variable) -> Type {
 }
 
 fn string() -> Type {
-    builtin_type("String", "String", Vec::new())
+    builtin_type("Str", "Str", Vec::new())
 }
 
 fn _num(var: Variable) -> Type {

@@ -2,7 +2,7 @@ use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::{Expr, Space};
-use parse::parser::{and, loc, map_with_arena, unexpected, unexpected_eof, Parser, State};
+use parse::parser::{and, map_with_arena, unexpected, unexpected_eof, Parser, State};
 use region::Located;
 
 /// What type of comment (if any) are we currently parsing?
@@ -13,15 +13,93 @@ enum CommentParsing {
     No,
 }
 
+/// Parses the given expression with 0 or more (spaces/comments/newlines) before and/or after it.
+/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
+/// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
+/// SpaceAfter as appropriate.
+pub fn space0_around<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
+where
+    P: Parser<'a, Located<Expr<'a>>>,
+{
+    map_with_arena(
+        and(space0(min_indent), and(parser, space0(min_indent))),
+        |arena, (spaces_before, (loc_expr, spaces_after))| {
+            if spaces_before.is_empty() {
+                if spaces_after.is_empty() {
+                    loc_expr
+                } else {
+                    Located {
+                        region: loc_expr.region,
+                        value: Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces_after),
+                    }
+                }
+            } else {
+                if spaces_after.is_empty() {
+                    Located {
+                        region: loc_expr.region,
+                        value: Expr::SpaceBefore(spaces_before, arena.alloc(loc_expr.value)),
+                    }
+                } else {
+                    let wrapped_expr = Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces_after);
+
+                    Located {
+                        region: loc_expr.region,
+                        value: Expr::SpaceBefore(spaces_before, arena.alloc(wrapped_expr)),
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// Parses the given expression with 1 or more (spaces/comments/newlines) before and/or after it.
+/// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
+/// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
+/// SpaceAfter as appropriate.
+pub fn space1_around<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
+where
+    P: Parser<'a, Located<Expr<'a>>>,
+{
+    map_with_arena(
+        and(space1(min_indent), and(parser, space1(min_indent))),
+        |arena, (spaces_before, (loc_expr, spaces_after))| {
+            if spaces_before.is_empty() {
+                if spaces_after.is_empty() {
+                    loc_expr
+                } else {
+                    Located {
+                        region: loc_expr.region,
+                        value: Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces_after),
+                    }
+                }
+            } else {
+                if spaces_after.is_empty() {
+                    Located {
+                        region: loc_expr.region,
+                        value: Expr::SpaceBefore(spaces_before, arena.alloc(loc_expr.value)),
+                    }
+                } else {
+                    let wrapped_expr = Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces_after);
+
+                    Located {
+                        region: loc_expr.region,
+                        value: Expr::SpaceBefore(spaces_before, arena.alloc(wrapped_expr)),
+                    }
+                }
+            }
+        },
+    )
+}
+
 /// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
 pub fn space0_before<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
 where
-    P: Parser<'a, Expr<'a>>,
+    P: Parser<'a, Located<Expr<'a>>>,
 {
     map_with_arena(
-        and(space0(min_indent), loc(parser)),
+        and(space0(min_indent), parser),
         |arena, (space_list, loc_expr)| {
             if space_list.is_empty() {
                 loc_expr
@@ -40,10 +118,10 @@ where
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
 pub fn space1_before<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
 where
-    P: Parser<'a, Expr<'a>>,
+    P: Parser<'a, Located<Expr<'a>>>,
 {
     map_with_arena(
-        and(space1(min_indent), loc(parser)),
+        and(space1(min_indent), parser),
         |arena, (space_list, loc_expr)| {
             if space_list.is_empty() {
                 loc_expr
@@ -62,10 +140,10 @@ where
 /// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
 pub fn space0_after<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
 where
-    P: Parser<'a, Expr<'a>>,
+    P: Parser<'a, Located<Expr<'a>>>,
 {
     map_with_arena(
-        and(space0(min_indent), loc(parser)),
+        and(space0(min_indent), parser),
         |arena, (space_list, loc_expr)| {
             if space_list.is_empty() {
                 loc_expr
@@ -84,10 +162,10 @@ where
 /// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
 pub fn space1_after<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
 where
-    P: Parser<'a, Expr<'a>>,
+    P: Parser<'a, Located<Expr<'a>>>,
 {
     map_with_arena(
-        and(space1(min_indent), loc(parser)),
+        and(space1(min_indent), parser),
         |arena, (space_list, loc_expr)| {
             if space_list.is_empty() {
                 loc_expr
@@ -286,7 +364,7 @@ fn spaces<'a>(require_at_least_one: bool, _min_indent: u16) -> impl Parser<'a, &
         }
 
         if require_at_least_one && chars_parsed == 0 {
-            Err(unexpected_eof(chars_parsed, state.attempting, state))
+            Err(unexpected_eof(0, state.attempting, state))
         } else {
             Ok((space_list.into_bump_slice(), state))
         }

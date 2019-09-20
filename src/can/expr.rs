@@ -10,7 +10,6 @@ pub enum Expr {
     // Literals
     Int(i64),
     Float(f64),
-    EmptyStr,
     Str(Box<str>),
     Char(char), // OBSOLETE
     List(Vec<Located<Expr>>),

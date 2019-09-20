@@ -53,7 +53,7 @@ mod test_parse {
                 ""
                 "#
             ),
-            EmptyStr,
+            Str(""),
         );
     }
 
@@ -236,7 +236,11 @@ mod test_parse {
 
     #[test]
     fn empty_record() {
-        assert_parses_to("{}", EmptyRecord);
+        let arena = Bump::new();
+        let expected = Record(Vec::new_in(&arena));
+        let actual = parse_with(&arena, "{}");
+
+        assert_eq!(Ok(expected), actual);
     }
 
     // OPERATORS
@@ -464,27 +468,63 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    // LISTS
+
+    #[test]
+    fn empty_list() {
+        let arena = Bump::new();
+        let elems = Vec::new_in(&arena);
+        let expected = List(elems);
+        let actual = parse_with(&arena, "[]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn packed_singleton_list() {
+        let arena = Bump::new();
+        let elems = bumpalo::vec![in &arena; Located::new(0, 0, 1, 2, Int("1"))];
+        let expected = List(elems);
+        let actual = parse_with(&arena, "[1]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn spaced_singleton_list() {
+        let arena = Bump::new();
+        let elems = bumpalo::vec![in &arena; Located::new(0, 0, 2, 3, Int("1"))];
+        let expected = List(elems);
+        let actual = parse_with(&arena, "[ 1 ]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // FIELD ACCESS
 
     #[test]
-    fn basic_field_expr() {
+    fn parenthetical_basic_field() {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
-        let expr = Var(module_parts, "rec");
-        let fields = bumpalo::vec![in &arena; "field"].into_bump_slice();
-        let expected = Field(arena.alloc(expr), fields);
+        let fields = bumpalo::vec![in &arena; "field"];
+        let expected = Field(
+            arena.alloc(Located::new(0, 0, 1, 4, Var(module_parts, "rec"))),
+            fields,
+        );
         let actual = parse_with(&arena, "(rec).field");
 
         assert_eq!(Ok(expected), actual);
     }
 
     #[test]
-    fn field_expr_qualified_var() {
+    fn parenthetical_field_qualified_var() {
         let arena = Bump::new();
         let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
-        let expr = Var(module_parts, "rec");
-        let fields = bumpalo::vec![in &arena; "field"].into_bump_slice();
-        let expected = Field(arena.alloc(expr), fields);
+        let fields = bumpalo::vec![in &arena; "field"];
+        let expected = Field(
+            arena.alloc(Located::new(0, 0, 1, 12, Var(module_parts, "rec"))),
+            fields,
+        );
         let actual = parse_with(&arena, "(One.Two.rec).field");
 
         assert_eq!(Ok(expected), actual);
@@ -520,10 +560,7 @@ mod test_parse {
         let module_parts = Vec::new_in(&arena).into_bump_slice();
         let arg = Located::new(0, 0, 5, 6, Int("1"));
         let args = bumpalo::vec![in &arena; arg];
-        let tuple = arena.alloc((
-            Located::new(0, 0, 0, 4, Var(module_parts, "whee")),
-            args.into_bump_slice(),
-        ));
+        let tuple = arena.alloc((Located::new(0, 0, 0, 4, Var(module_parts, "whee")), args));
         let expected = Apply(tuple);
         let actual = parse_with(&arena, "whee 1");
 
@@ -537,10 +574,7 @@ mod test_parse {
         let arg1 = Located::new(0, 0, 6, 8, Int("12"));
         let arg2 = Located::new(0, 0, 10, 12, Int("34"));
         let args = bumpalo::vec![in &arena; arg1, arg2];
-        let tuple = arena.alloc((
-            Located::new(0, 0, 0, 4, Var(module_parts, "whee")),
-            args.into_bump_slice(),
-        ));
+        let tuple = arena.alloc((Located::new(0, 0, 0, 4, Var(module_parts, "whee")), args));
         let expected = Apply(tuple);
         let actual = parse_with(&arena, "whee  12  34");
 
@@ -551,12 +585,9 @@ mod test_parse {
     fn parenthetical_apply() {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
-        let arg = Located::new(0, 0, 5, 6, Int("1"));
+        let arg = Located::new(0, 0, 7, 8, Int("1"));
         let args = bumpalo::vec![in &arena; arg];
-        let tuple = arena.alloc((
-            Located::new(0, 0, 0, 4, Var(module_parts, "whee")),
-            args.into_bump_slice(),
-        ));
+        let tuple = arena.alloc((Located::new(0, 0, 1, 5, Var(module_parts, "whee")), args));
         let expected = Apply(tuple);
         let actual = parse_with(&arena, "(whee) 1");
 

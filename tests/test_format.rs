@@ -9,7 +9,7 @@ extern crate roc;
 mod test_format {
     use bumpalo::Bump;
     use roc::parse;
-    use roc::parse::ast::{Attempting, Expr};
+    use roc::parse::ast::{format, Attempting, Expr};
     use roc::parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
@@ -26,7 +26,7 @@ mod test_format {
         let expected = expected.trim_end();
 
         match parse_with(&arena, input) {
-            Ok(actual) => assert_eq!(format!("{}", actual), expected),
+            Ok(actual) => assert_eq!(format(&arena, &actual, 0), expected),
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", input, error)
         }
     }

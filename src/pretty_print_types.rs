@@ -50,8 +50,8 @@ fn write_apply(
     let write_parens = use_parens && !args.is_empty();
 
     // Hardcoded type aliases
-    if module_name == "String" && type_name == "String" {
-        buf.push_str("String");
+    if module_name == "Str" && type_name == "Str" {
+        buf.push_str("Str");
     } else if module_name == "Num" && type_name == "Num" {
         let arg = args
             .into_iter()

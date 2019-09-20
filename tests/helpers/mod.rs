@@ -53,7 +53,7 @@ pub fn can_expr_with(
     let (loc_expr, output, problems, procedures) = can::canonicalize_declaration(
         home,
         name,
-        Located::new(0, 0, 0, 0, expr),
+        &Located::new(0, 0, 0, 0, expr),
         declared_idents,
         declared_variants,
     );

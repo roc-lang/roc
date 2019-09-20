@@ -1,8 +1,8 @@
 use bumpalo::collections::vec::Vec;
+use bumpalo::collections::String;
 use bumpalo::Bump;
 use operator::Operator;
 use region::{Loc, Region};
-use std::fmt::{self, Display, Formatter};
 
 pub type VariantName = str;
 
@@ -30,13 +30,20 @@ pub enum Expr<'a> {
     BinaryInt(&'a str),
 
     // String Literals
-    EmptyStr,
     Str(&'a str),
     BlockStr(&'a [&'a str]),
+    /// e.g. `(expr).foo.bar`
+    Field(&'a Loc<Expr<'a>>, Vec<'a, &'a str>),
+    /// e.g. `Foo.Bar.baz.qux`
+    QualifiedField(&'a [&'a str], &'a [&'a str]),
+    /// e.g. `.foo`
+    AccessorFunction(&'a str),
 
-    // List literals
-    EmptyList,
+    // Collection Literals
     List(Vec<'a, Loc<Expr<'a>>>),
+    Record(Vec<'a, Loc<Expr<'a>>>),
+    AssignField(Loc<&'a str>, &'a Loc<Expr<'a>>),
+
     // Lookups
     Var(&'a [&'a str], &'a str),
     Variant(&'a [&'a str], &'a str),
@@ -50,17 +57,8 @@ pub enum Expr<'a> {
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a variant by name, do Apply(Variant(...), ...)
-    Apply(&'a (Loc<Expr<'a>>, &'a [Loc<Expr<'a>>])),
+    Apply(&'a (Loc<Expr<'a>>, Vec<'a, Loc<Expr<'a>>>)),
     Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
-
-    // Product Types
-    EmptyRecord,
-    /// e.g. `(expr).foo.bar`
-    Field(&'a Expr<'a>, &'a [&'a str]),
-    /// e.g. `Foo.Bar.baz.qux`
-    QualifiedField(&'a [&'a str], &'a [&'a str]),
-    /// e.g. `.foo`
-    AccessorFunction(&'a str),
 
     // Conditionals
     If(&'a Loc<Expr<'a>>),
@@ -103,7 +101,7 @@ pub enum Pattern<'a> {
 
 #[test]
 fn expr_size() {
-    // The size of the Expr data structure should be exactly 5 machine words.
+    // The size of the Expr data structure should be exactly 6 machine words.
     // This test helps avoid regressions wich accidentally increase its size!
     assert_eq!(
         std::mem::size_of::<Expr>(),
@@ -131,7 +129,7 @@ fn expr_size() {
         // It's also possible that 4 machine words might yield better performance
         // than 2, due to more data structures being inlinable, and therefore
         // having fewer pointers to chase. This seems worth investigating as well.
-        std::mem::size_of::<usize>() * 5
+        std::mem::size_of::<usize>() * 6
     );
 }
 
@@ -175,6 +173,7 @@ pub enum Attempting {
     Keyword,
     StringLiteral,
     RecordLiteral,
+    RecordFieldLabel,
     InterpolatedString,
     NumberLiteral,
     UnicodeEscape,
@@ -221,21 +220,52 @@ impl<'a> Expr<'a> {
     }
 }
 
-impl<'a> Display for Expr<'a> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use self::Expr::*;
+pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, _indent: u16) -> String<'a> {
+    use self::Expr::*;
 
-        match self {
-            EmptyStr => write!(f, "\"\""),
-            Str(string) => write!(f, "\"{}\"", string),
-            BlockStr(lines) => write!(f, "\"\"\"{}\"\"\"", lines.join("\n")),
-            Int(string) => string.fmt(f),
-            Float(string) => string.fmt(f),
-            HexInt(string) => write!(f, "0x{}", string),
-            BinaryInt(string) => write!(f, "0b{}", string),
-            OctalInt(string) => write!(f, "0o{}", string),
-            EmptyRecord => write!(f, "{}", "{}"),
-            other => panic!("TODO implement Display for AST variant {:?}", other),
+    let mut buf = String::new_in(arena);
+
+    match expr {
+        Str(string) => {
+            buf.push('"');
+            buf.push_str(string);
+            buf.push('"');
         }
+        BlockStr(lines) => {
+            buf.push_str("\"\"\"");
+            for line in lines.iter() {
+                buf.push_str(line);
+            }
+            buf.push_str("\"\"\"");
+        }
+        Int(string) => buf.push_str(string),
+        Float(string) => buf.push_str(string),
+        HexInt(string) => {
+            buf.push('0');
+            buf.push('x');
+            buf.push_str(string);
+        }
+        BinaryInt(string) => {
+            buf.push('0');
+            buf.push('b');
+            buf.push_str(string);
+        }
+        OctalInt(string) => {
+            buf.push('0');
+            buf.push('o');
+            buf.push_str(string);
+        }
+        Record(fields) => {
+            buf.push('{');
+
+            for _field in fields {
+                panic!("TODO implement Display for record fields.");
+            }
+
+            buf.push('}');
+        }
+        other => panic!("TODO implement Display for AST variant {:?}", other),
     }
+
+    buf
 }

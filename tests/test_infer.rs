@@ -68,155 +68,155 @@ mod test_infer {
                 "type inference!"
             "#
             ),
-            "String",
+            "Str",
         );
     }
 
-    // #[test]
-    // fn empty_string() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             ""
-    //         "#
-    //         ),
-    //         "String",
-    //     );
-    // }
+    #[test]
+    fn empty_string() {
+        infer_eq(
+            indoc!(
+                r#"
+                ""
+            "#
+            ),
+            "Str",
+        );
+    }
 
-    // // LIST
+    // LIST
 
-    // #[test]
-    // fn empty_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             []
-    //         "#
-    //         ),
-    //         "List *",
-    //     );
-    // }
+    #[test]
+    fn empty_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                []
+            "#
+            ),
+            "List *",
+        );
+    }
 
-    // #[test]
-    // fn list_of_lists() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [[]]
-    //         "#
-    //         ),
-    //         "List (List *)",
-    //     );
-    // }
+    #[test]
+    fn list_of_lists() {
+        infer_eq(
+            indoc!(
+                r#"
+                [[]]
+            "#
+            ),
+            "List (List *)",
+        );
+    }
 
-    // #[test]
-    // fn triple_nested_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [[[]]]
-    //         "#
-    //         ),
-    //         "List (List (List *))",
-    //     );
-    // }
+    #[test]
+    fn triple_nested_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                [[[]]]
+            "#
+            ),
+            "List (List (List *))",
+        );
+    }
 
-    // #[test]
-    // fn nested_empty_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [ [], [ [] ] ]
-    //         "#
-    //         ),
-    //         "List (List (List *))",
-    //     );
-    // }
+    #[test]
+    fn nested_empty_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                [ [], [ [] ] ]
+            "#
+            ),
+            "List (List (List *))",
+        );
+    }
 
-    // #[test]
-    // fn list_of_one_int() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [42]
-    //         "#
-    //         ),
-    //         "List Int",
-    //     );
-    // }
+    #[test]
+    fn list_of_one_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                [42]
+            "#
+            ),
+            "List Int",
+        );
+    }
 
-    // #[test]
-    // fn triple_nested_int_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [[[ 5 ]]]
-    //         "#
-    //         ),
-    //         "List (List (List Int))",
-    //     );
-    // }
+    #[test]
+    fn triple_nested_int_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                [[[ 5 ]]]
+            "#
+            ),
+            "List (List (List Int))",
+        );
+    }
 
-    // #[test]
-    // fn list_of_ints() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [ 1, 2, 3 ]
-    //         "#
-    //         ),
-    //         "List Int",
-    //     );
-    // }
+    #[test]
+    fn list_of_ints() {
+        infer_eq(
+            indoc!(
+                r#"
+                [ 1, 2, 3 ]
+            "#
+            ),
+            "List Int",
+        );
+    }
 
-    // #[test]
-    // fn nested_list_of_ints() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [ [ 1 ], [ 2, 3 ] ]
-    //         "#
-    //         ),
-    //         "List (List Int)",
-    //     );
-    // }
+    #[test]
+    fn nested_list_of_ints() {
+        infer_eq(
+            indoc!(
+                r#"
+                [ [ 1 ], [ 2, 3 ] ]
+            "#
+            ),
+            "List (List Int)",
+        );
+    }
 
-    // #[test]
-    // fn list_of_one_string() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [ "cowabunga" ]
-    //         "#
-    //         ),
-    //         "List String",
-    //     );
-    // }
+    #[test]
+    fn list_of_one_string() {
+        infer_eq(
+            indoc!(
+                r#"
+                [ "cowabunga" ]
+            "#
+            ),
+            "List Str",
+        );
+    }
 
-    // #[test]
-    // fn triple_nested_string_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [[[ "foo" ]]]
-    //         "#
-    //         ),
-    //         "List (List (List String))",
-    //     );
-    // }
+    #[test]
+    fn triple_nested_string_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                [[[ "foo" ]]]
+            "#
+            ),
+            "List (List (List Str))",
+        );
+    }
 
-    // #[test]
-    // fn list_of_strings() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [ "foo", "bar" ]
-    //         "#
-    //         ),
-    //         "List String",
-    //     );
-    // }
+    #[test]
+    fn list_of_strings() {
+        infer_eq(
+            indoc!(
+                r#"
+                [ "foo", "bar" ]
+            "#
+            ),
+            "List Str",
+        );
+    }
 
     // // INTERPOLATED STRING
 
@@ -230,47 +230,47 @@ mod test_infer {
     //             "type inference is \(whatItIs)!"
     //         "#
     //         ),
-    //         "String",
+    //         "Str",
     //     );
     // }
 
-    // // LIST MISMATCH
+    // LIST MISMATCH
 
-    // #[test]
-    // fn mismatch_heterogeneous_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [ "foo", 5 ]
-    //         "#
-    //         ),
-    //         "List <type mismatch>",
-    //     );
-    // }
+    #[test]
+    fn mismatch_heterogeneous_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                [ "foo", 5 ]
+            "#
+            ),
+            "List <type mismatch>",
+        );
+    }
 
-    // #[test]
-    // fn mismatch_heterogeneous_nested_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [ [ "foo", 5 ] ]
-    //         "#
-    //         ),
-    //         "List (List <type mismatch>)",
-    //     );
-    // }
+    #[test]
+    fn mismatch_heterogeneous_nested_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                [ [ "foo", 5 ] ]
+            "#
+            ),
+            "List (List <type mismatch>)",
+        );
+    }
 
-    // #[test]
-    // fn mismatch_heterogeneous_nested_empty_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             [ [ 1 ], [ [] ] ]
-    //         "#
-    //         ),
-    //         "List (List <type mismatch>)",
-    //     );
-    // }
+    #[test]
+    fn mismatch_heterogeneous_nested_empty_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                [ [ 1 ], [ [] ] ]
+            "#
+            ),
+            "List (List <type mismatch>)",
+        );
+    }
 
     // // CLOSURE
 
@@ -336,7 +336,7 @@ mod test_infer {
     //             str
     //         "#
     //         ),
-    //         "String",
+    //         "Str",
     //     );
     // }
 
@@ -410,7 +410,7 @@ mod test_infer {
     //             b
     //         "#
     //         ),
-    //         "String",
+    //         "Str",
     //     );
     // }
 
@@ -462,43 +462,43 @@ mod test_infer {
     //     );
     // }
 
-    // // TODO type annotations
-    // // TODO fix identity inference
-    // // TODO BoundTypeVariables
-    // // TODO conditionals
+    // TODO type annotations
+    // TODO fix identity inference
+    // TODO BoundTypeVariables
+    // TODO conditionals
 
-    // //     #[test]
-    // //     fn indirect_always() {
-    // //         infer_eq(
-    // //             indoc!(r#"
-    // //                 always = \val -> (\_ -> val)
-    // //                 alwaysFoo = always "foo"
+    //     #[test]
+    //     fn indirect_always() {
+    //         infer_eq(
+    //             indoc!(r#"
+    //                 always = \val -> (\_ -> val)
+    //                 alwaysFoo = always "foo"
 
-    // //                 alwaysFoo 42
-    // //             "#),
-    // //             "String"
-    // //         );
-    // //     }
+    //                 alwaysFoo 42
+    //             "#),
+    //             "Str"
+    //         );
+    //     }
 
-    // //     #[test]
-    // //     fn identity() {
-    // //         infer_eq(
-    // //             indoc!(r#"
-    // //                 \val -> val
-    // //             "#),
-    // //             "a -> a"
-    // //         );
-    // //     }
+    //     #[test]
+    //     fn identity() {
+    //         infer_eq(
+    //             indoc!(r#"
+    //                 \val -> val
+    //             "#),
+    //             "a -> a"
+    //         );
+    //     }
 
-    // //     #[test]
-    // //     fn always_function() {
-    // //         infer_eq(
-    // //             indoc!(r#"
-    // //                 \val -> \_ -> val
-    // //             "#),
-    // //             "a -> (* -> a)"
-    // //         );
-    // //     }
+    //     #[test]
+    //     fn always_function() {
+    //         infer_eq(
+    //             indoc!(r#"
+    //                 \val -> \_ -> val
+    //             "#),
+    //             "a -> (* -> a)"
+    //         );
+    //     }
 
     // // OPERATORS
 

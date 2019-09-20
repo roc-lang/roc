@@ -392,22 +392,39 @@ pub fn char<'a>(expected: char) -> impl Parser<'a, ()> {
     }
 }
 
-/// A string with no newlines in it.
-pub fn string<'a>(string: &'static str) -> impl Parser<'a, ()> {
+/// A hardcoded keyword string with no newlines in it.
+pub fn string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
     // We can't have newlines because we don't attempt to advance the row
     // in the state, only the column.
-    debug_assert!(!string.contains("\n"));
+    debug_assert!(!keyword.contains("\n"));
 
     move |_arena, state: State<'a>| {
         let input = state.input;
-        let len = string.len();
+        let len = keyword.len();
 
         // TODO do this comparison in one SIMD instruction (on supported systems)
         match input.get(0..len) {
-            Some(next_str) if next_str == string => Ok(((), state.advance_without_indenting(len)?)),
+            Some(next_str) if next_str == keyword => {
+                Ok(((), state.advance_without_indenting(len)?))
+            }
             _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
         }
     }
+}
+
+/// Parse everything between two braces (e.g. parentheses), skipping both braces
+/// and keeping only whatever was parsed in between them.
+pub fn between<'a, P, OpeningBrace, ClosingBrace, Val>(
+    opening_brace: OpeningBrace,
+    parser: P,
+    closing_brace: ClosingBrace,
+) -> impl Parser<'a, Val>
+where
+    OpeningBrace: Parser<'a, ()>,
+    P: Parser<'a, Val>,
+    ClosingBrace: Parser<'a, ()>,
+{
+    skip_first(opening_brace, skip_second(parser, closing_brace))
 }
 
 /// Parse zero or more values separated by a delimiter (e.g. a comma) whose
@@ -417,17 +434,45 @@ where
     D: Parser<'a, ()>,
     P: Parser<'a, Val>,
 {
-    zero_or_more(skip_first(delimiter, parser))
-}
+    move |arena, state: State<'a>| {
+        let original_attempting = state.attempting;
 
-/// Parse one or more values separated by a delimiter (e.g. a comma) whose
-/// values are discarded
-pub fn sep_by1<'a, P, D, Val>(delimiter: D, parser: P) -> impl Parser<'a, Vec<'a, Val>>
-where
-    D: Parser<'a, ()>,
-    P: Parser<'a, Val>,
-{
-    one_or_more(skip_first(delimiter, parser))
+        match parser.parse(arena, state) {
+            Ok((first_output, next_state)) => {
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
+
+                buf.push(first_output);
+
+                loop {
+                    match delimiter.parse(arena, state) {
+                        Ok(((), next_state)) => {
+                            // If the delimiter passed, check the element parser.
+                            match parser.parse(arena, next_state) {
+                                Ok((next_output, next_state)) => {
+                                    state = next_state;
+                                    buf.push(next_output);
+                                }
+                                Err((fail, state)) => {
+                                    // If the delimiter parsed, but the following
+                                    // element did not, that's a fatal error.
+                                    return Err((
+                                        Fail {
+                                            attempting: original_attempting,
+                                            ..fail
+                                        },
+                                        state,
+                                    ));
+                                }
+                            }
+                        }
+                        Err((_, old_state)) => return Ok((buf, old_state)),
+                    }
+                }
+            }
+            Err((_, new_state)) => return Ok((Vec::new_in(arena), new_state)),
+        }
+    }
 }
 
 pub fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
@@ -458,22 +503,24 @@ where
     P2: Parser<'a, B>,
 {
     move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
+        // We have to clone this because if the first parser passes and then
+        // the second one fails, we need to revert back to the original state.
+        let original_state = state.clone();
 
         match p1.parse(arena, state) {
             Ok((out1, state)) => match p2.parse(arena, state) {
                 Ok((out2, state)) => Ok(((out1, out2), state)),
-                Err((fail, state)) => Err((
+                Err((fail, _)) => Err((
                     Fail {
-                        attempting: original_attempting,
+                        attempting: original_state.attempting,
                         ..fail
                     },
-                    state,
+                    original_state,
                 )),
             },
             Err((fail, state)) => Err((
                 Fail {
-                    attempting: original_attempting,
+                    attempting: original_state.attempting,
                     ..fail
                 },
                 state,
@@ -518,6 +565,38 @@ where
         match p1.parse(arena, state) {
             Ok((_, state)) => match p2.parse(arena, state) {
                 Ok((out2, state)) => Ok((out2, state)),
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_attempting,
+                        ..fail
+                    },
+                    state,
+                )),
+            },
+            Err((fail, state)) => Err((
+                Fail {
+                    attempting: original_attempting,
+                    ..fail
+                },
+                state,
+            )),
+        }
+    }
+}
+
+/// If the first one parses, parse the second one; if it also parses, use the
+/// output from the first one.
+pub fn skip_second<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, B>,
+{
+    move |arena: &'a Bump, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match p1.parse(arena, state) {
+            Ok((out1, state)) => match p2.parse(arena, state) {
+                Ok((_, state)) => Ok((out1, state)),
                 Err((fail, state)) => Err((
                     Fail {
                         attempting: original_attempting,
