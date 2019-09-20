@@ -335,7 +335,7 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
         // Idents must start with a lowercase letter.
         let first_letter = match chars.next() {
             Some(ch) => {
-                if ch.is_alphabetic() && ch.is_lowercase() {
+                if ch.is_lowercase() {
                     ch
                 } else {
                     return Err(unexpected(ch, 0, state, Attempting::RecordFieldLabel));
