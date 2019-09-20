@@ -12,14 +12,14 @@ use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
-use parse::ast::{Attempting, Expr};
+use parse::ast::{Attempting, Expr, Spaceable};
 use parse::blankspace::{space0, space0_around, space0_before, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, one_of4, one_of8, one_or_more,
-    optional, sep_by0, skip_first, skip_second, string, unexpected, unexpected_eof, Either,
-    ParseResult, Parser, State,
+    and, attempt, between, char, either, loc, map, map_with_arena, one_of2, one_of4, one_of8,
+    one_or_more, optional, sep_by0, skip_first, skip_second, string, unexpected, unexpected_eof,
+    Either, ParseResult, Parser, State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -75,7 +75,9 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
                     loc_expr1
                 } else {
                     // Attach the spaces retroactively to the expression preceding the operator.
-                    Expr::with_spaces_after(arena, loc_expr1, spaces_before_op)
+                    arena
+                        .alloc(loc_expr1.value)
+                        .with_spaces_after(spaces_before_op, loc_expr1.region)
                 };
                 let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
 
@@ -113,7 +115,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                 // as if there were any args they'd have consumed it anyway
                 // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
                 either(
-                    one_or_more(skip_first(char('.'), field_label())),
+                    one_or_more(skip_first(char('.'), unqualified_ident())),
                     and(space0(min_indent), either(char('='), char(':'))),
                 ),
             )),
@@ -275,7 +277,7 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     let field = map_with_arena(
         and(
-            loc(skip_second(field_label(), char(':'))),
+            loc(skip_second(unqualified_ident(), char(':'))),
             space0_before(
                 loc(move |arena, state| parse_expr(min_indent, arena, state)),
                 min_indent,
@@ -288,8 +290,11 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     attempt(Attempting::List, map(fields, Expr::Record))
 }
 
-/// A record field, e.g. "email" in `.email` or in `email:`
-pub fn field_label<'a>() -> impl Parser<'a, &'a str> {
+/// This could be:
+///
+/// * A record field, e.g. "email" in `.email` or in `email:`
+/// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
+pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
     move |arena, state: State<'a>| {
         let mut chars = state.input.chars();
 

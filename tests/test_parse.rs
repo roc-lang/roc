@@ -19,7 +19,7 @@ mod test_parse {
     use helpers::parse_with;
     use roc::operator::Operator::*;
     use roc::parse::ast::Expr::{self, *};
-    use roc::parse::ast::{Attempting, Space};
+    use roc::parse::ast::{Attempting, Space, Spaceable};
     use roc::parse::parser::{Fail, FailReason};
     use roc::region::{Located, Region};
     use std::{f64, i64};
@@ -294,10 +294,9 @@ mod test_parse {
     #[test]
     fn newline_after_op() {
         let arena = Bump::new();
-        let spaced_int = SpaceBefore(
-            bumpalo::vec![in &arena; Space::Newline].into_bump_slice(),
-            arena.alloc(Int("4")),
-        );
+        let spaced_int = arena
+            .alloc(Int("4"))
+            .before(bumpalo::vec![in &arena; Space::Newline].into_bump_slice());
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Int("3")),
             Located::new(0, 0, 3, 4, Star),
@@ -312,10 +311,9 @@ mod test_parse {
     #[test]
     fn comment_before_op() {
         let arena = Bump::new();
-        let spaced_int = SpaceAfter(
-            arena.alloc(Int("3")),
-            bumpalo::vec![in &arena; Space::LineComment(" test!")].into_bump_slice(),
-        );
+        let spaced_int = arena
+            .alloc(Int("3"))
+            .after(bumpalo::vec![in &arena; Space::LineComment(" test!")].into_bump_slice());
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Plus),
@@ -330,10 +328,9 @@ mod test_parse {
     #[test]
     fn comment_after_op() {
         let arena = Bump::new();
-        let spaced_int = SpaceBefore(
-            bumpalo::vec![in &arena; Space::LineComment(" test!")].into_bump_slice(),
-            arena.alloc(Int("92")),
-        );
+        let spaced_int = arena
+            .alloc(Int("92"))
+            .before(bumpalo::vec![in &arena; Space::LineComment(" test!")].into_bump_slice());
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 2, Int("12")),
             Located::new(0, 0, 4, 5, Star),
@@ -348,14 +345,12 @@ mod test_parse {
     #[test]
     fn ops_with_newlines() {
         let arena = Bump::new();
-        let spaced_int1 = SpaceAfter(
-            arena.alloc(Int("3")),
-            bumpalo::vec![in &arena; Space::Newline].into_bump_slice(),
-        );
-        let spaced_int2 = SpaceBefore(
-            bumpalo::vec![in &arena; Space::Newline, Space::Newline].into_bump_slice(),
-            arena.alloc(Int("4")),
-        );
+        let spaced_int1 = arena
+            .alloc(Int("3"))
+            .after(bumpalo::vec![in &arena; Space::Newline].into_bump_slice());
+        let spaced_int2 = arena
+            .alloc(Int("4"))
+            .before(bumpalo::vec![in &arena; Space::Newline, Space::Newline].into_bump_slice());
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int1),
             Located::new(1, 1, 0, 1, Plus),

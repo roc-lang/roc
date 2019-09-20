@@ -68,7 +68,7 @@ pub enum Expr<'a> {
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a [Space<'a>], &'a Expr<'a>),
+    SpaceBefore(&'a Expr<'a>, &'a [Space<'a>]),
     SpaceAfter(&'a Expr<'a>, &'a [Space<'a>]),
 
     // Problems
@@ -97,6 +97,53 @@ pub enum Pattern<'a> {
     StringLiteral(&'a str),
     EmptyRecordLiteral,
     Underscore,
+
+    // Space
+    SpaceBefore(&'a Pattern<'a>, &'a [Space<'a>]),
+    SpaceAfter(&'a Pattern<'a>, &'a [Space<'a>]),
+}
+
+pub trait Spaceable<'a> {
+    fn before(&'a self, &'a [Space<'a>]) -> Self;
+    fn after(&'a self, &'a [Space<'a>]) -> Self;
+
+    fn with_spaces_before(&'a self, spaces: &'a [Space<'a>], region: Region) -> Loc<Self>
+    where
+        Self: Sized,
+    {
+        Loc {
+            region,
+            value: self.before(spaces),
+        }
+    }
+
+    fn with_spaces_after(&'a self, spaces: &'a [Space<'a>], region: Region) -> Loc<Self>
+    where
+        Self: Sized,
+    {
+        Loc {
+            region,
+            value: self.after(spaces),
+        }
+    }
+}
+
+impl<'a> Spaceable<'a> for Expr<'a> {
+    fn before(&'a self, spaces: &'a [Space<'a>]) -> Self {
+        Expr::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [Space<'a>]) -> Self {
+        Expr::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for Pattern<'a> {
+    fn before(&'a self, spaces: &'a [Space<'a>]) -> Self {
+        Pattern::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [Space<'a>]) -> Self {
+        Pattern::SpaceAfter(self, spaces)
+    }
 }
 
 #[test]
@@ -135,11 +182,8 @@ fn expr_size() {
 
 #[test]
 fn pattern_size() {
-    // The size of the Pattern data structure should be exactly 3 machine words.
+    // The size of the Pattern data structure should be exactly 4 machine words.
     // This test helps avoid regressions wich accidentally increase its size!
-    //
-    // Worth noting that going up to 4 machine words is probably not a big deal;
-    // an 8-byte cache line will only fit 2 of these regardless.
     assert_eq!(
         std::mem::size_of::<Pattern>(),
         // TODO [move this comment to an issue] We should be able to get this
@@ -161,7 +205,7 @@ fn pattern_size() {
         // better performance, due to more data structures being inlinable,
         // and therefore having fewer pointers to chase. This seems worth
         // investigating as well.
-        std::mem::size_of::<usize>() * 3
+        std::mem::size_of::<usize>() * 4
     );
 }
 
@@ -195,28 +239,6 @@ impl<'a> Expr<'a> {
             region,
             value: self,
         }
-    }
-
-    pub fn with_spaces_before(
-        arena: &'a Bump,
-        spaces: &'a [Space<'a>],
-        loc_expr: Loc<Expr<'a>>,
-    ) -> Loc<Self> {
-        let region = loc_expr.region;
-        let value = Expr::SpaceBefore(spaces, arena.alloc(loc_expr.value));
-
-        Loc { region, value }
-    }
-
-    pub fn with_spaces_after(
-        arena: &'a Bump,
-        loc_expr: Loc<Expr<'a>>,
-        spaces: &'a [Space<'a>],
-    ) -> Loc<Self> {
-        let region = loc_expr.region;
-        let value = Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces);
-
-        Loc { region, value }
     }
 }
 

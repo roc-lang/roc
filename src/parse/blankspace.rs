@@ -1,7 +1,7 @@
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use parse::ast::{Expr, Space};
+use parse::ast::{Space, Spaceable};
 use parse::parser::{and, map_with_arena, unexpected, unexpected_eof, Parser, State};
 use region::Located;
 
@@ -17,35 +17,37 @@ enum CommentParsing {
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
 /// SpaceAfter as appropriate.
-pub fn space0_around<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
+pub fn space0_around<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
 where
-    P: Parser<'a, Located<Expr<'a>>>,
+    S: Spaceable<'a>,
+    S: 'a,
+    S: Sized,
+    P: Parser<'a, Located<S>>,
 {
     map_with_arena(
         and(space0(min_indent), and(parser, space0(min_indent))),
-        |arena, (spaces_before, (loc_expr, spaces_after))| {
+        |arena, (spaces_before, (loc_val, spaces_after))| {
             if spaces_before.is_empty() {
                 if spaces_after.is_empty() {
-                    loc_expr
+                    loc_val
                 } else {
-                    Located {
-                        region: loc_expr.region,
-                        value: Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces_after),
-                    }
+                    arena
+                        .alloc(loc_val.value)
+                        .with_spaces_after(spaces_after, loc_val.region)
                 }
             } else {
                 if spaces_after.is_empty() {
-                    Located {
-                        region: loc_expr.region,
-                        value: Expr::SpaceBefore(spaces_before, arena.alloc(loc_expr.value)),
-                    }
+                    arena
+                        .alloc(loc_val.value)
+                        .with_spaces_before(spaces_before, loc_val.region)
                 } else {
-                    let wrapped_expr = Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces_after);
+                    let wrapped_expr = arena
+                        .alloc(loc_val.value)
+                        .with_spaces_after(spaces_after, loc_val.region);
 
-                    Located {
-                        region: loc_expr.region,
-                        value: Expr::SpaceBefore(spaces_before, arena.alloc(wrapped_expr)),
-                    }
+                    arena
+                        .alloc(wrapped_expr.value)
+                        .with_spaces_before(spaces_before, wrapped_expr.region)
                 }
             }
         },
@@ -56,9 +58,11 @@ where
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
 /// SpaceAfter as appropriate.
-pub fn space1_around<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
+pub fn space1_around<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
 where
-    P: Parser<'a, Located<Expr<'a>>>,
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>>,
 {
     map_with_arena(
         and(space1(min_indent), and(parser, space1(min_indent))),
@@ -67,24 +71,23 @@ where
                 if spaces_after.is_empty() {
                     loc_expr
                 } else {
-                    Located {
-                        region: loc_expr.region,
-                        value: Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces_after),
-                    }
+                    arena
+                        .alloc(loc_expr.value)
+                        .with_spaces_after(spaces_after, loc_expr.region)
                 }
             } else {
                 if spaces_after.is_empty() {
-                    Located {
-                        region: loc_expr.region,
-                        value: Expr::SpaceBefore(spaces_before, arena.alloc(loc_expr.value)),
-                    }
+                    arena
+                        .alloc(loc_expr.value)
+                        .with_spaces_before(spaces_before, loc_expr.region)
                 } else {
-                    let wrapped_expr = Expr::SpaceAfter(arena.alloc(loc_expr.value), spaces_after);
+                    let loc_wrapped_expr = arena
+                        .alloc(loc_expr.value)
+                        .with_spaces_after(spaces_after, loc_expr.region);
 
-                    Located {
-                        region: loc_expr.region,
-                        value: Expr::SpaceBefore(spaces_before, arena.alloc(wrapped_expr)),
-                    }
+                    arena
+                        .alloc(loc_wrapped_expr.value)
+                        .with_spaces_before(spaces_before, loc_wrapped_expr.region)
                 }
             }
         },
@@ -94,9 +97,11 @@ where
 /// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
-pub fn space0_before<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
+pub fn space0_before<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
 where
-    P: Parser<'a, Located<Expr<'a>>>,
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>>,
 {
     map_with_arena(
         and(space0(min_indent), parser),
@@ -104,10 +109,9 @@ where
             if space_list.is_empty() {
                 loc_expr
             } else {
-                Located {
-                    region: loc_expr.region,
-                    value: Expr::SpaceBefore(space_list, arena.alloc(loc_expr.value)),
-                }
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_before(space_list, loc_expr.region)
             }
         },
     )
@@ -116,9 +120,11 @@ where
 /// Parses the given expression with 1 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceBefore if there were any newlines or comments found.
-pub fn space1_before<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
+pub fn space1_before<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
 where
-    P: Parser<'a, Located<Expr<'a>>>,
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>>,
 {
     map_with_arena(
         and(space1(min_indent), parser),
@@ -126,10 +132,9 @@ where
             if space_list.is_empty() {
                 loc_expr
             } else {
-                Located {
-                    region: loc_expr.region,
-                    value: Expr::SpaceBefore(space_list, arena.alloc(loc_expr.value)),
-                }
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_before(space_list, loc_expr.region)
             }
         },
     )
@@ -138,9 +143,11 @@ where
 /// Parses the given expression with 0 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
-pub fn space0_after<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
+pub fn space0_after<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
 where
-    P: Parser<'a, Located<Expr<'a>>>,
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>>,
 {
     map_with_arena(
         and(space0(min_indent), parser),
@@ -148,10 +155,9 @@ where
             if space_list.is_empty() {
                 loc_expr
             } else {
-                Located {
-                    region: loc_expr.region,
-                    value: Expr::SpaceAfter(arena.alloc(loc_expr.value), space_list),
-                }
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_after(space_list, loc_expr.region)
             }
         },
     )
@@ -160,9 +166,11 @@ where
 /// Parses the given expression with 1 or more (spaces/comments/newlines) after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// The Expr will be wrapped in a SpaceAfter if there were any newlines or comments found.
-pub fn space1_after<'a, P>(parser: P, min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>>
+pub fn space1_after<'a, P, S>(parser: P, min_indent: u16) -> impl Parser<'a, Located<S>>
 where
-    P: Parser<'a, Located<Expr<'a>>>,
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>>,
 {
     map_with_arena(
         and(space1(min_indent), parser),
@@ -170,10 +178,9 @@ where
             if space_list.is_empty() {
                 loc_expr
             } else {
-                Located {
-                    region: loc_expr.region,
-                    value: Expr::SpaceAfter(arena.alloc(loc_expr.value), space_list),
-                }
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_after(space_list, loc_expr.region)
             }
         },
     )
