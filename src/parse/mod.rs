@@ -359,13 +359,23 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     let field = map_with_arena(
         and(
-            loc(skip_second(unqualified_ident(), char(':'))),
-            space0_before(
-                loc(move |arena, state| parse_expr(min_indent, arena, state)),
-                min_indent,
-            ),
+            // You must have a field name, e.g. "email"
+            loc(unqualified_ident()),
+            // Having a value is optional; both `{ email }` and `{ email: blah }` work
+            optional(skip_first(
+                char(':'),
+                space0_before(
+                    loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                    min_indent,
+                ),
+            )),
         ),
-        |arena, (label, loc_expr)| Expr::AssignField(label, arena.alloc(loc_expr)),
+        |arena, (label, opt_loc_expr)| match opt_loc_expr {
+            Some(loc_expr) => Expr::AssignField(label, arena.alloc(loc_expr)),
+            // If no value was provided, record it as a Var.
+            // Canonicalize will know what to do with a Var later.
+            None => Expr::Var(&[], label.value),
+        },
     );
     let fields = collection(char('{'), loc(field), char(','), char('}'), min_indent);
 
