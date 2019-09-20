@@ -461,6 +461,7 @@ pub fn collection<'a, Elem, OpeningBrace, ClosingBrace, Delimiter, S>(
 where
     OpeningBrace: Parser<'a, ()>,
     Elem: Parser<'a, Located<S>>,
+    Elem: 'a,
     Delimiter: Parser<'a, ()>,
     S: Spaceable<'a>,
     S: 'a,

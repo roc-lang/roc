@@ -1,4 +1,4 @@
-#![type_length_limit = "16777216"]
+#![type_length_limit = "20932125"]
 
 pub mod can;
 pub mod collections;

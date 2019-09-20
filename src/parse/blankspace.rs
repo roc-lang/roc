@@ -23,6 +23,7 @@ where
     S: 'a,
     S: Sized,
     P: Parser<'a, Located<S>>,
+    P: 'a,
 {
     map_with_arena(
         and(space0(min_indent), and(parser, space0(min_indent))),
@@ -63,6 +64,7 @@ where
     S: Spaceable<'a>,
     S: 'a,
     P: Parser<'a, Located<S>>,
+    P: 'a,
 {
     map_with_arena(
         and(space1(min_indent), and(parser, space1(min_indent))),
@@ -102,6 +104,7 @@ where
     S: Spaceable<'a>,
     S: 'a,
     P: Parser<'a, Located<S>>,
+    P: 'a,
 {
     map_with_arena(
         and(space0(min_indent), parser),
@@ -125,6 +128,7 @@ where
     S: Spaceable<'a>,
     S: 'a,
     P: Parser<'a, Located<S>>,
+    P: 'a,
 {
     map_with_arena(
         and(space1(min_indent), parser),
@@ -148,6 +152,7 @@ where
     S: Spaceable<'a>,
     S: 'a,
     P: Parser<'a, Located<S>>,
+    P: 'a,
 {
     map_with_arena(
         and(space0(min_indent), parser),
@@ -171,6 +176,7 @@ where
     S: Spaceable<'a>,
     S: 'a,
     P: Parser<'a, Located<S>>,
+    P: 'a,
 {
     map_with_arena(
         and(space1(min_indent), parser),
