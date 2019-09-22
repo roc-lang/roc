@@ -4,8 +4,11 @@ use bumpalo::Bump;
 use operator::Operator;
 use region::{Loc, Region};
 
-pub type VariantName = str;
-
+#[derive(Clone, Debug, PartialEq)]
+pub enum Module<'a> {
+    Api(&'a [&'a str], &'a str, Vec<'a, Def<'a>>),
+    App(&'a [&'a str], &'a str),
+}
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -51,8 +54,8 @@ pub enum Expr<'a> {
     // Pattern Matching
     When(&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)]),
     Closure(&'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)),
-    // /// basically Assign(Vec<(Loc<Pattern>, Loc<Expr>)>, Loc<Expr>)
-    // Assign(&'a (&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)], Loc<Expr<'a>>)),
+    /// Multiple defs in a row
+    Defs(&'a (Vec<'a, Def<'a>>, Loc<Expr<'a>>)),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
@@ -68,15 +71,22 @@ pub enum Expr<'a> {
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a Expr<'a>, &'a [Space<'a>]),
-    SpaceAfter(&'a Expr<'a>, &'a [Space<'a>]),
+    SpaceBefore(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
 
     // Problems
     MalformedIdent(&'a str),
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum Space<'a> {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Def<'a> {
+    AnnotationOnly,
+    BodyOnly(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+    AnnotatedBody(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
     BlockComment(&'a [&'a str]),
@@ -88,7 +98,7 @@ pub enum Pattern<'a> {
     Identifier(&'a str),
 
     // Variant, optionally qualified
-    Variant(&'a [&'a str], &'a VariantName),
+    Variant(&'a [&'a str], &'a str),
     Apply(&'a (Loc<&'a Pattern<'a>>, [Loc<Pattern<'a>>])),
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
@@ -103,15 +113,15 @@ pub enum Pattern<'a> {
     Underscore,
 
     // Space
-    SpaceBefore(&'a Pattern<'a>, &'a [Space<'a>]),
-    SpaceAfter(&'a Pattern<'a>, &'a [Space<'a>]),
+    SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 pub trait Spaceable<'a> {
-    fn before(&'a self, &'a [Space<'a>]) -> Self;
-    fn after(&'a self, &'a [Space<'a>]) -> Self;
+    fn before(&'a self, &'a [CommentOrNewline<'a>]) -> Self;
+    fn after(&'a self, &'a [CommentOrNewline<'a>]) -> Self;
 
-    fn with_spaces_before(&'a self, spaces: &'a [Space<'a>], region: Region) -> Loc<Self>
+    fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where
         Self: Sized,
     {
@@ -121,7 +131,7 @@ pub trait Spaceable<'a> {
         }
     }
 
-    fn with_spaces_after(&'a self, spaces: &'a [Space<'a>], region: Region) -> Loc<Self>
+    fn with_spaces_after(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where
         Self: Sized,
     {
@@ -133,19 +143,19 @@ pub trait Spaceable<'a> {
 }
 
 impl<'a> Spaceable<'a> for Expr<'a> {
-    fn before(&'a self, spaces: &'a [Space<'a>]) -> Self {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Expr::SpaceBefore(self, spaces)
     }
-    fn after(&'a self, spaces: &'a [Space<'a>]) -> Self {
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Expr::SpaceAfter(self, spaces)
     }
 }
 
 impl<'a> Spaceable<'a> for Pattern<'a> {
-    fn before(&'a self, spaces: &'a [Space<'a>]) -> Self {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Pattern::SpaceBefore(self, spaces)
     }
-    fn after(&'a self, spaces: &'a [Space<'a>]) -> Self {
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Pattern::SpaceAfter(self, spaces)
     }
 }

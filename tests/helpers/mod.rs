@@ -40,7 +40,7 @@ pub fn can_expr_with(
     name: &str,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    declared_variants: &ImMap<Symbol, Located<Box<ast::VariantName>>>,
+    declared_variants: &ImMap<Symbol, Located<Box<str>>>,
 ) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
     let expr = parse_with(&arena, expr_str).unwrap_or_else(|_| {
         panic!(

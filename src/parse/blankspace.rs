@@ -1,7 +1,8 @@
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use parse::ast::{Space, Spaceable};
+use parse::ast::CommentOrNewline::{self, *};
+use parse::ast::Spaceable;
 use parse::parser::{and, map_with_arena, unexpected, unexpected_eof, Parser, State};
 use region::Located;
 
@@ -55,7 +56,8 @@ where
     )
 }
 
-/// Parses the given expression with 1 or more (spaces/comments/newlines) before and/or after it.
+/// Parses the given expression with 1 or more (spaces/comments/newlines) before it,
+/// and also 1 or more spaces after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
 /// SpaceAfter as appropriate.
@@ -193,12 +195,12 @@ where
 }
 
 /// Zero or more (spaces/comments/newlines).
-pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
+pub fn space0<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
     spaces(false, min_indent)
 }
 
 /// One or more (spaces/comments/newlines).
-pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
+pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
     // TODO try benchmarking a short-circuit for the typical case: see if there is
     // exactly one space followed by char that isn't [' ', '\n', or '#'], and
     // if so, return empty slice. The case where there's exactly 1 space should
@@ -207,7 +209,10 @@ pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
 }
 
 #[inline(always)]
-fn spaces<'a>(require_at_least_one: bool, _min_indent: u16) -> impl Parser<'a, &'a [Space<'a>]> {
+fn spaces<'a>(
+    require_at_least_one: bool,
+    _min_indent: u16,
+) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
     move |arena: &'a Bump, state: State<'a>| {
         let mut chars = state.input.chars().peekable();
         let mut space_list = Vec::new_in(arena);
@@ -229,7 +234,7 @@ fn spaces<'a>(require_at_least_one: bool, _min_indent: u16) -> impl Parser<'a, &
                         state = state.newline()?;
 
                         // Newlines only get added to the list when they're outside comments.
-                        space_list.push(Space::Newline);
+                        space_list.push(Newline);
                     }
                     '#' => {
                         state = state.advance_without_indenting(1)?;
@@ -258,7 +263,7 @@ fn spaces<'a>(require_at_least_one: bool, _min_indent: u16) -> impl Parser<'a, &
                             state = state.newline()?;
 
                             // This was a newline, so end this line comment.
-                            space_list.push(Space::LineComment(comment_line_buf.into_bump_str()));
+                            space_list.push(LineComment(comment_line_buf.into_bump_str()));
                             comment_line_buf = String::new_in(arena);
 
                             comment_parsing = CommentParsing::No;
@@ -339,7 +344,7 @@ fn spaces<'a>(require_at_least_one: bool, _min_indent: u16) -> impl Parser<'a, &
                                             comment_line_buf = String::new_in(arena);
 
                                             // Add the block comment to the list.
-                                            space_list.push(Space::BlockComment(
+                                            space_list.push(BlockComment(
                                                 comment_lines.into_bump_slice(),
                                             ));
 

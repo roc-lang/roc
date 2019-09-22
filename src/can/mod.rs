@@ -30,7 +30,7 @@ pub fn canonicalize_declaration<'a>(
     name: &str,
     loc_expr: &'a Located<ast::Expr<'a>>,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    declared_variants: &ImMap<Symbol, Located<Box<ast::VariantName>>>,
+    declared_variants: &ImMap<Symbol, Located<Box<str>>>,
 ) -> (
     Located<Expr>,
     Output,

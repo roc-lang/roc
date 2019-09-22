@@ -174,6 +174,19 @@ where
     }
 }
 
+pub fn then<'a, P1, F, Before, After>(parser: P1, transform: F) -> impl Parser<'a, After>
+where
+    P1: Parser<'a, Before>,
+    After: 'a,
+    F: Fn(&'a Bump, State<'a>, Before) -> ParseResult<'a, After>,
+{
+    move |arena, state| {
+        parser
+            .parse(arena, state)
+            .and_then(|(output, next_state)| transform(arena, next_state, output))
+    }
+}
+
 #[cfg(not(debug_assertions))]
 pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where

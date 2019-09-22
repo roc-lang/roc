@@ -8,21 +8,51 @@ pub mod parser;
 pub mod problems;
 pub mod string_literal;
 
+/// All module definitions begin with one of these:
+///
+/// app
+/// api
+/// api bridge
+///
+/// We parse these to guard against mistakes; in general, the build tool
+/// is responsible for determining the root module (either an `app` or `api bridge`
+/// module), and then all `api` modules should only ever be imported from
+/// another module.
+///
+/// parsing the file
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
-use parse::ast::{Attempting, Expr, Pattern, Spaceable};
+use parse::ast::{Attempting, Def, Expr, Pattern, Spaceable};
 use parse::blankspace::{space0, space0_around, space0_before, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
     and, attempt, between, char, either, loc, map, map_with_arena, one_of3, one_of4, one_of9,
-    one_or_more, optional, sep_by0, skip_first, skip_second, string, unexpected, unexpected_eof,
-    Either, ParseResult, Parser, State,
+    one_or_more, optional, sep_by0, skip_first, skip_second, string, then, unexpected,
+    unexpected_eof, zero_or_more, Either, ParseResult, Parser, State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
+
+// pub fn api<'a>() -> impl Parser<'a, Module<'a>> {
+//     and(
+//         skip_first(string("api"), space1_around(ident())),
+//         skip_first(string("exposes"), space1_around(ident())),
+//     )
+// }
+
+// pub fn app<'a>() -> impl Parser<'a, Module<'a>> {
+//     skip_first(string("app using Echo"))
+// }
+
+// pub fn api_bridge<'a>() -> impl Parser<'a, Module<'a>> {
+//     and(
+//         skip_first(string("api bridge"), space1_around(ident())),
+//         skip_first(string("exposes"), space1_around(ident())),
+//     )
+// }
 
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
@@ -125,7 +155,6 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
             // We parse the parenthetical expression *and* the arguments after it
             // in one region, so that (for example) the region for Apply includes its args.
             let (loc_expr, opt_extras) = loc_expr_with_extras.value;
-
             match opt_extras {
                 Some(Either::First(loc_args)) => Located {
                     region: loc_expr_with_extras.region,
@@ -148,6 +177,106 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
             }
         },
     )
+}
+
+/// A definition, consisting of one of these:
+///
+/// * A pattern followed by '=' and then an expression
+/// * A type annotation
+/// * Both
+pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
+    move |arena, state| panic!("TODO parse a single def")
+}
+
+/// Same as def() but with space_before1 before each def, because each nested def must
+/// have space separating it from the previous def.
+pub fn nested_def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
+    then(def(min_indent), move |arena: &'a Bump, state, def_val| {
+        panic!("TODO actually parse the def with space_before1");
+        Ok((def_val, state))
+    })
+}
+
+fn parse_def_expr<'a, S>(
+    min_indent: u16,
+    equals_sign_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+    loc_first_pattern: Located<Pattern<'a>>,
+) -> ParseResult<'a, Expr<'a>> {
+    let original_indent = state.indent_col;
+
+    if original_indent < min_indent {
+        panic!("TODO this declaration is outdented too far");
+    // `<` because '=' should be same indent or greater
+    } else if equals_sign_indent < original_indent {
+        panic!("TODO the = in this declaration seems outdented");
+    } else {
+        then(
+            and(
+                // Parse the body of the first def. It doesn't need any spaces
+                // around it parsed, because both the subsquent defs and the
+                // final body will have space1_before on them.
+                loc(move |arena, state| parse_expr(original_indent + 1, arena, state)),
+                and(
+                    // Optionally parse additional defs.
+                    zero_or_more(nested_def(original_indent)),
+                    // Parse the final
+                    loc(move |arena, state| parse_expr(original_indent + 1, arena, state)),
+                ),
+            ),
+            move |arena, state, (loc_first_body, (mut defs, loc_ret))| {
+                if state.indent_col != original_indent {
+                    panic!("TODO return expr was indented differently from original def",);
+                } else {
+                    let first_def: Def<'a> =
+                        // TODO if Parser were FnOnce instead of Fn, this might not need .clone()?
+                        Def::BodyOnly(loc_first_pattern.clone(), arena.alloc(loc_first_body));
+
+                    // Add the first def to the end of the defs. (It's fine that we
+                    // reorder the first one to the end, because canonicalize will
+                    // re-sort all of these based on dependencies anyway. Only
+                    // their regions will ever be visible to the user.)
+                    defs.push(first_def);
+
+                    Ok((Expr::Defs(arena.alloc((defs, loc_ret))), state))
+                }
+            },
+        )
+        .parse(arena, state)
+    }
+}
+
+fn parse_nested_def_body<'a, S>(
+    min_indent: u16,
+    equals_sign_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+    loc_pattern: Located<Pattern<'a>>,
+) -> ParseResult<'a, Located<Expr<'a>>> {
+    let original_indent = state.indent_col;
+
+    if original_indent < min_indent {
+        panic!("TODO this declaration is outdented too far");
+    // `<` because '=' should be same indent or greater
+    } else if equals_sign_indent < original_indent {
+        panic!("TODO the = in this declaration seems outdented");
+    } else {
+        then(
+            loc(move |arena, state| {
+                parse_expr(original_indent + 1, arena, state)
+            }),
+            move |arena, state, loc_expr| {
+                if state.indent_col != original_indent {
+                    panic!(
+                                "TODO the return expression was indented differently from the original assignment",
+                            );
+                } else {
+                    Ok((loc_expr, state))
+                }
+            },
+        ).parse(arena, state)
+    }
 }
 
 fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
@@ -296,6 +425,9 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             optional(either(
                 // There may optionally be function args after this ident
                 loc_function_args(min_indent),
+                // TODO make sure '=' is not_followed_by(one_of2(char('='), char('>'))) b/c
+                // otherwise it's an == or => and not a def!
+                //
                 // If there aren't any args, there may be a '=' or ':' after it.
                 // (It's a syntax error to write e.g. `foo bar =` - so if there
                 // were any args, there is definitely no need to parse '=' or ':'!)

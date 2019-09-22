@@ -4,7 +4,6 @@ use can::problem::Problem;
 use can::procedure::{Procedure, References};
 use can::symbol::Symbol;
 use collections::{ImMap, MutMap};
-use parse::ast;
 use region::{Located, Region};
 
 /// The canonicalization environment for a particular module.
@@ -17,17 +16,14 @@ pub struct Env {
     pub problems: Vec<Problem>,
 
     /// Variants either declared in this module, or imported.
-    pub variants: ImMap<Symbol, Located<Box<ast::VariantName>>>,
+    pub variants: ImMap<Symbol, Located<Box<str>>>,
 
     /// Former closures converted to top-level procedures.
     pub procedures: MutMap<Symbol, Procedure>,
 }
 
 impl Env {
-    pub fn new(
-        home: String,
-        declared_variants: ImMap<Symbol, Located<Box<ast::VariantName>>>,
-    ) -> Env {
+    pub fn new(home: String, declared_variants: ImMap<Symbol, Located<Box<str>>>) -> Env {
         Env {
             home,
             variants: declared_variants,

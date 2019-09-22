@@ -18,8 +18,10 @@ mod test_parse {
     use bumpalo::{self, Bump};
     use helpers::parse_with;
     use roc::operator::Operator::*;
+    use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
-    use roc::parse::ast::{Attempting, Space, Spaceable};
+    use roc::parse::ast::Pattern::*;
+    use roc::parse::ast::{Attempting, Spaceable};
     use roc::parse::parser::{Fail, FailReason};
     use roc::region::{Located, Region};
     use std::{f64, i64};
@@ -276,9 +278,9 @@ mod test_parse {
     #[test]
     fn newline_before_op() {
         let arena = Bump::new();
-        let spaced_int = SpaceAfter(
+        let spaced_int = Expr::SpaceAfter(
             arena.alloc(Int("3")),
-            bumpalo::vec![in &arena; Space::Newline].into_bump_slice(),
+            bumpalo::vec![in &arena; Newline].into_bump_slice(),
         );
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
@@ -296,7 +298,7 @@ mod test_parse {
         let arena = Bump::new();
         let spaced_int = arena
             .alloc(Int("4"))
-            .before(bumpalo::vec![in &arena; Space::Newline].into_bump_slice());
+            .before(bumpalo::vec![in &arena; Newline].into_bump_slice());
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Int("3")),
             Located::new(0, 0, 3, 4, Star),
@@ -313,7 +315,7 @@ mod test_parse {
         let arena = Bump::new();
         let spaced_int = arena
             .alloc(Int("3"))
-            .after(bumpalo::vec![in &arena; Space::LineComment(" test!")].into_bump_slice());
+            .after(bumpalo::vec![in &arena; LineComment(" test!")].into_bump_slice());
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Plus),
@@ -330,7 +332,7 @@ mod test_parse {
         let arena = Bump::new();
         let spaced_int = arena
             .alloc(Int("92"))
-            .before(bumpalo::vec![in &arena; Space::LineComment(" test!")].into_bump_slice());
+            .before(bumpalo::vec![in &arena; LineComment(" test!")].into_bump_slice());
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 2, Int("12")),
             Located::new(0, 0, 4, 5, Star),
@@ -347,10 +349,10 @@ mod test_parse {
         let arena = Bump::new();
         let spaced_int1 = arena
             .alloc(Int("3"))
-            .after(bumpalo::vec![in &arena; Space::Newline].into_bump_slice());
+            .after(bumpalo::vec![in &arena; Newline].into_bump_slice());
         let spaced_int2 = arena
             .alloc(Int("4"))
-            .before(bumpalo::vec![in &arena; Space::Newline, Space::Newline].into_bump_slice());
+            .before(bumpalo::vec![in &arena; Newline, Newline].into_bump_slice());
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, spaced_int1),
             Located::new(1, 1, 0, 1, Plus),
@@ -447,7 +449,7 @@ mod test_parse {
     fn basic_variant() {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
-        let expected = Variant(module_parts, "Whee");
+        let expected = Expr::Variant(module_parts, "Whee");
         let actual = parse_with(&arena, "Whee");
 
         assert_eq!(Ok(expected), actual);
@@ -457,7 +459,7 @@ mod test_parse {
     fn qualified_variant() {
         let arena = Bump::new();
         let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
-        let expected = Variant(module_parts, "Whee");
+        let expected = Expr::Variant(module_parts, "Whee");
         let actual = parse_with(&arena, "One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
@@ -556,7 +558,7 @@ mod test_parse {
         let arg = Located::new(0, 0, 5, 6, Int("1"));
         let args = bumpalo::vec![in &arena; arg];
         let tuple = arena.alloc((Located::new(0, 0, 0, 4, Var(module_parts, "whee")), args));
-        let expected = Apply(tuple);
+        let expected = Expr::Apply(tuple);
         let actual = parse_with(&arena, "whee 1");
 
         assert_eq!(Ok(expected), actual);
@@ -570,7 +572,7 @@ mod test_parse {
         let arg2 = Located::new(0, 0, 10, 12, Int("34"));
         let args = bumpalo::vec![in &arena; arg1, arg2];
         let tuple = arena.alloc((Located::new(0, 0, 0, 4, Var(module_parts, "whee")), args));
-        let expected = Apply(tuple);
+        let expected = Expr::Apply(tuple);
         let actual = parse_with(&arena, "whee  12  34");
 
         assert_eq!(Ok(expected), actual);
@@ -583,8 +585,22 @@ mod test_parse {
         let arg = Located::new(0, 0, 7, 8, Int("1"));
         let args = bumpalo::vec![in &arena; arg];
         let tuple = arena.alloc((Located::new(0, 0, 1, 5, Var(module_parts, "whee")), args));
-        let expected = Apply(tuple);
+        let expected = Expr::Apply(tuple);
         let actual = parse_with(&arena, "(whee) 1");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // CLOSURE
+
+    #[test]
+    fn basic_closure() {
+        let arena = Bump::new();
+        let pattern = Located::new(0, 0, 1, 2, Identifier("a"));
+        let patterns = bumpalo::vec![in &arena; pattern];
+        let tuple = arena.alloc((patterns, Located::new(0, 0, 6, 8, Int("42"))));
+        let expected = Closure(tuple);
+        let actual = parse_with(&arena, "\\a -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
