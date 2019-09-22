@@ -29,7 +29,7 @@ use parse::blankspace::{space0, space0_around, space0_before, space1_before};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, one_of3, one_of4, one_of9,
+    and, attempt, between, char, either, loc, map, map_with_arena, one_of4, one_of5, one_of9,
     one_or_more, optional, sep_by0, skip_first, skip_second, string, then, unexpected,
     unexpected_eof, zero_or_more, Either, ParseResult, Parser, State,
 };
@@ -317,9 +317,11 @@ fn parse_closure_param<'a>(
     state: State<'a>,
     min_indent: u16,
 ) -> ParseResult<'a, Located<Pattern<'a>>> {
-    one_of4(
+    one_of5(
         // An ident is the most common param, e.g. \foo -> ...
         loc(ident_pattern()),
+        // Underscore is also common, e.g. \_ -> ...
+        loc(underscore_pattern()),
         // You can destructure records in params, e.g. \{ x, y } -> ...
         loc(record_destructure(min_indent)),
         // If you wrap it in parens, you can match any arbitrary pattern at all.
@@ -338,11 +340,16 @@ fn parse_closure_param<'a>(
 }
 
 fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
-    one_of3(
+    one_of4(
+        underscore_pattern(),
         variant_pattern(),
         ident_pattern(),
         record_destructure(min_indent),
     )
+}
+
+fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
+    map(char('_'), |_| Pattern::Underscore)
 }
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
