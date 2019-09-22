@@ -108,7 +108,7 @@ pub enum Pattern<'a> {
     // Literal
     IntLiteral(i64),
     FloatLiteral(f64),
-    StringLiteral(&'a str),
+    StrLiteral(&'a str),
     EmptyRecordLiteral,
     Underscore,
 

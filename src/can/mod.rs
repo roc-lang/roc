@@ -1,7 +1,7 @@
 use self::env::Env;
 use self::expr::Expr;
-// use self::pattern::Pattern;
-// use self::pattern::PatternType::*;
+use self::pattern::PatternType::*;
+use self::pattern::{canonicalize_pattern, Pattern};
 use self::problem::Problem;
 use self::problem::RuntimeError::*;
 use self::procedure::{Procedure, References};
@@ -549,79 +549,78 @@ fn canonicalize<'a>(
         //        }
         //    }
         //}
+        ast::Expr::Closure((loc_arg_patterns, loc_body_expr)) => {
+            // The globally unique symbol that will refer to this closure once it gets converted
+            // into a top-level procedure for code gen.
+            //
+            // The symbol includes the module name, the top-level declaration name, and the
+            // index (0-based) of the closure within that declaration.
+            //
+            // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
+            let symbol = scope.gen_unique_symbol();
 
-        //ast::Expr::Closure(loc_arg_patterns, box_loc_body_expr) => {
-        //    // The globally unique symbol that will refer to this closure once it gets converted
-        //    // into a top-level procedure for code gen.
-        //    //
-        //    // The symbol includes the module name, the top-level declaration name, and the
-        //    // index (0-based) of the closure within that declaration.
-        //    //
-        //    // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
-        //    let symbol = scope.gen_unique_symbol();
+            // The body expression gets a new scope for canonicalization.
+            // Shadow `scope` to make sure we don't accidentally use the original one for the
+            // rest of this block.
+            let mut scope = scope.clone();
 
-        //    // The body expression gets a new scope for canonicalization.
-        //    // Shadow `scope` to make sure we don't accidentally use the original one for the
-        //    // rest of this block.
-        //    let mut scope = scope.clone();
+            let arg_idents: Vec<(Ident, (Symbol, Region))> =
+                idents_from_patterns(loc_arg_patterns.iter(), &scope);
 
-        //    let arg_idents: Vec<(Ident, (Symbol, Region))> =
-        //        idents_from_patterns(loc_arg_patterns.iter(), &scope);
+            // Add the arguments' idents to scope.idents. If there's a collision,
+            // it means there was shadowing, which will be handled later.
+            scope.idents = union_pairs(scope.idents, arg_idents.iter());
 
-        //    // Add the arguments' idents to scope.idents. If there's a collision,
-        //    // it means there was shadowing, which will be handled later.
-        //    scope.idents = union_pairs(scope.idents, arg_idents.iter());
+            let can_args: Vec<Located<Pattern>> = loc_arg_patterns
+                .into_iter()
+                .map(|loc_pattern| {
+                    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                    // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                    let mut shadowable_idents = scope.idents.clone();
+                    remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-        //    let can_args: Vec<Located<Pattern>> = loc_arg_patterns
-        //        .into_iter()
-        //        .map(|loc_pattern| {
-        //            // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-        //            // (However, still include it in scope, because you *can* recursively refer to yourself.)
-        //            let mut shadowable_idents = scope.idents.clone();
-        //            remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
+                    canonicalize_pattern(
+                        env,
+                        &mut scope,
+                        &FunctionArg,
+                        &loc_pattern,
+                        &mut shadowable_idents,
+                    )
+                })
+                .collect();
+            let (loc_body_expr, mut output) = canonicalize(env, &mut scope, loc_body_expr);
 
-        //            canonicalize_pattern(
-        //                env,
-        //                &mut scope,
-        //                &FunctionArg,
-        //                &loc_pattern,
-        //                &mut shadowable_idents,
-        //            )
-        //        })
-        //        .collect();
-        //    let (loc_body_expr, mut output) = canonicalize(env, &mut scope, *box_loc_body_expr);
+            // Now that we've collected all the references, check to see if any of the args we defined
+            // went unreferenced. If any did, report them as unused arguments.
+            for (ident, (arg_symbol, region)) in arg_idents {
+                if !output.references.has_local(&arg_symbol) {
+                    // The body never referenced this argument we declared. It's an unused argument!
+                    env.problem(Problem::UnusedArgument(Located {
+                        region,
+                        value: ident,
+                    }));
+                }
 
-        //    // Now that we've collected all the references, check to see if any of the args we defined
-        //    // went unreferenced. If any did, report them as unused arguments.
-        //    for (ident, (arg_symbol, region)) in arg_idents {
-        //        if !output.references.has_local(&arg_symbol) {
-        //            // The body never referenced this argument we declared. It's an unused argument!
-        //            env.problem(Problem::UnusedArgument(Located {
-        //                region,
-        //                value: ident,
-        //            }));
-        //        }
+                // We shouldn't ultimately count arguments as referenced locals. Otherwise,
+                // we end up with weird conclusions like the expression (\x -> x + 1)
+                // references the (nonexistant) local variable x!
+                output.references.locals.remove(&arg_symbol);
+            }
 
-        //        // We shouldn't ultimately count arguments as referenced locals. Otherwise,
-        //        // we end up with weird conclusions like the expression (\x -> x + 1)
-        //        // references the (nonexistant) local variable x!
-        //        output.references.locals.remove(&arg_symbol);
-        //    }
+            // We've finished analyzing the closure. Its references.locals are now the values it closes over,
+            // since we removed the only locals it shouldn't close over (its arguments).
+            // Register it as a top-level procedure in the Env!
+            env.register_closure(
+                symbol.clone(),
+                can_args,
+                loc_body_expr,
+                loc_expr.region.clone(),
+                output.references.clone(),
+            );
 
-        //    // We've finished analyzing the closure. Its references.locals are now the values it closes over,
-        //    // since we removed the only locals it shouldn't close over (its arguments).
-        //    // Register it as a top-level procedure in the Env!
-        //    env.register_closure(
-        //        symbol.clone(),
-        //        can_args,
-        //        loc_body_expr,
-        //        loc_expr.region.clone(),
-        //        output.references.clone(),
-        //    );
-
-        //    // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
-        //    (FunctionPointer(symbol), output)
-        //}
+            // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
+            (FunctionPointer(symbol), output)
+        }
 
         //ast::Expr::Case(loc_cond, branches) => {
         //    // Canonicalize the conditional
@@ -728,7 +727,7 @@ fn canonicalize<'a>(
     )
 }
 
-fn _union_pairs<'a, K, V, I>(mut map: ImMap<K, V>, pairs: I) -> ImMap<K, V>
+fn union_pairs<'a, K, V, I>(mut map: ImMap<K, V>, pairs: I) -> ImMap<K, V>
 where
     I: Iterator<Item = &'a (K, V)>,
     K: std::hash::Hash + Eq + Clone,
@@ -917,70 +916,95 @@ fn _references_from_call<T>(
     }
 }
 
-//fn idents_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Ident, (Symbol, Region))>
-//where
-//    I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
-//{
-//    let mut answer = Vec::new();
+fn idents_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Ident, (Symbol, Region))>
+where
+    I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
+{
+    let mut answer = Vec::new();
 
-//    for loc_pattern in loc_patterns {
-//        add_idents_from_pattern(loc_pattern, scope, &mut answer);
-//    }
+    for loc_pattern in loc_patterns {
+        add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, &mut answer);
+    }
 
-//    answer
-//}
+    answer
+}
 
-///// helper function for idents_from_patterns
-//fn add_idents_from_pattern<'a>(
-//    loc_pattern: &Located<ast::Pattern<'a>>,
-//    scope: &Scope,
-//    answer: &mut Vec<(Ident, (Symbol, Region))>,
-//) {
-//    use parse::ast::Pattern::*;
+/// helper function for idents_from_patterns
+fn add_idents_from_pattern<'a>(
+    region: &Region,
+    pattern: &ast::Pattern<'a>,
+    scope: &Scope,
+    answer: &mut Vec<(Ident, (Symbol, Region))>,
+) {
+    use parse::ast::Pattern::*;
 
-//    match &loc_pattern.value {
-//        &Identifier(ref name) => {
-//            let symbol = scope.symbol(&name);
+    match &pattern {
+        &Identifier(name) => {
+            let symbol = scope.symbol(&name);
 
-//            answer.push((
-//                Ident::Unqualified(name.clone()),
-//                (symbol, loc_pattern.region.clone()),
-//            ));
-//        }
-//        &Variant(_, ref opt_loc_args) => match opt_loc_args {
-//            &None => (),
-//            &Some(ref loc_args) => {
-//                for loc_arg in loc_args.iter() {
-//                    add_idents_from_pattern(loc_arg, scope, answer);
-//                }
-//            }
-//        },
-//        &IntLiteral(_) | &FloatLiteral(_) | &ExactString(_) | &EmptyRecordLiteral | &Underscore => {
-//            ()
-//        }
-//    }
-//}
+            answer.push((
+                Ident::Unqualified(name.to_string()),
+                (symbol, region.clone()),
+            ));
+        }
+        &Apply(_) => {
+            panic!("TODO implement Apply pattern.");
+            // &AppliedVariant(_, ref opt_loc_args) => match opt_loc_args {
+            // &None => (),
+            // &Some(ref loc_args) => {
+            //     for loc_arg in loc_args.iter() {
+            //         add_idents_from_pattern(loc_arg, scope, answer);
+            //     }
+            // }
+            // },
+        }
 
-//fn remove_idents(pattern: expr::Pattern, idents: &mut ImMap<Ident, (Symbol, Region)>) {
-//    use expr::Pattern::*;
+        &RecordDestructure(_) => {
+            panic!("TODO implement RecordDestructure pattern in add_idents_from_pattern.");
+        }
+        &SpaceBefore(pattern, _) | &SpaceAfter(pattern, _) => {
+            // Ignore the newline/comment info; it doesn't matter in canonicalization.
+            add_idents_from_pattern(region, pattern, scope, answer)
+        }
+        &Variant(_, _)
+        | &IntLiteral(_)
+        | &FloatLiteral(_)
+        | &StrLiteral(_)
+        | &EmptyRecordLiteral
+        | &Underscore => (),
+    }
+}
 
-//    match pattern {
-//        Identifier(name) => {
-//            idents.remove(&(Ident::Unqualified(name)));
-//        }
-//        Variant(_, Some(loc_args)) => {
-//            for loc_arg in loc_args {
-//                remove_idents(loc_arg.value, idents);
-//            }
-//        }
-//        Variant(_, None)
-//        | IntLiteral(_)
-//        | FloatLiteral(_)
-//        | ExactString(_)
-//        | EmptyRecordLiteral
-//        | Underscore => {}
-//    }
-//}
+fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Region)>) {
+    use parse::ast::Pattern::*;
+
+    match &pattern {
+        Identifier(name) => {
+            idents.remove(&(Ident::Unqualified(name.to_string())));
+        }
+        Apply(_) => {
+            panic!("TODO implement Apply pattern in remove_idents.");
+            // AppliedVariant(_, Some(loc_args)) => {
+            //     for loc_arg in loc_args {
+            //         remove_idents(loc_arg.value, idents);
+            //     }
+            // }
+        }
+        RecordDestructure(_) => {
+            panic!("TODO implement RecordDestructure pattern in remove_idents.");
+        }
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
+            // Ignore the newline/comment info; it doesn't matter in canonicalization.
+            remove_idents(pattern, idents)
+        }
+        Variant(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | EmptyRecordLiteral
+        | Underscore => {}
+    }
+}
 
 ///// If it could not be found, return it unchanged as an Err.
 //#[inline(always)] // This is shared code between Var and InterpolatedStr; it was inlined when handwritten
