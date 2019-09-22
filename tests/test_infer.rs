@@ -310,127 +310,127 @@ mod test_infer {
         );
     }
 
-    // // ASSIGN
+    // DEF
 
-    // #[test]
-    // fn assign_empty_record() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             foo = {}
+    #[test]
+    fn def_empty_record() {
+        infer_eq(
+            indoc!(
+                r#"
+                foo = {}
 
-    //             foo
-    //         "#
-    //         ),
-    //         "{}",
-    //     );
-    // }
+                foo
+            "#
+            ),
+            "{}",
+        );
+    }
 
-    // #[test]
-    // fn assign_string() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             str = "thing"
+    #[test]
+    fn def_string() {
+        infer_eq(
+            indoc!(
+                r#"
+                str = "thing"
 
-    //             str
-    //         "#
-    //         ),
-    //         "Str",
-    //     );
-    // }
+                str
+            "#
+            ),
+            "Str",
+        );
+    }
 
-    // #[test]
-    // fn assign_1_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             fn = \_ -> {}
+    #[test]
+    fn def_1_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                fn = \_ -> {}
 
-    //             fn
-    //         "#
-    //         ),
-    //         "* -> {}",
-    //     );
-    // }
+                fn
+            "#
+            ),
+            "* -> {}",
+        );
+    }
 
-    // #[test]
-    // fn assign_2_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             func = \_ _ -> 42
+    #[test]
+    fn def_2_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                func = \_ _ -> 42
 
-    //             func
-    //         "#
-    //         ),
-    //         "*, * -> Int",
-    //     );
-    // }
+                func
+            "#
+            ),
+            "*, * -> Int",
+        );
+    }
 
-    // #[test]
-    // fn assign_3_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             f = \_ _ _ -> "test!"
+    #[test]
+    fn def_3_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \_ _ _ -> "test!"
 
-    //             f
-    //         "#
-    //         ),
-    //         "*, *, * -> String",
-    //     );
-    // }
+                f
+            "#
+            ),
+            "*, *, * -> String",
+        );
+    }
 
-    // #[test]
-    // fn assign_multiple_functions() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             a = \_ _ _ -> "test!"
+    #[test]
+    fn def_multiple_functions() {
+        infer_eq(
+            indoc!(
+                r#"
+                a = \_ _ _ -> "test!"
 
-    //             b = a
+                b = a
 
-    //             b
-    //         "#
-    //         ),
-    //         "*, *, * -> String",
-    //     );
-    // }
+                b
+            "#
+            ),
+            "*, *, * -> String",
+        );
+    }
 
-    // #[test]
-    // fn assign_multiple_strings() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             a = "test!"
+    #[test]
+    fn def_multiple_strings() {
+        infer_eq(
+            indoc!(
+                r#"
+                a = "test!"
 
-    //             b = a
+                b = a
 
-    //             b
-    //         "#
-    //         ),
-    //         "Str",
-    //     );
-    // }
+                b
+            "#
+            ),
+            "Str",
+        );
+    }
 
-    // #[test]
-    // fn assign_multiple_nums() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             c = b
+    #[test]
+    fn def_multiple_nums() {
+        infer_eq(
+            indoc!(
+                r#"
+                c = b
 
-    //             b = a
+                b = a
 
-    //             a = 42
+                a = 42
 
-    //             c
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+                c
+            "#
+            ),
+            "Int",
+        );
+    }
 
     // // CALLING FUNCTIONS
 
