@@ -194,24 +194,25 @@ fn canonicalize<'a>(
 
             (expr, output)
         }
-        // ast::Expr::Var(ident) => {
-        //     let mut output = Output::new();
-        //     let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
-        //         Ok(symbol) => Var(symbol),
-        //         Err(ident) => {
-        //             let loc_ident = Located {
-        //                 region: loc_expr.region.clone(),
-        //                 value: ident,
-        //             };
+        ast::Expr::Var(module_parts, name) => {
+            let mut output = Output::new();
+            let ident = Ident::new(module_parts, name);
+            let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
+                Ok(symbol) => Var(symbol),
+                Err(ident) => {
+                    let loc_ident = Located {
+                        region: loc_expr.region.clone(),
+                        value: ident,
+                    };
 
-        //             env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
+                    env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
 
-        //             RuntimeError(UnrecognizedConstant(loc_ident))
-        //         }
-        //     };
+                    RuntimeError(UnrecognizedConstant(loc_ident))
+                }
+            };
 
-        //     (can_expr, output)
-        // }
+            (can_expr, output)
+        }
 
         //ast::Expr::InterpolatedStr(pairs, suffix) => {
         //    let mut output = Output::new();
@@ -1006,57 +1007,57 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
     }
 }
 
-///// If it could not be found, return it unchanged as an Err.
-//#[inline(always)] // This is shared code between Var and InterpolatedStr; it was inlined when handwritten
-//fn resolve_ident(
-//    env: &Env,
-//    scope: &Scope,
-//    ident: Ident,
-//    references: &mut References,
-//) -> Result<Symbol, Ident> {
-//    if scope.idents.contains_key(&ident) {
-//        let recognized = match ident {
-//            Ident::Unqualified(name) => {
-//                let symbol = scope.symbol(&name);
+/// If it could not be found, return it unchanged as an Err.
+#[inline(always)] // This is shared code between Var and InterpolatedStr; it was inlined when handwritten
+fn resolve_ident(
+    env: &Env,
+    scope: &Scope,
+    ident: Ident,
+    references: &mut References,
+) -> Result<Symbol, Ident> {
+    if scope.idents.contains_key(&ident) {
+        let recognized = match ident {
+            Ident::Unqualified(name) => {
+                let symbol = scope.symbol(&name);
 
-//                references.locals.insert(symbol.clone());
+                references.locals.insert(symbol.clone());
 
-//                symbol
-//            }
-//            Ident::Qualified(path, name) => {
-//                let symbol = Symbol::new(&path, &name);
+                symbol
+            }
+            Ident::Qualified(path, name) => {
+                let symbol = Symbol::new(&path, &name);
 
-//                references.globals.insert(symbol.clone());
+                references.globals.insert(symbol.clone());
 
-//                symbol
-//            }
-//        };
+                symbol
+            }
+        };
 
-//        Ok(recognized)
-//    } else {
-//        match ident {
-//            Ident::Unqualified(name) => {
-//                // Try again, this time using the current module as the path.
-//                let qualified = Ident::Qualified(env.home.clone(), name.clone());
+        Ok(recognized)
+    } else {
+        match ident {
+            Ident::Unqualified(name) => {
+                // Try again, this time using the current module as the path.
+                let qualified = Ident::Qualified(env.home.clone(), name.clone());
 
-//                if scope.idents.contains_key(&qualified) {
-//                    let symbol = Symbol::new(&env.home, &name);
+                if scope.idents.contains_key(&qualified) {
+                    let symbol = Symbol::new(&env.home, &name);
 
-//                    references.globals.insert(symbol.clone());
+                    references.globals.insert(symbol.clone());
 
-//                    Ok(symbol)
-//                } else {
-//                    // We couldn't find the unqualified ident in scope. NAMING PROBLEM!
-//                    Err(Ident::Unqualified(name))
-//                }
-//            }
-//            qualified @ Ident::Qualified(_, _) => {
-//                // We couldn't find the qualified ident in scope. NAMING PROBLEM!
-//                Err(qualified)
-//            }
-//        }
-//    }
-//}
+                    Ok(symbol)
+                } else {
+                    // We couldn't find the unqualified ident in scope. NAMING PROBLEM!
+                    Err(Ident::Unqualified(name))
+                }
+            }
+            qualified @ Ident::Qualified(_, _) => {
+                // We couldn't find the qualified ident in scope. NAMING PROBLEM!
+                Err(qualified)
+            }
+        }
+    }
+}
 
 ///// Translate a VariantName into a resolved symbol if it's found in env.declared_variants.
 ///// If it could not be found, return it unchanged as an Err.

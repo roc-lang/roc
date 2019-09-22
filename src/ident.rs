@@ -19,6 +19,13 @@ pub enum Ident {
 }
 
 impl Ident {
+    pub fn new(module_parts: &[&str], name: &str) -> Self {
+        if module_parts.is_empty() {
+            Ident::Unqualified(name.to_string())
+        } else {
+            Ident::Qualified(module_parts.to_vec().join("."), name.to_string())
+        }
+    }
     pub fn is_qualified(&self) -> bool {
         match &self {
             &Ident::Unqualified(_) => false,
