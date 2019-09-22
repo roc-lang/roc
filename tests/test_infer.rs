@@ -272,43 +272,43 @@ mod test_infer {
         );
     }
 
-    // // CLOSURE
+    // CLOSURE
 
-    // #[test]
-    // fn always_return_empty_record() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             \_ -> {}
-    //         "#
-    //         ),
-    //         "* -> {}",
-    //     );
-    // }
+    #[test]
+    fn always_return_empty_record() {
+        infer_eq(
+            indoc!(
+                r#"
+                \_ -> {}
+            "#
+            ),
+            "* -> {}",
+        );
+    }
 
-    // #[test]
-    // fn two_arg_return_int() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             \_ _ -> 42
-    //         "#
-    //         ),
-    //         "*, * -> Int",
-    //     );
-    // }
+    #[test]
+    fn two_arg_return_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                \_ _ -> 42
+            "#
+            ),
+            "*, * -> Int",
+        );
+    }
 
-    // #[test]
-    // fn three_arg_return_string() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             \_ _ _ -> "test!"
-    //         "#
-    //         ),
-    //         "*, *, * -> String",
-    //     );
-    // }
+    #[test]
+    fn three_arg_return_string() {
+        infer_eq(
+            indoc!(
+                r#"
+                \_ _ _ -> "test!"
+            "#
+            ),
+            "*, *, * -> Str",
+        );
+    }
 
     // // ASSIGN
 
