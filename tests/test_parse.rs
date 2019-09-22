@@ -594,13 +594,26 @@ mod test_parse {
     // CLOSURE
 
     #[test]
-    fn basic_closure() {
+    fn single_arg_closure() {
         let arena = Bump::new();
         let pattern = Located::new(0, 0, 1, 2, Identifier("a"));
         let patterns = bumpalo::vec![in &arena; pattern];
         let tuple = arena.alloc((patterns, Located::new(0, 0, 6, 8, Int("42"))));
         let expected = Closure(tuple);
         let actual = parse_with(&arena, "\\a -> 42");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn two_arg_closure() {
+        let arena = Bump::new();
+        let arg1 = Located::new(0, 0, 1, 2, Identifier("a"));
+        let arg2 = Located::new(0, 0, 3, 4, Identifier("b"));
+        let patterns = bumpalo::vec![in &arena; arg1, arg2];
+        let tuple = arena.alloc((patterns, Located::new(0, 0, 8, 10, Int("42"))));
+        let expected = Closure(tuple);
+        let actual = parse_with(&arena, "\\a b -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
