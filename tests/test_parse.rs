@@ -618,6 +618,19 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn closure_with_underscores() {
+        let arena = Bump::new();
+        let underscore1 = Located::new(0, 0, 1, 2, Underscore);
+        let underscore2 = Located::new(0, 0, 3, 4, Underscore);
+        let patterns = bumpalo::vec![in &arena; underscore1, underscore2];
+        let tuple = arena.alloc((patterns, Located::new(0, 0, 8, 10, Int("42"))));
+        let expected = Closure(tuple);
+        let actual = parse_with(&arena, "\\_ _ -> 42");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // TODO test hex/oct/binary parsing
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
