@@ -500,39 +500,41 @@ mod test_infer {
     //         );
     //     }
 
-    // // OPERATORS
+    // OPERATORS
 
-    // #[test]
-    // fn div_operator() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             \l r -> l / r
-    //         "#
-    //         ),
-    //         "Float, Float -> Float",
-    //     );
-    // }
+    #[test]
+    fn div_operator() {
+        infer_eq(
+            indoc!(
+                r#"
+                \l r -> l / r
+            "#
+            ),
+            "Float, Float -> Float",
+        );
+    }
 
-    // #[test]
-    // fn basic_division() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             1 / 2
-    //         "#
-    //         ),
-    //         "Float",
-    //     );
-    // }
+    #[test]
+    fn basic_division() {
+        infer_eq(
+            indoc!(
+                r#"
+                1 / 2
+            "#
+            ),
+            "Float",
+        );
+    }
 
     // #[test]
     // fn basic_addition() {
     //     infer_eq(
-    //         indoc!(r#"
+    //         indoc!(
+    //             r#"
     //             1 + 2
-    //         "#),
-    //         "Num *"
+    //         "#
+    //         ),
+    //         "Num *",
     //     );
     // }
 
