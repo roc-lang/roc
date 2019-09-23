@@ -631,6 +631,22 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    // DEF
+
+    #[test]
+    fn basic_def() {
+        assert_parses_to(
+            indoc!(
+                r#"
+                x = 5
+
+                42
+                "#
+            ),
+            Str(""),
+        );
+    }
+
     // TODO test hex/oct/binary parsing
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
