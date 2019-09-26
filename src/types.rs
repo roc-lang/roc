@@ -7,6 +7,18 @@ use subs::Variable;
 
 type ModuleName = String;
 
+// The standard modules
+pub const MOD_FLOAT: &'static str = "Float";
+pub const MOD_INT: &'static str = "Int";
+pub const MOD_STR: &'static str = "Str";
+pub const MOD_LIST: &'static str = "List";
+pub const MOD_MAP: &'static str = "Map";
+pub const MOD_SET: &'static str = "Set";
+pub const MOD_NUM: &'static str = "Num";
+pub const MOD_DEFAULT: &'static str = "Default";
+
+pub const TYPE_NUM: &'static str = "Num";
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Type {
     EmptyRec,
@@ -26,19 +38,38 @@ impl Type {
 
         match op {
             Slash => op_type(Type::float(), Type::float(), Type::float()),
+            // TODO actually, drop this in favor of having the parser use Apply in the AST.
             _ => panic!("TODO types for operator {:?}", op),
         }
     }
 
     pub fn num(args: Vec<Type>) -> Self {
-        Type::Apply("Num".to_string(), "Num".to_string(), args)
+        Type::Apply(MOD_NUM.to_string(), TYPE_NUM.to_string(), args)
     }
 
     pub fn float() -> Self {
-        let floating_point =
-            Type::Apply("Float".to_string(), "FloatingPoint".to_string(), Vec::new());
+        let floating_point = Type::Apply(
+            MOD_FLOAT.to_string(),
+            "FloatingPoint".to_string(),
+            Vec::new(),
+        );
 
         Type::num(vec![floating_point])
+    }
+
+    pub fn int() -> Self {
+        let integer = Type::Apply(MOD_INT.to_string(), "Integer".to_string(), Vec::new());
+
+        Type::num(vec![integer])
+    }
+
+    pub fn string() -> Self {
+        Type::Apply(MOD_STR.to_string(), "Str".to_string(), Vec::new())
+    }
+
+    /// This is needed to constrain `if` conditionals
+    pub fn bool() -> Self {
+        Type::Apply(MOD_DEFAULT.to_string(), "Bool".to_string(), Vec::new())
     }
 }
 
