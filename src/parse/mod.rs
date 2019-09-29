@@ -24,8 +24,10 @@ use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
-use parse::ast::{Attempting, Def, Expr, Pattern, Spaceable};
-use parse::blankspace::{space0, space0_around, space0_before, space1_before};
+use parse::ast::{Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable};
+use parse::blankspace::{
+    space0, space0_after, space0_around, space0_before, space1, space1_before,
+};
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
@@ -185,19 +187,38 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
 /// * A type annotation
 /// * Both
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
-    move |arena, state| panic!("TODO parse a single def")
+    // TODO support type annotations
+    map_with_arena(
+        and(
+            skip_second(
+                space0_after(loc_closure_param(min_indent), min_indent),
+                char('='),
+            ),
+            space0_before(
+                loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                min_indent,
+            ),
+        ),
+        |arena, (loc_pattern, loc_expr)| {
+            // BodyOnly(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+            Def::BodyOnly(loc_pattern, arena.alloc(loc_expr))
+        },
+    )
 }
 
 /// Same as def() but with space_before1 before each def, because each nested def must
 /// have space separating it from the previous def.
-pub fn nested_def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
-    then(def(min_indent), move |arena: &'a Bump, state, def_val| {
-        panic!("TODO actually parse the def with space_before1");
-        Ok((def_val, state))
-    })
+pub fn nested_def<'a>(min_indent: u16) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], Def<'a>)> {
+    then(
+        and(space1(min_indent), def(min_indent)),
+        move |arena: &'a Bump, state, tuple| {
+            // TODO verify spacing (I think?)
+            Ok((tuple, state))
+        },
+    )
 }
 
-fn parse_def_expr<'a, S>(
+fn parse_def_expr<'a>(
     min_indent: u16,
     equals_sign_indent: u16,
     arena: &'a Bump,
@@ -221,8 +242,11 @@ fn parse_def_expr<'a, S>(
                 and(
                     // Optionally parse additional defs.
                     zero_or_more(nested_def(original_indent)),
-                    // Parse the final
-                    loc(move |arena, state| parse_expr(original_indent + 1, arena, state)),
+                    // Parse the final expression that will be returned
+                    space1_before(
+                        loc(move |arena, state| parse_expr(original_indent + 1, arena, state)),
+                        original_indent + 1,
+                    ),
                 ),
             ),
             move |arena, state, (loc_first_body, (mut defs, loc_ret))| {
@@ -237,7 +261,7 @@ fn parse_def_expr<'a, S>(
                     // reorder the first one to the end, because canonicalize will
                     // re-sort all of these based on dependencies anyway. Only
                     // their regions will ever be visible to the user.)
-                    defs.push(first_def);
+                    defs.push((&[], first_def));
 
                     Ok((Expr::Defs(arena.alloc((defs, loc_ret))), state))
                 }
@@ -426,7 +450,7 @@ pub fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located
 /// 4. The beginning of a type annotation (e.g. `foo :`)
 /// 5. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
 pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    map_with_arena(
+    then(
         and(
             loc(ident()),
             optional(either(
@@ -438,30 +462,65 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 // If there aren't any args, there may be a '=' or ':' after it.
                 // (It's a syntax error to write e.g. `foo bar =` - so if there
                 // were any args, there is definitely no need to parse '=' or ':'!)
-                and(space0(min_indent), either(char('='), char(':'))),
+                and(space0(min_indent), either(equals_with_indent(), char(':'))),
             )),
         ),
-        |arena, (loc_ident, opt_extras)| {
+        move |arena, state, (loc_ident, opt_extras)| {
             // This appears to be a var, keyword, or function application.
             match opt_extras {
                 Some(Either::First(loc_args)) => {
+                    let len = loc_ident.value.len();
                     let loc_expr = Located {
                         region: loc_ident.region,
                         value: ident_to_expr(loc_ident.value),
                     };
 
-                    Expr::Apply(arena.alloc((loc_expr, loc_args)))
+                    Ok((Expr::Apply(arena.alloc((loc_expr, loc_args))), state))
                 }
-                Some(Either::Second((_space_list, Either::First(())))) => {
-                    panic!("TODO handle def, making sure not to drop comments!");
+                Some(Either::Second((_space_list, Either::First(indent)))) => {
+                    let value: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
+                    let region = loc_ident.region;
+                    let loc_pattern = Located { region, value };
+
+                    parse_def_expr(min_indent, indent, arena, state, loc_pattern)
                 }
                 Some(Either::Second((_space_list, Either::Second(())))) => {
                     panic!("TODO handle annotation, making sure not to drop comments!");
                 }
-                None => ident_to_expr(loc_ident.value),
+                None => {
+                    let ident = loc_ident.value.clone();
+                    let len = ident.len();
+
+                    Ok((ident_to_expr(ident), state))
+                }
             }
         },
     )
+}
+
+pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
+    move |_arena, state: State<'a>| {
+        let mut iter = state.input.chars();
+
+        match iter.next() {
+            Some(ch) if ch == '=' => {
+                match iter.peekable().peek() {
+                    // The '=' must not be followed by another `=` or `>`
+                    Some(next_ch) if next_ch != &'=' && next_ch != &'>' => {
+                        Ok((state.indent_col, state.advance_without_indenting(1)?))
+                    }
+                    Some(next_ch) => Err(unexpected(*next_ch, 0, state, Attempting::Def)),
+                    None => Err(unexpected_eof(
+                        1,
+                        Attempting::Def,
+                        state.advance_without_indenting(1)?,
+                    )),
+                }
+            }
+            Some(ch) => Err(unexpected(ch, 0, state, Attempting::Def)),
+            None => Err(unexpected_eof(0, Attempting::Def, state)),
+        }
+    }
 }
 
 fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {

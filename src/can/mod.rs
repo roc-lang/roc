@@ -948,6 +948,9 @@ fn add_idents_from_pattern<'a>(
                 (symbol, region.clone()),
             ));
         }
+        &QualifiedIdentifier(name) => {
+            panic!("TODO implement QualifiedIdentifier pattern.");
+        }
         &Apply(_) => {
             panic!("TODO implement Apply pattern.");
             // &AppliedVariant(_, ref opt_loc_args) => match opt_loc_args {
@@ -972,6 +975,7 @@ fn add_idents_from_pattern<'a>(
         | &FloatLiteral(_)
         | &StrLiteral(_)
         | &EmptyRecordLiteral
+        | &Malformed(_)
         | &Underscore => (),
     }
 }
@@ -982,6 +986,9 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
     match &pattern {
         Identifier(name) => {
             idents.remove(&(Ident::Unqualified(name.to_string())));
+        }
+        QualifiedIdentifier(name) => {
+            panic!("TODO implement QualifiedIdentifier pattern in remove_idents.");
         }
         Apply(_) => {
             panic!("TODO implement Apply pattern in remove_idents.");
@@ -1003,6 +1010,7 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
         | FloatLiteral(_)
         | StrLiteral(_)
         | EmptyRecordLiteral
+        | Malformed(_)
         | Underscore => {}
     }
 }

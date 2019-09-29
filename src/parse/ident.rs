@@ -9,7 +9,7 @@ use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 /// appear. This way, canonicalization can give more helpful error messages like
 /// "you can't redefine this variant!" if you wrote `Foo = ...` or
 /// "you can only define unqualified constants" if you wrote `Foo.bar = ...`
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ident<'a> {
     /// foo or Bar.Baz.foo
     Var(MaybeQualified<'a, &'a str>),
@@ -23,12 +23,54 @@ pub enum Ident<'a> {
     Malformed(&'a str),
 }
 
+impl<'a> Ident<'a> {
+    pub fn len(&self) -> usize {
+        use self::Ident::*;
+
+        match self {
+            Var(string) => string.len(),
+            Variant(string) => string.len(),
+            Field(string) => string.len(),
+            AccessorFunction(string) => string.len(),
+            Malformed(string) => string.len(),
+        }
+    }
+}
+
 /// An optional qualifier (the `Foo.Bar` in `Foo.Bar.baz`).
 /// If module_parts is empty, this is unqualified.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaybeQualified<'a, Val> {
     pub module_parts: &'a [&'a str],
     pub value: Val,
+}
+
+impl<'a> MaybeQualified<'a, &'a str> {
+    pub fn len(&self) -> usize {
+        let mut answer = self.value.len();
+
+        for part in self.module_parts {
+            answer += part.len();
+        }
+
+        answer
+    }
+}
+
+impl<'a> MaybeQualified<'a, &'a [&'a str]> {
+    pub fn len(&self) -> usize {
+        let mut answer = 0;
+
+        for module_part in self.module_parts {
+            answer += module_part.len();
+        }
+
+        for value_part in self.module_parts {
+            answer += value_part.len();
+        }
+
+        answer
+    }
 }
 
 /// Parse an identifier into a string.

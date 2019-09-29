@@ -38,8 +38,8 @@ impl fmt::Debug for Region {
         } else {
             write!(
                 f,
-                "|L {}, C {} - L {}, C {}|",
-                self.start_line, self.start_col, self.end_line, self.end_col,
+                "|L {}-{}, C {}-{}|",
+                self.start_line, self.end_line, self.start_col, self.end_col,
             )
         }
     }

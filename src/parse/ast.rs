@@ -2,6 +2,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::collections::String;
 use bumpalo::Bump;
 use operator::Operator;
+use parse::ident::{Ident, MaybeQualified};
 use region::{Loc, Region};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,7 +56,12 @@ pub enum Expr<'a> {
     When(&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)]),
     Closure(&'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)),
     /// Multiple defs in a row
-    Defs(&'a (Vec<'a, Def<'a>>, Loc<Expr<'a>>)),
+    Defs(
+        &'a (
+            Vec<'a, (&'a [CommentOrNewline<'a>], Def<'a>)>,
+            Loc<Expr<'a>>,
+        ),
+    ),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
@@ -115,6 +121,53 @@ pub enum Pattern<'a> {
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
+
+    // Malformed
+    Malformed(&'a str),
+    QualifiedIdentifier(MaybeQualified<'a, &'a str>),
+}
+
+impl<'a> Pattern<'a> {
+    pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
+        match ident {
+            Ident::Var(maybe_qualified) => {
+                if maybe_qualified.module_parts.is_empty() {
+                    Pattern::Identifier(maybe_qualified.value)
+                } else {
+                    Pattern::Variant(maybe_qualified.module_parts, maybe_qualified.value)
+                }
+            }
+            Ident::Variant(maybe_qualified) => {
+                Pattern::Variant(maybe_qualified.module_parts, maybe_qualified.value)
+            }
+            Ident::Field(maybe_qualified) => {
+                let mut buf = String::with_capacity_in(
+                    maybe_qualified.module_parts.len() + maybe_qualified.value.len(),
+                    arena,
+                );
+
+                for part in maybe_qualified.module_parts.iter() {
+                    buf.push_str(part);
+                    buf.push('.');
+                }
+
+                let mut iter = maybe_qualified.value.iter().peekable();
+
+                while let Some(part) = iter.next() {
+                    buf.push_str(part);
+
+                    // If there are more fields to come, add a "."
+                    if iter.peek().is_some() {
+                        buf.push('.');
+                    }
+                }
+
+                Pattern::Malformed(buf.into_bump_str())
+            }
+            Ident::AccessorFunction(string) => Pattern::Malformed(string),
+            Ident::Malformed(string) => Pattern::Malformed(string),
+        }
+    }
 }
 
 pub trait Spaceable<'a> {
@@ -235,6 +288,7 @@ pub enum Attempting {
     InterpolatedString,
     NumberLiteral,
     UnicodeEscape,
+    Def,
     Expression,
     Module,
     Identifier,

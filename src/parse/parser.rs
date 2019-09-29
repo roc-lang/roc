@@ -210,31 +210,6 @@ where
 }
 
 #[cfg(not(debug_assertions))]
-pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(&'a Bump, Before) -> After,
-{
-    map_with_arena_impl(parser, transform)
-}
-
-#[inline(always)]
-pub fn map_with_arena_impl<'a, P, F, Before, After>(
-    parser: P,
-    transform: F,
-) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(&'a Bump, Before) -> After,
-{
-    move |arena, state| {
-        parser
-            .parse(arena, state)
-            .map(|(output, next_state)| (transform(arena, output), next_state))
-    }
-}
-
-#[cfg(not(debug_assertions))]
 pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
 where
     P: Parser<'a, Val>,
@@ -1112,6 +1087,28 @@ where
     B: 'a,
 {
     BoxedParser::new(and_impl(p1, p2))
+}
+
+#[cfg(not(debug_assertions))]
+pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+where
+    P: Parser<'a, Before>,
+    F: Fn(&'a Bump, Before) -> After,
+{
+    map_with_arena_impl(parser, transform)
+}
+
+#[inline(always)]
+fn map_with_arena_impl<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+where
+    P: Parser<'a, Before>,
+    F: Fn(&'a Bump, Before) -> After,
+{
+    move |arena, state| {
+        parser
+            .parse(arena, state)
+            .map(|(output, next_state)| (transform(arena, output), next_state))
+    }
 }
 
 #[cfg(debug_assertions)]
