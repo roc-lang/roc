@@ -456,9 +456,6 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             optional(either(
                 // There may optionally be function args after this ident
                 loc_function_args(min_indent),
-                // TODO make sure '=' is not_followed_by(one_of2(char('='), char('>'))) b/c
-                // otherwise it's an == or => and not a def!
-                //
                 // If there aren't any args, there may be a '=' or ':' after it.
                 // (It's a syntax error to write e.g. `foo bar =` - so if there
                 // were any args, there is definitely no need to parse '=' or ':'!)
@@ -481,8 +478,17 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     let value: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
                     let region = loc_ident.region;
                     let loc_pattern = Located { region, value };
+                    let (spaces, state) = space0(min_indent).parse(arena, state)?;
+                    let (parsed_expr, state) =
+                        parse_def_expr(min_indent, indent, arena, state, loc_pattern)?;
 
-                    parse_def_expr(min_indent, indent, arena, state, loc_pattern)
+                    let answer = if spaces.is_empty() {
+                        parsed_expr
+                    } else {
+                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces)
+                    };
+
+                    Ok((answer, state))
                 }
                 Some(Either::Second((_space_list, Either::Second(())))) => {
                     panic!("TODO handle annotation, making sure not to drop comments!");

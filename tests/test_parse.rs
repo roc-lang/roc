@@ -634,7 +634,7 @@ mod test_parse {
     // DEF
 
     #[test]
-    fn basic_def() {
+    fn one_def() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::BodyOnly(
@@ -650,6 +650,31 @@ mod test_parse {
             indoc!(
                 r#"
                 x=5
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn one_spaced_def() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::BodyOnly(
+            Located::new(0, 0, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(0, 0, 4, 5, Int("5"))),
+        );
+        let defs = bumpalo::vec![in &arena; (Vec::new_in(&arena).into_bump_slice(), def)];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(2, 2, 0, 2, ret);
+        let expected = Defs(arena.alloc((defs, loc_ret)));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                x = 5
 
                 42
                 "#
