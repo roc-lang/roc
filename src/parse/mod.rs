@@ -31,8 +31,8 @@ use parse::blankspace::{
 use parse::ident::{ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, one_of4, one_of5, one_of9,
-    one_or_more, optional, sep_by0, skip_first, skip_second, string, then, unexpected,
+    and, and_then, attempt, between, char, either, loc, map, map_with_arena, one_of4, one_of5,
+    one_of9, one_or_more, optional, sep_by0, skip_first, skip_second, string, then, unexpected,
     unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser, State,
 };
 use parse::string_literal::string_literal;
@@ -199,13 +199,10 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
             ),
             space0_before(
                 loc(move |arena, state| parse_expr(indented_more, arena, state)),
-                min_indent,
+                indented_more,
             ),
         ),
-        |arena, (loc_pattern, loc_expr)| {
-            // BodyOnly(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
-            Def::BodyOnly(loc_pattern, arena.alloc(loc_expr))
-        },
+        |arena, (loc_pattern, loc_expr)| Def::BodyOnly(loc_pattern, arena.alloc(loc_expr)),
     )
 }
 
