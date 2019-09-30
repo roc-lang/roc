@@ -10,14 +10,17 @@ mod test_format {
     use bumpalo::Bump;
     use roc::parse;
     use roc::parse::ast::{format, Attempting, Expr};
-    use roc::parse::parser::{Fail, Parser, State};
+    use roc::parse::blankspace::space0_before;
+    use roc::parse::parser::{loc, Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
         let state = State::new(&input, Attempting::Module);
-        let parser = parse::expr(0);
+        let parser = space0_before(loc(parse::expr(0)), 0);
         let answer = parser.parse(&arena, state);
 
-        answer.map(|(expr, _)| expr).map_err(|(fail, _)| fail)
+        answer
+            .map(|(loc_expr, _)| loc_expr.value)
+            .map_err(|(fail, _)| fail)
     }
 
     fn assert_formats_to(input: &str, expected: &str) {
@@ -96,6 +99,17 @@ mod test_format {
         assert_formats_same(indoc!(
             r#"
             "unicode: \u{A00A}!"
+            "#
+        ));
+    }
+
+    #[test]
+    fn single_def() {
+        assert_formats_same(indoc!(
+            r#"# comment to reset indentation
+            x = 5
+
+            42
             "#
         ));
     }
