@@ -33,7 +33,7 @@ use parse::number_literal::number_literal;
 use parse::parser::{
     and, attempt, between, char, either, loc, map, map_with_arena, one_of4, one_of5, one_of9,
     one_or_more, optional, sep_by0, skip_first, skip_second, string, then, unexpected,
-    unexpected_eof, zero_or_more, Either, ParseResult, Parser, State,
+    unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser, State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -187,6 +187,9 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
 /// * A type annotation
 /// * Both
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
+    // Indented more beyond the original indent.
+    let indented_more = min_indent + 1;
+
     // TODO support type annotations
     map_with_arena(
         and(
@@ -195,7 +198,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                 char('='),
             ),
             space0_before(
-                loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                loc(move |arena, state| parse_expr(indented_more, arena, state)),
                 min_indent,
             ),
         ),
@@ -228,24 +231,41 @@ fn parse_def_expr<'a>(
     let original_indent = state.indent_col;
 
     if original_indent < min_indent {
-        panic!("TODO this declaration is outdented too far");
+        Err((
+            Fail {
+                attempting: state.attempting,
+                reason: FailReason::DefOutdentedTooFar(
+                    original_indent,
+                    min_indent,
+                    loc_first_pattern.region,
+                ),
+            },
+            state,
+        ))
     // `<` because '=' should be same indent or greater
     } else if equals_sign_indent < original_indent {
         panic!("TODO the = in this declaration seems outdented");
     } else {
+        // Indented more beyond the original indent.
+        let indented_more = original_indent + 1;
+
         then(
             and(
                 // Parse the body of the first def. It doesn't need any spaces
                 // around it parsed, because both the subsquent defs and the
                 // final body will have space1_before on them.
-                loc(move |arena, state| parse_expr(original_indent + 1, arena, state)),
+                //
+                // It should be indented more than the original, and it will
+                // end when outdented again.
+                loc(move |arena, state| parse_expr(indented_more, arena, state)),
                 and(
                     // Optionally parse additional defs.
                     zero_or_more(nested_def(original_indent)),
-                    // Parse the final expression that will be returned
+                    // Parse the final expression that will be returned.
+                    // It should be indented the same amount as the original.
                     space1_before(
-                        loc(move |arena, state| parse_expr(original_indent + 1, arena, state)),
-                        original_indent + 1,
+                        loc(move |arena, state| parse_expr(original_indent, arena, state)),
+                        indented_more,
                     ),
                 ),
             ),
@@ -466,7 +486,6 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             // This appears to be a var, keyword, or function application.
             match opt_extras {
                 Some(Either::First(loc_args)) => {
-                    let len = loc_ident.value.len();
                     let loc_expr = Located {
                         region: loc_ident.region,
                         value: ident_to_expr(loc_ident.value),

@@ -136,6 +136,7 @@ pub type ParseResult<'a, Output> = Result<(Output, State<'a>), (Fail, State<'a>)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailReason {
     Unexpected(char, Region),
+    DefOutdentedTooFar(u16, u16, Region),
     ConditionFailed,
     LineTooLong(u32 /* which line was too long */),
     TooManyLines,
