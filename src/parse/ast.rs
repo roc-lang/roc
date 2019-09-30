@@ -112,8 +112,8 @@ pub enum Pattern<'a> {
     RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
 
     // Literal
-    IntLiteral(i64),
-    FloatLiteral(f64),
+    IntLiteral(&'a str),
+    FloatLiteral(&'a str),
     StrLiteral(&'a str),
     EmptyRecordLiteral,
     Underscore,
