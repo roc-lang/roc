@@ -1,5 +1,5 @@
-use bumpalo::collections::vec::Vec;
 use bumpalo::collections::String;
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
 use parse::ident::{Ident, MaybeQualified};
@@ -310,12 +310,26 @@ impl<'a> Expr<'a> {
     }
 }
 
-pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, _indent: u16) -> String<'a> {
+pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a> {
     use self::Expr::*;
 
     let mut buf = String::new_in(arena);
 
     match expr {
+        SpaceBefore(sub_expr, spaces) => {
+            for space in spaces.iter() {
+                buf.push_str(&format_space(arena, space, indent));
+            }
+
+            buf.push_str(&format(arena, sub_expr, indent));
+        }
+        SpaceAfter(sub_expr, spaces) => {
+            buf.push_str(&format(arena, sub_expr, indent));
+
+            for space in spaces.iter() {
+                buf.push_str(&format_space(arena, space, indent));
+            }
+        }
         Str(string) => {
             buf.push('"');
             buf.push_str(string);
@@ -354,7 +368,159 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, _indent: u16) -> String<'
 
             buf.push('}');
         }
+        Defs((defs, ret)) => {
+            // The first def is actually at the end of the list, because
+            // it gets added there with .push() for efficiency. (The order of parsed defs doesn't
+            // matter because canonicalization sorts them anyway.) The other
+            // defs in the list are in their usual order.
+            let (first_spaces, first_def) = defs.last().unwrap_or_else(|| {
+                panic!("Tried to format Defs which somehow had an empty list of defs!")
+            });
+            let other_spaced_defs = &defs[0..defs.len() - 1];
+
+            for space in first_spaces.iter() {
+                buf.push_str(&format_space(arena, space, indent));
+            }
+
+            buf.push_str(&format_def(arena, first_def, indent));
+
+            for (spaces, def) in other_spaced_defs.iter() {
+                for space in spaces.iter() {
+                    buf.push_str(&format_space(arena, space, indent));
+                }
+
+                buf.push_str(&format_def(arena, def, indent));
+            }
+
+            buf.push_str(&format(arena, &ret.value, indent));
+        }
         other => panic!("TODO implement Display for AST variant {:?}", other),
+    }
+
+    buf
+}
+
+pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<'a> {
+    use self::Def::*;
+
+    let mut buf = String::new_in(arena);
+
+    match def {
+        AnnotationOnly => panic!("TODO have format_def support AnnotationOnly"),
+        BodyOnly(loc_pattern, loc_expr) => {
+            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent));
+            buf.push_str(" = ");
+            buf.push_str(&format(arena, &loc_expr.value, indent));
+        }
+        AnnotatedBody(_loc_pattern, _loc_expr) => {
+            panic!("TODO have format_def support AnnotationOnly")
+        }
+    }
+
+    buf
+}
+
+fn format_pattern<'a>(arena: &'a Bump, pattern: &'a Pattern<'a>, indent: u16) -> String<'a> {
+    use self::Pattern::*;
+
+    let mut buf = String::new_in(arena);
+
+    match pattern {
+        Identifier(string) => buf.push_str(string),
+        Variant(module_parts, name) => {
+            for part in module_parts.iter() {
+                buf.push_str(part);
+                buf.push('.');
+            }
+
+            buf.push_str(name);
+        }
+        Apply((loc_pattern, loc_arg_patterns)) => {
+            buf.push_str(&format_pattern(arena, loc_pattern.value, indent));
+
+            for loc_arg in loc_arg_patterns {
+                buf.push(' ');
+                buf.push_str(&format_pattern(arena, &loc_arg.value, indent));
+            }
+        }
+        RecordDestructure(loc_patterns) => {
+            buf.push_str("{ ");
+
+            let mut is_first = true;
+
+            for loc_pattern in loc_patterns {
+                if is_first {
+                    is_first = false;
+                } else {
+                    buf.push_str(", ");
+                }
+
+                buf.push_str(&format_pattern(arena, &loc_pattern.value, indent));
+            }
+
+            buf.push_str(" }");
+        }
+
+        IntLiteral(string) => buf.push_str(string),
+        FloatLiteral(string) => buf.push_str(string),
+        StrLiteral(string) => buf.push_str(string),
+        EmptyRecordLiteral => buf.push_str("{}"),
+        Underscore => buf.push('_'),
+
+        // Space
+        SpaceBefore(sub_pattern, spaces) => {
+            for space in spaces.iter() {
+                buf.push_str(&format_space(arena, space, indent));
+            }
+
+            buf.push_str(&format_pattern(arena, sub_pattern, indent));
+        }
+        SpaceAfter(sub_pattern, spaces) => {
+            buf.push_str(&format_pattern(arena, sub_pattern, indent));
+
+            for space in spaces.iter() {
+                buf.push_str(&format_space(arena, space, indent));
+            }
+        }
+
+        // Malformed
+        Malformed(string) => buf.push_str(string),
+        QualifiedIdentifier(maybe_qualified) => {
+            for part in maybe_qualified.module_parts.iter() {
+                buf.push_str(part);
+                buf.push('.');
+            }
+
+            buf.push_str(maybe_qualified.value);
+        }
+    }
+
+    buf
+}
+
+fn format_space<'a>(arena: &'a Bump, space: &'a CommentOrNewline<'a>, _indent: u16) -> String<'a> {
+    use self::CommentOrNewline::*;
+
+    let mut buf = String::new_in(arena);
+
+    match space {
+        Newline => {
+            buf.push('\n');
+        }
+        LineComment(comment) => {
+            buf.push('#');
+            buf.push_str(comment);
+            buf.push('\n');
+        }
+        BlockComment(lines) => {
+            buf.push_str("###");
+
+            for line in lines.iter() {
+                buf.push_str(line);
+            }
+
+            buf.push_str("###");
+        }
     }
 
     buf
