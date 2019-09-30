@@ -28,12 +28,13 @@ use parse::ast::{Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable};
 use parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_before,
 };
-use parse::ident::{ident, Ident};
+use parse::ident::{ident, Ident, MaybeQualified};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, and_then, attempt, between, char, either, loc, map, map_with_arena, one_of4, one_of5,
-    one_of9, one_or_more, optional, sep_by0, skip_first, skip_second, string, then, unexpected,
-    unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser, State,
+    and, attempt, between, char, either, loc, map, map_with_arena, not_followed_by, one_of2,
+    one_of4, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second, string,
+    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
+    State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -149,7 +150,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                 // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
                 either(
                     one_or_more(skip_first(char('.'), unqualified_ident())),
-                    and(space0(min_indent), either(char('='), char(':'))),
+                    and(space0(min_indent), either(equals_for_def(), char(':'))),
                 ),
             )),
         )),
@@ -181,6 +182,12 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
     )
 }
 
+/// The '=' used in a def can't be followed by another '=' (or else it's actually
+/// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
+fn equals_for_def<'a>() -> impl Parser<'a, ()> {
+    not_followed_by(char('='), one_of2(char('='), char('>')))
+}
+
 /// A definition, consisting of one of these:
 ///
 /// * A pattern followed by '=' and then an expression
@@ -195,7 +202,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
         and(
             skip_second(
                 space0_after(loc_closure_param(min_indent), min_indent),
-                char('='),
+                equals_for_def(),
             ),
             space0_before(
                 loc(move |arena, state| parse_expr(indented_more, arena, state)),
@@ -285,38 +292,6 @@ fn parse_def_expr<'a>(
             },
         )
         .parse(arena, state)
-    }
-}
-
-fn parse_nested_def_body<'a, S>(
-    min_indent: u16,
-    equals_sign_indent: u16,
-    arena: &'a Bump,
-    state: State<'a>,
-    loc_pattern: Located<Pattern<'a>>,
-) -> ParseResult<'a, Located<Expr<'a>>> {
-    let original_indent = state.indent_col;
-
-    if original_indent < min_indent {
-        panic!("TODO this declaration is outdented too far");
-    // `<` because '=' should be same indent or greater
-    } else if equals_sign_indent < original_indent {
-        panic!("TODO the = in this declaration seems outdented");
-    } else {
-        then(
-            loc(move |arena, state| {
-                parse_expr(original_indent + 1, arena, state)
-            }),
-            move |arena, state, loc_expr| {
-                if state.indent_col != original_indent {
-                    panic!(
-                                "TODO the return expression was indented differently from the original assignment",
-                            );
-                } else {
-                    Ok((loc_expr, state))
-                }
-            },
-        ).parse(arena, state)
     }
 }
 
@@ -490,18 +465,23 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
                     Ok((Expr::Apply(arena.alloc((loc_expr, loc_args))), state))
                 }
-                Some(Either::Second((_space_list, Either::First(indent)))) => {
-                    let value: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
+                Some(Either::Second((spaces_before_equals, Either::First(equals_indent)))) => {
+                    let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
+                    let value = if spaces_before_equals.is_empty() {
+                        pattern
+                    } else {
+                        Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_equals)
+                    };
                     let region = loc_ident.region;
                     let loc_pattern = Located { region, value };
-                    let (spaces, state) = space0(min_indent).parse(arena, state)?;
+                    let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
                     let (parsed_expr, state) =
-                        parse_def_expr(min_indent, indent, arena, state, loc_pattern)?;
+                        parse_def_expr(min_indent, equals_indent, arena, state, loc_pattern)?;
 
-                    let answer = if spaces.is_empty() {
+                    let answer = if spaces_after_equals.is_empty() {
                         parsed_expr
                     } else {
-                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces)
+                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
                     };
 
                     Ok((answer, state))
@@ -528,6 +508,7 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
             Some(ch) if ch == '=' => {
                 match iter.peekable().peek() {
                     // The '=' must not be followed by another `=` or `>`
+                    // (See equals_for_def() for explanation)
                     Some(next_ch) if next_ch != &'=' && next_ch != &'>' => {
                         Ok((state.indent_col, state.advance_without_indenting(1)?))
                     }
@@ -599,7 +580,65 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     );
     let fields = collection(char('{'), loc(field), char(','), char('}'), min_indent);
 
-    attempt(Attempting::List, map(fields, Expr::Record))
+    then(
+        and(
+            attempt(Attempting::Record, loc(fields)),
+            optional(and(space0(min_indent), equals_with_indent())),
+        ),
+        move |arena, state, (loc_field_exprs, opt_def)| match opt_def {
+            None => Ok((Expr::Record(loc_field_exprs.value), state)),
+            Some((spaces_before_equals, equals_indent)) => {
+                let region = loc_field_exprs.region;
+                let field_exprs = loc_field_exprs.value;
+                let mut loc_patterns = Vec::with_capacity_in(field_exprs.len(), arena);
+
+                for loc_field_expr in field_exprs {
+                    let region = loc_field_expr.region;
+
+                    // If this is a record destructure, these should all be
+                    // unqualified Var expressions!
+                    let value = match loc_field_expr.value {
+                        Expr::Var(module_parts, value) => {
+                            if module_parts.is_empty() {
+                                Pattern::Identifier(value)
+                            } else {
+                                Pattern::QualifiedIdentifier(MaybeQualified {
+                                    module_parts,
+                                    value,
+                                })
+                            }
+                        }
+                        _ => {
+                            panic!("TODO handle malformed record destructure.");
+                            // Malformed("???"),
+                        }
+                    };
+
+                    loc_patterns.push(Located { region, value });
+                }
+
+                let pattern = Pattern::RecordDestructure(loc_patterns);
+                let value = if spaces_before_equals.is_empty() {
+                    pattern
+                } else {
+                    Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_equals)
+                };
+                let loc_pattern = Located { region, value };
+                let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
+
+                let (parsed_expr, state) =
+                    parse_def_expr(min_indent, equals_indent, arena, state, loc_pattern)?;
+
+                let answer = if spaces_after_equals.is_empty() {
+                    parsed_expr
+                } else {
+                    Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
+                };
+
+                Ok((answer, state))
+            }
+        },
+    )
 }
 
 /// This is mainly for matching variants in closure params, e.g. \Foo -> ...

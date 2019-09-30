@@ -162,6 +162,42 @@ where
     }
 }
 
+pub fn not_followed_by<'a, P, ByParser, By, Val>(parser: P, by: ByParser) -> impl Parser<'a, Val>
+where
+    ByParser: Parser<'a, By>,
+    P: Parser<'a, Val>,
+{
+    move |arena, state: State<'a>| {
+        parser.parse(arena, state).and_then(|(answer, state)| {
+            let original_state = state.clone();
+
+            match by.parse(arena, state) {
+                Ok((_, state)) => Err((
+                    Fail {
+                        attempting: state.attempting,
+                        reason: FailReason::ConditionFailed,
+                    },
+                    original_state,
+                )),
+                Err(_) => Ok((answer, original_state)),
+            }
+        })
+    }
+}
+
+pub fn lookahead<'a, Peek, P, PeekVal, Val>(peek: Peek, parser: P) -> impl Parser<'a, Val>
+where
+    Peek: Parser<'a, PeekVal>,
+    P: Parser<'a, Val>,
+{
+    move |arena, state: State<'a>| {
+        let original_state = state.clone();
+
+        peek.parse(arena, state)
+            .and_then(|_| parser.parse(arena, original_state))
+    }
+}
+
 pub fn and_then<'a, P1, P2, F, Before, After>(parser: P1, transform: F) -> impl Parser<'a, After>
 where
     P1: Parser<'a, Before>,

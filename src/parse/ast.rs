@@ -291,6 +291,7 @@ pub enum Attempting {
     Def,
     Expression,
     Module,
+    Record,
     Identifier,
 }
 

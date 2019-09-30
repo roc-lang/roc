@@ -126,6 +126,17 @@ mod test_format {
         ));
     }
 
+    #[test]
+    fn record_destructuring() {
+        assert_formats_same(indoc!(
+            r#"# comment to reset indentation
+            { x, y } = 5
+
+            42
+            "#
+        ));
+    }
+
     // RECORD LITERALS
 
     #[test]

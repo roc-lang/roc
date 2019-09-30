@@ -724,6 +724,51 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn record_destructure_def() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let newline = bumpalo::vec![in &arena; Newline];
+        let fields = bumpalo::vec![in &arena;
+            Located::new(1, 1, 2, 3, Identifier("x")),
+            Located::new(1, 1, 5, 6, Identifier("y"))
+        ];
+        let def1 = Def::BodyOnly(
+            Located::new(1, 1, 0, 8, RecordDestructure(fields)),
+            arena.alloc(Located::new(1, 1, 11, 12, Int("5"))),
+        );
+        let def2 = Def::BodyOnly(
+            Located::new(2, 2, 0, 1, Identifier("y")),
+            arena.alloc(Located::new(2, 2, 4, 5, Int("6"))),
+        );
+        // NOTE: The first def always gets reordered to the end (because it
+        // gets added by .push(), since that's more efficient and since
+        // canonicalization is going to re-sort these all anyway.)
+        let defs = bumpalo::vec![in &arena;
+            (newline.into_bump_slice(), def2),
+            (Vec::new_in(&arena).into_bump_slice(), def1)
+        ];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(4, 4, 0, 2, ret);
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" reset indentation")];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Defs(arena.alloc((defs, loc_ret)))),
+            reset_indentation.into_bump_slice(),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"# reset indentation
+                { x, y } = 5
+                y = 6
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
     // TODO test hex/oct/binary parsing
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
