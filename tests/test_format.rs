@@ -114,6 +114,18 @@ mod test_format {
         ));
     }
 
+    #[test]
+    fn two_defs() {
+        assert_formats_same(indoc!(
+            r#"# comment to reset indentation
+            x = 5
+            y = 10
+
+            42
+            "#
+        ));
+    }
+
     // RECORD LITERALS
 
     #[test]
