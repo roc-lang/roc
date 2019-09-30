@@ -157,8 +157,8 @@ where
     P: 'a,
 {
     map_with_arena(
-        and(space0(min_indent), parser),
-        |arena, (space_list, loc_expr)| {
+        and(parser, space0(min_indent)),
+        |arena, (loc_expr, space_list)| {
             if space_list.is_empty() {
                 loc_expr
             } else {
@@ -181,8 +181,8 @@ where
     P: 'a,
 {
     map_with_arena(
-        and(space1(min_indent), parser),
-        |arena, (space_list, loc_expr)| {
+        and(parser, space1(min_indent)),
+        |arena, (loc_expr, space_list)| {
             if space_list.is_empty() {
                 loc_expr
             } else {
