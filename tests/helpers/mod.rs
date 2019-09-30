@@ -12,12 +12,18 @@ use roc::collections::{ImMap, MutMap};
 use roc::ident::Ident;
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
-use roc::parse::parser::{Fail, Parser, State};
+use roc::parse::blankspace::space0_before;
+use roc::parse::parser::{attempt, loc, map, Fail, Parser, State};
 use roc::region::{Located, Region};
 
 pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
     let state = State::new(&input, Attempting::Module);
-    let parser = parse::expr(0);
+    let parser = attempt(
+        Attempting::Expression,
+        map(space0_before(loc(parse::expr(0)), 0), |loc_expr| {
+            loc_expr.value
+        }),
+    );
     let answer = parser.parse(&arena, state);
 
     answer.map(|(expr, _)| expr).map_err(|(fail, _)| fail)
