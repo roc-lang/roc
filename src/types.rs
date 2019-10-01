@@ -39,6 +39,9 @@ impl Type {
         match op {
             Slash => op_type(Type::float(), Type::float(), Type::float()),
             DoubleSlash => op_type(Type::int(), Type::int(), Type::int()),
+            // TODO actually, don't put these in types.rs - instead, replace them
+            // with an equivalence to their corresponding stdlib functions - e.g.
+            // Slash generates a new variable and an Eq constraint with Float.div.
             _ => panic!("TODO types for operator {:?}", op),
         }
     }
