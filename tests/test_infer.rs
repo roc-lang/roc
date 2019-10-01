@@ -515,7 +515,7 @@ mod test_infer {
     }
 
     #[test]
-    fn basic_division() {
+    fn basic_float_division() {
         infer_eq(
             indoc!(
                 r#"
@@ -523,6 +523,18 @@ mod test_infer {
             "#
             ),
             "Float",
+        );
+    }
+
+    #[test]
+    fn basic_int_division() {
+        infer_eq(
+            indoc!(
+                r#"
+                1 // 2
+            "#
+            ),
+            "Int",
         );
     }
 
