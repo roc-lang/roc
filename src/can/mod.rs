@@ -743,7 +743,18 @@ fn canonicalize<'a>(
         ast::Expr::SpaceAfter(sub_expr, _spaces) => {
             return canonicalize(env, scope, region, sub_expr);
         }
-        _ => {
+        ast::Expr::BlockStr(_)
+        | ast::Expr::Field(_, _)
+        | ast::Expr::QualifiedField(_, _)
+        | ast::Expr::AccessorFunction(_)
+        | ast::Expr::If(_)
+        | ast::Expr::Then(_)
+        | ast::Expr::Else(_)
+        | ast::Expr::Case(_)
+        | ast::Expr::When(_)
+        | ast::Expr::Variant(_, _)
+        | ast::Expr::MalformedIdent(_)
+        | ast::Expr::AssignField(_, _) => {
             panic!(
                 "TODO restore the rest of canonicalize()'s branches {:?}",
                 local_successors(&References::new(), &MutMap::default())
