@@ -312,155 +312,155 @@ mod test_infer {
 
     // DEF
 
-    // #[test]
-    // fn def_empty_record() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             foo = {}
+    #[test]
+    fn def_empty_record() {
+        infer_eq(
+            indoc!(
+                r#"
+                foo = {}
 
-    //             foo
-    //         "#
-    //         ),
-    //         "{}",
-    //     );
-    // }
+                foo
+            "#
+            ),
+            "{}",
+        );
+    }
 
-    // #[test]
-    // fn def_string() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             str = "thing"
+    #[test]
+    fn def_string() {
+        infer_eq(
+            indoc!(
+                r#"
+                str = "thing"
 
-    //             str
-    //         "#
-    //         ),
-    //         "Str",
-    //     );
-    // }
+                str
+            "#
+            ),
+            "Str",
+        );
+    }
 
-    // #[test]
-    // fn def_1_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             fn = \_ -> {}
+    #[test]
+    fn def_1_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                fn = \_ -> {}
 
-    //             fn
-    //         "#
-    //         ),
-    //         "* -> {}",
-    //     );
-    // }
+                fn
+            "#
+            ),
+            "* -> {}",
+        );
+    }
 
-    // #[test]
-    // fn def_2_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             func = \_ _ -> 42
+    #[test]
+    fn def_2_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                func = \_ _ -> 42
 
-    //             func
-    //         "#
-    //         ),
-    //         "*, * -> Int",
-    //     );
-    // }
+                func
+            "#
+            ),
+            "*, * -> Int",
+        );
+    }
 
-    // #[test]
-    // fn def_3_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             f = \_ _ _ -> "test!"
+    #[test]
+    fn def_3_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \_ _ _ -> "test!"
 
-    //             f
-    //         "#
-    //         ),
-    //         "*, *, * -> String",
-    //     );
-    // }
+                f
+            "#
+            ),
+            "*, *, * -> Str",
+        );
+    }
 
-    // #[test]
-    // fn def_multiple_functions() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             a = \_ _ _ -> "test!"
+    #[test]
+    fn def_multiple_functions() {
+        infer_eq(
+            indoc!(
+                r#"
+                a = \_ _ _ -> "test!"
 
-    //             b = a
+                b = a
 
-    //             b
-    //         "#
-    //         ),
-    //         "*, *, * -> String",
-    //     );
-    // }
+                b
+            "#
+            ),
+            "*, *, * -> Str",
+        );
+    }
 
-    // #[test]
-    // fn def_multiple_strings() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             a = "test!"
+    #[test]
+    fn def_multiple_strings() {
+        infer_eq(
+            indoc!(
+                r#"
+                a = "test!"
 
-    //             b = a
+                b = a
 
-    //             b
-    //         "#
-    //         ),
-    //         "Str",
-    //     );
-    // }
+                b
+            "#
+            ),
+            "Str",
+        );
+    }
 
-    // #[test]
-    // fn def_multiple_nums() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             c = b
+    #[test]
+    fn def_multiple_ints() {
+        infer_eq(
+            indoc!(
+                r#"
+                c = b
 
-    //             b = a
+                b = a
 
-    //             a = 42
+                a = 42
 
-    //             c
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+                c
+            "#
+            ),
+            "Int",
+        );
+    }
 
-    // // CALLING FUNCTIONS
+    // CALLING FUNCTIONS
 
-    // #[test]
-    // fn call_returns_num() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             alwaysFive = \_ -> 5
+    #[test]
+    fn call_returns_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                alwaysFive = \_ -> 5
 
-    //             alwaysFive "stuff"
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+                alwaysFive "stuff"
+            "#
+            ),
+            "Int",
+        );
+    }
 
-    // #[test]
-    // fn call_returns_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             enlist = \val -> [ val ]
+    #[test]
+    fn call_returns_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                enlist = \val -> [ val ]
 
-    //             enlist 5
-    //         "#
-    //         ),
-    //         "List Int",
-    //     );
-    // }
+                enlist 5
+            "#
+            ),
+            "List Int",
+        );
+    }
 
     // TODO type annotations
     // TODO fix identity inference

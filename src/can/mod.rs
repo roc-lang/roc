@@ -28,7 +28,8 @@ pub mod symbol;
 pub fn canonicalize_declaration<'a>(
     home: String,
     name: &str,
-    loc_expr: &'a Located<ast::Expr<'a>>,
+    region: Region,
+    expr: &'a ast::Expr<'a>,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
     declared_variants: &ImMap<Symbol, Located<Box<str>>>,
 ) -> (
@@ -42,7 +43,7 @@ pub fn canonicalize_declaration<'a>(
     let scope_prefix = format!("{}${}$", home, name);
     let mut scope = Scope::new(scope_prefix, declared_idents.clone());
     let mut env = Env::new(home, declared_variants.clone());
-    let (mut new_loc_expr, output) = canonicalize(&mut env, &mut scope, loc_expr);
+    let (mut new_loc_expr, output) = canonicalize(&mut env, &mut scope, region, expr);
 
     // Apply operator precedence and associativity rules once, after canonicalization is
     // otherwise complete. If we did this *during* canonicalization, then each time we
@@ -72,11 +73,12 @@ impl Output {
 fn canonicalize<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    loc_expr: &'a Located<ast::Expr<'a>>,
+    region: Region,
+    expr: &'a ast::Expr<'a>,
 ) -> (Located<Expr>, Output) {
     use self::Expr::*;
 
-    let (expr, output) = match &loc_expr.value {
+    let (expr, output) = match expr {
         ast::Expr::Int(string) => (int_from_parsed(string, &mut env.problems), Output::new()),
         ast::Expr::Float(string) => (float_from_parsed(string, &mut env.problems), Output::new()),
         ast::Expr::Record(fields) => {
@@ -96,7 +98,8 @@ fn canonicalize<'a>(
                 let mut can_elems = Vec::with_capacity(elems.len());
 
                 for loc_elem in elems.iter() {
-                    let (can_expr, elem_out) = canonicalize(env, scope, loc_elem);
+                    let (can_expr, elem_out) =
+                        canonicalize(env, scope, loc_elem.region.clone(), &loc_elem.value);
 
                     output.references = output.references.union(elem_out.references);
 
@@ -139,12 +142,14 @@ fn canonicalize<'a>(
         //}
         ast::Expr::Apply((loc_fn, loc_args)) => {
             // Canonicalize the function expression and its arguments
-            let (fn_expr, mut output) = canonicalize(env, scope, loc_fn);
+            let (fn_expr, mut output) =
+                canonicalize(env, scope, loc_fn.region.clone(), &loc_fn.value);
             let mut args = Vec::new();
             let mut outputs = Vec::new();
 
             for loc_arg in loc_args.iter() {
-                let (arg_expr, arg_out) = canonicalize(env, scope, loc_arg);
+                let (arg_expr, arg_out) =
+                    canonicalize(env, scope, loc_arg.region.clone(), &loc_arg.value);
 
                 args.push(arg_expr);
                 outputs.push(arg_out);
@@ -170,8 +175,10 @@ fn canonicalize<'a>(
         }
         ast::Expr::Operator((loc_left, loc_op, loc_right)) => {
             // Canonicalize the nested expressions
-            let (left_expr, left_out) = canonicalize(env, scope, loc_left);
-            let (right_expr, mut output) = canonicalize(env, scope, loc_right);
+            let (left_expr, left_out) =
+                canonicalize(env, scope, loc_left.region.clone(), &loc_left.value);
+            let (right_expr, mut output) =
+                canonicalize(env, scope, loc_right.region.clone(), &loc_right.value);
 
             // Incorporate both expressions into a combined Output value.
             output.references = output.references.union(left_out.references);
@@ -201,7 +208,7 @@ fn canonicalize<'a>(
                 Ok(symbol) => Var(symbol),
                 Err(ident) => {
                     let loc_ident = Located {
-                        region: loc_expr.region.clone(),
+                        region: region.clone(),
                         value: ident,
                     };
 
@@ -332,12 +339,14 @@ fn canonicalize<'a>(
 
                         (None, (loc_expr, Output::new()))
                     }
-                    Def::BodyOnly(loc_pattern, loc_expr) => {
-                        (Some(loc_pattern), canonicalize(env, &mut scope, loc_expr))
-                    }
-                    Def::AnnotatedBody(loc_pattern, loc_expr) => {
-                        (Some(loc_pattern), canonicalize(env, &mut scope, loc_expr))
-                    }
+                    Def::BodyOnly(loc_pattern, loc_expr) => (
+                        Some(loc_pattern),
+                        canonicalize(env, &mut scope, loc_expr.region.clone(), &loc_expr.value),
+                    ),
+                    Def::AnnotatedBody(loc_pattern, loc_expr) => (
+                        Some(loc_pattern),
+                        canonicalize(env, &mut scope, loc_expr.region.clone(), &loc_expr.value),
+                    ),
                 };
 
                 if let Some(loc_pattern) = opt_loc_pattern {
@@ -454,7 +463,8 @@ fn canonicalize<'a>(
 
             // The assignment as a whole is a tail call iff its return expression is a tail call.
             // Use its output as a starting point because its tail_call already has the right answer!
-            let (ret_expr, mut output) = canonicalize(env, &mut scope, loc_ret);
+            let (ret_expr, mut output) =
+                canonicalize(env, &mut scope, loc_ret.region.clone(), &loc_ret.value);
 
             // Determine the full set of references by traversing the graph.
             let mut visited_symbols = MutSet::default();
@@ -607,7 +617,12 @@ fn canonicalize<'a>(
                     )
                 })
                 .collect();
-            let (loc_body_expr, mut output) = canonicalize(env, &mut scope, loc_body_expr);
+            let (loc_body_expr, mut output) = canonicalize(
+                env,
+                &mut scope,
+                loc_body_expr.region.clone(),
+                &loc_body_expr.value,
+            );
 
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
@@ -633,7 +648,7 @@ fn canonicalize<'a>(
                 symbol.clone(),
                 can_args,
                 loc_body_expr,
-                loc_expr.region.clone(),
+                region.clone(),
                 output.references.clone(),
             );
 
@@ -722,6 +737,12 @@ fn canonicalize<'a>(
         ast::Expr::HexInt(string) => (hex_from_parsed(string, &mut env.problems), Output::new()),
         ast::Expr::BinaryInt(string) => (bin_from_parsed(string, &mut env.problems), Output::new()),
         ast::Expr::OctalInt(string) => (oct_from_parsed(string, &mut env.problems), Output::new()),
+        ast::Expr::SpaceBefore(sub_expr, _spaces) => {
+            return canonicalize(env, scope, region, sub_expr);
+        }
+        ast::Expr::SpaceAfter(sub_expr, _spaces) => {
+            return canonicalize(env, scope, region, sub_expr);
+        }
         _ => {
             panic!(
                 "TODO restore the rest of canonicalize()'s branches {:?}",
@@ -739,7 +760,7 @@ fn canonicalize<'a>(
     // DCE them in optimized builds, and it's not worth the bookkeeping for dev builds.
     (
         Located {
-            region: loc_expr.region.clone(),
+            region,
             value: expr,
         },
         output,
