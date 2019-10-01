@@ -24,7 +24,7 @@ use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
-use parse::ast::{Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable};
+use parse::ast::{Attempting, Def, Expr, Pattern, Spaceable};
 use parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_before,
 };
@@ -213,18 +213,6 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     )
 }
 
-/// Same as def() but with space_before1 before each def, because each nested def must
-/// have space separating it from the previous def.
-pub fn nested_def<'a>(min_indent: u16) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], Def<'a>)> {
-    then(
-        and(space1(min_indent), def(min_indent)),
-        move |arena: &'a Bump, state, tuple| {
-            // TODO verify spacing (I think?)
-            Ok((tuple, state))
-        },
-    )
-}
-
 fn parse_def_expr<'a>(
     min_indent: u16,
     equals_sign_indent: u16,
@@ -264,7 +252,7 @@ fn parse_def_expr<'a>(
                 loc(move |arena, state| parse_expr(indented_more, arena, state)),
                 and(
                     // Optionally parse additional defs.
-                    zero_or_more(nested_def(original_indent)),
+                    zero_or_more(and(space1(original_indent), def(original_indent))),
                     // Parse the final expression that will be returned.
                     // It should be indented the same amount as the original.
                     space1_before(
@@ -491,7 +479,6 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 }
                 None => {
                     let ident = loc_ident.value.clone();
-                    let len = ident.len();
 
                     Ok((ident_to_expr(ident), state))
                 }

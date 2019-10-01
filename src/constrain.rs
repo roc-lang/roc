@@ -17,7 +17,7 @@ use types::{Expected, Expected::*, LetConstraint, Reason};
 ///     nested : Map k v # <-- the same k and v from the top-level annotation
 ///     nested = mapping
 ///     42
-///     
+///
 /// In elm/compiler this is called RTV - the "Rigid Type Variables" dictionary.
 type BoundTypeVars = ImMap<String, Type>;
 
