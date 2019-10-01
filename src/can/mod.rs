@@ -8,11 +8,11 @@ use self::procedure::{Procedure, References};
 use self::scope::Scope;
 use self::symbol::Symbol;
 use collections::{ImMap, ImSet, MutMap, MutSet};
+use graph::{strongly_connected_component, topological_sort};
 use ident::Ident;
-// use graph::{strongly_connected_component, topological_sort};
 use operator::Operator;
 use operator::Operator::Pizza;
-use parse::ast;
+use parse::ast::{self, Def};
 use region::{Located, Region};
 use std::i64;
 
@@ -295,261 +295,279 @@ fn canonicalize<'a>(
 
         //    (can_expr, output)
         //}
+        ast::Expr::Defs((defs, loc_ret)) => {
+            // The body expression gets a new scope for canonicalization.
+            // Shadow `scope` to make sure we don't accidentally use the original one for the
+            // rest of this block.
+            let mut scope = scope.clone();
 
-        //ast::Expr::Assign(assignments, box_loc_returned) => {
-        //    // The body expression gets a new scope for canonicalization.
-        //    // Shadow `scope` to make sure we don't accidentally use the original one for the
-        //    // rest of this block.
-        //    let mut scope = scope.clone();
+            // Add the assigned identifiers to scope. If there's a collision, it means there
+            // was shadowing, which will be handled later.
+            let assigned_idents: Vec<(Ident, (Symbol, Region))> = idents_from_patterns(
+                defs.clone().iter().flat_map(|(_, def)| match def {
+                    Def::AnnotationOnly(_region) => None,
+                    Def::BodyOnly(loc_pattern, _expr) => Some(loc_pattern),
+                    Def::AnnotatedBody(loc_pattern, _expr) => Some(loc_pattern),
+                }),
+                &scope,
+            );
 
-        //    // Add the assigned identifiers to scope. If there's a collision, it means there
-        //    // was shadowing, which will be handled later.
-        //    let assigned_idents: Vec<(Ident, (Symbol, Region))> = idents_from_patterns(
-        //        assignments
-        //            .clone()
-        //            .iter()
-        //            .map(|(loc_pattern, _)| loc_pattern),
-        //        &scope,
-        //    );
+            scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
-        //    scope.idents = union_pairs(scope.idents, assigned_idents.iter());
+            let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> =
+                MutMap::default();
+            let mut can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
+                MutMap::default();
 
-        //    let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> =
-        //        MutMap::default();
-        //    let mut can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
-        //        MutMap::default();
+            for (_, def) in defs {
+                // Each assignment gets to have all the idents in scope that are assigned in this
+                // block. Order of assignments doesn't matter, thanks to referential transparency!
+                let (opt_loc_pattern, (loc_can_expr, can_output)) = match def {
+                    Def::AnnotationOnly(region) => {
+                        let value = Expr::RuntimeError(NoImplementation);
+                        let loc_expr = Located {
+                            value,
+                            region: region.clone(),
+                        };
 
-        //    for (loc_pattern, expr) in assignments {
-        //        // Each assignment gets to have all the idents in scope that are assigned in this
-        //        // block. Order of assignments doesn't matter, thanks to referential transparency!
-        //        let (loc_can_expr, can_output) = canonicalize(env, &mut scope, expr);
+                        (None, (loc_expr, Output::new()))
+                    }
+                    Def::BodyOnly(loc_pattern, loc_expr) => {
+                        (Some(loc_pattern), canonicalize(env, &mut scope, loc_expr))
+                    }
+                    Def::AnnotatedBody(loc_pattern, loc_expr) => {
+                        (Some(loc_pattern), canonicalize(env, &mut scope, loc_expr))
+                    }
+                };
 
-        //        // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-        //        // (However, still include it in scope, because you *can* recursively refer to yourself.)
-        //        let mut shadowable_idents = scope.idents.clone();
-        //        remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
+                if let Some(loc_pattern) = opt_loc_pattern {
+                    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                    // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                    let mut shadowable_idents = scope.idents.clone();
+                    remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-        //        let loc_can_pattern = canonicalize_pattern(
-        //            env,
-        //            &mut scope,
-        //            &Assignment,
-        //            &loc_pattern,
-        //            &mut shadowable_idents,
-        //        );
-        //        let mut renamed_closure_assignment: Option<&Symbol> = None;
+                    let loc_can_pattern = canonicalize_pattern(
+                        env,
+                        &mut scope,
+                        &Assignment,
+                        &loc_pattern,
+                        &mut shadowable_idents,
+                    );
+                    let mut renamed_closure_assignment: Option<&Symbol> = None;
 
-        //        // Give closures names (and tail-recursive status) where appropriate.
-        //        let can_expr = match (
-        //            &loc_pattern.value,
-        //            &loc_can_pattern.value,
-        //            &loc_can_expr.value,
-        //        ) {
-        //            // First, make sure we are actually assigning an identifier instead of (for example) a variant.
-        //            //
-        //            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
-        //            // which also implies it's not a self tail call!
-        //            //
-        //            // Only assignments of the form (foo = ...) can be closure declarations or self tail calls.
-        //            (
-        //                &expr::Pattern::Identifier(ref name),
-        //                &Pattern::Identifier(ref assigned_symbol),
-        //                &FunctionPointer(ref symbol),
-        //            ) => {
-        //                // Since everywhere in the code it'll be referred to by its assigned name,
-        //                // remove its generated name from the procedure map. (We'll re-insert it later.)
-        //                let mut procedure = env.procedures.remove(&symbol).unwrap();
+                    // Give closures names (and tail-recursive status) where appropriate.
+                    let can_expr = match (
+                        &loc_pattern.value,
+                        &loc_can_pattern.value,
+                        &loc_can_expr.value,
+                    ) {
+                        // First, make sure we are actually assigning an identifier instead of (for example) a variant.
+                        //
+                        // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
+                        // which also implies it's not a self tail call!
+                        //
+                        // Only assignments of the form (foo = ...) can be closure declarations or self tail calls.
+                        (
+                            &ast::Pattern::Identifier(ref name),
+                            &Pattern::Identifier(ref assigned_symbol),
+                            &FunctionPointer(ref symbol),
+                        ) => {
+                            // Since everywhere in the code it'll be referred to by its assigned name,
+                            // remove its generated name from the procedure map. (We'll re-insert it later.)
+                            let mut procedure = env.procedures.remove(&symbol).unwrap();
 
-        //                // The original ident name will be used for debugging and stack traces.
-        //                procedure.name = Some(name.clone());
+                            // The original ident name will be used for debugging and stack traces.
+                            procedure.name = Some(name.to_string());
 
-        //                // The closure is self tail recursive iff it tail calls itself (by assigned name).
-        //                procedure.is_self_tail_recursive = match &can_output.tail_call {
-        //                    &None => false,
-        //                    &Some(ref symbol) => symbol == assigned_symbol,
-        //                };
+                            // The closure is self tail recursive iff it tail calls itself (by assigned name).
+                            procedure.is_self_tail_recursive = match &can_output.tail_call {
+                                &None => false,
+                                &Some(ref symbol) => symbol == assigned_symbol,
+                            };
 
-        //                // Re-insert the procedure into the map, under its assigned name. This way,
-        //                // when code elsewhere calls it by assigned name, it'll resolve properly.
-        //                env.procedures.insert(assigned_symbol.clone(), procedure);
+                            // Re-insert the procedure into the map, under its assigned name. This way,
+                            // when code elsewhere calls it by assigned name, it'll resolve properly.
+                            env.procedures.insert(assigned_symbol.clone(), procedure);
 
-        //                // Recursion doesn't count as referencing. (If it did, all recursive functions
-        //                // would result in circular assignment errors!)
-        //                refs_by_assignment
-        //                    .entry(assigned_symbol.clone())
-        //                    .and_modify(|(_, refs)| {
-        //                        refs.locals = refs.locals.without(assigned_symbol);
-        //                    });
+                            // Recursion doesn't count as referencing. (If it did, all recursive functions
+                            // would result in circular assignment errors!)
+                            refs_by_assignment
+                                .entry(assigned_symbol.clone())
+                                .and_modify(|(_, refs)| {
+                                    refs.locals = refs.locals.without(assigned_symbol);
+                                });
 
-        //                renamed_closure_assignment = Some(&assigned_symbol);
+                            renamed_closure_assignment = Some(&assigned_symbol);
 
-        //                // Return a reference to the assigned symbol, since the auto-generated one no
-        //                // longer references any entry in the procedure map!
-        //                Var(assigned_symbol.clone())
-        //            }
-        //            _ => loc_can_expr.value,
-        //        };
+                            // Return a reference to the assigned symbol, since the auto-generated one no
+                            // longer references any entry in the procedure map!
+                            Var(assigned_symbol.clone())
+                        }
+                        _ => loc_can_expr.value,
+                    };
 
-        //        let mut assigned_symbols = Vec::new();
+                    let mut assigned_symbols = Vec::new();
 
-        //        // Store the referenced locals in the refs_by_assignment map, so we can later figure out
-        //        // which assigned names reference each other.
-        //        for (ident, (symbol, region)) in
-        //            idents_from_patterns(std::iter::once(&loc_pattern), &scope)
-        //        {
-        //            let refs =
-        //                // Functions' references don't count in assignments.
-        //                // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-        //                // parent commit for the bug this fixed!
-        //                if renamed_closure_assignment == Some(&symbol) {
-        //                    References::new()
-        //                } else {
-        //                    can_output.references.clone()
-        //                };
+                    // Store the referenced locals in the refs_by_assignment map, so we can later figure out
+                    // which assigned names reference each other.
+                    for (ident, (symbol, region)) in
+                        idents_from_patterns(std::iter::once(loc_pattern), &scope)
+                    {
+                        let refs =
+                            // Functions' references don't count in assignments.
+                            // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                            // parent commit for the bug this fixed!
+                            if renamed_closure_assignment == Some(&symbol) {
+                                References::new()
+                            } else {
+                                can_output.references.clone()
+                            };
 
-        //            refs_by_assignment.insert(
-        //                symbol.clone(),
-        //                (
-        //                    Located {
-        //                        value: ident,
-        //                        region,
-        //                    },
-        //                    refs,
-        //                ),
-        //            );
+                        refs_by_assignment.insert(
+                            symbol.clone(),
+                            (
+                                Located {
+                                    value: ident,
+                                    region,
+                                },
+                                refs,
+                            ),
+                        );
 
-        //            assigned_symbols.push(symbol.clone());
-        //        }
+                        assigned_symbols.push(symbol.clone());
+                    }
 
-        //        for symbol in assigned_symbols {
-        //            can_assignments_by_symbol.insert(
-        //                symbol,
-        //                (
-        //                    loc_can_pattern.clone(),
-        //                    Located {
-        //                        region: loc_can_expr.region.clone(),
-        //                        value: can_expr.clone(),
-        //                    },
-        //                ),
-        //            );
-        //        }
-        //    }
+                    for symbol in assigned_symbols {
+                        can_assignments_by_symbol.insert(
+                            symbol,
+                            (
+                                loc_can_pattern.clone(),
+                                Located {
+                                    region: loc_can_expr.region.clone(),
+                                    value: can_expr.clone(),
+                                },
+                            ),
+                        );
+                    }
+                }
+            }
 
-        //    // The assignment as a whole is a tail call iff its return expression is a tail call.
-        //    // Use its output as a starting point because its tail_call already has the right answer!
-        //    let (ret_expr, mut output) = canonicalize(env, &mut scope, *box_loc_returned);
+            // The assignment as a whole is a tail call iff its return expression is a tail call.
+            // Use its output as a starting point because its tail_call already has the right answer!
+            let (ret_expr, mut output) = canonicalize(env, &mut scope, loc_ret);
 
-        //    // Determine the full set of references by traversing the graph.
-        //    let mut visited_symbols = MutSet::default();
+            // Determine the full set of references by traversing the graph.
+            let mut visited_symbols = MutSet::default();
 
-        //    // Start with the return expression's referenced locals. They are the only ones that count!
-        //    //
-        //    // If I have two assignments which reference each other, but neither of them
-        //    // is referenced in the return expression, I don't want either of them (or their references)
-        //    // to end up in the final output.references. They were unused, and so were their references!
-        //    //
-        //    // The reason we need a graph here is so we don't overlook transitive dependencies.
-        //    // For example, if I have `a = b + 1` and the assignment returns `a + 1`, then the
-        //    // assignment as a whole references both `a` *and* `b`, even though it doesn't
-        //    // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
-        //    // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
-        //    for symbol in output.references.locals.clone().into_iter() {
-        //        // Traverse the graph and look up *all* the references for this local symbol.
-        //        let refs = references_from_local(
-        //            symbol,
-        //            &mut visited_symbols,
-        //            &refs_by_assignment,
-        //            &env.procedures,
-        //        );
+            // Start with the return expression's referenced locals. They are the only ones that count!
+            //
+            // If I have two assignments which reference each other, but neither of them
+            // is referenced in the return expression, I don't want either of them (or their references)
+            // to end up in the final output.references. They were unused, and so were their references!
+            //
+            // The reason we need a graph here is so we don't overlook transitive dependencies.
+            // For example, if I have `a = b + 1` and the assignment returns `a + 1`, then the
+            // assignment as a whole references both `a` *and* `b`, even though it doesn't
+            // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
+            // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
+            for symbol in output.references.locals.clone().into_iter() {
+                // Traverse the graph and look up *all* the references for this local symbol.
+                let refs = references_from_local(
+                    symbol,
+                    &mut visited_symbols,
+                    &refs_by_assignment,
+                    &env.procedures,
+                );
 
-        //        output.references = output.references.union(refs);
-        //    }
+                output.references = output.references.union(refs);
+            }
 
-        //    for symbol in output.references.calls.clone().into_iter() {
-        //        // Traverse the graph and look up *all* the references for this call.
-        //        // Reuse the same visited_symbols as before; if we already visited it, we
-        //        // won't learn anything new from visiting it again!
-        //        let refs = references_from_call(
-        //            symbol,
-        //            &mut visited_symbols,
-        //            &refs_by_assignment,
-        //            &env.procedures,
-        //        );
+            for symbol in output.references.calls.clone().into_iter() {
+                // Traverse the graph and look up *all* the references for this call.
+                // Reuse the same visited_symbols as before; if we already visited it, we
+                // won't learn anything new from visiting it again!
+                let refs = references_from_call(
+                    symbol,
+                    &mut visited_symbols,
+                    &refs_by_assignment,
+                    &env.procedures,
+                );
 
-        //        output.references = output.references.union(refs);
-        //    }
+                output.references = output.references.union(refs);
+            }
 
-        //    // Now that we've collected all the references, check to see if any of the new idents
-        //    // we defined went unused by the return expression. If any were unused, report it.
-        //    for (ident, (symbol, region)) in assigned_idents.clone() {
-        //        if !output.references.has_local(&symbol) {
-        //            let loc_ident = Located {
-        //                region: region.clone(),
-        //                value: ident.clone(),
-        //            };
+            // Now that we've collected all the references, check to see if any of the new idents
+            // we defined went unused by the return expression. If any were unused, report it.
+            for (ident, (symbol, region)) in assigned_idents.clone() {
+                if !output.references.has_local(&symbol) {
+                    let loc_ident = Located {
+                        region: region.clone(),
+                        value: ident.clone(),
+                    };
 
-        //            env.problem(Problem::UnusedAssignment(loc_ident));
-        //        }
-        //    }
+                    env.problem(Problem::UnusedAssignment(loc_ident));
+                }
+            }
 
-        //    // Use topological sort to reorder the assignments based on their dependencies to one another.
-        //    // This way, during code gen, no assignment will refer to a value that hasn't been initialized yet.
-        //    // As a bonus, the topological sort also reveals any cycles between the assignments, allowing
-        //    // us to give a CircularAssignment error.
-        //    let successors = |symbol: &Symbol| -> ImSet<Symbol> {
-        //        let (_, references) = refs_by_assignment.get(symbol).unwrap();
+            // Use topological sort to reorder the assignments based on their dependencies to one another.
+            // This way, during code gen, no assignment will refer to a value that hasn't been initialized yet.
+            // As a bonus, the topological sort also reveals any cycles between the assignments, allowing
+            // us to give a CircularAssignment error.
+            let successors = |symbol: &Symbol| -> ImSet<Symbol> {
+                let (_, references) = refs_by_assignment.get(symbol).unwrap();
 
-        //        local_successors(&references, &env.procedures)
-        //    };
+                local_successors(&references, &env.procedures)
+            };
 
-        //    let assigned_symbols: Vec<Symbol> = can_assignments_by_symbol
-        //        .keys()
-        //        .into_iter()
-        //        .map(Symbol::clone)
-        //        .collect();
+            let assigned_symbols: Vec<Symbol> = can_assignments_by_symbol
+                .keys()
+                .into_iter()
+                .map(Symbol::clone)
+                .collect();
 
-        //    match topological_sort(assigned_symbols.as_slice(), successors) {
-        //        Ok(sorted_symbols) => {
-        //            let can_assignments = sorted_symbols
-        //                .into_iter()
-        //                .rev() // Topological sort gives us the reverse of the sorting we want!
-        //                .map(|symbol| can_assignments_by_symbol.get(&symbol).unwrap().clone())
-        //                .collect();
+            match topological_sort(assigned_symbols.as_slice(), successors) {
+                Ok(sorted_symbols) => {
+                    let can_assignments = sorted_symbols
+                        .into_iter()
+                        .rev() // Topological sort gives us the reverse of the sorting we want!
+                        .map(|symbol| can_assignments_by_symbol.get(&symbol).unwrap().clone())
+                        .collect();
 
-        //            (Assign(can_assignments, Box::new(ret_expr)), output)
-        //        }
-        //        Err(node_in_cycle) => {
-        //            // We have one node we know is in the cycle.
-        //            // We want to show the entire cycle in the error message, so expand it out.
-        //            let mut loc_idents_in_cycle: Vec<Located<expr::Ident>> =
-        //                strongly_connected_component(&node_in_cycle, successors)
-        //                    .into_iter()
-        //                    .rev() // Strongly connected component gives us the reverse of the sorting we want!
-        //                    .map(|symbol| refs_by_assignment.get(&symbol).unwrap().0.clone())
-        //                    .collect();
+                    (Assign(can_assignments, Box::new(ret_expr)), output)
+                }
+                Err(node_in_cycle) => {
+                    // We have one node we know is in the cycle.
+                    // We want to show the entire cycle in the error message, so expand it out.
+                    let mut loc_idents_in_cycle: Vec<Located<Ident>> =
+                        strongly_connected_component(&node_in_cycle, successors)
+                            .into_iter()
+                            .rev() // Strongly connected component gives us the reverse of the sorting we want!
+                            .map(|symbol| refs_by_assignment.get(&symbol).unwrap().0.clone())
+                            .collect();
 
-        //            loc_idents_in_cycle = sort_cyclic_idents(
-        //                loc_idents_in_cycle,
-        //                &mut assigned_idents.iter().map(|(ident, _)| ident),
-        //            );
+                    loc_idents_in_cycle = sort_cyclic_idents(
+                        loc_idents_in_cycle,
+                        &mut assigned_idents.iter().map(|(ident, _)| ident),
+                    );
 
-        //            env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
+                    env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
 
-        //            let can_assignments = can_assignments_by_symbol
-        //                .values()
-        //                .map(|tuple| tuple.clone())
-        //                .collect();
+                    let can_assignments = can_assignments_by_symbol
+                        .values()
+                        .map(|tuple| tuple.clone())
+                        .collect();
 
-        //            (
-        //                RuntimeError(CircularAssignment(
-        //                    loc_idents_in_cycle,
-        //                    can_assignments,
-        //                    Box::new(ret_expr),
-        //                )),
-        //                output,
-        //            )
-        //        }
-        //    }
-        //}
+                    (
+                        RuntimeError(CircularAssignment(
+                            loc_idents_in_cycle,
+                            can_assignments,
+                            Box::new(ret_expr),
+                        )),
+                        output,
+                    )
+                }
+            }
+        }
         ast::Expr::Closure((loc_arg_patterns, loc_body_expr)) => {
             // The globally unique symbol that will refer to this closure once it gets converted
             // into a top-level procedure for code gen.
@@ -770,7 +788,7 @@ fn call_successors(call_symbol: &Symbol, procedures: &MutMap<Symbol, Procedure>)
     }
 }
 
-fn _references_from_local<T>(
+fn references_from_local<T>(
     assigned_symbol: Symbol,
     visited: &mut MutSet<Symbol>,
     refs_by_assignment: &MutMap<Symbol, (T, References)>,
@@ -784,7 +802,7 @@ fn _references_from_local<T>(
 
             for local in refs.locals.iter() {
                 if !visited.contains(&local) {
-                    let other_refs = _references_from_local(
+                    let other_refs = references_from_local(
                         local.clone(),
                         visited,
                         refs_by_assignment,
@@ -799,12 +817,8 @@ fn _references_from_local<T>(
 
             for call in refs.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs = _references_from_call(
-                        call.clone(),
-                        visited,
-                        refs_by_assignment,
-                        procedures,
-                    );
+                    let other_refs =
+                        references_from_call(call.clone(), visited, refs_by_assignment, procedures);
 
                     answer = answer.union(other_refs);
                 }
@@ -865,7 +879,7 @@ where
     answer
 }
 
-fn _references_from_call<T>(
+fn references_from_call<T>(
     call_symbol: Symbol,
     visited: &mut MutSet<Symbol>,
     refs_by_assignment: &MutMap<Symbol, (T, References)>,
@@ -879,7 +893,7 @@ fn _references_from_call<T>(
 
             for closed_over_local in procedure.references.locals.iter() {
                 if !visited.contains(&closed_over_local) {
-                    let other_refs = _references_from_local(
+                    let other_refs = references_from_local(
                         closed_over_local.clone(),
                         visited,
                         refs_by_assignment,
@@ -894,12 +908,8 @@ fn _references_from_call<T>(
 
             for call in procedure.references.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs = _references_from_call(
-                        call.clone(),
-                        visited,
-                        refs_by_assignment,
-                        procedures,
-                    );
+                    let other_refs =
+                        references_from_call(call.clone(), visited, refs_by_assignment, procedures);
 
                     answer = answer.union(other_refs);
                 }
@@ -948,7 +958,7 @@ fn add_idents_from_pattern<'a>(
                 (symbol, region.clone()),
             ));
         }
-        &QualifiedIdentifier(name) => {
+        &QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern.");
         }
         &Apply(_) => {
@@ -987,7 +997,7 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
         Identifier(name) => {
             idents.remove(&(Ident::Unqualified(name.to_string())));
         }
-        QualifiedIdentifier(name) => {
+        QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern in remove_idents.");
         }
         Apply(_) => {

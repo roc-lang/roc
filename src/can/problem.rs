@@ -41,4 +41,7 @@ pub enum RuntimeError {
         Vec<(Located<Pattern>, Located<Expr>)>,
         Box<Located<Expr>>,
     ),
+
+    /// When the author specifies a type annotation but no implementation
+    NoImplementation,
 }

@@ -86,7 +86,7 @@ pub enum Expr<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Def<'a> {
-    AnnotationOnly,
+    AnnotationOnly(Region),
     BodyOnly(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
     AnnotatedBody(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
 }
@@ -407,7 +407,7 @@ pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<
     let mut buf = String::new_in(arena);
 
     match def {
-        AnnotationOnly => panic!("TODO have format_def support AnnotationOnly"),
+        Def::AnnotationOnly(_region) => panic!("TODO have format_def support AnnotationOnly"),
         BodyOnly(loc_pattern, loc_expr) => {
             buf.push_str(&format_pattern(arena, &loc_pattern.value, indent));
             buf.push_str(" = ");
