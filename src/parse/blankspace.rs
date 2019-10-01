@@ -211,9 +211,10 @@ pub fn space1<'a>(min_indent: u16) -> impl Parser<'a, &'a [CommentOrNewline<'a>]
 #[inline(always)]
 fn spaces<'a>(
     require_at_least_one: bool,
-    _min_indent: u16,
+    min_indent: u16,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
     move |arena: &'a Bump, state: State<'a>| {
+        let original_state = state.clone();
         let mut chars = state.input.chars().peekable();
         let mut space_list = Vec::new_in(arena);
         let mut chars_parsed = 0;
@@ -228,16 +229,23 @@ fn spaces<'a>(
             match comment_parsing {
                 CommentParsing::No => match ch {
                     ' ' => {
+                        // Don't check indentation here; it might not be enough
+                        // indentation yet, but maybe it will be after more spaces happen!
                         state = state.advance_spaces(1)?;
                     }
                     '\n' => {
+                        // No need to check indentation because we're about to reset it anyway.
                         state = state.newline()?;
 
                         // Newlines only get added to the list when they're outside comments.
                         space_list.push(Newline);
                     }
                     '#' => {
-                        state = state.advance_without_indenting(1)?;
+                        // Check indentation to make sure we were indented enough
+                        // before this comment began.
+                        state = state
+                            .check_indent(min_indent)?
+                            .advance_without_indenting(1)?;
 
                         // We're now parsing a line comment!
                         comment_parsing = CommentParsing::Line;
@@ -248,6 +256,11 @@ fn spaces<'a>(
                             // but we require parsing at least one space!
                             Err(unexpected(nonblank, 0, state.clone(), state.attempting))
                         } else {
+                            // First make sure we were indented enough!
+                            state = state
+                                .check_indent(min_indent)
+                                .map_err(|(fail, _)| (fail, original_state))?;
+
                             Ok((space_list.into_bump_slice(), state))
                         };
                     }
@@ -255,7 +268,8 @@ fn spaces<'a>(
                 CommentParsing::Line => {
                     match ch {
                         ' ' => {
-                            state = state.advance_spaces(1)?;
+                            // If we're in a line comment, this won't affect indentation anyway.
+                            state = state.advance_without_indenting(1)?;
 
                             comment_line_buf.push(ch);
                         }
@@ -300,6 +314,7 @@ fn spaces<'a>(
                 CommentParsing::Block => {
                     match ch {
                         ' ' => {
+                            // Block comments *do* interact with indentation.
                             state = state.advance_spaces(1)?;
 
                             comment_line_buf.push(ch);
@@ -313,7 +328,7 @@ fn spaces<'a>(
                             comment_line_buf = String::new_in(arena);
                         }
                         '#' => {
-                            // Three '#' in a row means the comment is finished.
+                            // Three '#' chars in a row means the block comment is finished.
                             //
                             // We want to peek ahead two characters to see if there
                             // are another two '#' there. If so, this comment is done.
@@ -384,6 +399,11 @@ fn spaces<'a>(
         if require_at_least_one && chars_parsed == 0 {
             Err(unexpected_eof(0, state.attempting, state))
         } else {
+            // First make sure we were indented enough!
+            state = state
+                .check_indent(min_indent)
+                .map_err(|(fail, _)| (fail, original_state))?;
+
             Ok((space_list.into_bump_slice(), state))
         }
     }

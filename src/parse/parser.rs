@@ -38,9 +38,23 @@ impl<'a> State<'a> {
             input,
             line: 0,
             column: 0,
-            indent_col: 1,
+            indent_col: 0,
             is_indenting: true,
             attempting,
+        }
+    }
+
+    pub fn check_indent(self, min_indent: u16) -> Result<Self, (Fail, Self)> {
+        if self.indent_col < min_indent {
+            Err((
+                Fail {
+                    attempting: self.attempting,
+                    reason: FailReason::OutdentedTooFar,
+                },
+                self,
+            ))
+        } else {
+            Ok(self)
         }
     }
 
@@ -136,7 +150,7 @@ pub type ParseResult<'a, Output> = Result<(Output, State<'a>), (Fail, State<'a>)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailReason {
     Unexpected(char, Region),
-    DefOutdentedTooFar(u16, u16, Region),
+    OutdentedTooFar,
     ConditionFailed,
     LineTooLong(u32 /* which line was too long */),
     TooManyLines,

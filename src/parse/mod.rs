@@ -200,13 +200,16 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     // TODO support type annotations
     map_with_arena(
         and(
+            // A pattern followed by '='
             skip_second(
                 space0_after(loc_closure_param(min_indent), min_indent),
                 equals_for_def(),
             ),
+            // Spaces after the '=' (at a normal indentation level) and then the expr.
+            // The expr itself must be indented more than the pattern and '='
             space0_before(
                 loc(move |arena, state| parse_expr(indented_more, arena, state)),
-                indented_more,
+                min_indent,
             ),
         ),
         |arena, (loc_pattern, loc_expr)| Def::BodyOnly(loc_pattern, arena.alloc(loc_expr)),
@@ -226,11 +229,7 @@ fn parse_def_expr<'a>(
         Err((
             Fail {
                 attempting: state.attempting,
-                reason: FailReason::DefOutdentedTooFar(
-                    original_indent,
-                    min_indent,
-                    loc_first_pattern.region,
-                ),
+                reason: FailReason::OutdentedTooFar,
             },
             state,
         ))
@@ -242,22 +241,25 @@ fn parse_def_expr<'a>(
         let indented_more = original_indent + 1;
 
         then(
-            and(
-                // Parse the body of the first def. It doesn't need any spaces
-                // around it parsed, because both the subsquent defs and the
-                // final body will have space1_before on them.
-                //
-                // It should be indented more than the original, and it will
-                // end when outdented again.
-                loc(move |arena, state| parse_expr(indented_more, arena, state)),
+            attempt(
+                Attempting::Def,
                 and(
-                    // Optionally parse additional defs.
-                    zero_or_more(and(space1(original_indent), def(original_indent))),
-                    // Parse the final expression that will be returned.
-                    // It should be indented the same amount as the original.
-                    space1_before(
-                        loc(move |arena, state| parse_expr(original_indent, arena, state)),
-                        indented_more,
+                    // Parse the body of the first def. It doesn't need any spaces
+                    // around it parsed, because both the subsquent defs and the
+                    // final body will have space1_before on them.
+                    //
+                    // It should be indented more than the original, and it will
+                    // end when outdented again.
+                    loc(move |arena, state| parse_expr(indented_more, arena, state)),
+                    and(
+                        // Optionally parse additional defs.
+                        zero_or_more(and(space1(original_indent), def(original_indent))),
+                        // Parse the final expression that will be returned.
+                        // It should be indented the same amount as the original.
+                        space1_before(
+                            loc(move |arena, state| parse_expr(original_indent, arena, state)),
+                            original_indent,
+                        ),
                     ),
                 ),
             ),

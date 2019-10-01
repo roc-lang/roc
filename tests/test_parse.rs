@@ -638,17 +638,21 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::BodyOnly(
-            Located::new(0, 0, 0, 1, Identifier("x")),
-            arena.alloc(Located::new(0, 0, 2, 3, Int("5"))),
+            Located::new(1, 1, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(1, 1, 2, 3, Int("5"))),
         );
         let defs = bumpalo::vec![in &arena; (Vec::new_in(&arena).into_bump_slice(), def)];
         let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(2, 2, 0, 2, ret);
-        let expected = Defs(arena.alloc((defs, loc_ret)));
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" reset indentation")];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Defs(arena.alloc((defs, loc_ret)))),
+            reset_indentation.into_bump_slice(),
+        );
 
         assert_parses_to(
             indoc!(
-                r#"
+                r#"# reset indentation
                 x=5
 
                 42
@@ -663,17 +667,21 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::BodyOnly(
-            Located::new(0, 0, 0, 1, Identifier("x")),
-            arena.alloc(Located::new(0, 0, 4, 5, Int("5"))),
+            Located::new(1, 1, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(1, 1, 4, 5, Int("5"))),
         );
         let defs = bumpalo::vec![in &arena; (Vec::new_in(&arena).into_bump_slice(), def)];
         let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
-        let loc_ret = Located::new(2, 2, 0, 2, ret);
-        let expected = Defs(arena.alloc((defs, loc_ret)));
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" reset indentation")];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Defs(arena.alloc((defs, loc_ret)))),
+            reset_indentation.into_bump_slice(),
+        );
 
         assert_parses_to(
             indoc!(
-                r#"
+                r#"# reset indentation
                 x = 5
 
                 42
