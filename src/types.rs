@@ -38,7 +38,7 @@ impl Type {
 
         match op {
             Slash => op_type(Type::float(), Type::float(), Type::float()),
-            // TODO actually, drop this in favor of having the parser use Apply in the AST.
+            DoubleSlash => op_type(Type::int(), Type::int(), Type::int()),
             _ => panic!("TODO types for operator {:?}", op),
         }
     }
