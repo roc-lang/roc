@@ -316,7 +316,7 @@ mod test_infer {
     fn def_empty_record() {
         infer_eq(
             indoc!(
-                r#"
+                r#"# reset indentation
                 foo = {}
 
                 foo
@@ -330,7 +330,7 @@ mod test_infer {
     fn def_string() {
         infer_eq(
             indoc!(
-                r#"
+                r#"# reset indentation
                 str = "thing"
 
                 str
@@ -340,69 +340,69 @@ mod test_infer {
         );
     }
 
-    #[test]
-    fn def_1_arg_closure() {
-        infer_eq(
-            indoc!(
-                r#"
-                fn = \_ -> {}
+    // #[test]
+    // fn def_1_arg_closure() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"# reset indentation
+    //             fn = \_ -> {}
 
-                fn
-            "#
-            ),
-            "* -> {}",
-        );
-    }
+    //             fn
+    //         "#
+    //         ),
+    //         "* -> {}",
+    //     );
+    // }
 
-    #[test]
-    fn def_2_arg_closure() {
-        infer_eq(
-            indoc!(
-                r#"
-                func = \_ _ -> 42
+    // #[test]
+    // fn def_2_arg_closure() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"# reset indentation
+    //             func = \_ _ -> 42
 
-                func
-            "#
-            ),
-            "*, * -> Int",
-        );
-    }
+    //             func
+    //         "#
+    //         ),
+    //         "*, * -> Int",
+    //     );
+    // }
 
-    #[test]
-    fn def_3_arg_closure() {
-        infer_eq(
-            indoc!(
-                r#"
-                f = \_ _ _ -> "test!"
+    // #[test]
+    // fn def_3_arg_closure() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"# reset indentation
+    //             f = \_ _ _ -> "test!"
 
-                f
-            "#
-            ),
-            "*, *, * -> Str",
-        );
-    }
+    //             f
+    //         "#
+    //         ),
+    //         "*, *, * -> Str",
+    //     );
+    // }
 
-    #[test]
-    fn def_multiple_functions() {
-        infer_eq(
-            indoc!(
-                r#"
-                a = \_ _ _ -> "test!"
+    // #[test]
+    // fn def_multiple_functions() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"# reset indentation
+    //             a = \_ _ _ -> "test!"
 
-                b = a
+    //             b = a
 
-                b
-            "#
-            ),
-            "*, *, * -> Str",
-        );
-    }
+    //             b
+    //         "#
+    //         ),
+    //         "*, *, * -> Str",
+    //     );
+    // }
 
     #[test]
     fn def_multiple_strings() {
         infer_eq(
             indoc!(
-                r#"
+                r#"# reset indentation
                 a = "test!"
 
                 b = a
@@ -418,7 +418,7 @@ mod test_infer {
     fn def_multiple_ints() {
         infer_eq(
             indoc!(
-                r#"
+                r#"# reset indentation
                 c = b
 
                 b = a
@@ -434,33 +434,33 @@ mod test_infer {
 
     // CALLING FUNCTIONS
 
-    #[test]
-    fn call_returns_int() {
-        infer_eq(
-            indoc!(
-                r#"
-                alwaysFive = \_ -> 5
+    // #[test]
+    // fn call_returns_int() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"# reset indentation
+    //             alwaysFive = \_ -> 5
 
-                alwaysFive "stuff"
-            "#
-            ),
-            "Int",
-        );
-    }
+    //             alwaysFive "stuff"
+    //         "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
 
-    #[test]
-    fn call_returns_list() {
-        infer_eq(
-            indoc!(
-                r#"
-                enlist = \val -> [ val ]
+    // #[test]
+    // fn call_returns_list() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"# reset indentation
+    //             enlist = \val -> [ val ]
 
-                enlist 5
-            "#
-            ),
-            "List Int",
-        );
-    }
+    //             enlist 5
+    //         "#
+    //         ),
+    //         "List Int",
+    //     );
+    // }
 
     // TODO type annotations
     // TODO fix identity inference
