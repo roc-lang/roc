@@ -404,7 +404,7 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn variant_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    move |_, _| panic!("TODO support variant patterns, including qualified and/or applied")
+    map(unqualified_variant(), |name| Pattern::Variant(&[], name))
 }
 
 fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
@@ -663,6 +663,8 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 }
 
 /// This is mainly for matching variants in closure params, e.g. \Foo -> ...
+///
+/// TODO: this should absolutely support qualified variants. Need to change it and rename it!
 fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
     variant_or_ident(|first_char| first_char.is_uppercase())
 }

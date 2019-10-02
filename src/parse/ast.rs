@@ -339,6 +339,14 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
             buf.push_str(string);
             buf.push('"');
         }
+        Var(module_parts, name) => {
+            for part in module_parts.iter() {
+                buf.push_str(part);
+                buf.push('.');
+            }
+
+            buf.push_str(name);
+        }
         BlockStr(lines) => {
             buf.push_str("\"\"\"");
             for line in lines.iter() {
