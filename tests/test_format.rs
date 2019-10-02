@@ -127,6 +127,18 @@ mod test_format {
     }
 
     #[test]
+    fn parenthetical_def() {
+        assert_formats_same(indoc!(
+            r#"
+            (UserId userId) = 5
+            y = 10
+
+            42
+            "#
+        ));
+    }
+
+    #[test]
     fn record_destructuring() {
         assert_formats_same(indoc!(
             r#"
