@@ -10,16 +10,10 @@ mod helpers;
 #[cfg(test)]
 mod test_infer {
     use helpers::can_expr;
-    // use roc::can::symbol::Symbol;
-    // use roc::ident::{Ident, VariantName};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::content_to_string;
     use roc::region::Located;
-    // use roc::subs::Content::{self, *};
     use roc::subs::Subs;
-    // use roc::subs::{FlatType, Variable};
-    // use roc::types::Type::*;
-    // use roc::types::{Problem, Type};
 
     // HELPERS
 
@@ -32,18 +26,6 @@ mod test_infer {
 
         assert_eq!(actual_str, expected.to_string());
     }
-
-    // fn apply(module_name: &str, type_name: &str, args: Vec<Variable>) -> Content {
-    //     Structure(FlatType::Apply(
-    //         module_name.to_string(),
-    //         type_name.to_string(),
-    //         args,
-    //     ))
-    // }
-
-    //     fn var(num: u32) -> Variable {
-    //         Variable::new_for_testing_only(num)
-    //     }
 
     #[test]
     fn empty_record() {
@@ -316,7 +298,7 @@ mod test_infer {
     fn def_empty_record() {
         infer_eq(
             indoc!(
-                r#"# reset indentation
+                r#"
                 foo = {}
 
                 foo
@@ -330,7 +312,7 @@ mod test_infer {
     fn def_string() {
         infer_eq(
             indoc!(
-                r#"# reset indentation
+                r#"
                 str = "thing"
 
                 str
@@ -340,69 +322,69 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // fn def_1_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"# reset indentation
-    //             fn = \_ -> {}
+    #[test]
+    fn def_1_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                fn = \_ -> {}
 
-    //             fn
-    //         "#
-    //         ),
-    //         "* -> {}",
-    //     );
-    // }
+                fn
+            "#
+            ),
+            "* -> {}",
+        );
+    }
 
-    // #[test]
-    // fn def_2_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"# reset indentation
-    //             func = \_ _ -> 42
+    #[test]
+    fn def_2_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                func = \_ _ -> 42
 
-    //             func
-    //         "#
-    //         ),
-    //         "*, * -> Int",
-    //     );
-    // }
+                func
+            "#
+            ),
+            "*, * -> Int",
+        );
+    }
 
-    // #[test]
-    // fn def_3_arg_closure() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"# reset indentation
-    //             f = \_ _ _ -> "test!"
+    #[test]
+    fn def_3_arg_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \_ _ _ -> "test!"
 
-    //             f
-    //         "#
-    //         ),
-    //         "*, *, * -> Str",
-    //     );
-    // }
+                f
+            "#
+            ),
+            "*, *, * -> Str",
+        );
+    }
 
-    // #[test]
-    // fn def_multiple_functions() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"# reset indentation
-    //             a = \_ _ _ -> "test!"
+    #[test]
+    fn def_multiple_functions() {
+        infer_eq(
+            indoc!(
+                r#"
+                a = \_ _ _ -> "test!"
 
-    //             b = a
+                b = a
 
-    //             b
-    //         "#
-    //         ),
-    //         "*, *, * -> Str",
-    //     );
-    // }
+                b
+            "#
+            ),
+            "*, *, * -> Str",
+        );
+    }
 
     #[test]
     fn def_multiple_strings() {
         infer_eq(
             indoc!(
-                r#"# reset indentation
+                r#"
                 a = "test!"
 
                 b = a
@@ -418,7 +400,7 @@ mod test_infer {
     fn def_multiple_ints() {
         infer_eq(
             indoc!(
-                r#"# reset indentation
+                r#"
                 c = b
 
                 b = a
@@ -434,33 +416,33 @@ mod test_infer {
 
     // CALLING FUNCTIONS
 
-    // #[test]
-    // fn call_returns_int() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"# reset indentation
-    //             alwaysFive = \_ -> 5
+    #[test]
+    fn call_returns_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                alwaysFive = \_ -> 5
 
-    //             alwaysFive "stuff"
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+                alwaysFive "stuff"
+                "#
+            ),
+            "Int",
+        );
+    }
 
-    // #[test]
-    // fn call_returns_list() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"# reset indentation
-    //             enlist = \val -> [ val ]
+    #[test]
+    fn call_returns_list() {
+        infer_eq(
+            indoc!(
+                r#"
+                enlist = \val -> [ val ]
 
-    //             enlist 5
-    //         "#
-    //         ),
-    //         "List Int",
-    //     );
-    // }
+                enlist 5
+                "#
+            ),
+            "List Int",
+        );
+    }
 
     // TODO type annotations
     // TODO fix identity inference

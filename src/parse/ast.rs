@@ -82,6 +82,7 @@ pub enum Expr<'a> {
 
     // Problems
     MalformedIdent(&'a str),
+    MalformedClosure,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -280,6 +281,7 @@ fn pattern_size() {
 /// "currently attempting to parse a list." This helps error messages!
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attempting {
+    Expression,
     List,
     Keyword,
     StringLiteral,
@@ -288,8 +290,9 @@ pub enum Attempting {
     InterpolatedString,
     NumberLiteral,
     UnicodeEscape,
+    ClosureParams,
+    ClosureBody,
     Def,
-    Expression,
     Module,
     Record,
     Identifier,

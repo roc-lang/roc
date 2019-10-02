@@ -606,6 +606,18 @@ mod test_parse {
     }
 
     #[test]
+    fn single_underscore_closure() {
+        let arena = Bump::new();
+        let pattern = Located::new(0, 0, 1, 2, Underscore);
+        let patterns = bumpalo::vec![in &arena; pattern];
+        let tuple = arena.alloc((patterns, Located::new(0, 0, 6, 8, Int("42"))));
+        let expected = Closure(tuple);
+        let actual = parse_with(&arena, "\\_ -> 42");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn two_arg_closure() {
         let arena = Bump::new();
         let arg1 = Located::new(0, 0, 1, 2, Identifier("a"));
@@ -644,7 +656,7 @@ mod test_parse {
         let defs = bumpalo::vec![in &arena; (Vec::new_in(&arena).into_bump_slice(), def)];
         let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(3, 3, 0, 2, ret);
-        let reset_indentation = bumpalo::vec![in &arena; LineComment(" reset indentation")];
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(arena.alloc((defs, loc_ret)))),
             reset_indentation.into_bump_slice(),
@@ -652,7 +664,7 @@ mod test_parse {
 
         assert_parses_to(
             indoc!(
-                r#"# reset indentation
+                r#"# leading comment
                 x=5
 
                 42
@@ -673,7 +685,7 @@ mod test_parse {
         let defs = bumpalo::vec![in &arena; (Vec::new_in(&arena).into_bump_slice(), def)];
         let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(3, 3, 0, 2, ret);
-        let reset_indentation = bumpalo::vec![in &arena; LineComment(" reset indentation")];
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(arena.alloc((defs, loc_ret)))),
             reset_indentation.into_bump_slice(),
@@ -681,7 +693,7 @@ mod test_parse {
 
         assert_parses_to(
             indoc!(
-                r#"# reset indentation
+                r#"# leading comment
                 x = 5
 
                 42
@@ -713,7 +725,7 @@ mod test_parse {
         ];
         let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(4, 4, 0, 2, ret);
-        let reset_indentation = bumpalo::vec![in &arena; LineComment(" reset indentation")];
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(arena.alloc((defs, loc_ret)))),
             reset_indentation.into_bump_slice(),
@@ -721,7 +733,7 @@ mod test_parse {
 
         assert_parses_to(
             indoc!(
-                r#"# reset indentation
+                r#"# leading comment
                 x = 5
                 y = 6
 
@@ -758,7 +770,7 @@ mod test_parse {
         ];
         let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(4, 4, 0, 2, ret);
-        let reset_indentation = bumpalo::vec![in &arena; LineComment(" reset indentation")];
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
         let expected = Expr::SpaceBefore(
             arena.alloc(Defs(arena.alloc((defs, loc_ret)))),
             reset_indentation.into_bump_slice(),
@@ -766,7 +778,7 @@ mod test_parse {
 
         assert_parses_to(
             indoc!(
-                r#"# reset indentation
+                r#"# leading comment
                 { x, y } = 5
                 y = 6
 

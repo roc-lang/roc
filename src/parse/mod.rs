@@ -32,9 +32,9 @@ use parse::ident::{ident, Ident, MaybeQualified};
 use parse::number_literal::number_literal;
 use parse::parser::{
     and, attempt, between, char, either, loc, map, map_with_arena, not_followed_by, one_of2,
-    one_of4, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second, string,
-    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
-    State,
+    one_of4, one_of5, one_of8, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second,
+    string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
+    Parser, State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -73,8 +73,8 @@ fn loc_parse_expr_body_without_operators<'a>(
         loc_parenthetical_expr(min_indent),
         loc(string_literal()),
         loc(number_literal()),
-        loc(record_literal(min_indent)),
         loc(closure(min_indent)),
+        loc(record_literal(min_indent)),
         loc(list_literal(min_indent)),
         loc(when(min_indent)),
         loc(conditional(min_indent)),
@@ -296,21 +296,32 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         skip_first(
             // All closures start with a '\' - e.g. (\x -> x + 1)
             char('\\'),
-            and(
+            // Once we see the '\', we're committed to parsing this as a closure.
+            // It may turn out to be malformed, but it is definitely a closure.
+            optional(and(
                 // Parse the params
-                one_or_more(space0_around(loc_closure_param(min_indent), min_indent)),
+                attempt(
+                    Attempting::ClosureParams,
+                    one_or_more(space0_around(loc_closure_param(min_indent), min_indent)),
+                ),
                 skip_first(
                     // Parse the -> which separates params from body
                     string("->"),
                     // Parse the body
-                    space0_before(
-                        loc(move |arena, state| parse_expr(min_indent, arena, state)),
-                        min_indent,
+                    attempt(
+                        Attempting::ClosureBody,
+                        space0_before(
+                            loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                            min_indent,
+                        ),
                     ),
                 ),
-            ),
+            )),
         ),
-        |arena, (params, loc_body)| Expr::Closure(arena.alloc((params, loc_body))),
+        |arena, opt_contents| match opt_contents {
+            None => Expr::MalformedClosure,
+            Some((params, loc_body)) => Expr::Closure(arena.alloc((params, loc_body))),
+        },
     )
 }
 

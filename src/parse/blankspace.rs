@@ -222,6 +222,7 @@ fn spaces<'a>(
         let mut comment_line_buf = String::new_in(arena);
         let mut comment_parsing = CommentParsing::No;
         let mut state = state;
+        let mut any_newlines = false;
 
         while let Some(ch) = chars.next() {
             chars_parsed += 1;
@@ -239,12 +240,15 @@ fn spaces<'a>(
 
                         // Newlines only get added to the list when they're outside comments.
                         space_list.push(Newline);
+
+                        any_newlines = true;
                     }
                     '#' => {
                         // Check indentation to make sure we were indented enough
                         // before this comment began.
                         state = state
-                            .check_indent(min_indent)?
+                            .check_indent(min_indent)
+                            .map_err(|(fail, _)| (fail, original_state.clone()))?
                             .advance_without_indenting(1)?;
 
                         // We're now parsing a line comment!
@@ -257,9 +261,17 @@ fn spaces<'a>(
                             Err(unexpected(nonblank, 0, state.clone(), state.attempting))
                         } else {
                             // First make sure we were indented enough!
-                            state = state
-                                .check_indent(min_indent)
-                                .map_err(|(fail, _)| (fail, original_state))?;
+                            //
+                            // (We only do this if we've encountered any newlines.
+                            // Otherwise, we assume indentation is already correct.
+                            // It's actively important for correctness that we skip
+                            // this check if there are no newlines, because otherwise
+                            // we would have false positives for single-line defs.)
+                            if any_newlines {
+                                state = state
+                                    .check_indent(min_indent)
+                                    .map_err(|(fail, _)| (fail, original_state))?;
+                            }
 
                             Ok((space_list.into_bump_slice(), state))
                         };
@@ -400,9 +412,17 @@ fn spaces<'a>(
             Err(unexpected_eof(0, state.attempting, state))
         } else {
             // First make sure we were indented enough!
-            state = state
-                .check_indent(min_indent)
-                .map_err(|(fail, _)| (fail, original_state))?;
+            //
+            // (We only do this if we've encountered any newlines.
+            // Otherwise, we assume indentation is already correct.
+            // It's actively important for correctness that we skip
+            // this check if there are no newlines, because otherwise
+            // we would have false positives for single-line defs.)
+            if any_newlines {
+                state = state
+                    .check_indent(min_indent)
+                    .map_err(|(fail, _)| (fail, original_state))?;
+            }
 
             Ok((space_list.into_bump_slice(), state))
         }

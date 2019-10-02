@@ -754,6 +754,7 @@ fn canonicalize<'a>(
         | ast::Expr::When(_)
         | ast::Expr::Variant(_, _)
         | ast::Expr::MalformedIdent(_)
+        | ast::Expr::MalformedClosure
         | ast::Expr::AssignField(_, _) => {
             panic!(
                 "TODO restore the rest of canonicalize()'s branches {:?}",

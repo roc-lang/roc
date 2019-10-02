@@ -66,7 +66,7 @@ impl<'a> State<'a> {
                 input: &self.input[1..],
                 line,
                 column: 0,
-                indent_col: 1,
+                indent_col: 0,
                 is_indenting: true,
                 attempting: self.attempting,
             }),
@@ -273,14 +273,28 @@ pub fn attempt_impl<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parse
 where
     P: Parser<'a, Val>,
 {
-    move |arena, state| {
-        parser.parse(
-            arena,
-            State {
-                attempting,
-                ..state
-            },
-        )
+    move |arena, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        parser
+            .parse(
+                arena,
+                State {
+                    attempting,
+                    ..state
+                },
+            )
+            .map(|(answer, state)| {
+                // If the parser suceeded, go back to what we were originally attempting.
+                // (If it failed, that's exactly where we care what we were attempting!)
+                (
+                    answer,
+                    State {
+                        attempting: original_attempting,
+                        ..state
+                    },
+                )
+            })
     }
 }
 
@@ -750,16 +764,15 @@ where
 
         match p1.parse(arena, state) {
             valid @ Ok(_) => valid,
-            Err((_, state)) => match p2.parse(arena, state) {
-                valid @ Ok(_) => valid,
-                Err((fail, state)) => Err((
-                    Fail {
-                        attempting: original_attempting,
-                        ..fail
-                    },
-                    state,
-                )),
-            },
+            Err((_, state)) => p2.parse(
+                arena,
+                State {
+                    // Try again, using the original `attempting` value.
+                    // We don't care what the failed first attempt was trying to do.
+                    attempting: original_attempting,
+                    ..state
+                },
+            ),
         }
     }
 }
@@ -770,26 +783,7 @@ where
     P2: Parser<'a, A>,
     P3: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            valid @ Ok(_) => valid,
-            Err((_, state)) => match p2.parse(arena, state) {
-                valid @ Ok(_) => valid,
-                Err((_, state)) => match p3.parse(arena, state) {
-                    valid @ Ok(_) => valid,
-                    Err((fail, state)) => Err((
-                        Fail {
-                            attempting: original_attempting,
-                            ..fail
-                        },
-                        state,
-                    )),
-                },
-            },
-        }
-    }
+    one_of2(p1, one_of2(p2, p3))
 }
 
 pub fn one_of4<'a, P1, P2, P3, P4, A>(p1: P1, p2: P2, p3: P3, p4: P4) -> impl Parser<'a, A>
@@ -799,29 +793,7 @@ where
     P3: Parser<'a, A>,
     P4: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            valid @ Ok(_) => valid,
-            Err((_, state)) => match p2.parse(arena, state) {
-                valid @ Ok(_) => valid,
-                Err((_, state)) => match p3.parse(arena, state) {
-                    valid @ Ok(_) => valid,
-                    Err((_, state)) => match p4.parse(arena, state) {
-                        valid @ Ok(_) => valid,
-                        Err((fail, state)) => Err((
-                            Fail {
-                                attempting: original_attempting,
-                                ..fail
-                            },
-                            state,
-                        )),
-                    },
-                },
-            },
-        }
-    }
+    one_of2(p1, one_of3(p2, p3, p4))
 }
 
 pub fn one_of5<'a, P1, P2, P3, P4, P5, A>(
@@ -838,32 +810,7 @@ where
     P4: Parser<'a, A>,
     P5: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            valid @ Ok(_) => valid,
-            Err((_, state)) => match p2.parse(arena, state) {
-                valid @ Ok(_) => valid,
-                Err((_, state)) => match p3.parse(arena, state) {
-                    valid @ Ok(_) => valid,
-                    Err((_, state)) => match p4.parse(arena, state) {
-                        valid @ Ok(_) => valid,
-                        Err((_, state)) => match p5.parse(arena, state) {
-                            valid @ Ok(_) => valid,
-                            Err((fail, state)) => Err((
-                                Fail {
-                                    attempting: original_attempting,
-                                    ..fail
-                                },
-                                state,
-                            )),
-                        },
-                    },
-                },
-            },
-        }
-    }
+    one_of2(p1, one_of4(p2, p3, p4, p5))
 }
 
 pub fn one_of6<'a, P1, P2, P3, P4, P5, P6, A>(
@@ -882,35 +829,7 @@ where
     P5: Parser<'a, A>,
     P6: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            valid @ Ok(_) => valid,
-            Err((_, state)) => match p2.parse(arena, state) {
-                valid @ Ok(_) => valid,
-                Err((_, state)) => match p3.parse(arena, state) {
-                    valid @ Ok(_) => valid,
-                    Err((_, state)) => match p4.parse(arena, state) {
-                        valid @ Ok(_) => valid,
-                        Err((_, state)) => match p5.parse(arena, state) {
-                            valid @ Ok(_) => valid,
-                            Err((_, state)) => match p6.parse(arena, state) {
-                                valid @ Ok(_) => valid,
-                                Err((fail, state)) => Err((
-                                    Fail {
-                                        attempting: original_attempting,
-                                        ..fail
-                                    },
-                                    state,
-                                )),
-                            },
-                        },
-                    },
-                },
-            },
-        }
-    }
+    one_of2(p1, one_of5(p2, p3, p4, p5, p6))
 }
 
 pub fn one_of7<'a, P1, P2, P3, P4, P5, P6, P7, A>(
@@ -931,38 +850,7 @@ where
     P6: Parser<'a, A>,
     P7: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            valid @ Ok(_) => valid,
-            Err((_, state)) => match p2.parse(arena, state) {
-                valid @ Ok(_) => valid,
-                Err((_, state)) => match p3.parse(arena, state) {
-                    valid @ Ok(_) => valid,
-                    Err((_, state)) => match p4.parse(arena, state) {
-                        valid @ Ok(_) => valid,
-                        Err((_, state)) => match p5.parse(arena, state) {
-                            valid @ Ok(_) => valid,
-                            Err((_, state)) => match p6.parse(arena, state) {
-                                valid @ Ok(_) => valid,
-                                Err((_, state)) => match p7.parse(arena, state) {
-                                    valid @ Ok(_) => valid,
-                                    Err((fail, state)) => Err((
-                                        Fail {
-                                            attempting: original_attempting,
-                                            ..fail
-                                        },
-                                        state,
-                                    )),
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        }
-    }
+    one_of2(p1, one_of6(p2, p3, p4, p5, p6, p7))
 }
 
 pub fn one_of8<'a, P1, P2, P3, P4, P5, P6, P7, P8, A>(
@@ -985,41 +873,7 @@ where
     P7: Parser<'a, A>,
     P8: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            valid @ Ok(_) => valid,
-            Err((_, state)) => match p2.parse(arena, state) {
-                valid @ Ok(_) => valid,
-                Err((_, state)) => match p3.parse(arena, state) {
-                    valid @ Ok(_) => valid,
-                    Err((_, state)) => match p4.parse(arena, state) {
-                        valid @ Ok(_) => valid,
-                        Err((_, state)) => match p5.parse(arena, state) {
-                            valid @ Ok(_) => valid,
-                            Err((_, state)) => match p6.parse(arena, state) {
-                                valid @ Ok(_) => valid,
-                                Err((_, state)) => match p7.parse(arena, state) {
-                                    valid @ Ok(_) => valid,
-                                    Err((_, state)) => match p8.parse(arena, state) {
-                                        valid @ Ok(_) => valid,
-                                        Err((fail, state)) => Err((
-                                            Fail {
-                                                attempting: original_attempting,
-                                                ..fail
-                                            },
-                                            state,
-                                        )),
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        }
-    }
+    one_of2(p1, one_of7(p2, p3, p4, p5, p6, p7, p8))
 }
 
 pub fn one_of9<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, A>(
@@ -1044,44 +898,7 @@ where
     P8: Parser<'a, A>,
     P9: Parser<'a, A>,
 {
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            valid @ Ok(_) => valid,
-            Err((_, state)) => match p2.parse(arena, state) {
-                valid @ Ok(_) => valid,
-                Err((_, state)) => match p3.parse(arena, state) {
-                    valid @ Ok(_) => valid,
-                    Err((_, state)) => match p4.parse(arena, state) {
-                        valid @ Ok(_) => valid,
-                        Err((_, state)) => match p5.parse(arena, state) {
-                            valid @ Ok(_) => valid,
-                            Err((_, state)) => match p6.parse(arena, state) {
-                                valid @ Ok(_) => valid,
-                                Err((_, state)) => match p7.parse(arena, state) {
-                                    valid @ Ok(_) => valid,
-                                    Err((_, state)) => match p8.parse(arena, state) {
-                                        valid @ Ok(_) => valid,
-                                        Err((_, state)) => match p9.parse(arena, state) {
-                                            valid @ Ok(_) => valid,
-                                            Err((fail, state)) => Err((
-                                                Fail {
-                                                    attempting: original_attempting,
-                                                    ..fail
-                                                },
-                                                state,
-                                            )),
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        }
-    }
+    one_of2(p1, one_of8(p2, p3, p4, p5, p6, p7, p8, p9))
 }
 
 // DEBUG COMBINATORS
