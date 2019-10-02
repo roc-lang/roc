@@ -70,8 +70,8 @@ fn loc_parse_expr_body_without_operators<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
     one_of10(
-        loc_parenthetical_expr(min_indent),
         loc_parenthetical_def(min_indent),
+        loc_parenthetical_expr(min_indent),
         loc(string_literal()),
         loc(number_literal()),
         loc(closure(min_indent)),
