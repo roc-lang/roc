@@ -106,7 +106,7 @@ mod test_format {
     #[test]
     fn single_def() {
         assert_formats_same(indoc!(
-            r#"# comment to reset indentation
+            r#"
             x = 5
 
             42
@@ -117,7 +117,7 @@ mod test_format {
     #[test]
     fn two_defs() {
         assert_formats_same(indoc!(
-            r#"# comment to reset indentation
+            r#"
             x = 5
             y = 10
 
@@ -129,7 +129,7 @@ mod test_format {
     #[test]
     fn record_destructuring() {
         assert_formats_same(indoc!(
-            r#"# comment to reset indentation
+            r#"
             { x, y } = 5
 
             42
