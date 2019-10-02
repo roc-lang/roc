@@ -31,10 +31,10 @@ use parse::blankspace::{
 use parse::ident::{ident, Ident, MaybeQualified};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, not_followed_by, one_of2,
-    one_of4, one_of5, one_of8, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second,
-    string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
-    Parser, State,
+    and, attempt, between, char, either, loc, map, map_with_arena, not_followed_by, one_of10,
+    one_of2, one_of4, one_of5, one_or_more, optional, sep_by0, skip_first, skip_second, string,
+    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
+    State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -69,8 +69,9 @@ fn loc_parse_expr_body_without_operators<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
-    one_of9(
+    one_of10(
         loc_parenthetical_expr(min_indent),
+        loc_parenthetical_def(min_indent),
         loc(string_literal()),
         loc(number_literal()),
         loc(closure(min_indent)),
@@ -139,40 +140,25 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                 // There may optionally be function args after the ')'
                 // e.g. ((foo bar) baz)
                 loc_function_args(min_indent),
-                // If there aren't any args, there may be a '=' or ':' after it.
-                //
-                // (It's a syntax error to write e.g. `foo bar =` - so if there
-                // were any args, there is definitely no need to parse '=' or ':'!)
-                //
-                // Also, there may be a '.' for field access (e.g. `(foo).bar`),
+                // There may be a '.' for field access after it, e.g. `(foo).bar`,
                 // but we only want to look for that if there weren't any args,
                 // as if there were any args they'd have consumed it anyway
                 // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
-                either(
-                    one_or_more(skip_first(char('.'), unqualified_ident())),
-                    and(space0(min_indent), either(equals_for_def(), char(':'))),
-                ),
+                one_or_more(skip_first(char('.'), unqualified_ident())),
             )),
         )),
         |arena, loc_expr_with_extras| {
             // We parse the parenthetical expression *and* the arguments after it
             // in one region, so that (for example) the region for Apply includes its args.
             let (loc_expr, opt_extras) = loc_expr_with_extras.value;
+
             match opt_extras {
                 Some(Either::First(loc_args)) => Located {
                     region: loc_expr_with_extras.region,
                     value: Expr::Apply(arena.alloc((loc_expr, loc_args))),
                 },
-                // '=' after optional spaces
-                Some(Either::Second(Either::Second((_space_list, Either::First(()))))) => {
-                    panic!("TODO handle def, making sure not to drop comments!");
-                }
-                // ':' after optional spaces
-                Some(Either::Second(Either::Second((_space_list, Either::Second(()))))) => {
-                    panic!("TODO handle annotation, making sure not to drop comments!");
-                }
                 // '.' and a record field immediately after ')', no optional spaces
-                Some(Either::Second(Either::First(fields))) => Located {
+                Some(Either::Second(fields)) => Located {
                     region: loc_expr_with_extras.region,
                     value: Expr::Field(arena.alloc(loc_expr), fields),
                 },
@@ -180,6 +166,41 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
             }
         },
     )
+}
+
+/// A def beginning with a parenthetical pattern, for example:
+///
+/// (UserId userId) = ...
+///
+/// Note: Parenthetical patterns are a shorthand convenience, and may not have type annotations.
+/// It would be too weird to parse; imagine `(UserId userId) : ...` above `(UserId userId) = ...`
+pub fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
+    move |arena, state| {
+        let (loc_tuple, state) = loc(and(
+            space0_after(
+                between(
+                    char('('),
+                    space0_around(loc(pattern(min_indent)), min_indent),
+                    char(')'),
+                ),
+                min_indent,
+            ),
+            equals_with_indent(),
+        ))
+        .parse(arena, state)?;
+
+        let region = loc_tuple.region;
+        let (loc_first_pattern, equals_sign_indent) = loc_tuple.value;
+        let (value, state) = parse_def_expr(
+            min_indent,
+            equals_sign_indent,
+            arena,
+            state,
+            loc_first_pattern,
+        )?;
+
+        Ok((Located { value, region }, state))
+    }
 }
 
 /// The '=' used in a def can't be followed by another '=' (or else it's actually

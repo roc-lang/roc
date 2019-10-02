@@ -901,6 +901,33 @@ where
     one_of2(p1, one_of8(p2, p3, p4, p5, p6, p7, p8, p9))
 }
 
+pub fn one_of10<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+{
+    one_of2(p1, one_of9(p2, p3, p4, p5, p6, p7, p8, p9, p10))
+}
+
 // DEBUG COMBINATORS
 //
 // These use dyn for runtime dynamic dispatch. It prevents combinatoric
