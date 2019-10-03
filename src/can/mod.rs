@@ -1015,6 +1015,9 @@ fn add_idents_from_pattern<'a>(
         }
         &Variant(_, _)
         | &IntLiteral(_)
+        | &HexIntLiteral(_)
+        | &OctalIntLiteral(_)
+        | &BinaryIntLiteral(_)
         | &FloatLiteral(_)
         | &StrLiteral(_)
         | &EmptyRecordLiteral
@@ -1050,6 +1053,9 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
         }
         Variant(_, _)
         | IntLiteral(_)
+        | HexIntLiteral(_)
+        | BinaryIntLiteral(_)
+        | OctalIntLiteral(_)
         | FloatLiteral(_)
         | StrLiteral(_)
         | EmptyRecordLiteral

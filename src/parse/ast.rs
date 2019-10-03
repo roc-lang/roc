@@ -114,6 +114,9 @@ pub enum Pattern<'a> {
 
     // Literal
     IntLiteral(&'a str),
+    HexIntLiteral(&'a str),
+    OctalIntLiteral(&'a str),
+    BinaryIntLiteral(&'a str),
     FloatLiteral(&'a str),
     StrLiteral(&'a str),
     EmptyRecordLiteral,
@@ -499,6 +502,9 @@ fn format_pattern<'a>(
         }
 
         IntLiteral(string) => buf.push_str(string),
+        HexIntLiteral(string) => buf.push_str(string),
+        OctalIntLiteral(string) => buf.push_str(string),
+        BinaryIntLiteral(string) => buf.push_str(string),
         FloatLiteral(string) => buf.push_str(string),
         StrLiteral(string) => buf.push_str(string),
         EmptyRecordLiteral => buf.push_str("{}"),
