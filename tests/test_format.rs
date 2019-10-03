@@ -177,4 +177,34 @@ mod test_format {
     fn empty_record() {
         assert_formats_same("{}");
     }
+
+    // NEWLINES
+
+    #[test]
+    fn multiple_blank_lines_collapse_to_one() {
+        assert_formats_to(
+            indoc!(
+                r#"
+                x = 5
+
+
+
+                y = 10
+
+
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 5
+
+                y = 10
+
+                42
+                "#
+            ),
+        );
+    }
 }

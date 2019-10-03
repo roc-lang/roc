@@ -321,18 +321,13 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
 
     match expr {
         SpaceBefore(sub_expr, spaces) => {
-            for space in spaces.iter() {
-                buf.push_str(&format_space(arena, space, indent));
-            }
-
+            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
             buf.push_str(&format(arena, sub_expr, indent));
         }
         SpaceAfter(sub_expr, spaces) => {
             buf.push_str(&format(arena, sub_expr, indent));
 
-            for space in spaces.iter() {
-                buf.push_str(&format_space(arena, space, indent));
-            }
+            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
         }
         Str(string) => {
             buf.push('"');
@@ -412,17 +407,12 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
             });
             let other_spaced_defs = &defs[0..defs.len() - 1];
 
-            for space in first_spaces.iter() {
-                buf.push_str(&format_space(arena, space, indent));
-            }
+            buf.push_str(&format_spaces(arena, first_spaces.iter(), indent));
 
             buf.push_str(&format_def(arena, first_def, indent));
 
             for (spaces, def) in other_spaced_defs.iter() {
-                for space in spaces.iter() {
-                    buf.push_str(&format_space(arena, space, indent));
-                }
-
+                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
                 buf.push_str(&format_def(arena, def, indent));
             }
 
@@ -503,18 +493,12 @@ fn format_pattern<'a>(arena: &'a Bump, pattern: &'a Pattern<'a>, indent: u16) ->
 
         // Space
         SpaceBefore(sub_pattern, spaces) => {
-            for space in spaces.iter() {
-                buf.push_str(&format_space(arena, space, indent));
-            }
-
+            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
             buf.push_str(&format_pattern(arena, sub_pattern, indent));
         }
         SpaceAfter(sub_pattern, spaces) => {
             buf.push_str(&format_pattern(arena, sub_pattern, indent));
-
-            for space in spaces.iter() {
-                buf.push_str(&format_space(arena, space, indent));
-            }
+            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
         }
 
         // Malformed
@@ -532,28 +516,47 @@ fn format_pattern<'a>(arena: &'a Bump, pattern: &'a Pattern<'a>, indent: u16) ->
     buf
 }
 
-fn format_space<'a>(arena: &'a Bump, space: &'a CommentOrNewline<'a>, _indent: u16) -> String<'a> {
+fn format_spaces<'a, I>(arena: &'a Bump, spaces: I, _indent: u16) -> String<'a>
+where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
     use self::CommentOrNewline::*;
 
     let mut buf = String::new_in(arena);
+    let mut consecutive_newlines = 0;
 
-    match space {
-        Newline => {
-            buf.push('\n');
-        }
-        LineComment(comment) => {
-            buf.push('#');
-            buf.push_str(comment);
-            buf.push('\n');
-        }
-        BlockComment(lines) => {
-            buf.push_str("###");
+    for space in spaces {
+        match space {
+            Newline => {
+                // Only ever print two newlines back to back.
+                // (Two newlines renders as one blank line.)
+                if consecutive_newlines < 2 {
+                    buf.push('\n');
 
-            for line in lines.iter() {
-                buf.push_str(line);
+                    // Don't bother incrementing it if we're already over the limit.
+                    // There's no upside, and it might eventually overflow,
+                    consecutive_newlines += 1;
+                }
             }
+            LineComment(comment) => {
+                buf.push('#');
+                buf.push_str(comment);
+                buf.push('\n');
 
-            buf.push_str("###");
+                // Reset to 1 because we just printed a \n
+                consecutive_newlines = 1;
+            }
+            BlockComment(lines) => {
+                buf.push_str("###");
+
+                for line in lines.iter() {
+                    buf.push_str(line);
+                }
+
+                buf.push_str("###");
+
+                consecutive_newlines = 0;
+            }
         }
     }
 
