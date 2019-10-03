@@ -272,10 +272,6 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             Ok(Pattern::RecordDestructure(loc_patterns))
         }
 
-        // // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
-        // // We preserve this for the formatter; canonicalization ignores it.
-        // SpaceBefore(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
-        // SpaceAfter(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
         Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
         Expr::Int(string) => Ok(Pattern::IntLiteral(string)),
         Expr::HexInt(string) => Ok(Pattern::HexIntLiteral(string)),
