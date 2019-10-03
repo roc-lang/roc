@@ -104,6 +104,17 @@ mod test_format {
     }
 
     #[test]
+    fn multi_arg_closure() {
+        assert_formats_same(indoc!(
+            r#"
+            \a b c -> a b c
+            "#
+        ));
+    }
+
+    // DEFS
+
+    #[test]
     fn single_def() {
         assert_formats_same(indoc!(
             r#"
