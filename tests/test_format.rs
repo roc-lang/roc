@@ -149,6 +149,17 @@ mod test_format {
         ));
     }
 
+    #[test]
+    fn def_closure() {
+        assert_formats_same(indoc!(
+            r#"
+            identity = \a -> a
+
+            identity 42
+            "#
+        ));
+    }
+
     // RECORD LITERALS
 
     #[test]

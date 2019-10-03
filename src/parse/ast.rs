@@ -347,6 +347,15 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
 
             buf.push_str(name);
         }
+        Apply((loc_expr, loc_args)) => {
+            buf.push_str(&format(arena, &loc_expr.value, indent));
+
+            for loc_arg in loc_args {
+                buf.push(' ');
+
+                buf.push_str(&format(arena, &loc_arg.value, indent));
+            }
+        }
         BlockStr(lines) => {
             buf.push_str("\"\"\"");
             for line in lines.iter() {
@@ -379,6 +388,19 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
             }
 
             buf.push('}');
+        }
+        Closure((loc_patterns, loc_ret)) => {
+            buf.push('\\');
+
+            for loc_pattern in loc_patterns {
+                buf.push_str(&format_pattern(arena, &loc_pattern.value, indent));
+
+                buf.push(' ');
+            }
+
+            buf.push_str("-> ");
+
+            buf.push_str(&format(arena, &loc_ret.value, indent));
         }
         Defs((defs, ret)) => {
             // The first def is actually at the end of the list, because
