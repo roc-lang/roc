@@ -106,7 +106,7 @@ pub enum Pattern<'a> {
 
     // Variant, optionally qualified
     Variant(&'a [&'a str], &'a str),
-    Apply(&'a (Loc<&'a Pattern<'a>>, [Loc<Pattern<'a>>])),
+    Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
@@ -388,7 +388,7 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
             buf.push('\\');
 
             for loc_pattern in loc_patterns {
-                buf.push_str(&format_pattern(arena, &loc_pattern.value, indent));
+                buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
 
                 buf.push(' ');
             }
@@ -432,7 +432,7 @@ pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<
     match def {
         Def::AnnotationOnly(_region) => panic!("TODO have format_def support AnnotationOnly"),
         BodyOnly(loc_pattern, loc_expr) => {
-            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent));
+            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
             buf.push_str(" = ");
             buf.push_str(&format(arena, &loc_expr.value, indent));
         }
@@ -444,7 +444,12 @@ pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<
     buf
 }
 
-fn format_pattern<'a>(arena: &'a Bump, pattern: &'a Pattern<'a>, indent: u16) -> String<'a> {
+fn format_pattern<'a>(
+    arena: &'a Bump,
+    pattern: &'a Pattern<'a>,
+    indent: u16,
+    apply_needs_parens: bool,
+) -> String<'a> {
     use self::Pattern::*;
 
     let mut buf = String::new_in(arena);
@@ -459,12 +464,20 @@ fn format_pattern<'a>(arena: &'a Bump, pattern: &'a Pattern<'a>, indent: u16) ->
 
             buf.push_str(name);
         }
-        Apply((loc_pattern, loc_arg_patterns)) => {
-            buf.push_str(&format_pattern(arena, loc_pattern.value, indent));
+        Apply(loc_pattern, loc_arg_patterns) => {
+            if apply_needs_parens {
+                buf.push('(');
+            }
 
-            for loc_arg in loc_arg_patterns {
+            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
+
+            for loc_arg in loc_arg_patterns.iter() {
                 buf.push(' ');
-                buf.push_str(&format_pattern(arena, &loc_arg.value, indent));
+                buf.push_str(&format_pattern(arena, &loc_arg.value, indent, true));
+            }
+
+            if apply_needs_parens {
+                buf.push(')');
             }
         }
         RecordDestructure(loc_patterns) => {
@@ -479,7 +492,7 @@ fn format_pattern<'a>(arena: &'a Bump, pattern: &'a Pattern<'a>, indent: u16) ->
                     buf.push_str(", ");
                 }
 
-                buf.push_str(&format_pattern(arena, &loc_pattern.value, indent));
+                buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
             }
 
             buf.push_str(" }");
@@ -494,10 +507,10 @@ fn format_pattern<'a>(arena: &'a Bump, pattern: &'a Pattern<'a>, indent: u16) ->
         // Space
         SpaceBefore(sub_pattern, spaces) => {
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            buf.push_str(&format_pattern(arena, sub_pattern, indent));
+            buf.push_str(&format_pattern(arena, sub_pattern, indent, true));
         }
         SpaceAfter(sub_pattern, spaces) => {
-            buf.push_str(&format_pattern(arena, sub_pattern, indent));
+            buf.push_str(&format_pattern(arena, sub_pattern, indent, true));
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
         }
 

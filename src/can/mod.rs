@@ -994,7 +994,7 @@ fn add_idents_from_pattern<'a>(
         &QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern.");
         }
-        &Apply(_) => {
+        &Apply(_, _) => {
             panic!("TODO implement Apply pattern.");
             // &AppliedVariant(_, ref opt_loc_args) => match opt_loc_args {
             // &None => (),
@@ -1033,7 +1033,7 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
         QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern in remove_idents.");
         }
-        Apply(_) => {
+        Apply(_, _) => {
             panic!("TODO implement Apply pattern in remove_idents.");
             // AppliedVariant(_, Some(loc_args)) => {
             //     for loc_arg in loc_args {
