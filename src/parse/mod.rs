@@ -172,7 +172,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                     let region = loc_expr.region;
 
                     // Re-parse the Expr as a Pattern.
-                    let pattern = match expr_to_pattern(arena, loc_expr.value) {
+                    let pattern = match expr_to_pattern(arena, &loc_expr.value) {
                         Ok(valid) => valid,
                         Err(fail) => return Err((fail, state)),
                     };
@@ -218,7 +218,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
-fn expr_to_pattern<'a>(arena: &'a Bump, expr: Expr<'a>) -> Result<Pattern<'a>, Fail> {
+fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, Fail> {
     match expr {
         Expr::Var(module_parts, value) => {
             if module_parts.is_empty() {
@@ -233,14 +233,14 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: Expr<'a>) -> Result<Pattern<'a>, F
         Expr::Variant(module_parts, value) => Ok(Pattern::Variant(module_parts, value)),
         Expr::Apply((loc_val, loc_args)) => {
             let region = loc_val.region.clone();
-            let value = expr_to_pattern(arena, loc_val.value.clone())?;
+            let value = expr_to_pattern(arena, &loc_val.value)?;
             let val_pattern = arena.alloc(Located { region, value });
 
             let mut arg_patterns = Vec::with_capacity_in(loc_args.len(), arena);
 
             for loc_arg in loc_args {
                 let region = loc_arg.region.clone();
-                let value = expr_to_pattern(arena, loc_arg.value.clone())?;
+                let value = expr_to_pattern(arena, &loc_arg.value)?;
 
                 arg_patterns.push(Located { region, value });
             }
@@ -250,7 +250,59 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: Expr<'a>) -> Result<Pattern<'a>, F
             Ok(pattern)
         }
 
-        _ => panic!("TODO handle expr_to_pattern for {:?}", expr),
+        Expr::SpaceBefore(sub_expr, spaces) => Ok(Pattern::SpaceBefore(
+            arena.alloc(expr_to_pattern(arena, sub_expr)?),
+            spaces,
+        )),
+        Expr::SpaceAfter(sub_expr, spaces) => Ok(Pattern::SpaceAfter(
+            arena.alloc(expr_to_pattern(arena, sub_expr)?),
+            spaces,
+        )),
+
+        Expr::Record(loc_exprs) => {
+            let mut loc_patterns = Vec::with_capacity_in(loc_exprs.len(), arena);
+
+            for loc_expr in loc_exprs {
+                let region = loc_expr.region.clone();
+                let value = expr_to_pattern(arena, &loc_expr.value)?;
+
+                loc_patterns.push(Located { region, value });
+            }
+
+            Ok(Pattern::RecordDestructure(loc_patterns))
+        }
+
+        // // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
+        // // We preserve this for the formatter; canonicalization ignores it.
+        // SpaceBefore(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
+        // SpaceAfter(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
+        Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
+        Expr::Int(string) => Ok(Pattern::IntLiteral(string)),
+        Expr::HexInt(string) => Ok(Pattern::HexIntLiteral(string)),
+        Expr::OctalInt(string) => Ok(Pattern::OctalIntLiteral(string)),
+        Expr::BinaryInt(string) => Ok(Pattern::BinaryIntLiteral(string)),
+        Expr::Str(string) => Ok(Pattern::StrLiteral(string)),
+        Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
+
+        // These would not have parsed as patterns
+        Expr::BlockStr(_)
+        | Expr::AccessorFunction(_)
+        | Expr::Field(_, _)
+        | Expr::List(_)
+        | Expr::Closure(_)
+        | Expr::Operator(_)
+        | Expr::AssignField(_, _)
+        | Expr::Defs(_)
+        | Expr::If(_)
+        | Expr::Then(_)
+        | Expr::Else(_)
+        | Expr::Case(_)
+        | Expr::When(_)
+        | Expr::MalformedClosure
+        | Expr::QualifiedField(_, _) => Err(Fail {
+            attempting: Attempting::Def,
+            reason: FailReason::InvalidPattern,
+        }),
     }
 }
 

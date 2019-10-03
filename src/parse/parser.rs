@@ -155,6 +155,7 @@ pub enum FailReason {
     LineTooLong(u32 /* which line was too long */),
     TooManyLines,
     Eof(Region),
+    InvalidPattern,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
