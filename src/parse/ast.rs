@@ -53,7 +53,6 @@ pub enum Expr<'a> {
     Variant(&'a [&'a str], &'a str),
 
     // Pattern Matching
-    When(&'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)]),
     Closure(&'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)),
     /// Multiple defs in a row
     Defs(
@@ -70,10 +69,8 @@ pub enum Expr<'a> {
     Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
 
     // Conditionals
-    If(&'a Loc<Expr<'a>>),
-    Then(&'a Loc<Expr<'a>>),
-    Else(&'a Loc<Expr<'a>>),
-    Case(&'a Loc<Expr<'a>>),
+    If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
+    Case(&'a (Loc<Expr<'a>>, &'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)])),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.

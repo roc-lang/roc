@@ -76,8 +76,8 @@ fn loc_parse_expr_body_without_operators<'a>(
         loc(closure(min_indent)),
         loc(record_literal(min_indent)),
         loc(list_literal(min_indent)),
-        loc(when(min_indent)),
-        loc(conditional(min_indent)),
+        loc(case_expr(min_indent)),
+        loc(if_expr(min_indent)),
         loc(ident_etc(min_indent)),
     )
     .parse(arena, state)
@@ -290,10 +290,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::AssignField(_, _)
         | Expr::Defs(_)
         | Expr::If(_)
-        | Expr::Then(_)
-        | Expr::Else(_)
         | Expr::Case(_)
-        | Expr::When(_)
         | Expr::MalformedClosure
         | Expr::QualifiedField(_, _) => Err(Fail {
             attempting: Attempting::Def,
@@ -545,47 +542,18 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
     map(unqualified_ident(), Pattern::Identifier)
 }
 
-pub fn when<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    map(string(keyword::WHEN), |_| {
+pub fn case_expr<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    map(string(keyword::CASE), |_| {
         panic!("TODO implement WHEN");
     })
 }
 
-pub fn conditional<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    // TODO figure out how to remove this code duplication in a way rustc
-    // accepts. I tried making a helper functions and couldn't resolve the
-    // lifetime errors, so I manually inlined them and moved on.
-    one_of4(
-        map_with_arena(
-            skip_first(
-                string(keyword::IF),
-                space1_before(loc(expr(min_indent)), min_indent),
-            ),
-            |arena, loc_expr| Expr::If(arena.alloc(loc_expr)),
-        ),
-        map_with_arena(
-            skip_first(
-                string(keyword::THEN),
-                space1_before(loc(expr(min_indent)), min_indent),
-            ),
-            |arena, loc_expr| Expr::Then(arena.alloc(loc_expr)),
-        ),
-        map_with_arena(
-            skip_first(
-                string(keyword::ELSE),
-                space1_before(loc(expr(min_indent)), min_indent),
-            ),
-            |arena, loc_expr| Expr::Else(arena.alloc(loc_expr)),
-        ),
-        map_with_arena(
-            skip_first(
-                string(keyword::CASE),
-                space1_before(loc(expr(min_indent)), min_indent),
-            ),
-            |arena, loc_expr| Expr::Case(arena.alloc(loc_expr)),
-        ),
-    )
+pub fn if_expr<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    map(string(keyword::IF), |_| {
+        panic!("TODO implement IF");
+    })
 }
+
 pub fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
     one_or_more(space1_before(loc_function_arg(min_indent), min_indent))
 }

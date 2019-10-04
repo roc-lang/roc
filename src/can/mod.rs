@@ -314,7 +314,7 @@ fn canonicalize<'a>(
                 defs.clone().iter().flat_map(|(_, def)| match def {
                     Def::AnnotationOnly(_region) => None,
                     Def::BodyOnly(loc_pattern, _expr) => Some(loc_pattern),
-                    Def::AnnotatedBody(loc_annotation, loc_pattern, _expr) => Some(loc_pattern),
+                    Def::AnnotatedBody(_loc_annotation, loc_pattern, _expr) => Some(loc_pattern),
                 }),
                 &scope,
             );
@@ -752,10 +752,7 @@ fn canonicalize<'a>(
         | ast::Expr::QualifiedField(_, _)
         | ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)
-        | ast::Expr::Then(_)
-        | ast::Expr::Else(_)
         | ast::Expr::Case(_)
-        | ast::Expr::When(_)
         | ast::Expr::Variant(_, _)
         | ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
