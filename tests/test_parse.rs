@@ -111,7 +111,7 @@ mod test_parse {
 
     #[test]
     fn empty_source_file() {
-        assert_parsing_fails("", FailReason::Eof(Region::zero()), Attempting::Expression);
+        assert_parsing_fails("", FailReason::Eof(Region::zero()), Attempting::Module);
     }
 
     #[test]
@@ -131,7 +131,7 @@ mod test_parse {
         assert_parsing_fails(
             &too_long_str,
             FailReason::LineTooLong(0),
-            Attempting::Expression,
+            Attempting::Module,
         );
     }
 
@@ -817,6 +817,32 @@ mod test_parse {
             expected,
         );
     }
+
+    // CASE
+
+    // #[test]
+    // fn two_branch_case() {
+    //     let arena = Bump::new();
+    //     let module_parts = Vec::new_in(&arena).into_bump_slice();
+    //     let arg1 = Located::new(0, 0, 2, 3, Var(module_parts, "b"));
+    //     let arg2 = Located::new(0, 0, 4, 5, Var(module_parts, "c"));
+    //     let arg3 = Located::new(0, 0, 6, 7, Var(module_parts, "d"));
+    //     let args = bumpalo::vec![in &arena; arg1, arg2, arg3];
+    //     let tuple = arena.alloc((Located::new(0, 0, 0, 1, Var(module_parts, "a")), args));
+    //     let expected = Expr::Apply(tuple);
+    //     let actual = parse_with(
+    //         &arena,
+    //         indoc!(
+    //             r#"
+    //             case foo bar baz when
+    //              "blah" -> foo a b
+    //              "mise" -> bar c d
+    //             "#
+    //         ),
+    //     );
+
+    //     assert_eq!(Ok(expected), actual);
+    // }
 
     // TODO test hex/oct/binary parsing
     //

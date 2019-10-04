@@ -1,9 +1,9 @@
 use bumpalo::Bump;
-use parse::ast::{Attempting, Expr};
+use parse::ast::Attempting;
 use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use std::char;
 
-pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
+pub fn parse<'a>() -> impl Parser<'a, &'a str> {
     move |arena: &'a Bump, state: State<'a>| {
         let mut chars = state.input.chars();
 
@@ -36,23 +36,23 @@ pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
 
             // Potentially end the string (unless this is an escaped `"`!)
             if ch == '"' && prev_ch != '\\' {
-                let expr = if parsed_chars == 2 {
+                let string = if parsed_chars == 2 {
                     if let Some('"') = chars.next() {
                         // If the first three chars were all `"`, then this
                         // literal begins with `"""` and is a block string.
                         return parse_block_string(arena, state, &mut chars);
                     } else {
-                        Expr::Str("")
+                        ""
                     }
                 } else {
                     // Start at 1 so we omit the opening `"`.
                     // Subtract 1 from parsed_chars so we omit the closing `"`.
-                    Expr::Str(&state.input[1..(parsed_chars - 1)])
+                    &state.input[1..(parsed_chars - 1)]
                 };
 
                 let next_state = state.advance_without_indenting(parsed_chars)?;
 
-                return Ok((expr, next_state));
+                return Ok((string, next_state));
             } else if ch == '\n' {
                 // This is a single-line string, which cannot have newlines!
                 // Treat this as an unclosed string literal, and consume
@@ -83,7 +83,7 @@ fn parse_block_string<'a, I>(
     _arena: &'a Bump,
     _state: State<'a>,
     _chars: &mut I,
-) -> ParseResult<'a, Expr<'a>>
+) -> ParseResult<'a, &'a str>
 where
     I: Iterator<Item = char>,
 {

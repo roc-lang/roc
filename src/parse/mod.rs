@@ -24,6 +24,7 @@ use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator;
+use parse;
 use parse::ast::{Attempting, Def, Expr, Pattern, Spaceable};
 use parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
@@ -32,11 +33,10 @@ use parse::ident::{ident, Ident, MaybeQualified};
 use parse::number_literal::number_literal;
 use parse::parser::{
     and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by, one_of16,
-    one_of2, one_of4, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second,
-    string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
-    Parser, State,
+    one_of2, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second, string,
+    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
+    State,
 };
-use parse::string_literal::string_literal;
 use region::Located;
 
 // pub fn api<'a>() -> impl Parser<'a, Module<'a>> {
@@ -121,7 +121,7 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
         },
     );
 
-    attempt(Attempting::Expression, expr_parser).parse(arena, state)
+    expr_parser.parse(arena, state)
 }
 
 pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
@@ -290,7 +290,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::AssignField(_, _)
         | Expr::Defs(_)
         | Expr::If(_)
-        | Expr::Case(_)
+        | Expr::Case(_, _)
         | Expr::MalformedClosure
         | Expr::QualifiedField(_, _) => Err(Fail {
             attempting: Attempting::Def,
@@ -543,12 +543,17 @@ fn parse_closure_param<'a>(
 }
 
 fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
-    one_of4(
+    one_of5(
         underscore_pattern(),
         variant_pattern(),
         ident_pattern(),
         record_destructure(min_indent),
+        string_pattern(),
     )
+}
+
+fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
+    map(parse::string_literal::parse(), Pattern::StrLiteral)
 }
 
 fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
@@ -576,10 +581,115 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
     map(unqualified_ident(), Pattern::Identifier)
 }
 
-pub fn case_expr<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    map(string(keyword::CASE), |_| {
-        panic!("TODO implement WHEN");
-    })
+pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    then(
+        and(
+            case_with_indent(),
+            attempt(
+                Attempting::CaseCondition,
+                skip_second(
+                    space1_around(
+                        loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                        min_indent,
+                    ),
+                    string(keyword::WHEN),
+                ),
+            ),
+        ),
+        move |arena, state, (case_indent, loc_condition)| {
+            if case_indent < min_indent {
+                panic!("TODO case wasns't indented enough");
+            }
+
+            // Everything in the branches must be indented at least as much as the case itself.
+            let min_indent = case_indent;
+
+            let (branches, state) =
+                attempt(Attempting::CaseBranch, case_branches(min_indent)).parse(arena, state)?;
+
+            Ok((Expr::Case(arena.alloc(loc_condition), branches), state))
+        },
+    )
+}
+
+pub fn case_branches<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Vec<'a, &'a (Located<Pattern<'a>>, Located<Expr<'a>>)>> {
+    move |arena, state| {
+        let mut branches: Vec<'a, &'a (Located<Pattern<'a>>, Located<Expr<'a>>)> =
+            Vec::with_capacity_in(2, arena);
+
+        // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
+        // 2. Parse the other branches. Their indentation levels must be == the first branch's.
+
+        let (mut loc_first_pattern, state) =
+            space1_before(loc(pattern(min_indent)), min_indent).parse(arena, state)?;
+        let original_indent = state.indent_col;
+        let indented_more = original_indent + 1;
+        let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
+
+        // Record the spaces before the first "->", if any.
+        if !spaces_before_arrow.is_empty() {
+            let region = loc_first_pattern.region;
+            let value =
+                Pattern::SpaceAfter(arena.alloc(loc_first_pattern.value), spaces_before_arrow);
+
+            loc_first_pattern = Located { region, value };
+        };
+
+        // Parse the first "->" and the expression after it.
+        let (loc_first_expr, mut state) = skip_first(
+            string("->"),
+            // The expr must be indented more than the pattern preceding it
+            space0_before(
+                loc(move |arena, state| parse_expr(indented_more, arena, state)),
+                indented_more,
+            ),
+        )
+        .parse(arena, state)?;
+
+        // Record this as the first branch, then optionally parse additional branches.
+        branches.push(arena.alloc((loc_first_pattern, loc_first_expr)));
+
+        let branch_parser = and(
+            then(
+                space1_around(loc(pattern(min_indent)), min_indent),
+                move |_arena, state, loc_pattern| {
+                    if state.indent_col == original_indent {
+                        Ok((loc_pattern, state))
+                    } else {
+                        panic!(
+                            "TODO additional branch didn't have same indentation as first branch"
+                        );
+                    }
+                },
+            ),
+            skip_first(
+                string("->"),
+                space1_before(
+                    loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                    min_indent,
+                ),
+            ),
+        );
+
+        loop {
+            match branch_parser.parse(arena, state) {
+                Ok((next_output, next_state)) => {
+                    state = next_state;
+
+                    branches.push(arena.alloc(next_output));
+                }
+                Err((_, old_state)) => {
+                    state = old_state;
+
+                    break;
+                }
+            }
+        }
+
+        Ok((branches, state))
+    }
 }
 
 pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
@@ -713,6 +823,14 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
             Some(ch) => Err(unexpected(ch, 0, state, Attempting::Def)),
             None => Err(unexpected_eof(0, Attempting::Def, state)),
         }
+    }
+}
+
+pub fn case_with_indent<'a>() -> impl Parser<'a, u16> {
+    move |arena, state: State<'a>| {
+        string(keyword::CASE)
+            .parse(arena, state)
+            .map(|((), state)| ((state.indent_col, state)))
     }
 }
 
@@ -858,6 +976,10 @@ fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
     variant_or_ident(|first_char| first_char.is_lowercase())
+}
+
+pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
+    map(parse::string_literal::parse(), Expr::Str)
 }
 
 fn variant_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str>

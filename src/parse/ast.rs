@@ -70,7 +70,10 @@ pub enum Expr<'a> {
 
     // Conditionals
     If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
-    Case(&'a (Loc<Expr<'a>>, &'a [(Loc<Pattern<'a>>, Loc<Expr<'a>>)])),
+    Case(
+        &'a Loc<Expr<'a>>,
+        Vec<'a, &'a (Loc<Pattern<'a>>, Loc<Expr<'a>>)>,
+    ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.
@@ -310,7 +313,6 @@ fn pattern_size() {
 /// "currently attempting to parse a list." This helps error messages!
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attempting {
-    Expression,
     List,
     Keyword,
     StringLiteral,
@@ -325,6 +327,8 @@ pub enum Attempting {
     Module,
     Record,
     Identifier,
+    CaseCondition,
+    CaseBranch,
 }
 
 impl<'a> Expr<'a> {

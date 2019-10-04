@@ -752,7 +752,7 @@ fn canonicalize<'a>(
         | ast::Expr::QualifiedField(_, _)
         | ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)
-        | ast::Expr::Case(_)
+        | ast::Expr::Case(_, _)
         | ast::Expr::Variant(_, _)
         | ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
