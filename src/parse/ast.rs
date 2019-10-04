@@ -87,9 +87,29 @@ pub enum Expr<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Def<'a> {
-    AnnotationOnly(Region),
+    AnnotationOnly(Loc<TypeAnnotation<'a>>),
     BodyOnly(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
-    AnnotatedBody(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+    AnnotatedBody(Loc<TypeAnnotation<'a>>, Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeAnnotation<'a> {
+    EmptyRec,
+    /// A function. The types of its arguments, then the type of its return value.
+    Function(&'a [TypeAnnotation<'a>], &'a TypeAnnotation<'a>),
+
+    /// Applying a type to some arguments (e.g. Map.Map String Int)
+    Apply(&'a [&'a str], &'a str, &'a [&'a TypeAnnotation<'a>]),
+
+    /// A bound type variable, e.g. `a` in `(a -> a)`
+    BoundVariable(&'a str),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
+
+    /// A malformed type annotation, which will code gen to a runtime error
+    Malformed(&'a str),
 }
 
 #[derive(Debug, PartialEq)]
@@ -214,6 +234,15 @@ impl<'a> Spaceable<'a> for Pattern<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Pattern::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for TypeAnnotation<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        TypeAnnotation::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        TypeAnnotation::SpaceAfter(self, spaces)
     }
 }
 
@@ -439,7 +468,7 @@ pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<
             buf.push_str(" = ");
             buf.push_str(&format(arena, &loc_expr.value, indent));
         }
-        AnnotatedBody(_loc_pattern, _loc_expr) => {
+        AnnotatedBody(_loc_annotation, _loc_pattern, _loc_expr) => {
             panic!("TODO have format_def support AnnotationOnly")
         }
     }

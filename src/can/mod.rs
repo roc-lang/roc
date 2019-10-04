@@ -314,7 +314,7 @@ fn canonicalize<'a>(
                 defs.clone().iter().flat_map(|(_, def)| match def {
                     Def::AnnotationOnly(_region) => None,
                     Def::BodyOnly(loc_pattern, _expr) => Some(loc_pattern),
-                    Def::AnnotatedBody(loc_pattern, _expr) => Some(loc_pattern),
+                    Def::AnnotatedBody(loc_annotation, loc_pattern, _expr) => Some(loc_pattern),
                 }),
                 &scope,
             );
@@ -330,11 +330,11 @@ fn canonicalize<'a>(
                 // Each assignment gets to have all the idents in scope that are assigned in this
                 // block. Order of assignments doesn't matter, thanks to referential transparency!
                 let (opt_loc_pattern, (loc_can_expr, can_output)) = match def {
-                    Def::AnnotationOnly(region) => {
+                    Def::AnnotationOnly(loc_annotation) => {
                         let value = Expr::RuntimeError(NoImplementation);
                         let loc_expr = Located {
                             value,
-                            region: region.clone(),
+                            region: loc_annotation.region.clone(),
                         };
 
                         (None, (loc_expr, Output::new()))
@@ -343,7 +343,11 @@ fn canonicalize<'a>(
                         Some(loc_pattern),
                         canonicalize(env, &mut scope, loc_expr.region.clone(), &loc_expr.value),
                     ),
-                    Def::AnnotatedBody(loc_pattern, loc_expr) => (
+                    Def::AnnotatedBody(
+                        _loc_annotation, /* TODO use this! */
+                        loc_pattern,
+                        loc_expr,
+                    ) => (
                         Some(loc_pattern),
                         canonicalize(env, &mut scope, loc_expr.region.clone(), &loc_expr.value),
                     ),
