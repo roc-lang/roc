@@ -8,8 +8,8 @@ pub enum Operator {
     Star,
     Slash,
     DoubleSlash,
-    TildeSlash,
     Percent,
+    DoublePercent,
     Plus,
     Minus,
     Equals,
@@ -54,7 +54,7 @@ impl Operator {
         use self::Associativity::*;
 
         match self {
-            Pizza | Star | Slash | DoubleSlash | TildeSlash | Percent | Plus | Minus => {
+            Pizza | Star | Slash | DoubleSlash | DoublePercent | Percent | Plus | Minus => {
                 LeftAssociative
             }
             And | Or | Caret => RightAssociative,
@@ -65,7 +65,7 @@ impl Operator {
     fn precedence(&self) -> u8 {
         match self {
             Caret => 7,
-            Star | Slash | DoubleSlash | TildeSlash | Percent => 6,
+            Star | Slash | DoubleSlash | DoublePercent | Percent => 6,
             Plus | Minus => 5,
             Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => 4,
             And => 3,

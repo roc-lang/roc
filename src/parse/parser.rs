@@ -929,6 +929,224 @@ where
     one_of2(p1, one_of9(p2, p3, p4, p5, p6, p7, p8, p9, p10))
 }
 
+pub fn one_of11<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+    p11: P11,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+    P11: Parser<'a, A>,
+{
+    one_of2(p1, one_of10(p2, p3, p4, p5, p6, p7, p8, p9, p10, p11))
+}
+
+pub fn one_of12<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+    p11: P11,
+    p12: P12,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+    P11: Parser<'a, A>,
+    P12: Parser<'a, A>,
+{
+    one_of2(p1, one_of11(p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12))
+}
+
+pub fn one_of13<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+    p11: P11,
+    p12: P12,
+    p13: P13,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+    P11: Parser<'a, A>,
+    P12: Parser<'a, A>,
+    P13: Parser<'a, A>,
+{
+    one_of2(
+        p1,
+        one_of12(p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13),
+    )
+}
+
+pub fn one_of14<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+    p11: P11,
+    p12: P12,
+    p13: P13,
+    p14: P14,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+    P11: Parser<'a, A>,
+    P12: Parser<'a, A>,
+    P13: Parser<'a, A>,
+    P14: Parser<'a, A>,
+{
+    one_of2(
+        p1,
+        one_of13(p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14),
+    )
+}
+
+pub fn one_of15<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+    p11: P11,
+    p12: P12,
+    p13: P13,
+    p14: P14,
+    p15: P15,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+    P11: Parser<'a, A>,
+    P12: Parser<'a, A>,
+    P13: Parser<'a, A>,
+    P14: Parser<'a, A>,
+    P15: Parser<'a, A>,
+{
+    one_of2(
+        p1,
+        one_of14(p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15),
+    )
+}
+
+pub fn one_of16<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, P16, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+    p11: P11,
+    p12: P12,
+    p13: P13,
+    p14: P14,
+    p15: P15,
+    p16: P16,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+    P11: Parser<'a, A>,
+    P12: Parser<'a, A>,
+    P13: Parser<'a, A>,
+    P14: Parser<'a, A>,
+    P15: Parser<'a, A>,
+    P16: Parser<'a, A>,
+{
+    one_of2(
+        p1,
+        one_of15(
+            p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16,
+        ),
+    )
+}
+
 // DEBUG COMBINATORS
 //
 // These use dyn for runtime dynamic dispatch. It prevents combinatoric

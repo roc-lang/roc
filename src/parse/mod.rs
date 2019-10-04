@@ -31,10 +31,10 @@ use parse::blankspace::{
 use parse::ident::{ident, Ident, MaybeQualified};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, not_followed_by, one_of2,
-    one_of4, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second, string,
-    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
-    State,
+    and, attempt, between, char, either, loc, map, map_with_arena, not_followed_by, one_of16,
+    one_of2, one_of4, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second,
+    string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
+    Parser, State,
 };
 use parse::string_literal::string_literal;
 use region::Located;
@@ -660,11 +660,25 @@ fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {
 }
 
 pub fn operator<'a>() -> impl Parser<'a, Operator> {
-    one_of4(
+    one_of16(
+        // Sorted from highest to lowest predicted usage in practice,
+        // so that successful matches shorrt-circuit as early as possible.
+        map(string("|>"), |_| Operator::Pizza),
+        map(string("=="), |_| Operator::Equals),
+        map(string("&&"), |_| Operator::And),
+        map(string("||"), |_| Operator::Or),
         map(char('+'), |_| Operator::Plus),
         map(char('-'), |_| Operator::Minus),
         map(char('*'), |_| Operator::Star),
         map(char('/'), |_| Operator::Slash),
+        map(char('<'), |_| Operator::LessThan),
+        map(char('>'), |_| Operator::GreaterThan),
+        map(string("<="), |_| Operator::LessThanOrEq),
+        map(string(">="), |_| Operator::GreaterThanOrEq),
+        map(char('^'), |_| Operator::Caret),
+        map(char('%'), |_| Operator::Percent),
+        map(string("//"), |_| Operator::DoubleSlash),
+        map(string("%%"), |_| Operator::DoublePercent),
     )
 }
 
