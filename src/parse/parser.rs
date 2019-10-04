@@ -200,6 +200,26 @@ where
     }
 }
 
+pub fn not<'a, P, Val>(parser: P) -> impl Parser<'a, ()>
+where
+    P: Parser<'a, Val>,
+{
+    move |arena, state: State<'a>| {
+        let original_state = state.clone();
+
+        match parser.parse(arena, state) {
+            Ok((_, _)) => Err((
+                Fail {
+                    reason: FailReason::ConditionFailed,
+                    attempting: original_state.attempting,
+                },
+                original_state,
+            )),
+            Err((_, _)) => Ok(((), original_state)),
+        }
+    }
+}
+
 pub fn lookahead<'a, Peek, P, PeekVal, Val>(peek: Peek, parser: P) -> impl Parser<'a, Val>
 where
     Peek: Parser<'a, PeekVal>,

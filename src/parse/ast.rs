@@ -343,7 +343,12 @@ impl<'a> Expr<'a> {
     }
 }
 
-pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a> {
+pub fn format<'a>(
+    arena: &'a Bump,
+    expr: &'a Expr<'a>,
+    indent: u16,
+    apply_needs_parens: bool,
+) -> String<'a> {
     use self::Expr::*;
 
     let mut buf = String::new_in(arena);
@@ -351,10 +356,10 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
     match expr {
         SpaceBefore(sub_expr, spaces) => {
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            buf.push_str(&format(arena, sub_expr, indent));
+            buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
         }
         SpaceAfter(sub_expr, spaces) => {
-            buf.push_str(&format(arena, sub_expr, indent));
+            buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
 
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
         }
@@ -372,12 +377,20 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
             buf.push_str(name);
         }
         Apply((loc_expr, loc_args)) => {
-            buf.push_str(&format(arena, &loc_expr.value, indent));
+            if apply_needs_parens {
+                buf.push('(');
+            }
+
+            buf.push_str(&format(arena, &loc_expr.value, indent, true));
 
             for loc_arg in loc_args {
                 buf.push(' ');
 
-                buf.push_str(&format(arena, &loc_arg.value, indent));
+                buf.push_str(&format(arena, &loc_arg.value, indent, true));
+            }
+
+            if apply_needs_parens {
+                buf.push(')');
             }
         }
         BlockStr(lines) => {
@@ -424,7 +437,7 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
 
             buf.push_str("-> ");
 
-            buf.push_str(&format(arena, &loc_ret.value, indent));
+            buf.push_str(&format(arena, &loc_ret.value, indent, false));
         }
         Defs((defs, ret)) => {
             // The first def is actually at the end of the list, because
@@ -445,7 +458,15 @@ pub fn format<'a>(arena: &'a Bump, expr: &'a Expr<'a>, indent: u16) -> String<'a
                 buf.push_str(&format_def(arena, def, indent));
             }
 
-            buf.push_str(&format(arena, &ret.value, indent));
+            buf.push_str(&format(arena, &ret.value, indent, false));
+        }
+        If((loc_condition, loc_then, loc_else)) => {
+            buf.push_str("if ");
+            buf.push_str(&format(arena, &loc_condition.value, indent, false));
+            buf.push_str(" then ");
+            buf.push_str(&format(arena, &loc_then.value, indent, false));
+            buf.push_str(" else ");
+            buf.push_str(&format(arena, &loc_else.value, indent, false));
         }
         other => panic!("TODO implement Display for AST variant {:?}", other),
     }
@@ -463,7 +484,7 @@ pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<
         BodyOnly(loc_pattern, loc_expr) => {
             buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
             buf.push_str(" = ");
-            buf.push_str(&format(arena, &loc_expr.value, indent));
+            buf.push_str(&format(arena, &loc_expr.value, indent, false));
         }
         AnnotatedBody(_loc_annotation, _loc_pattern, _loc_expr) => {
             panic!("TODO have format_def support AnnotationOnly")
@@ -539,10 +560,20 @@ fn format_pattern<'a>(
         // Space
         SpaceBefore(sub_pattern, spaces) => {
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            buf.push_str(&format_pattern(arena, sub_pattern, indent, true));
+            buf.push_str(&format_pattern(
+                arena,
+                sub_pattern,
+                indent,
+                apply_needs_parens,
+            ));
         }
         SpaceAfter(sub_pattern, spaces) => {
-            buf.push_str(&format_pattern(arena, sub_pattern, indent, true));
+            buf.push_str(&format_pattern(
+                arena,
+                sub_pattern,
+                indent,
+                apply_needs_parens,
+            ));
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
         }
 

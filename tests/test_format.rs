@@ -29,7 +29,7 @@ mod test_format {
         let expected = expected.trim_end();
 
         match parse_with(&arena, input) {
-            Ok(actual) => assert_eq!(format(&arena, &actual, 0), expected),
+            Ok(actual) => assert_eq!(format(&arena, &actual, 0, false), expected),
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", input, error)
         }
     }
@@ -176,6 +176,23 @@ mod test_format {
     #[test]
     fn empty_record() {
         assert_formats_same("{}");
+    }
+
+    // IF
+
+    #[test]
+    fn single_line_if() {
+        assert_formats_same(indoc!(
+            r#"
+            if foo bar then a b c else d e f
+        "#
+        ));
+
+        assert_formats_same(indoc!(
+            r#"
+            if foo (a b c) then a b c else d e f
+        "#
+        ));
     }
 
     // NEWLINES

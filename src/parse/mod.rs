@@ -26,12 +26,12 @@ use bumpalo::Bump;
 use operator::Operator;
 use parse::ast::{Attempting, Def, Expr, Pattern, Spaceable};
 use parse::blankspace::{
-    space0, space0_after, space0_around, space0_before, space1, space1_before,
+    space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
 };
 use parse::ident::{ident, Ident, MaybeQualified};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, not_followed_by, one_of16,
+    and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by, one_of16,
     one_of2, one_of4, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second,
     string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
     Parser, State,
@@ -438,9 +438,43 @@ fn parse_def_expr<'a>(
 }
 
 fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
-    // Don't parse operators, because they have a higher precedence than function application.
-    // If we encounter one, we're done parsing function args!
-    move |arena, state| loc_parse_expr_body_without_operators(min_indent, arena, state)
+    skip_first(
+        // If this is a reserved keyword ("if", "then", "case, "when"), then
+        // it is not a function argument!
+        not(reserved_keyword()),
+        // Don't parse operators, because they have a higher precedence than function application.
+        // If we encounter one, we're done parsing function args!
+        move |arena, state| loc_parse_function_arg(min_indent, arena, state),
+    )
+}
+
+fn loc_parse_function_arg<'a>(
+    min_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Located<Expr<'a>>> {
+    one_of9(
+        loc_parenthetical_expr(min_indent),
+        loc(string_literal()),
+        loc(number_literal()),
+        loc(closure(min_indent)),
+        loc(record_literal(min_indent)),
+        loc(list_literal(min_indent)),
+        loc(case_expr(min_indent)),
+        loc(if_expr(min_indent)),
+        loc(ident_without_apply()),
+    )
+    .parse(arena, state)
+}
+
+fn reserved_keyword<'a>() -> impl Parser<'a, ()> {
+    one_of5(
+        string(keyword::IF),
+        string(keyword::THEN),
+        string(keyword::ELSE),
+        string(keyword::CASE),
+        string(keyword::WHEN),
+    )
 }
 
 fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
@@ -548,10 +582,37 @@ pub fn case_expr<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     })
 }
 
-pub fn if_expr<'a>(_min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    map(string(keyword::IF), |_| {
-        panic!("TODO implement IF");
-    })
+pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    map_with_arena(
+        and(
+            skip_first(
+                string(keyword::IF),
+                space1_around(
+                    loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                    min_indent,
+                ),
+            ),
+            and(
+                skip_first(
+                    string(keyword::THEN),
+                    space1_around(
+                        loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                        min_indent,
+                    ),
+                ),
+                skip_first(
+                    string(keyword::ELSE),
+                    space1_before(
+                        loc(move |arena, state| parse_expr(min_indent, arena, state)),
+                        min_indent,
+                    ),
+                ),
+            ),
+        ),
+        |arena, (condition, (then_branch, else_branch))| {
+            Expr::If(arena.alloc((condition, then_branch, else_branch)))
+        },
+    )
 }
 
 pub fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
@@ -621,6 +682,12 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             }
         },
     )
+}
+
+pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {
+    then(loc(ident()), move |_arena, state, loc_ident| {
+        Ok((ident_to_expr(loc_ident.value), state))
+    })
 }
 
 pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {

@@ -579,6 +579,21 @@ mod test_parse {
     }
 
     #[test]
+    fn apply_three_args() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = Located::new(0, 0, 2, 3, Var(module_parts, "b"));
+        let arg2 = Located::new(0, 0, 4, 5, Var(module_parts, "c"));
+        let arg3 = Located::new(0, 0, 6, 7, Var(module_parts, "d"));
+        let args = bumpalo::vec![in &arena; arg1, arg2, arg3];
+        let tuple = arena.alloc((Located::new(0, 0, 0, 1, Var(module_parts, "a")), args));
+        let expected = Expr::Apply(tuple);
+        let actual = parse_with(&arena, "a b c d");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn parenthetical_apply() {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
@@ -626,6 +641,20 @@ mod test_parse {
         let tuple = arena.alloc((patterns, Located::new(0, 0, 8, 10, Int("42"))));
         let expected = Closure(tuple);
         let actual = parse_with(&arena, "\\a b -> 42");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn three_arg_closure() {
+        let arena = Bump::new();
+        let arg1 = Located::new(0, 0, 1, 2, Identifier("a"));
+        let arg2 = Located::new(0, 0, 3, 4, Identifier("b"));
+        let arg3 = Located::new(0, 0, 5, 6, Identifier("c"));
+        let patterns = bumpalo::vec![in &arena; arg1, arg2, arg3];
+        let tuple = arena.alloc((patterns, Located::new(0, 0, 10, 12, Int("42"))));
+        let expected = Closure(tuple);
+        let actual = parse_with(&arena, "\\a b c -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
