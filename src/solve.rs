@@ -1,4 +1,3 @@
-use bumpalo::collections::Vec;
 use can::symbol::Symbol;
 use collections::ImMap;
 use subs::{Content, Descriptor, FlatType, Subs, Variable};
@@ -80,16 +79,16 @@ fn type_to_variable<'a>(subs: &'a mut Subs<'a>, typ: Type<'a>) -> Variable {
             name,
             args,
         } => {
-            let mut arg_vars = Vec::with_capacity_in(args.len(), subs.arena);
+            let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
                 arg_vars.push(type_to_variable(subs, arg.clone()))
             }
 
             let flat_type = FlatType::Apply {
-                module_name,
-                name,
-                args: arg_vars.into_bump_slice(),
+                module_name: module_name.into(),
+                name: name.into(),
+                args: arg_vars,
             };
             let content = Content::Structure(flat_type);
 
@@ -101,15 +100,14 @@ fn type_to_variable<'a>(subs: &'a mut Subs<'a>, typ: Type<'a>) -> Variable {
             subs.fresh(Descriptor::from(content))
         }
         Function(args, ret_type) => {
-            let mut arg_vars: Vec<'a, Variable> = Vec::with_capacity_in(args.len(), subs.arena);
+            let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
                 arg_vars.push(type_to_variable(subs, arg.clone()))
             }
 
             let ret_var = type_to_variable(subs, *ret_type);
-            let content: Content<'a> =
-                Content::Structure(FlatType::Func(arg_vars.into_bump_slice(), ret_var));
+            let content: Content = Content::Structure(FlatType::Func(arg_vars, ret_var));
 
             subs.fresh(Descriptor::from(content))
         }

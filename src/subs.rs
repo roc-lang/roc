@@ -27,7 +27,7 @@ impl fmt::Debug for Variable {
 }
 
 impl UnifyKey for Variable {
-    type Value = Descriptor<'static>;
+    type Value = Descriptor;
 
     fn index(&self) -> u32 {
         self.0
@@ -50,7 +50,7 @@ impl<'a> Subs<'a> {
         }
     }
 
-    pub fn fresh(&'a mut self, value: Descriptor<'a>) -> Variable {
+    pub fn fresh(&'a mut self, value: Descriptor) -> Variable {
         self.utable.new_key(value)
     }
 
@@ -66,18 +66,18 @@ impl<'a> Subs<'a> {
         }
     }
 
-    pub fn get(&'a mut self, key: Variable) -> Descriptor<'a> {
+    pub fn get(&'a mut self, key: Variable) -> Descriptor {
         self.utable.probe_value(key)
     }
 
-    pub fn set(&'a mut self, key: Variable, r_value: Descriptor<'a>) {
+    pub fn set(&'a mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key.into());
         let unified = unify::unify_var_val(self, l_key, &r_value);
 
         self.utable.update_value(l_key, |node| node.value = unified);
     }
 
-    pub fn mk_flex_var(&mut self) -> Variable {
+    pub fn mk_flex_var(&'a mut self) -> Variable {
         self.fresh(flex_var_descriptor())
     }
 
@@ -104,25 +104,25 @@ impl<'a> Subs<'a> {
 }
 
 #[inline(always)]
-fn flex_var_descriptor() -> Descriptor<'static> {
+fn flex_var_descriptor() -> Descriptor {
     Descriptor::from(unnamed_flex_var())
 }
 
 #[inline(always)]
-fn unnamed_flex_var() -> Content<'static> {
+fn unnamed_flex_var() -> Content {
     Content::FlexVar(None)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Descriptor<'a> {
-    pub content: Content<'a>,
+pub struct Descriptor {
+    pub content: Content,
     pub rank: usize,
     pub mark: u32,
     pub copy: Option<Variable>,
 }
 
-impl<'a> From<Content<'a>> for Descriptor<'a> {
-    fn from(content: Content<'a>) -> Descriptor<'a> {
+impl From<Content> for Descriptor {
+    fn from(content: Content) -> Descriptor {
         Descriptor {
             content,
             rank: 0,
@@ -133,21 +133,21 @@ impl<'a> From<Content<'a>> for Descriptor<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Content<'a> {
-    FlexVar(Option<&'a str> /* name */),
-    RigidVar(&'a str /* name */),
-    Structure(FlatType<'a>),
+pub enum Content {
+    FlexVar(Option<Box<str>> /* name */),
+    RigidVar(String /* name */),
+    Structure(FlatType),
     Error(Problem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FlatType<'a> {
+pub enum FlatType {
     Apply {
-        module_name: &'a str,
-        name: &'a str,
-        args: &'a [Variable],
+        module_name: Box<str>,
+        name: Box<str>,
+        args: Vec<Variable>,
     },
-    Func(&'a [Variable], Variable),
+    Func(Vec<Variable>, Variable),
     Operator(Variable, Variable, Variable),
     Erroneous(Problem),
     EmptyRecord,

@@ -1,4 +1,3 @@
-use bumpalo::collections::Vec;
 use subs::Content::{self, *};
 use subs::{Descriptor, FlatType, Subs, Variable};
 use types::Problem;
@@ -8,7 +7,7 @@ pub fn unify_vars<'a>(
     subs: &'a mut Subs<'a>,
     left_key: Variable,
     right_key: Variable,
-) -> Descriptor<'a> {
+) -> Descriptor {
     let right = subs.get(right_key);
 
     unify_var_val(subs, left_key, &right)
@@ -18,8 +17,8 @@ pub fn unify_vars<'a>(
 pub fn unify_var_val<'a>(
     subs: &'a mut Subs<'a>,
     left_key: Variable,
-    right: &'a Descriptor<'a>,
-) -> Descriptor<'a> {
+    right: &'a Descriptor,
+) -> Descriptor {
     let left = subs.get(left_key);
 
     unify(subs, &left, right)
@@ -27,9 +26,9 @@ pub fn unify_var_val<'a>(
 
 pub fn unify<'a>(
     subs: &'a mut Subs<'a>,
-    left: &'a Descriptor<'a>,
-    right: &'a Descriptor<'a>,
-) -> Descriptor<'a> {
+    left: &'a Descriptor,
+    right: &'a Descriptor,
+) -> Descriptor {
     let answer = match left.content {
         FlexVar(ref opt_name) => unify_flex(opt_name, &right.content),
         RigidVar(ref name) => unify_rigid(name, &right.content),
@@ -47,8 +46,8 @@ pub fn unify<'a>(
 fn unify_structure<'a>(
     subs: &'a mut Subs<'a>,
     flat_type: &'a FlatType,
-    other: &'a Content<'a>,
-) -> Descriptor<'a> {
+    other: &'a Content,
+) -> Descriptor {
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
@@ -72,9 +71,9 @@ fn unify_structure<'a>(
 #[inline(always)]
 fn unify_flat_type<'a>(
     subs: &'a mut Subs<'a>,
-    left: &'a FlatType<'a>,
-    right: &'a FlatType<'a>,
-) -> Descriptor<'a> {
+    left: &'a FlatType,
+    right: &'a FlatType,
+) -> Descriptor {
     use subs::FlatType::*;
 
     match (left, right) {
@@ -93,8 +92,8 @@ fn unify_flat_type<'a>(
         ) if l_module_name == r_module_name && l_type_name == r_type_name => {
             let args = unify_args(subs, l_args.iter(), r_args.iter());
             let flat_type = Apply {
-                module_name: l_module_name,
-                name: l_type_name,
+                module_name: l_module_name.clone(),
+                name: l_type_name.clone(),
                 args,
             };
 
@@ -125,11 +124,11 @@ fn unify_flat_type<'a>(
     }
 }
 
-fn unify_args<'a, I>(subs: &'a mut Subs<'a>, left_iter: I, right_iter: I) -> &'a [Variable]
+fn unify_args<'a, I>(subs: &'a mut Subs<'a>, left_iter: I, right_iter: I) -> Vec<Variable>
 where
     I: Iterator<Item = &'a Variable>,
 {
-    let mut answer = Vec::new_in(subs.arena);
+    let mut answer = Vec::new();
 
     for (l_var, r_var) in left_iter.zip(right_iter) {
         // Look up the descriptors we have for these variables, and unify them.
@@ -142,7 +141,7 @@ where
         answer.push(r_var.clone())
     }
 
-    answer.into_bump_slice()
+    answer
 }
 
 fn union_vars<'a>(subs: &'a mut Subs<'a>, l_var: Variable, r_var: Variable) -> Variable {
@@ -157,11 +156,11 @@ fn union_vars<'a>(subs: &'a mut Subs<'a>, l_var: Variable, r_var: Variable) -> V
 }
 
 #[inline(always)]
-fn unify_rigid<'a>(name: &'a str, other: &'a Content<'a>) -> Descriptor<'a> {
+fn unify_rigid<'a>(name: &'a str, other: &'a Content) -> Descriptor {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            from_content(RigidVar(name.clone()))
+            from_content(RigidVar(name.to_string()))
         }
         RigidVar(_) | Structure(_) => {
             // Type mismatch! Rigid can only unify with flex, even if the
@@ -176,7 +175,7 @@ fn unify_rigid<'a>(name: &'a str, other: &'a Content<'a>) -> Descriptor<'a> {
 }
 
 #[inline(always)]
-fn unify_flex<'a>(opt_name: &'a Option<&'a str>, other: &'a Content<'a>) -> Descriptor<'a> {
+fn unify_flex<'a>(opt_name: &'a Option<Box<str>>, other: &'a Content) -> Descriptor {
     match other {
         FlexVar(None) => {
             // If both are flex, and only left has a name, keep the name around.
@@ -192,7 +191,7 @@ fn unify_flex<'a>(opt_name: &'a Option<&'a str>, other: &'a Content<'a>) -> Desc
 
 /// TODO this was f/k/a merge() - got rid of the rank stuff...good idea? Bad?
 /// TODO it used to be { rank: std::cmp::min(left_rank, right_rank), ... }
-fn from_content<'a>(content: Content<'a>) -> Descriptor<'a> {
+fn from_content<'a>(content: Content) -> Descriptor {
     Descriptor {
         content,
         rank: 0,

@@ -14,7 +14,7 @@ pub fn infer_expr<'a>(
     subs: &'a mut Subs<'a>,
     loc_expr: Located<Expr<'a>>,
     procedures: MutMap<Symbol<'a>, Procedure<'a>>,
-) -> Content<'a> {
+) -> Content {
     panic!("TODO re-constrain procedures.");
     // let bound_vars = ImMap::default();
     // let mut env = ImMap::default();
