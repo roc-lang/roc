@@ -3,11 +3,7 @@ use subs::{Descriptor, FlatType, Subs, Variable};
 use types::Problem;
 
 #[inline(always)]
-pub fn unify_vars<'a>(
-    subs: &'a mut Subs<'a>,
-    left_key: Variable,
-    right_key: Variable,
-) -> Descriptor {
+pub fn unify_vars<'a>(subs: &'a mut Subs, left_key: Variable, right_key: Variable) -> Descriptor {
     let right = subs.get(right_key);
 
     unify_var_val(subs, left_key, &right)
@@ -15,7 +11,7 @@ pub fn unify_vars<'a>(
 
 #[inline(always)]
 pub fn unify_var_val<'a>(
-    subs: &'a mut Subs<'a>,
+    subs: &'a mut Subs,
     left_key: Variable,
     right: &'a Descriptor,
 ) -> Descriptor {
@@ -24,11 +20,7 @@ pub fn unify_var_val<'a>(
     unify(subs, &left, right)
 }
 
-pub fn unify<'a>(
-    subs: &'a mut Subs<'a>,
-    left: &'a Descriptor,
-    right: &'a Descriptor,
-) -> Descriptor {
+pub fn unify<'a>(subs: &'a mut Subs, left: &'a Descriptor, right: &'a Descriptor) -> Descriptor {
     let answer = match left.content {
         FlexVar(ref opt_name) => unify_flex(opt_name, &right.content),
         RigidVar(ref name) => unify_rigid(name, &right.content),
@@ -44,7 +36,7 @@ pub fn unify<'a>(
 
 #[inline(always)]
 fn unify_structure<'a>(
-    subs: &'a mut Subs<'a>,
+    subs: &'a mut Subs,
     flat_type: &'a FlatType,
     other: &'a Content,
 ) -> Descriptor {
@@ -69,11 +61,7 @@ fn unify_structure<'a>(
 }
 
 #[inline(always)]
-fn unify_flat_type<'a>(
-    subs: &'a mut Subs<'a>,
-    left: &'a FlatType,
-    right: &'a FlatType,
-) -> Descriptor {
+fn unify_flat_type<'a>(subs: &'a mut Subs, left: &'a FlatType, right: &'a FlatType) -> Descriptor {
     use subs::FlatType::*;
 
     match (left, right) {
@@ -124,7 +112,7 @@ fn unify_flat_type<'a>(
     }
 }
 
-fn unify_args<'a, I>(subs: &'a mut Subs<'a>, left_iter: I, right_iter: I) -> Vec<Variable>
+fn unify_args<'a, I>(subs: &'a mut Subs, left_iter: I, right_iter: I) -> Vec<Variable>
 where
     I: Iterator<Item = &'a Variable>,
 {
@@ -144,7 +132,7 @@ where
     answer
 }
 
-fn union_vars<'a>(subs: &'a mut Subs<'a>, l_var: Variable, r_var: Variable) -> Variable {
+fn union_vars<'a>(subs: &'a mut Subs, l_var: Variable, r_var: Variable) -> Variable {
     // Look up the descriptors we have for these variables, and unify them.
     let descriptor = unify_vars(subs, l_var.clone(), r_var.clone());
 

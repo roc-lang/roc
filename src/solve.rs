@@ -4,16 +4,15 @@ use subs::{Content, Descriptor, FlatType, Subs, Variable};
 use types::Constraint::{self, *};
 use types::Type::{self, *};
 
-type Env<'a> = ImMap<Symbol<'a>, Variable>;
+type Env<'a> = ImMap<Symbol, Variable>;
 
-pub fn solve<'a>(env: &'a Env<'a>, subs: &'a mut Subs<'a>, constraint: &'a Constraint<'a>) {
-    // println!("\nSolving:\n\n\t{:?}\n\n", constraint);
+pub fn solve<'a>(env: &Env<'a>, subs: &mut Subs, constraint: &Constraint) {
     match constraint {
         True => (),
         Eq(typ, expected_type, _region) => {
             // TODO use region?
             let actual = type_to_variable(subs, typ.clone());
-            let expected = type_to_variable(subs, expected_type.get_type());
+            let expected = type_to_variable(subs, expected_type.clone().get_type());
 
             subs.union(actual, expected);
         }
@@ -23,7 +22,7 @@ pub fn solve<'a>(env: &'a Env<'a>, subs: &'a mut Subs<'a>, constraint: &'a Const
                 subs.copy_var(env.get(&symbol).unwrap_or_else(|| {
                     panic!("Could not find symbol {:?} in env {:?}", symbol, env)
                 }));
-            let expected = type_to_variable(subs, expected_type.get_type());
+            let expected = type_to_variable(subs, expected_type.clone().get_type());
 
             subs.union(actual, expected);
         }
@@ -32,31 +31,29 @@ pub fn solve<'a>(env: &'a Env<'a>, subs: &'a mut Subs<'a>, constraint: &'a Const
                 solve(env, subs, sub_constraint);
             }
         }
-        Let(box_let_constraint) => {
-            let let_con = *box_let_constraint;
-
+        Let(let_con) => {
             match let_con.ret_constraint {
                 True => {
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(env, subs, &let_con.assignments_constraint)
                 }
-                ret_con => {
+                ref ret_con => {
                     // Solve the assignments' constraints first.
                     solve(env, subs, &let_con.assignments_constraint);
 
                     // Add a variable for each assignment to the env.
                     let mut new_env = env.clone();
 
-                    for (symbol, loc_type) in let_con.assignment_types {
+                    for (symbol, loc_type) in let_con.assignment_types.iter() {
                         // We must not overwrite existing symbols! If we do,
                         // we will overwrite procedure entries, which were
                         // inserted earlier in solving. (If we allowed
                         // shadowing, we'd need to do something fancier here.)
                         if !new_env.contains_key(&symbol) {
-                            let var = type_to_variable(subs, loc_type.value);
+                            let var = type_to_variable(subs, loc_type.value.clone());
 
-                            new_env.insert(symbol, var);
+                            new_env.insert(symbol.clone(), var);
                         }
                     }
 
@@ -71,7 +68,7 @@ pub fn solve<'a>(env: &'a Env<'a>, subs: &'a mut Subs<'a>, constraint: &'a Const
     }
 }
 
-fn type_to_variable<'a>(subs: &'a mut Subs<'a>, typ: Type<'a>) -> Variable {
+fn type_to_variable<'a>(subs: &'a mut Subs, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
         Apply {

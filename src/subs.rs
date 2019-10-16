@@ -1,13 +1,11 @@
-use bumpalo::Bump;
 use ena::unify::{InPlace, UnificationTable, UnifyKey};
 use std::fmt;
 use types::Problem;
 use unify;
 
 #[derive(Debug)]
-pub struct Subs<'a> {
+pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
-    pub arena: &'a Bump,
 }
 
 #[derive(Copy, PartialEq, Eq, Clone)]
@@ -42,20 +40,19 @@ impl UnifyKey for Variable {
     }
 }
 
-impl<'a> Subs<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
+impl Subs {
+    pub fn new() -> Self {
         Subs {
             utable: UnificationTable::default(),
-            arena,
         }
     }
 
-    pub fn fresh(&'a mut self, value: Descriptor) -> Variable {
+    pub fn fresh(&mut self, value: Descriptor) -> Variable {
         self.utable.new_key(value)
     }
 
     /// Unions two keys without the possibility of failure.
-    pub fn union(&'a mut self, left: Variable, right: Variable) {
+    pub fn union(&mut self, left: Variable, right: Variable) {
         let l_root = self.utable.get_root_key(left.into());
         let r_root = self.utable.get_root_key(right.into());
 
@@ -66,18 +63,18 @@ impl<'a> Subs<'a> {
         }
     }
 
-    pub fn get(&'a mut self, key: Variable) -> Descriptor {
+    pub fn get(&mut self, key: Variable) -> Descriptor {
         self.utable.probe_value(key)
     }
 
-    pub fn set(&'a mut self, key: Variable, r_value: Descriptor) {
+    pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key.into());
         let unified = unify::unify_var_val(self, l_key, &r_value);
 
         self.utable.update_value(l_key, |node| node.value = unified);
     }
 
-    pub fn mk_flex_var(&'a mut self) -> Variable {
+    pub fn mk_flex_var(&mut self) -> Variable {
         self.fresh(flex_var_descriptor())
     }
 

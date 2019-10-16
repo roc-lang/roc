@@ -11,9 +11,9 @@ use types::Expected::*;
 use types::Type::*;
 
 pub fn infer_expr<'a>(
-    subs: &'a mut Subs<'a>,
-    loc_expr: Located<Expr<'a>>,
-    procedures: MutMap<Symbol<'a>, Procedure<'a>>,
+    subs: &'a mut Subs,
+    loc_expr: Located<Expr>,
+    procedures: MutMap<Symbol, Procedure>,
 ) -> Content {
     panic!("TODO re-constrain procedures.");
     // let bound_vars = ImMap::default();

@@ -1,4 +1,3 @@
-use bumpalo::{self, Bump};
 use can::symbol::Symbol;
 use collections::ImMap;
 use operator::{ArgSide, Operator};
@@ -21,29 +20,29 @@ pub const MOD_DEFAULT: &'static str = "Default";
 pub const TYPE_NUM: &'static str = "Num";
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Type<'a> {
+pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
-    Function(&'a [Type<'a>], &'a Type<'a>),
-    Operator(&'a OperatorType<'a>),
+    Function(Vec<Type>, Box<Type>),
+    Operator(Box<OperatorType>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
-        module_name: &'a str,
-        name: &'a str,
-        args: &'a [Type<'a>],
+        module_name: Box<str>,
+        name: Box<str>,
+        args: Vec<Type>,
     },
     Variable(Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
 
-impl<'a> Type<'a> {
-    pub fn for_operator(arena: &'a Bump, op: Operator) -> OperatorType<'a> {
+impl Type {
+    pub fn for_operator(op: Operator) -> OperatorType {
         use self::Operator::*;
 
         match op {
-            Slash => op_type(Type::float(arena), Type::float(arena), Type::float(arena)),
-            DoubleSlash => op_type(Type::int(arena), Type::int(arena), Type::int(arena)),
+            Slash => op_type(Type::float(), Type::float(), Type::float()),
+            DoubleSlash => op_type(Type::int(), Type::int(), Type::int()),
             // TODO actually, don't put these in types.rs - instead, replace them
             // with an equivalence to their corresponding stdlib functions - e.g.
             // Slash generates a new variable and an Eq constraint with Float.div.
@@ -51,61 +50,61 @@ impl<'a> Type<'a> {
         }
     }
 
-    pub fn num(args: &'a [Type<'a>]) -> Self {
+    pub fn num(args: Vec<Type>) -> Self {
         Type::Apply {
-            module_name: MOD_NUM,
-            name: TYPE_NUM,
+            module_name: MOD_NUM.into(),
+            name: TYPE_NUM.into(),
             args,
         }
     }
 
-    pub fn float(arena: &'a Bump) -> Self {
+    pub fn float() -> Self {
         let floating_point = Type::Apply {
-            module_name: MOD_FLOAT,
-            name: "FloatingPoint",
-            args: &[],
+            module_name: MOD_FLOAT.into(),
+            name: "FloatingPoint".into(),
+            args: Vec::new(),
         };
 
-        Type::num(bumpalo::vec![in &arena; floating_point].into_bump_slice())
+        Type::num(vec![floating_point])
     }
 
-    pub fn int(arena: &'a Bump) -> Self {
+    pub fn int() -> Self {
         let integer = Type::Apply {
-            module_name: MOD_INT,
-            name: "Integer",
-            args: &[],
+            module_name: MOD_INT.into(),
+            name: "Integer".into(),
+            args: Vec::new(),
         };
 
-        Type::num(bumpalo::vec![in &arena; integer].into_bump_slice())
+        Type::num(vec![integer])
     }
 
     pub fn string() -> Self {
         Type::Apply {
-            module_name: MOD_STR,
-            name: "Str",
-            args: &[],
+            module_name: MOD_STR.into(),
+            name: "Str".into(),
+            args: Vec::new(),
         }
     }
 
     /// This is needed to constrain `if` conditionals
     pub fn bool() -> Self {
         Type::Apply {
-            module_name: MOD_DEFAULT,
-            name: "Bool",
-            args: &[],
+            module_name: MOD_DEFAULT.into(),
+            name: "Bool".into(),
+            args: Vec::new(),
         }
     }
 }
 
-fn op_type<'a>(left: Type<'a>, right: Type<'a>, ret: Type<'a>) -> OperatorType<'a> {
+fn op_type(left: Type, right: Type, ret: Type) -> OperatorType {
     OperatorType { left, right, ret }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct OperatorType<'a> {
-    pub left: Type<'a>,
-    pub right: Type<'a>,
-    pub ret: Type<'a>,
+pub struct OperatorType {
+    pub left: Type,
+    pub right: Type,
+    pub ret: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -138,21 +137,21 @@ pub enum Reason {
 }
 
 #[derive(Debug, Clone)]
-pub enum Constraint<'a> {
-    Eq(Type<'a>, Expected<Type<'a>>, Region),
-    Lookup(Symbol<'a>, Expected<Type<'a>>, Region),
+pub enum Constraint {
+    Eq(Type, Expected<Type>, Region),
+    Lookup(Symbol, Expected<Type>, Region),
     True, // Used for things that always unify, e.g. blanks and runtime errors
-    Let(&'a LetConstraint<'a>),
-    And(&'a [Constraint<'a>]),
+    Let(Box<LetConstraint>),
+    And(Vec<Constraint>),
 }
 
 #[derive(Debug, Clone)]
-pub struct LetConstraint<'a> {
-    pub rigid_vars: &'a [Variable],
-    pub flex_vars: &'a [Variable],
-    pub assignment_types: ImMap<Symbol<'a>, Located<Type<'a>>>,
-    pub assignments_constraint: Constraint<'a>,
-    pub ret_constraint: Constraint<'a>,
+pub struct LetConstraint {
+    pub rigid_vars: Vec<Variable>,
+    pub flex_vars: Vec<Variable>,
+    pub assignment_types: ImMap<Symbol, Located<Type>>,
+    pub assignments_constraint: Constraint,
+    pub ret_constraint: Constraint,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

@@ -4,17 +4,14 @@ use ident::Ident;
 use region::Region;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Scope<'a> {
-    pub idents: ImMap<Ident, (Symbol<'a>, Region)>,
-    symbol_prefix: &'a str,
+pub struct Scope {
+    pub idents: ImMap<Ident, (Symbol, Region)>,
+    symbol_prefix: Box<str>,
     next_unique_id: u64,
 }
 
-impl<'a> Scope<'a> {
-    pub fn new(
-        symbol_prefix: &'a str,
-        declared_idents: ImMap<Ident, (Symbol<'a>, Region)>,
-    ) -> Scope<'a> {
+impl Scope {
+    pub fn new(symbol_prefix: Box<str>, declared_idents: ImMap<Ident, (Symbol, Region)>) -> Scope {
         Scope {
             symbol_prefix,
 
@@ -26,11 +23,11 @@ impl<'a> Scope<'a> {
         }
     }
 
-    pub fn symbol(&'a self, name: &'a str) -> Symbol<'a> {
+    pub fn symbol(&self, name: &str) -> Symbol {
         Symbol::new(&self.symbol_prefix, name)
     }
 
-    pub fn gen_unique_symbol(&mut self) -> Symbol<'a> {
+    pub fn gen_unique_symbol(&mut self) -> Symbol {
         self.next_unique_id = self.next_unique_id + 1;
 
         Symbol::new(&self.symbol_prefix, &self.next_unique_id.to_string())

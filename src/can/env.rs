@@ -1,5 +1,3 @@
-use bumpalo::collections::Vec;
-use bumpalo::Bump;
 use can::expr::Expr;
 use can::pattern::Pattern;
 use can::problem::Problem;
@@ -7,55 +5,44 @@ use can::procedure::{Procedure, References};
 use can::symbol::Symbol;
 use collections::{ImMap, MutMap};
 use region::{Located, Region};
-use subs::Subs;
 
 /// The canonicalization environment for a particular module.
-pub struct Env<'a> {
+pub struct Env {
     /// The module's path. Unqualified references to identifiers and variant names are assumed
     /// to be relative to this path.
-    pub home: &'a str,
+    pub home: Box<str>,
 
     /// Problems we've encountered along the way, which will be reported to the user at the end.
-    pub problems: Vec<'a, Problem<'a>>,
+    pub problems: Vec<Problem>,
 
     /// Variants either declared in this module, or imported.
-    pub variants: ImMap<Symbol<'a>, Located<&'a str>>,
+    pub variants: ImMap<Symbol, Located<Box<str>>>,
 
     /// Former closures converted to top-level procedures.
-    pub procedures: MutMap<Symbol<'a>, Procedure<'a>>,
-
-    pub arena: &'a Bump,
-
-    pub subs: Subs<'a>,
+    pub procedures: MutMap<Symbol, Procedure>,
 }
 
-impl<'a> Env<'a> {
-    pub fn new(
-        arena: &'a Bump,
-        home: &'a str,
-        declared_variants: ImMap<Symbol<'a>, Located<&'a str>>,
-    ) -> Env<'a> {
+impl Env {
+    pub fn new(home: Box<str>, declared_variants: ImMap<Symbol, Located<Box<str>>>) -> Env {
         Env {
             home,
             variants: declared_variants,
-            problems: Vec::new_in(arena),
+            problems: Vec::new(),
             procedures: MutMap::default(),
-            arena,
-            subs: Subs::new(arena),
         }
     }
 
-    pub fn problem(&mut self, problem: Problem<'a>) -> () {
+    pub fn problem(&mut self, problem: Problem) -> () {
         self.problems.push(problem)
     }
 
     pub fn register_closure(
         &mut self,
-        symbol: Symbol<'a>,
-        args: &'a [Located<Pattern<'a>>],
-        body: Located<Expr<'a>>,
+        symbol: Symbol,
+        args: Vec<Located<Pattern>>,
+        body: Located<Expr>,
         definition: Region,
-        references: References<'a>,
+        references: References,
     ) -> () {
         // We can't if the closure is self tail recursive yet, because it doesn't know its final name yet.
         // (Assign sets that.) Assume this is false, and let Assign change it to true after it sets final name.

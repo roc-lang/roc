@@ -75,7 +75,7 @@ impl Operator {
         }
     }
 
-    pub fn desugar(&self) -> Symbol<'static> {
+    pub fn desugar(&self) -> Symbol {
         match self {
             Caret => Symbol::new("Num", "pow"),
             Star => Symbol::new("Num", "mul"),

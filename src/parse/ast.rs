@@ -83,6 +83,9 @@ pub enum Expr<'a> {
     // Problems
     MalformedIdent(&'a str),
     MalformedClosure,
+    // Both operators were non-associative, e.g. (True == False == False).
+    // We should tell the author to disambiguate by grouping them with parens.
+    PrecedenceConflict(Loc<Operator>, Loc<Operator>, &'a Loc<Expr<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

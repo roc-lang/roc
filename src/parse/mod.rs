@@ -292,6 +292,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::If(_)
         | Expr::Case(_, _)
         | Expr::MalformedClosure
+        | Expr::PrecedenceConflict(_, _, _)
         | Expr::QualifiedField(_, _) => Err(Fail {
             attempting: Attempting::Def,
             reason: FailReason::InvalidPattern,

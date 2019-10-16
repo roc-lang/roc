@@ -1,13 +1,11 @@
-use bumpalo::collections::Vec;
-use can::expr::Expr;
-use can::pattern::{Pattern, PatternType};
+use can::pattern::PatternType;
 use ident::{Ident, VariantName};
 use operator::Operator;
 use region::{Located, Region};
 
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Problem<'a> {
+pub enum Problem {
     Shadowing(Located<Ident>),
     UnrecognizedFunctionName(Located<Ident>),
     UnrecognizedConstant(Located<Ident>),
@@ -17,8 +15,8 @@ pub enum Problem<'a> {
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(PatternType, Region),
-    CircularAssignment(Vec<'a, Located<Ident>>),
-    RuntimeError(RuntimeError<'a>),
+    CircularAssignment(Vec<Located<Ident>>),
+    RuntimeError(RuntimeError),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,20 +25,20 @@ pub enum PrecedenceProblem {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum RuntimeError<'a> {
-    InvalidPrecedence(PrecedenceProblem, &'a Located<Expr<'a>>),
+pub enum RuntimeError {
+    InvalidPrecedence(PrecedenceProblem, Region),
     UnrecognizedFunctionName(Located<Ident>),
     UnrecognizedConstant(Located<Ident>),
     UnrecognizedVariant(Located<VariantName>),
-    FloatOutsideRange(&'a str),
-    IntOutsideRange(&'a str),
-    InvalidHex(std::num::ParseIntError, &'a str),
-    InvalidOctal(std::num::ParseIntError, &'a str),
-    InvalidBinary(std::num::ParseIntError, &'a str),
+    FloatOutsideRange(Box<str>),
+    IntOutsideRange(Box<str>),
+    InvalidHex(std::num::ParseIntError, Box<str>),
+    InvalidOctal(std::num::ParseIntError, Box<str>),
+    InvalidBinary(std::num::ParseIntError, Box<str>),
     CircularAssignment(
-        Vec<'a, Located<Ident>>,
-        Vec<'a, (Located<Pattern<'a>>, Located<Expr<'a>>)>,
-        &'a Located<Expr<'a>>,
+        Vec<Located<Ident>>,
+        Vec<(Region /* pattern */, Region /* expr */)>,
+        Region,
     ),
 
     /// When the author specifies a type annotation but no implementation

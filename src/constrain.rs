@@ -4,11 +4,12 @@ use can::procedure::Procedure;
 // use can::symbol::Symbol;
 use collections::ImMap;
 // use operator::{ArgSide, Operator};
-use region::Located;
-use subs::Subs;
-use types::Constraint;
-use types::Expected;
-use types::Type;
+use region::{Located, Region};
+use subs::{Subs, Variable};
+use types::Constraint::{self, *};
+use types::Expected::{self, *};
+use types::Reason;
+use types::Type::{self, *};
 
 /// This lets us share bound type variables between nested annotations, e.g.
 ///
@@ -19,41 +20,90 @@ use types::Type;
 ///     42
 ///
 /// In elm/compiler this is called RTV - the "Rigid Type Variables" dictionary.
-type BoundTypeVars<'a> = ImMap<&'a str, Type<'a>>;
+type BoundTypeVars<'a> = ImMap<&'a str, Type>;
+
+pub struct Constraints(Vec<Constraint>);
+
+impl Constraints {
+    pub fn new() -> Self {
+        Constraints(Vec::new())
+    }
+
+    pub fn add(&mut self, constraint: Constraint) {
+        self.0.push(constraint)
+    }
+}
+
+pub fn int_literal(
+    subs: &mut Subs,
+    constraints: &mut Constraints,
+    expected: Expected<Type>,
+    region: Region,
+) {
+    let typ = number_literal_type("Int", "Integer");
+    let reason = Reason::IntLiteral;
+
+    num_literal(subs, constraints, typ, reason, expected, region)
+}
+
+#[inline(always)]
+pub fn float_literal(
+    subs: &mut Subs,
+    constraints: &mut Constraints,
+    expected: Expected<Type>,
+    region: Region,
+) {
+    let typ = number_literal_type("Float", "FloatingPoint");
+    let reason = Reason::FloatLiteral;
+
+    num_literal(subs, constraints, typ, reason, expected, region)
+}
+
+#[inline(always)]
+fn num_literal(
+    subs: &mut Subs,
+    constraints: &mut Constraints,
+    literal_type: Type,
+    reason: Reason,
+    expected: Expected<Type>,
+    region: Region,
+) {
+    let num_var = subs.mk_flex_var();
+    let num_type = Variable(num_var);
+    let expected_literal = ForReason(reason, literal_type, region.clone());
+
+    constraints.add(Eq(num_type.clone(), expected_literal, region.clone()));
+    constraints.add(Eq(num_type, expected, region.clone()));
+}
+
+#[inline(always)]
+fn number_literal_type(module_name: &str, type_name: &str) -> Type {
+    builtin_type(
+        "Num",
+        "Num",
+        vec![builtin_type(module_name, type_name, Vec::new())],
+    )
+}
+
+#[inline(always)]
+fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
+    Type::Apply {
+        module_name: module_name.into(),
+        name: type_name.into(),
+        args,
+    }
+}
 
 pub fn constrain<'a>(
     bound_vars: &'a BoundTypeVars<'a>,
-    subs: &'a mut Subs<'a>,
-    loc_expr: Located<Expr<'a>>,
-    expected: Expected<Type<'a>>,
-) -> Constraint<'a> {
+    subs: &'a mut Subs,
+    loc_expr: Located<Expr>,
+    expected: Expected<Type>,
+) -> Constraint {
     panic!("TODO inline constrain");
     // let region = loc_expr.region;
 
     // match loc_expr.value {
-    //     Int(_) => int_literal(subs, expected, region),
-    //     Float(_) => float_literal(subs, expected, region),
-    //     Str(_) => Eq(string(), expected, region),
-    //     InterpolatedStr(pairs, _) => {
-    //         let mut constraints = Vec::with_capacity(pairs.len() + 1);
-
-    //         for (_, loc_interpolated_expr) in pairs {
-    //             let expected_str = ForReason(
-    //                 Reason::InterpolatedStringVar,
-    //                 string(),
-    //                 loc_interpolated_expr.region.clone(),
-    //             );
-    //             let constraint = constrain(bound_vars, subs, loc_interpolated_expr, expected_str);
-
-    //             constraints.push(constraint);
-    //         }
-
-    //         constraints.push(Eq(string(), expected, region));
-
-    //         And(constraints)
-    //     }
-    //     EmptyRecord => Eq(EmptyRec, expected, region),
-    //     EmptyList => Eq(empty_list(subs.mk_flex_var()), expected, region),
     //     List(elems) => list(elems, bound_vars, subs, expected, region),
     //     Var(sym) | FunctionPointer(sym) => Lookup(sym, expected, region),
     //     Assign(assignments, ret_expr) => {
@@ -315,100 +365,52 @@ pub fn constrain<'a>(
 // }
 // }
 
-// fn empty_list(var: Variable) -> Type {
-// builtin_type("List", "List", vec![Type::Variable(var)])
-// }
+pub fn empty_list_type(var: Variable) -> Type {
+    list_type(Type::Variable(var))
+}
 
-// fn string() -> Type {
-// builtin_type("Str", "Str", Vec::new())
-// }
+pub fn list_type(typ: Type) -> Type {
+    builtin_type("List", "List", vec![typ])
+}
 
-// fn _num(var: Variable) -> Type {
-// builtin_type("Num", "Num", vec![Type::Variable(var)])
-// }
+pub fn str_type() -> Type {
+    builtin_type("Str", "Str", Vec::new())
+}
 
-// fn list(
-// loc_elems: Vec<Located<Expr>>,
-// bound_vars: &BoundTypeVars,
-// subs: &mut Subs,
-// expected: Expected<Type>,
-// region: Region,
-// ) -> Constraint {
-// let list_var = subs.mk_flex_var(); // `v` in the type (List v)
-// let list_type = Type::Variable(list_var);
-// let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
+fn list(
+    loc_elems: Vec<Located<Expr>>,
+    bound_vars: &BoundTypeVars,
+    subs: &mut Subs,
+    expected: Expected<Type>,
+    region: Region,
+) -> Constraint {
+    let list_var = subs.mk_flex_var(); // `v` in the type (List v)
+    let list_type = Type::Variable(list_var);
+    let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
 
-// for loc_elem in loc_elems {
-//     let elem_var = subs.mk_flex_var();
-//     let elem_type = Variable(elem_var);
-//     let elem_expected = NoExpectation(elem_type.clone());
-//     let elem_constraint = constrain(bound_vars, subs, loc_elem, elem_expected);
-//     let list_elem_constraint = Eq(
-//         list_type.clone(),
-//         ForReason(Reason::ElemInList, elem_type, region.clone()),
-//         region.clone(),
-//     );
+    for loc_elem in loc_elems {
+        let elem_var = subs.mk_flex_var();
+        let elem_type = Variable(elem_var);
+        let elem_expected = NoExpectation(elem_type.clone());
+        let elem_constraint = constrain(bound_vars, subs, loc_elem, elem_expected);
+        let list_elem_constraint = Eq(
+            list_type.clone(),
+            ForReason(Reason::ElemInList, elem_type, region.clone()),
+            region.clone(),
+        );
 
-//     constraints.push(elem_constraint);
-//     constraints.push(list_elem_constraint);
-// }
+        constraints.push(elem_constraint);
+        constraints.push(list_elem_constraint);
+    }
 
-// constraints.push(Eq(
-//     builtin_type("List", "List", vec![list_type]),
-//     expected,
-//     region,
-// ));
+    constraints.push(Eq(
+        builtin_type("List", "List", vec![list_type]),
+        expected,
+        region,
+    ));
 
-// And(constraints)
-// }
-
-// #[inline(always)]
-// fn int_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
-// let typ = number_literal_type("Int", "Integer");
-// let reason = Reason::IntLiteral;
-
-// num_literal(typ, reason, subs, expected, region)
-// }
-
-// #[inline(always)]
-// fn float_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
-// let typ = number_literal_type("Float", "FloatingPoint");
-// let reason = Reason::FloatLiteral;
-
-// num_literal(typ, reason, subs, expected, region)
-// }
-
-// #[inline(always)]
-// fn num_literal(
-// literal_type: Type,
-// reason: Reason,
-// subs: &mut Subs,
-// expected: Expected<Type>,
-// region: Region,
-// ) -> Constraint {
-// let num_var = subs.mk_flex_var();
-// let num_type = Variable(num_var);
-// let expected_literal = ForReason(reason, literal_type, region.clone());
-
-// And(vec![
-//     Eq(num_type.clone(), expected_literal, region.clone()),
-//     Eq(num_type, expected, region.clone()),
-// ])
-// }
-
-// #[inline(always)]
-// fn number_literal_type(module_name: &str, type_name: &str) -> Type {
-// builtin_type(
-//     "Num",
-//     "Num",
-//     vec![builtin_type(module_name, type_name, Vec::new())],
-// )
-// }
-
-// #[inline(always)]
-// fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
-// Type::Apply(module_name.to_string(), type_name.to_string(), args)
-// }
+    And(constraints)
+}
 
 // pub fn constrain_def(
 // loc_pattern: Located<Pattern>,
@@ -484,10 +486,10 @@ pub fn constrain<'a>(
 
 pub fn constrain_procedure<'a>(
     bound_vars: &'a BoundTypeVars<'a>,
-    subs: &'a mut Subs<'a>,
-    proc: Procedure<'a>,
-    expected: Expected<Type<'a>>,
-) -> Constraint<'a> {
+    subs: &'a mut Subs,
+    proc: Procedure,
+    expected: Expected<Type>,
+) -> Constraint {
     panic!("TODO inline constrain_procedure");
     // let mut state = PatternState {
     //     assignment_types: ImMap::default(),
