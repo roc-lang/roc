@@ -12,6 +12,7 @@ fraction = "0.6.2"
 num = "0.2.0"
 fxhash = "0.2.1"
 bumpalo = "2.6.0"
+inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "llvm8-0" }
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

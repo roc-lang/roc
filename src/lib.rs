@@ -19,10 +19,13 @@ pub mod subs;
 pub mod types;
 pub mod unify;
 
+pub mod gen;
+
 extern crate bumpalo;
 extern crate fraction;
 extern crate fxhash;
 extern crate im_rc;
+extern crate inkwell;
 extern crate num;
 
 #[macro_use]

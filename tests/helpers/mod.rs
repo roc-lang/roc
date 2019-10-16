@@ -53,7 +53,9 @@ pub fn can_expr_with(
     });
 
     let home = "Test".to_string();
+    let arena = Bump::new();
     let (loc_expr, output, problems, procedures) = can::canonicalize_declaration(
+        arena,
         home,
         name,
         Region::zero(),

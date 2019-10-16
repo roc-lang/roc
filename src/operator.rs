@@ -1,4 +1,5 @@
 use self::Operator::*;
+use can::symbol::Symbol;
 use std::cmp::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +72,27 @@ impl Operator {
             And => 3,
             Or => 2,
             Pizza => 1,
+        }
+    }
+
+    pub fn desugar(&self) -> Symbol<'static> {
+        match self {
+            Caret => Symbol::new("Num", "pow"),
+            Star => Symbol::new("Num", "mul"),
+            Slash => Symbol::new("Float", "div"),
+            DoubleSlash => Symbol::new("Int", "div"),
+            Percent => Symbol::new("Num", "rem"),
+            DoublePercent => Symbol::new("Num", "mod"),
+            Plus => Symbol::new("Num", "plus"),
+            Minus => Symbol::new("Num", "sub"),
+            Equals => Symbol::new("Bool", "isEqual"),
+            LessThan => Symbol::new("Num", "isLessThan"),
+            GreaterThan => Symbol::new("Num", "isGreaterThan"),
+            LessThanOrEq => Symbol::new("Num", "isLessThanOrEqualTo"),
+            GreaterThanOrEq => Symbol::new("Num", "isGreaterThanOrEqualTo"),
+            And => Symbol::new("Bool", "and"),
+            Or => Symbol::new("Bool", "or"),
+            Pizza => panic!("Cannot desugar the |> operator"),
         }
     }
 }

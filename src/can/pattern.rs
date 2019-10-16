@@ -6,19 +6,20 @@ use collections::ImMap;
 use ident::{Ident, VariantName};
 use parse::ast;
 use region::{Located, Region};
+use subs::Variable;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Pattern {
-    Identifier(Symbol),
-    Variant(Symbol),
-    AppliedVariant(Symbol, Vec<Located<Pattern>>),
-    IntLiteral(i64),
-    FloatLiteral(f64),
-    ExactString(String),
-    EmptyRecordLiteral,
-    Underscore,
+pub enum Pattern<'a> {
+    Identifier(Variable, Symbol<'a>),
+    Variant(Variable, Symbol<'a>),
+    AppliedVariant(Variable, Symbol<'a>, Vec<Located<Pattern<'a>>>),
+    IntLiteral(Variable, i64),
+    FloatLiteral(Variable, f64),
+    ExactString(Variable, &'a str),
+    EmptyRecordLiteral(Variable),
+    Underscore(Variable),
 
     // Runtime Exceptions
     Shadowed(Located<Ident>),
@@ -38,13 +39,13 @@ pub enum PatternType {
     CaseBranch,
 }
 
-pub fn canonicalize_pattern(
-    env: &mut Env,
-    scope: &mut Scope,
-    pattern_type: &PatternType,
-    loc_pattern: &Located<ast::Pattern>,
-    shadowable_idents: &mut ImMap<Ident, (Symbol, Region)>,
-) -> Located<Pattern> {
+pub fn canonicalize_pattern<'a>(
+    env: &'a mut Env<'a>,
+    scope: &'a mut Scope<'a>,
+    pattern_type: &'a PatternType,
+    loc_pattern: &'a Located<ast::Pattern<'a>>,
+    shadowable_idents: &'a mut ImMap<Ident, (Symbol<'a>, Region)>,
+) -> Located<Pattern<'a>> {
     use self::PatternType::*;
     use can::ast::Pattern::*;
 
@@ -78,7 +79,7 @@ pub fn canonicalize_pattern(
                 None => {
                     // Make sure we aren't shadowing something in the home module's scope.
                     let qualified_ident =
-                        Ident::Qualified(env.home.clone(), unqualified_ident.name());
+                        Ident::Qualified(env.home.to_string(), unqualified_ident.name());
 
                     match scope.idents.get(&qualified_ident) {
                         Some((_, region)) => {
@@ -113,7 +114,7 @@ pub fn canonicalize_pattern(
                                 .insert(new_ident.clone(), symbol_and_region.clone());
                             shadowable_idents.insert(new_ident, symbol_and_region);
 
-                            Pattern::Identifier(symbol)
+                            Pattern::Identifier(env.subs.mk_flex_var(), symbol)
                         }
                     }
                 }
@@ -156,7 +157,7 @@ pub fn canonicalize_pattern(
 
             if env.variants.contains_key(&symbol) {
                 // No problems; the qualified variant name was in scope!
-                Pattern::Variant(symbol)
+                Pattern::Variant(env.subs.mk_flex_var(), symbol)
             } else {
                 let loc_name = Located {
                     region: region.clone(),
@@ -184,7 +185,7 @@ pub fn canonicalize_pattern(
         //     ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
         // },
         &Underscore => match pattern_type {
-            CaseBranch | FunctionArg => Pattern::Underscore,
+            CaseBranch | FunctionArg => Pattern::Underscore(env.subs.mk_flex_var()),
             Assignment => unsupported_pattern(env, Assignment, region.clone()),
         },
 
@@ -200,7 +201,11 @@ pub fn canonicalize_pattern(
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
-fn unsupported_pattern<'a>(env: &mut Env, pattern_type: PatternType, region: Region) -> Pattern {
+fn unsupported_pattern<'a>(
+    env: &'a mut Env<'a>,
+    pattern_type: PatternType,
+    region: Region,
+) -> Pattern<'a> {
     env.problem(Problem::UnsupportedPattern(pattern_type, region.clone()));
 
     Pattern::UnsupportedPattern(region)

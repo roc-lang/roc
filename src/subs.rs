@@ -1,11 +1,13 @@
+use bumpalo::Bump;
 use ena::unify::{InPlace, UnificationTable, UnifyKey};
 use std::fmt;
 use types::Problem;
 use unify;
 
 #[derive(Debug)]
-pub struct Subs {
+pub struct Subs<'a> {
     utable: UnificationTable<InPlace<Variable>>,
+    pub arena: &'a Bump,
 }
 
 #[derive(Copy, PartialEq, Eq, Clone)]
@@ -25,7 +27,7 @@ impl fmt::Debug for Variable {
 }
 
 impl UnifyKey for Variable {
-    type Value = Descriptor;
+    type Value = Descriptor<'static>;
 
     fn index(&self) -> u32 {
         self.0
@@ -40,19 +42,20 @@ impl UnifyKey for Variable {
     }
 }
 
-impl Subs {
-    pub fn new() -> Self {
+impl<'a> Subs<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
         Subs {
             utable: UnificationTable::default(),
+            arena,
         }
     }
 
-    pub fn fresh(&mut self, value: Descriptor) -> Variable {
+    pub fn fresh(&'a mut self, value: Descriptor<'a>) -> Variable {
         self.utable.new_key(value)
     }
 
     /// Unions two keys without the possibility of failure.
-    pub fn union(&mut self, left: Variable, right: Variable) {
+    pub fn union(&'a mut self, left: Variable, right: Variable) {
         let l_root = self.utable.get_root_key(left.into());
         let r_root = self.utable.get_root_key(right.into());
 
@@ -63,11 +66,11 @@ impl Subs {
         }
     }
 
-    pub fn get(&mut self, key: Variable) -> Descriptor {
+    pub fn get(&'a mut self, key: Variable) -> Descriptor<'a> {
         self.utable.probe_value(key)
     }
 
-    pub fn set(&mut self, key: Variable, r_value: Descriptor) {
+    pub fn set(&'a mut self, key: Variable, r_value: Descriptor<'a>) {
         let l_key = self.utable.get_root_key(key.into());
         let unified = unify::unify_var_val(self, l_key, &r_value);
 
@@ -101,25 +104,25 @@ impl Subs {
 }
 
 #[inline(always)]
-fn flex_var_descriptor() -> Descriptor {
+fn flex_var_descriptor() -> Descriptor<'static> {
     Descriptor::from(unnamed_flex_var())
 }
 
 #[inline(always)]
-fn unnamed_flex_var() -> Content {
+fn unnamed_flex_var() -> Content<'static> {
     Content::FlexVar(None)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Descriptor {
-    pub content: Content,
+pub struct Descriptor<'a> {
+    pub content: Content<'a>,
     pub rank: usize,
     pub mark: u32,
     pub copy: Option<Variable>,
 }
 
-impl From<Content> for Descriptor {
-    fn from(content: Content) -> Self {
+impl<'a> From<Content<'a>> for Descriptor<'a> {
+    fn from(content: Content<'a>) -> Descriptor<'a> {
         Descriptor {
             content,
             rank: 0,
@@ -130,21 +133,21 @@ impl From<Content> for Descriptor {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Content {
-    FlexVar(Option<String> /* name */),
-    RigidVar(String /* name */),
-    Structure(FlatType),
+pub enum Content<'a> {
+    FlexVar(Option<&'a str> /* name */),
+    RigidVar(&'a str /* name */),
+    Structure(FlatType<'a>),
     Error(Problem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FlatType {
-    Apply(
-        String, /* module name */
-        String, /* type name */
-        Vec<Variable>,
-    ),
-    Func(Vec<Variable>, Variable),
+pub enum FlatType<'a> {
+    Apply {
+        module_name: &'a str,
+        name: &'a str,
+        args: &'a [Variable],
+    },
+    Func(&'a [Variable], Variable),
     Operator(Variable, Variable, Variable),
     Erroneous(Problem),
     EmptyRecord,

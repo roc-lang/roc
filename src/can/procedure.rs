@@ -5,22 +5,22 @@ use collections::ImSet;
 use region::{Located, Region};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Procedure {
-    pub name: Option<String>,
+pub struct Procedure<'a> {
+    pub name: Option<&'a str>,
     pub is_self_tail_recursive: bool,
     pub definition: Region,
-    pub args: Vec<Located<Pattern>>,
-    pub body: Located<Expr>,
-    pub references: References,
+    pub args: &'a [Located<Pattern<'a>>],
+    pub body: Located<Expr<'a>>,
+    pub references: References<'a>,
 }
 
-impl Procedure {
+impl<'a> Procedure<'a> {
     pub fn new(
         definition: Region,
-        args: Vec<Located<Pattern>>,
-        body: Located<Expr>,
-        references: References,
-    ) -> Procedure {
+        args: &'a [Located<Pattern<'a>>],
+        body: Located<Expr<'a>>,
+        references: References<'a>,
+    ) -> Procedure<'a> {
         Procedure {
             name: None,
             is_self_tail_recursive: false,
@@ -36,15 +36,15 @@ impl Procedure {
 /// to determine how assignments shuold be ordered. We want builds to be reproducible,
 /// so it's important that building the same code gives the same order every time!
 #[derive(Clone, Debug, PartialEq)]
-pub struct References {
-    pub locals: ImSet<Symbol>,
-    pub globals: ImSet<Symbol>,
-    pub variants: ImSet<Symbol>,
-    pub calls: ImSet<Symbol>,
+pub struct References<'a> {
+    pub locals: ImSet<Symbol<'a>>,
+    pub globals: ImSet<Symbol<'a>>,
+    pub variants: ImSet<Symbol<'a>>,
+    pub calls: ImSet<Symbol<'a>>,
 }
 
-impl References {
-    pub fn new() -> References {
+impl<'a> References<'a> {
+    pub fn new() -> References<'a> {
         References {
             locals: ImSet::default(),
             globals: ImSet::default(),
@@ -53,7 +53,7 @@ impl References {
         }
     }
 
-    pub fn union(mut self, other: References) -> Self {
+    pub fn union(mut self, other: References<'a>) -> Self {
         self.locals = self.locals.union(other.locals);
         self.globals = self.globals.union(other.globals);
         self.variants = self.variants.union(other.variants);
@@ -62,11 +62,11 @@ impl References {
         self
     }
 
-    pub fn has_local(&self, symbol: &Symbol) -> bool {
+    pub fn has_local(&self, symbol: &Symbol<'a>) -> bool {
         self.locals.contains(symbol)
     }
 
-    pub fn has_variant(&self, symbol: &Symbol) -> bool {
+    pub fn has_variant(&self, symbol: &Symbol<'a>) -> bool {
         self.variants.contains(symbol)
     }
 }

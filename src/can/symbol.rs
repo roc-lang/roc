@@ -3,14 +3,14 @@ use ident::VariantName;
 /// A globally unique identifier, used for both vars and variants.
 /// It will be used directly in code gen.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Symbol(String);
+pub struct Symbol<'a>(&'a str);
 
-impl Symbol {
-    pub fn new(prefix: &str, name: &str) -> Symbol {
-        Symbol(format!("{}{}", prefix, name))
+impl<'a> Symbol<'a> {
+    pub fn new(prefix: &'a str, name: &'a str) -> Symbol<'a> {
+        Symbol(&format!("{}{}", prefix, name))
     }
 
-    pub fn from_variant(variant_name: &VariantName, home: &str) -> Symbol {
+    pub fn from_variant(variant_name: &'a VariantName, home: &'a str) -> Symbol<'a> {
         match &variant_name {
             &VariantName::Unqualified(ref name) => Symbol::new(home, name),
 
@@ -19,8 +19,8 @@ impl Symbol {
     }
 }
 
-impl Into<String> for Symbol {
-    fn into(self) -> String {
+impl<'a> Into<&'a str> for Symbol<'a> {
+    fn into(self) -> &'a str {
         let Symbol(string) = self;
 
         string

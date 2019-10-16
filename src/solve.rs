@@ -1,31 +1,19 @@
-// type Env =
-//   Map.Map Name.Name Variable
-
-// type Pools =
-//   MVector.IOVector [Variable]
-
-// data State =
-//   State
-//     { _env :: Env
-//     , _mark :: Mark
-//     , _errors :: [Error.Error]
-//     }
-
+use bumpalo::collections::Vec;
 use can::symbol::Symbol;
 use collections::ImMap;
 use subs::{Content, Descriptor, FlatType, Subs, Variable};
 use types::Constraint::{self, *};
 use types::Type::{self, *};
 
-type Env = ImMap<Symbol, Variable>;
+type Env<'a> = ImMap<Symbol<'a>, Variable>;
 
-pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
+pub fn solve<'a>(env: &'a Env<'a>, subs: &'a mut Subs<'a>, constraint: &'a Constraint<'a>) {
     // println!("\nSolving:\n\n\t{:?}\n\n", constraint);
     match constraint {
         True => (),
         Eq(typ, expected_type, _region) => {
             // TODO use region?
-            let actual = type_to_variable(subs, typ);
+            let actual = type_to_variable(subs, typ.clone());
             let expected = type_to_variable(subs, expected_type.get_type());
 
             subs.union(actual, expected);
@@ -41,7 +29,7 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
             subs.union(actual, expected);
         }
         And(sub_constraints) => {
-            for sub_constraint in sub_constraints {
+            for sub_constraint in sub_constraints.iter() {
                 solve(env, subs, sub_constraint);
             }
         }
@@ -52,11 +40,11 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
                 True => {
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
-                    solve(env, subs, let_con.assignments_constraint)
+                    solve(env, subs, &let_con.assignments_constraint)
                 }
                 ret_con => {
                     // Solve the assignments' constraints first.
-                    solve(env, subs, let_con.assignments_constraint);
+                    solve(env, subs, &let_con.assignments_constraint);
 
                     // Add a variable for each assignment to the env.
                     let mut new_env = env.clone();
@@ -75,7 +63,7 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
 
                     // Now solve the body, using the new env which includes
                     // the assignments' name-to-variable mappings.
-                    solve(&new_env, subs, ret_con);
+                    solve(&new_env, subs, &ret_con);
 
                     // TODO do an occurs check for each of the assignments!
                 }
@@ -84,16 +72,25 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: Constraint) {
     }
 }
 
-fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
+fn type_to_variable<'a>(subs: &'a mut Subs<'a>, typ: Type<'a>) -> Variable {
     match typ {
         Variable(var) => var,
-        Apply(module_name, name, arg_types) => {
-            let args: Vec<Variable> = arg_types
-                .into_iter()
-                .map(|arg| type_to_variable(subs, arg))
-                .collect();
+        Apply {
+            module_name,
+            name,
+            args,
+        } => {
+            let mut arg_vars = Vec::with_capacity_in(args.len(), subs.arena);
 
-            let flat_type = FlatType::Apply(module_name, name, args);
+            for arg in args {
+                arg_vars.push(type_to_variable(subs, arg.clone()))
+            }
+
+            let flat_type = FlatType::Apply {
+                module_name,
+                name,
+                args: arg_vars.into_bump_slice(),
+            };
             let content = Content::Structure(flat_type);
 
             subs.fresh(Descriptor::from(content))
@@ -103,13 +100,16 @@ fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
 
             subs.fresh(Descriptor::from(content))
         }
-        Function(arg_types, ret_type) => {
-            let arg_vars = arg_types
-                .into_iter()
-                .map(|arg_type| type_to_variable(subs, arg_type))
-                .collect();
+        Function(args, ret_type) => {
+            let mut arg_vars: Vec<'a, Variable> = Vec::with_capacity_in(args.len(), subs.arena);
+
+            for arg in args {
+                arg_vars.push(type_to_variable(subs, arg.clone()))
+            }
+
             let ret_var = type_to_variable(subs, *ret_type);
-            let content = Content::Structure(FlatType::Func(arg_vars, ret_var));
+            let content: Content<'a> =
+                Content::Structure(FlatType::Func(arg_vars.into_bump_slice(), ret_var));
 
             subs.fresh(Descriptor::from(content))
         }

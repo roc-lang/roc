@@ -4,42 +4,46 @@ use can::symbol::Symbol;
 use operator::Operator;
 use region::Located;
 use std::i64;
+use subs::Variable;
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Expr {
+pub enum Expr<'a> {
     // Literals
-    Int(i64),
-    Float(f64),
-    Str(Box<str>),
-    Char(char), // OBSOLETE
-    List(Vec<Located<Expr>>),
-    EmptyList,
+    Int(Variable, i64),
+    Float(Variable, f64),
+    Str(Variable, &'a str),
+    List(Variable, &'a [Located<Expr<'a>>]),
 
     // Lookups
-    Var(Symbol),
+    Var(Variable, Symbol<'a>),
     /// Works the same as Var, but has an important marking purpose.
     /// See 13623e3f5f65ea2d703cf155f16650c1e8246502 for the bug this fixed.
-    FunctionPointer(Symbol),
-    /// We have a separate variant for this so that we can report errors
-    /// (including type errors later) in the context of the sugar rather than
-    /// confusingly talking about the desugared version the user can't see.
-    InterpolatedStr(Vec<(Box<str>, Located<Expr>)>, Box<str>),
+    FunctionPointer(Variable, Symbol<'a>),
 
     // Pattern Matching
-    Case(Box<Located<Expr>>, Vec<(Located<Pattern>, Located<Expr>)>),
-    Assign(Vec<(Located<Pattern>, Located<Expr>)>, Box<Located<Expr>>),
+    Case(
+        Variable,
+        &'a Located<Expr<'a>>,
+        &'a [(Located<Pattern<'a>>, Located<Expr<'a>>)],
+    ),
+    Define(
+        Variable,
+        &'a [(Located<Pattern<'a>>, Located<Expr<'a>>)],
+        &'a Located<Expr<'a>>,
+    ),
 
     // Application
-    Call(Box<Located<Expr>>, Vec<Located<Expr>>),
-    ApplyVariant(Symbol, Option<Vec<Located<Expr>>>),
+    Call(Variable, &'a Located<Expr<'a>>, &'a [Located<Expr<'a>>]),
+
+    // This has to be separate from Call so we can do precedence reordering
+    Operator(
+        Variable,
+        &'a (Located<Expr<'a>>, Located<Operator>, Located<Expr<'a>>),
+    ),
 
     // Product Types
-    EmptyRecord,
-
-    // Sugar
-    If(Box<Located<Expr>>, Box<Located<Expr>>, Box<Located<Expr>>),
-    Operator(Box<Located<Expr>>, Located<Operator>, Box<Located<Expr>>),
+    Record(Variable, &'a [Located<(&'a str, Located<Expr<'a>>)>]),
 
     // Compiles, but will crash if reached
-    RuntimeError(RuntimeError),
+    RuntimeError(Variable, RuntimeError<'a>),
 }

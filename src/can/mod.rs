@@ -7,6 +7,8 @@ use self::problem::RuntimeError::*;
 use self::procedure::{Procedure, References};
 use self::scope::Scope;
 use self::symbol::Symbol;
+use bumpalo::collections::Vec;
+use bumpalo::Bump;
 use collections::{ImMap, ImSet, MutMap, MutSet};
 use graph::{strongly_connected_component, topological_sort};
 use ident::Ident;
@@ -26,23 +28,24 @@ pub mod string;
 pub mod symbol;
 
 pub fn canonicalize_declaration<'a>(
-    home: String,
-    name: &str,
+    arena: &'a Bump,
+    home: &'a str,
+    name: &'a str,
     region: Region,
     expr: &'a ast::Expr<'a>,
-    declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    declared_variants: &ImMap<Symbol, Located<Box<str>>>,
+    declared_idents: &ImMap<Ident, (Symbol<'a>, Region)>,
+    declared_variants: &ImMap<Symbol<'a>, Located<&'a str>>,
 ) -> (
-    Located<Expr>,
-    Output,
-    Vec<Problem>,
-    MutMap<Symbol, Procedure>,
+    Located<Expr<'a>>,
+    Output<'a>,
+    Vec<'a, Problem<'a>>,
+    MutMap<Symbol<'a>, Procedure<'a>>,
 ) {
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main$foo$" and its first closure will be named "Main$foo$0"
     let scope_prefix = format!("{}${}$", home, name);
-    let mut scope = Scope::new(scope_prefix, declared_idents.clone());
-    let mut env = Env::new(home, declared_variants.clone());
+    let mut scope = Scope::new(&scope_prefix, declared_idents.clone());
+    let mut env = Env::new(&arena, home, declared_variants.clone());
     let (mut new_loc_expr, output) = canonicalize(&mut env, &mut scope, region, expr);
 
     // Apply operator precedence and associativity rules once, after canonicalization is
@@ -56,13 +59,13 @@ pub fn canonicalize_declaration<'a>(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Output {
-    pub references: References,
-    pub tail_call: Option<Symbol>,
+pub struct Output<'a> {
+    pub references: References<'a>,
+    pub tail_call: Option<Symbol<'a>>,
 }
 
-impl Output {
-    pub fn new() -> Output {
+impl<'a> Output<'a> {
+    pub fn new() -> Output<'a> {
         Output {
             references: References::new(),
             tail_call: None,
@@ -71,31 +74,31 @@ impl Output {
 }
 
 fn canonicalize<'a>(
-    env: &mut Env,
-    scope: &mut Scope,
+    env: &'a mut Env<'a>,
+    scope: &'a mut Scope<'a>,
     region: Region,
     expr: &'a ast::Expr<'a>,
-) -> (Located<Expr>, Output) {
+) -> (Located<Expr<'a>>, Output<'a>) {
     use self::Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Int(string) => (int_from_parsed(string, &mut env.problems), Output::new()),
-        ast::Expr::Float(string) => (float_from_parsed(string, &mut env.problems), Output::new()),
+        ast::Expr::Int(string) => (int_from_parsed(string, env), Output::new()),
+        ast::Expr::Float(string) => (float_from_parsed(string, env), Output::new()),
         ast::Expr::Record(fields) => {
             if fields.is_empty() {
-                (EmptyRecord, Output::new())
+                (Record(env.subs.mk_flex_var(), &[]), Output::new())
             } else {
                 panic!("TODO canonicalize nonempty record");
             }
         }
-        ast::Expr::Str(string) => (Str(string.clone().into()), Output::new()),
+        ast::Expr::Str(string) => (Str(env.subs.mk_flex_var(), string), Output::new()),
         ast::Expr::List(elems) => {
             let mut output = Output::new();
 
             if elems.is_empty() {
-                (EmptyList, output)
+                (List(env.subs.mk_flex_var(), &[]), output)
             } else {
-                let mut can_elems = Vec::with_capacity(elems.len());
+                let mut can_elems = Vec::with_capacity_in(elems.len(), &env.arena);
 
                 for loc_elem in elems.iter() {
                     let (can_expr, elem_out) =
@@ -109,7 +112,10 @@ fn canonicalize<'a>(
                 // A list literal is never a tail call!
                 output.tail_call = None;
 
-                (List(can_elems), output)
+                (
+                    List(env.subs.mk_flex_var(), can_elems.into_bump_slice()),
+                    output,
+                )
             }
         }
 
@@ -144,8 +150,8 @@ fn canonicalize<'a>(
             // Canonicalize the function expression and its arguments
             let (fn_expr, mut output) =
                 canonicalize(env, scope, loc_fn.region.clone(), &loc_fn.value);
-            let mut args = Vec::new();
-            let mut outputs = Vec::new();
+            let mut args = Vec::new_in(&env.arena);
+            let mut outputs = Vec::new_in(&env.arena);
 
             for loc_arg in loc_args.iter() {
                 let (arg_expr, arg_out) =
@@ -156,13 +162,17 @@ fn canonicalize<'a>(
             }
 
             match &fn_expr.value {
-                &Var(ref sym) => {
+                &Var(_, ref sym) => {
                     output.references.calls.insert(sym.clone());
                 }
                 _ => (),
             };
 
-            let expr = Call(Box::new(fn_expr), args);
+            let expr = Call(
+                env.subs.mk_flex_var(),
+                env.arena.alloc(fn_expr),
+                args.into_bump_slice(),
+            );
 
             for arg_out in outputs {
                 output.references = output.references.union(arg_out.references);
@@ -187,9 +197,9 @@ fn canonicalize<'a>(
             // because it's the only one that can call a function by name.
             output.tail_call = match loc_op.value {
                 Pizza => match &right_expr.value {
-                    &Var(ref sym) => Some(sym.clone()),
-                    &Call(ref loc_boxed_expr, _) => match &loc_boxed_expr.value {
-                        Var(sym) => Some(sym.clone()),
+                    &Var(_, sym) => Some(sym.clone()),
+                    &Call(_, loc_boxed_expr, _) => match &loc_boxed_expr.value {
+                        Var(_, sym) => Some(sym.clone()),
                         _ => None,
                     },
                     _ => None,
@@ -197,7 +207,10 @@ fn canonicalize<'a>(
                 _ => None,
             };
 
-            let expr = Operator(Box::new(left_expr), loc_op.clone(), Box::new(right_expr));
+            let expr = Operator(
+                env.subs.mk_flex_var(),
+                env.arena.alloc((left_expr, loc_op.clone(), right_expr)),
+            );
 
             (expr, output)
         }
@@ -205,7 +218,7 @@ fn canonicalize<'a>(
             let mut output = Output::new();
             let ident = Ident::new(module_parts, name);
             let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
-                Ok(symbol) => Var(symbol),
+                Ok(symbol) => Var(env.subs.mk_flex_var(), symbol),
                 Err(ident) => {
                     let loc_ident = Located {
                         region: region.clone(),
@@ -214,7 +227,7 @@ fn canonicalize<'a>(
 
                     env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
 
-                    RuntimeError(UnrecognizedConstant(loc_ident))
+                    RuntimeError(env.subs.mk_flex_var(), UnrecognizedConstant(loc_ident))
                 }
             };
 
@@ -311,6 +324,7 @@ fn canonicalize<'a>(
             // Add the assigned identifiers to scope. If there's a collision, it means there
             // was shadowing, which will be handled later.
             let assigned_idents: Vec<(Ident, (Symbol, Region))> = idents_from_patterns(
+                &env.arena,
                 defs.clone().iter().flat_map(|(_, def)| match def {
                     Def::AnnotationOnly(_region) => None,
                     Def::BodyOnly(loc_pattern, _expr) => Some(loc_pattern),
@@ -331,7 +345,7 @@ fn canonicalize<'a>(
                 // block. Order of assignments doesn't matter, thanks to referential transparency!
                 let (opt_loc_pattern, (loc_can_expr, can_output)) = match def {
                     Def::AnnotationOnly(loc_annotation) => {
-                        let value = Expr::RuntimeError(NoImplementation);
+                        let value = Expr::RuntimeError(env.subs.mk_flex_var(), NoImplementation);
                         let loc_expr = Located {
                             value,
                             region: loc_annotation.region.clone(),
@@ -382,15 +396,15 @@ fn canonicalize<'a>(
                         // Only assignments of the form (foo = ...) can be closure declarations or self tail calls.
                         (
                             &ast::Pattern::Identifier(ref name),
-                            &Pattern::Identifier(ref assigned_symbol),
-                            &FunctionPointer(ref symbol),
+                            &Pattern::Identifier(_, ref assigned_symbol),
+                            &FunctionPointer(_, ref symbol),
                         ) => {
                             // Since everywhere in the code it'll be referred to by its assigned name,
                             // remove its generated name from the procedure map. (We'll re-insert it later.)
                             let mut procedure = env.procedures.remove(&symbol).unwrap();
 
                             // The original ident name will be used for debugging and stack traces.
-                            procedure.name = Some(name.to_string());
+                            procedure.name = Some(name);
 
                             // The closure is self tail recursive iff it tail calls itself (by assigned name).
                             procedure.is_self_tail_recursive = match &can_output.tail_call {
@@ -414,17 +428,17 @@ fn canonicalize<'a>(
 
                             // Return a reference to the assigned symbol, since the auto-generated one no
                             // longer references any entry in the procedure map!
-                            Var(assigned_symbol.clone())
+                            Var(env.subs.mk_flex_var(), assigned_symbol.clone())
                         }
                         _ => loc_can_expr.value,
                     };
 
-                    let mut assigned_symbols = Vec::new();
+                    let mut assigned_symbols = Vec::new_in(env.arena);
 
                     // Store the referenced locals in the refs_by_assignment map, so we can later figure out
                     // which assigned names reference each other.
                     for (ident, (symbol, region)) in
-                        idents_from_patterns(std::iter::once(loc_pattern), &scope)
+                        idents_from_patterns(&env.arena, std::iter::once(loc_pattern), &scope)
                     {
                         let refs =
                             // Functions' references don't count in assignments.
@@ -527,56 +541,79 @@ fn canonicalize<'a>(
             // This way, during code gen, no assignment will refer to a value that hasn't been initialized yet.
             // As a bonus, the topological sort also reveals any cycles between the assignments, allowing
             // us to give a CircularAssignment error.
-            let successors = |symbol: &Symbol| -> ImSet<Symbol> {
+            let successors = |symbol: &Symbol<'a>| -> ImSet<Symbol<'a>> {
                 let (_, references) = refs_by_assignment.get(symbol).unwrap();
 
                 local_successors(&references, &env.procedures)
             };
 
-            let assigned_symbols: Vec<Symbol> = can_assignments_by_symbol
-                .keys()
-                .into_iter()
-                .map(Symbol::clone)
-                .collect();
+            let mut assigned_symbols: Vec<Symbol<'a>> = Vec::new_in(env.arena);
+
+            for symbol in can_assignments_by_symbol.keys().into_iter() {
+                assigned_symbols.push(symbol.clone())
+            }
 
             match topological_sort(assigned_symbols.as_slice(), successors) {
                 Ok(sorted_symbols) => {
-                    let can_assignments = sorted_symbols
-                        .into_iter()
-                        .rev() // Topological sort gives us the reverse of the sorting we want!
-                        .map(|symbol| can_assignments_by_symbol.get(&symbol).unwrap().clone())
-                        .collect();
+                    let mut can_assignments = Vec::new_in(env.arena);
 
-                    (Assign(can_assignments, Box::new(ret_expr)), output)
+                    for symbol in sorted_symbols
+                        .into_iter()
+                        // Topological sort gives us the reverse of the sorting we want!
+                        .rev()
+                    {
+                        can_assignments
+                            .push(can_assignments_by_symbol.get(&symbol).unwrap().clone());
+                    }
+
+                    (
+                        Define(
+                            env.subs.mk_flex_var(),
+                            can_assignments.into_bump_slice(),
+                            env.arena.alloc(ret_expr),
+                        ),
+                        output,
+                    )
                 }
                 Err(node_in_cycle) => {
                     // We have one node we know is in the cycle.
                     // We want to show the entire cycle in the error message, so expand it out.
-                    let mut loc_idents_in_cycle: Vec<Located<Ident>> =
-                        strongly_connected_component(&node_in_cycle, successors)
-                            .into_iter()
-                            .rev() // Strongly connected component gives us the reverse of the sorting we want!
-                            .map(|symbol| refs_by_assignment.get(&symbol).unwrap().0.clone())
-                            .collect();
+                    let mut loc_idents_in_cycle: Vec<'a, Located<Ident>> = Vec::new_in(env.arena);
 
+                    for symbol in strongly_connected_component(&node_in_cycle, successors)
+                        .into_iter()
+                        // Strongly connected component gives us the reverse of the sorting we want!
+                        .rev()
+                    {
+                        loc_idents_in_cycle
+                            .push(refs_by_assignment.get(&symbol).unwrap().0.clone());
+                    }
+
+                    // Sort them to make the report more helpful.
                     loc_idents_in_cycle = sort_cyclic_idents(
+                        &env.arena,
                         loc_idents_in_cycle,
                         &mut assigned_idents.iter().map(|(ident, _)| ident),
                     );
 
                     env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
 
-                    let can_assignments = can_assignments_by_symbol
-                        .values()
-                        .map(|tuple| tuple.clone())
-                        .collect();
+                    let mut can_assignments =
+                        Vec::with_capacity_in(can_assignments_by_symbol.len(), env.arena);
+
+                    for tuple in can_assignments_by_symbol.values() {
+                        can_assignments.push(tuple.clone());
+                    }
 
                     (
-                        RuntimeError(CircularAssignment(
-                            loc_idents_in_cycle,
-                            can_assignments,
-                            Box::new(ret_expr),
-                        )),
+                        RuntimeError(
+                            env.subs.mk_flex_var(),
+                            CircularAssignment(
+                                loc_idents_in_cycle,
+                                can_assignments,
+                                env.arena.alloc(ret_expr),
+                            ),
+                        ),
                         output,
                     )
                 }
@@ -598,29 +635,30 @@ fn canonicalize<'a>(
             let mut scope = scope.clone();
 
             let arg_idents: Vec<(Ident, (Symbol, Region))> =
-                idents_from_patterns(loc_arg_patterns.iter(), &scope);
+                idents_from_patterns(&env.arena, loc_arg_patterns.iter(), &scope);
 
             // Add the arguments' idents to scope.idents. If there's a collision,
             // it means there was shadowing, which will be handled later.
             scope.idents = union_pairs(scope.idents, arg_idents.iter());
 
-            let can_args: Vec<Located<Pattern>> = loc_arg_patterns
-                .into_iter()
-                .map(|loc_pattern| {
-                    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-                    // (However, still include it in scope, because you *can* recursively refer to yourself.)
-                    let mut shadowable_idents = scope.idents.clone();
-                    remove_idents(&loc_pattern.value, &mut shadowable_idents);
+            let can_args: Vec<Located<Pattern>> =
+                Vec::with_capacity_in(loc_arg_patterns.len(), env.arena);
 
-                    canonicalize_pattern(
-                        env,
-                        &mut scope,
-                        &FunctionArg,
-                        &loc_pattern,
-                        &mut shadowable_idents,
-                    )
-                })
-                .collect();
+            for loc_pattern in loc_arg_patterns.into_iter() {
+                // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                let mut shadowable_idents = scope.idents.clone();
+                remove_idents(&loc_pattern.value, &mut shadowable_idents);
+
+                can_args.push(canonicalize_pattern(
+                    env,
+                    &mut scope,
+                    &FunctionArg,
+                    &loc_pattern,
+                    &mut shadowable_idents,
+                ))
+            }
+
             let (loc_body_expr, mut output) = canonicalize(
                 env,
                 &mut scope,
@@ -650,14 +688,14 @@ fn canonicalize<'a>(
             // Register it as a top-level procedure in the Env!
             env.register_closure(
                 symbol.clone(),
-                can_args,
+                can_args.into_bump_slice(),
                 loc_body_expr,
                 region.clone(),
                 output.references.clone(),
             );
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
-            (FunctionPointer(symbol), output)
+            (FunctionPointer(env.subs.mk_flex_var(), symbol), output)
         }
 
         //ast::Expr::Case(loc_cond, branches) => {
@@ -738,9 +776,9 @@ fn canonicalize<'a>(
 
         //    (expr, output)
         //}
-        ast::Expr::HexInt(string) => (hex_from_parsed(string, &mut env.problems), Output::new()),
-        ast::Expr::BinaryInt(string) => (bin_from_parsed(string, &mut env.problems), Output::new()),
-        ast::Expr::OctalInt(string) => (oct_from_parsed(string, &mut env.problems), Output::new()),
+        ast::Expr::HexInt(string) => (hex_from_parsed(string, env), Output::new()),
+        ast::Expr::BinaryInt(string) => (bin_from_parsed(string, env), Output::new()),
+        ast::Expr::OctalInt(string) => (oct_from_parsed(string, env), Output::new()),
         ast::Expr::SpaceBefore(sub_expr, _spaces) => {
             return canonicalize(env, scope, region, sub_expr);
         }
@@ -795,10 +833,10 @@ where
     map
 }
 
-fn local_successors(
-    references: &References,
-    procedures: &MutMap<Symbol, Procedure>,
-) -> ImSet<Symbol> {
+fn local_successors<'a>(
+    references: &'a References<'a>,
+    procedures: &'a MutMap<Symbol<'a>, Procedure<'a>>,
+) -> ImSet<Symbol<'a>> {
     let mut answer = references.locals.clone();
 
     for call_symbol in references.calls.iter() {
@@ -808,7 +846,10 @@ fn local_successors(
     answer
 }
 
-fn call_successors(call_symbol: &Symbol, procedures: &MutMap<Symbol, Procedure>) -> ImSet<Symbol> {
+fn call_successors<'a>(
+    call_symbol: &'a Symbol<'a>,
+    procedures: &'a MutMap<Symbol<'a>, Procedure<'a>>,
+) -> ImSet<Symbol<'a>> {
     // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 procedures reference each other; may need to track visited procedures!
     match procedures.get(call_symbol) {
         Some(procedure) => {
@@ -822,21 +863,21 @@ fn call_successors(call_symbol: &Symbol, procedures: &MutMap<Symbol, Procedure>)
     }
 }
 
-fn references_from_local<T>(
-    assigned_symbol: Symbol,
-    visited: &mut MutSet<Symbol>,
-    refs_by_assignment: &MutMap<Symbol, (T, References)>,
-    procedures: &MutMap<Symbol, Procedure>,
-) -> References {
+fn references_from_local<'a, T>(
+    assigned_symbol: Symbol<'a>,
+    visited: &'a mut MutSet<Symbol<'a>>,
+    refs_by_assignment: &'a MutMap<Symbol<'a>, (T, References<'a>)>,
+    procedures: &'a MutMap<Symbol<'a>, Procedure<'a>>,
+) -> References<'a> {
     match refs_by_assignment.get(&assigned_symbol) {
         Some((_, refs)) => {
-            let mut answer = References::new();
+            let mut answer: References<'a> = References::new();
 
             visited.insert(assigned_symbol);
 
             for local in refs.locals.iter() {
                 if !visited.contains(&local) {
-                    let other_refs = references_from_local(
+                    let other_refs: References<'a> = references_from_local(
                         local.clone(),
                         visited,
                         refs_by_assignment,
@@ -876,9 +917,10 @@ fn references_from_local<T>(
 ///
 /// Example: the cycle  (c ---> a ---> b)  becomes  (a ---> b ---> c)
 pub fn sort_cyclic_idents<'a, I>(
+    arena: &'a Bump,
     loc_idents: Vec<Located<Ident>>,
     ordered_idents: &mut I,
-) -> Vec<Located<Ident>>
+) -> Vec<'a, Located<Ident>>
 where
     I: Iterator<Item = &'a Ident>,
 {
@@ -891,8 +933,8 @@ where
         })
         .unwrap();
 
-    let mut answer = Vec::with_capacity(loc_idents.len());
-    let mut end = Vec::with_capacity(loc_idents.len());
+    let mut answer = Vec::with_capacity_in(loc_idents.len(), arena);
+    let mut end = Vec::with_capacity_in(loc_idents.len(), arena);
     let mut encountered_first_ident = false;
 
     for loc_ident in loc_idents {
@@ -913,12 +955,12 @@ where
     answer
 }
 
-fn references_from_call<T>(
-    call_symbol: Symbol,
-    visited: &mut MutSet<Symbol>,
-    refs_by_assignment: &MutMap<Symbol, (T, References)>,
-    procedures: &MutMap<Symbol, Procedure>,
-) -> References {
+fn references_from_call<'a, T>(
+    call_symbol: Symbol<'a>,
+    visited: &'a mut MutSet<Symbol<'a>>,
+    refs_by_assignment: &'a MutMap<Symbol, (T, References<'a>)>,
+    procedures: &'a MutMap<Symbol, Procedure<'a>>,
+) -> References<'a> {
     match procedures.get(&call_symbol) {
         Some(procedure) => {
             let mut answer = procedure.references.clone();
@@ -961,11 +1003,15 @@ fn references_from_call<T>(
     }
 }
 
-fn idents_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Ident, (Symbol, Region))>
+fn idents_from_patterns<'a, I>(
+    arena: &'a Bump,
+    loc_patterns: I,
+    scope: &'a Scope<'a>,
+) -> Vec<'a, (Ident, (Symbol<'a>, Region))>
 where
     I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
 {
-    let mut answer = Vec::new();
+    let mut answer = Vec::new_in(arena);
 
     for loc_pattern in loc_patterns {
         add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, &mut answer);
@@ -976,10 +1022,10 @@ where
 
 /// helper function for idents_from_patterns
 fn add_idents_from_pattern<'a>(
-    region: &Region,
-    pattern: &ast::Pattern<'a>,
-    scope: &Scope,
-    answer: &mut Vec<(Ident, (Symbol, Region))>,
+    region: &'a Region,
+    pattern: &'a ast::Pattern<'a>,
+    scope: &'a Scope<'a>,
+    answer: &'a mut Vec<(Ident, (Symbol<'a>, Region))>,
 ) {
     use parse::ast::Pattern::*;
 
@@ -1067,12 +1113,12 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
 
 /// If it could not be found, return it unchanged as an Err.
 #[inline(always)] // This is shared code between Var and InterpolatedStr; it was inlined when handwritten
-fn resolve_ident(
-    env: &Env,
-    scope: &Scope,
+fn resolve_ident<'a>(
+    env: &'a Env<'a>,
+    scope: &'a Scope<'a>,
     ident: Ident,
-    references: &mut References,
-) -> Result<Symbol, Ident> {
+    references: &'a mut References<'a>,
+) -> Result<Symbol<'a>, Ident> {
     if scope.idents.contains_key(&ident) {
         let recognized = match ident {
             Ident::Unqualified(name) => {
@@ -1096,7 +1142,7 @@ fn resolve_ident(
         match ident {
             Ident::Unqualified(name) => {
                 // Try again, this time using the current module as the path.
-                let qualified = Ident::Qualified(env.home.clone(), name.clone());
+                let qualified = Ident::Qualified(env.home.clone().to_string(), name.clone());
 
                 if scope.idents.contains_key(&qualified) {
                     let symbol = Symbol::new(&env.home, &name);
@@ -1142,11 +1188,12 @@ fn resolve_ident(
 // Precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
 // https://github.com/gluon-lang/gluon
 // Thank you, Markus!
-fn new_op_expr(
-    left: Box<Located<Expr>>,
+fn new_op_expr<'a>(
+    env: &'a mut Env<'a>,
+    left: Located<Expr<'a>>,
     op: Located<Operator>,
-    right: Box<Located<Expr>>,
-) -> Located<Expr> {
+    right: Located<Expr<'a>>,
+) -> Located<Expr<'a>> {
     let new_region = Region {
         start_line: left.region.start_line,
         start_col: left.region.start_col,
@@ -1154,7 +1201,7 @@ fn new_op_expr(
         end_line: right.region.end_line,
         end_col: right.region.end_col,
     };
-    let new_expr = Expr::Operator(left, op, right);
+    let new_expr = Expr::Operator(env.subs.mk_flex_var(), env.arena.alloc((left, op, right)));
 
     Located {
         value: new_expr,
@@ -1170,7 +1217,10 @@ fn new_op_expr(
 /// By design, Roc neither allows custom operators nor has any built-in operators with
 /// the same precedence and different associativity, so this operation always succeeds
 /// and can never produce any user-facing errors.
-fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>) -> Located<Expr> {
+fn apply_precedence_and_associativity<'a>(
+    env: &'a mut Env<'a>,
+    expr: Located<Expr<'a>>,
+) -> Located<Expr<'a>> {
     use can::problem::PrecedenceProblem::*;
     use operator::Associativity::*;
     use std::cmp::Ordering;
@@ -1179,9 +1229,10 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>) -> Loc
     // arena bump allocation for Infixes, arg_stack, and op_stack. As long as we
     // allocate each element inside arg_stack outside the arena, this should end
     // up being a decent bit more efficient.
-    let mut infixes = Infixes::new(expr);
-    let mut arg_stack: Vec<Box<Located<Expr>>> = Vec::new();
-    let mut op_stack: Vec<Located<Operator>> = Vec::new();
+    let arena = env.arena;
+    let mut infixes = Infixes::new(&expr);
+    let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
+    let mut op_stack: Vec<Located<Operator>> = Vec::new_in(arena);
 
     while let Some(token) = infixes.next() {
         match token {
@@ -1196,7 +1247,8 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>) -> Loc
                                 let left = arg_stack.pop().unwrap();
 
                                 infixes.next_op = Some(next_op);
-                                arg_stack.push(Box::new(new_op_expr(left, stack_op, right)));
+                                arg_stack
+                                    .push(arena.alloc(new_op_expr(env, *left, stack_op, *right)));
                             }
 
                             Ordering::Greater => {
@@ -1216,8 +1268,9 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>) -> Loc
                                         let left = arg_stack.pop().unwrap();
 
                                         infixes.next_op = Some(next_op);
-                                        arg_stack
-                                            .push(Box::new(new_op_expr(left, stack_op, right)));
+                                        arg_stack.push(
+                                            arena.alloc(new_op_expr(env, *left, stack_op, *right)),
+                                        );
                                     }
 
                                     (RightAssociative, RightAssociative) => {
@@ -1235,12 +1288,12 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>) -> Loc
 
                                         let right = arg_stack.pop().unwrap();
                                         let left = arg_stack.pop().unwrap();
-                                        let broken_expr = new_op_expr(left, next_op, right);
+                                        let broken_expr = new_op_expr(env, *left, next_op, *right);
                                         let region = broken_expr.region.clone();
-                                        let value = Expr::RuntimeError(InvalidPrecedence(
-                                            problem,
-                                            Box::new(broken_expr),
-                                        ));
+                                        let value = Expr::RuntimeError(
+                                            env.subs.mk_flex_var(),
+                                            InvalidPrecedence(problem, arena.alloc(broken_expr)),
+                                        );
 
                                         return Located { region, value };
                                     }
@@ -1270,7 +1323,7 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>) -> Loc
         let right = arg_stack.pop().unwrap();
         let left = arg_stack.pop().unwrap();
 
-        arg_stack.push(Box::new(new_op_expr(left, op, right)));
+        arg_stack.push(arena.alloc(new_op_expr(env, *left, op, *right)));
     }
 
     assert_eq!(arg_stack.len(), 1);
@@ -1279,8 +1332,8 @@ fn apply_precedence_and_associativity(env: &mut Env, expr: Located<Expr>) -> Loc
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum InfixToken {
-    Arg(Box<Located<Expr>>),
+enum InfixToken<'a> {
+    Arg(&'a Located<Expr<'a>>),
     Op(Located<Operator>),
 }
 
@@ -1308,116 +1361,113 @@ enum InfixToken {
 /// Op:   -
 /// Arg:  8
 /// ```
-struct Infixes {
+struct Infixes<'a> {
     /// The next part of the expression that we need to flatten
-    remaining_expr: Option<Box<Located<Expr>>>,
+    remaining_expr: Option<&'a Located<Expr<'a>>>,
     /// Cached operator from a previous iteration
     next_op: Option<Located<Operator>>,
 }
 
-impl Infixes {
-    fn new(expr: Located<Expr>) -> Infixes {
+impl<'a> Infixes<'a> {
+    fn new(expr: &'a Located<Expr<'a>>) -> Infixes<'a> {
         Infixes {
-            remaining_expr: Some(Box::new(expr)),
+            remaining_expr: Some(expr),
             next_op: None,
         }
     }
 }
 
-impl Iterator for Infixes {
-    type Item = InfixToken;
+impl<'a> Iterator for Infixes<'a> {
+    type Item = InfixToken<'a>;
 
-    fn next(&mut self) -> Option<InfixToken> {
+    fn next(&mut self) -> Option<InfixToken<'a>> {
         match self.next_op.take() {
             Some(op) => Some(InfixToken::Op(op)),
-            None => self.remaining_expr.take().map(|boxed_expr| {
-                let expr = *boxed_expr;
+            None => self.remaining_expr.take().map(|expr| match expr.value {
+                Expr::Operator(_, (left, op, right)) => {
+                    self.remaining_expr = Some(right);
+                    self.next_op = Some(*op);
 
-                match expr.value {
-                    Expr::Operator(left, op, right) => {
-                        self.remaining_expr = Some(right);
-                        self.next_op = Some(op);
-
-                        InfixToken::Arg(left)
-                    }
-                    _ => InfixToken::Arg(Box::new(expr)),
+                    InfixToken::Arg(left)
                 }
+                _ => InfixToken::Arg(expr),
             }),
         }
     }
 }
 
 #[inline(always)]
-fn float_from_parsed<'a>(raw: &str, problems: &mut Vec<Problem>) -> Expr {
+
+fn float_from_parsed<'a>(raw: &'a str, env: &'a mut Env<'a>) -> Expr<'a> {
     // Ignore underscores.
     match raw.replace("_", "").parse::<f64>() {
-        Ok(float) if float.is_finite() => Expr::Float(float),
+        Ok(float) if float.is_finite() => Expr::Float(env.subs.mk_flex_var(), float),
         _ => {
             let runtime_error = FloatOutsideRange(raw.into());
 
-            problems.push(Problem::RuntimeError(runtime_error.clone()));
+            env.problem(Problem::RuntimeError(runtime_error.clone()));
 
-            Expr::RuntimeError(runtime_error)
+            Expr::RuntimeError(env.subs.mk_flex_var(), runtime_error)
         }
     }
 }
 
 #[inline(always)]
-fn int_from_parsed<'a>(raw: &str, problems: &mut Vec<Problem>) -> Expr {
+fn int_from_parsed<'a>(raw: &'a str, env: &'a mut Env<'a>) -> Expr<'a> {
     // Ignore underscores.
     match raw.replace("_", "").parse::<i64>() {
-        Ok(int) => Expr::Int(int),
+        Ok(int) => Expr::Int(env.subs.mk_flex_var(), int),
         Err(_) => {
             let runtime_error = IntOutsideRange(raw.into());
 
-            problems.push(Problem::RuntimeError(runtime_error.clone()));
+            env.problem(Problem::RuntimeError(runtime_error.clone()));
 
-            Expr::RuntimeError(runtime_error)
+            Expr::RuntimeError(env.subs.mk_flex_var(), runtime_error)
         }
     }
 }
 
 #[inline(always)]
-fn hex_from_parsed<'a>(raw: &str, problems: &mut Vec<Problem>) -> Expr {
+fn hex_from_parsed<'a>(raw: &'a str, env: &'a mut Env<'a>) -> Expr<'a> {
     // Ignore underscores.
     match i64::from_str_radix(raw.replace("_", "").as_str(), 16) {
-        Ok(int) => Expr::Int(int),
+        Ok(int) => Expr::Int(env.subs.mk_flex_var(), int),
         Err(parse_err) => {
             let runtime_error = InvalidHex(parse_err, raw.into());
 
-            problems.push(Problem::RuntimeError(runtime_error.clone()));
+            env.problem(Problem::RuntimeError(runtime_error.clone()));
 
-            Expr::RuntimeError(runtime_error)
+            Expr::RuntimeError(env.subs.mk_flex_var(), runtime_error)
         }
     }
 }
 
 #[inline(always)]
-fn oct_from_parsed<'a>(raw: &str, problems: &mut Vec<Problem>) -> Expr {
+fn oct_from_parsed<'a>(raw: &'a str, env: &'a mut Env<'a>) -> Expr<'a> {
     // Ignore underscores.
     match i64::from_str_radix(raw.replace("_", "").as_str(), 8) {
-        Ok(int) => Expr::Int(int),
+        Ok(int) => Expr::Int(env.subs.mk_flex_var(), int),
         Err(parse_err) => {
             let runtime_error = InvalidOctal(parse_err, raw.into());
 
-            problems.push(Problem::RuntimeError(runtime_error.clone()));
+            env.problem(Problem::RuntimeError(runtime_error.clone()));
 
-            Expr::RuntimeError(runtime_error)
+            Expr::RuntimeError(env.subs.mk_flex_var(), runtime_error)
         }
     }
 }
 
 #[inline(always)]
-fn bin_from_parsed<'a>(raw: &str, problems: &mut Vec<Problem>) -> Expr {
+fn bin_from_parsed<'a>(raw: &'a str, env: &'a mut Env<'a>) -> Expr<'a> {
     // Ignore underscores.
     match i64::from_str_radix(raw.replace("_", "").as_str(), 2) {
-        Ok(int) => Expr::Int(int),
+        Ok(int) => Expr::Int(env.subs.mk_flex_var(), int),
         Err(parse_err) => {
             let runtime_error = InvalidBinary(parse_err, raw.into());
 
-            problems.push(Problem::RuntimeError(runtime_error.clone()));
+            env.problem(Problem::RuntimeError(runtime_error.clone()));
 
-            Expr::RuntimeError(runtime_error)
+            Expr::RuntimeError(env.subs.mk_flex_var(), runtime_error)
         }
     }
 }
