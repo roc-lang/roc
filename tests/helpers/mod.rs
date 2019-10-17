@@ -42,6 +42,7 @@ pub fn can_expr(
     Vec<Problem>,
     MutMap<Symbol, Procedure>,
     Constraints,
+    Subs,
     Variable,
 ) {
     can_expr_with(
@@ -66,6 +67,7 @@ pub fn can_expr_with(
     Vec<Problem>,
     MutMap<Symbol, Procedure>,
     Constraints,
+    Subs,
     Variable,
 ) {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
@@ -99,6 +101,7 @@ pub fn can_expr_with(
         problems,
         procedures,
         constraints,
+        subs,
         variable,
     )
 }

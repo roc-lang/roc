@@ -16,7 +16,7 @@ pub fn unify_var_val(subs: &mut Subs, left_key: Variable, right: &Descriptor) ->
     unify(subs, &left, right)
 }
 
-pub fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descriptor {
+fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descriptor {
     let answer = match left.content {
         FlexVar(ref opt_name) => unify_flex(opt_name, &right.content),
         RigidVar(ref name) => unify_rigid(name, &right.content),
@@ -44,7 +44,7 @@ fn unify_structure(subs: &mut Subs, flat_type: &FlatType, other: &Content) -> De
             from_content(Error(Problem::GenericMismatch))
         }
         Structure(ref other_flat_type) => {
-            // Type mismatch! Rigid can only unify with flex.
+            // Unify the two flat types
             unify_flat_type(subs, flat_type, other_flat_type)
         }
         Error(problem) => {
