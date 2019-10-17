@@ -4,9 +4,9 @@ use subs::{Content, Descriptor, FlatType, Subs, Variable};
 use types::Constraint::{self, *};
 use types::Type::{self, *};
 
-type Env<'a> = ImMap<Symbol, Variable>;
+type Env = ImMap<Symbol, Variable>;
 
-pub fn solve<'a>(env: &Env<'a>, subs: &mut Subs, constraint: &Constraint) {
+pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
     match constraint {
         True => (),
         Eq(typ, expected_type, _region) => {
@@ -25,12 +25,6 @@ pub fn solve<'a>(env: &Env<'a>, subs: &mut Subs, constraint: &Constraint) {
             let expected = type_to_variable(subs, expected_type.clone().get_type());
 
             subs.union(actual, expected);
-        }
-        And(sub_constraints) => {
-            // TODO drop And - we shouldn't need it anymore
-            for sub_constraint in sub_constraints.iter() {
-                solve(env, subs, sub_constraint);
-            }
         }
         Let(let_con) => {
             match let_con.ret_constraint {
@@ -64,6 +58,12 @@ pub fn solve<'a>(env: &Env<'a>, subs: &mut Subs, constraint: &Constraint) {
 
                     // TODO do an occurs check for each of the assignments!
                 }
+            }
+        }
+        And(sub_constraints) => {
+            // TODO drop And - we shouldn't need it anymore
+            for sub_constraint in sub_constraints.iter() {
+                solve(env, subs, sub_constraint);
             }
         }
     }

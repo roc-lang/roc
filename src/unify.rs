@@ -3,24 +3,20 @@ use subs::{Descriptor, FlatType, Subs, Variable};
 use types::Problem;
 
 #[inline(always)]
-pub fn unify_vars<'a>(subs: &'a mut Subs, left_key: Variable, right_key: Variable) -> Descriptor {
+pub fn unify_vars(subs: &mut Subs, left_key: Variable, right_key: Variable) -> Descriptor {
     let right = subs.get(right_key);
 
     unify_var_val(subs, left_key, &right)
 }
 
 #[inline(always)]
-pub fn unify_var_val<'a>(
-    subs: &'a mut Subs,
-    left_key: Variable,
-    right: &'a Descriptor,
-) -> Descriptor {
+pub fn unify_var_val(subs: &mut Subs, left_key: Variable, right: &Descriptor) -> Descriptor {
     let left = subs.get(left_key);
 
     unify(subs, &left, right)
 }
 
-pub fn unify<'a>(subs: &'a mut Subs, left: &'a Descriptor, right: &'a Descriptor) -> Descriptor {
+pub fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descriptor {
     let answer = match left.content {
         FlexVar(ref opt_name) => unify_flex(opt_name, &right.content),
         RigidVar(ref name) => unify_rigid(name, &right.content),
@@ -31,15 +27,13 @@ pub fn unify<'a>(subs: &'a mut Subs, left: &'a Descriptor, right: &'a Descriptor
         }
     };
 
+    // println!("\nUnifying:\n\n\t{:?}\n\n\t{:?}\n\n\t-----\n\n\t{:?}\n\n", left.content, right.content, answer.content);
+
     answer
 }
 
 #[inline(always)]
-fn unify_structure<'a>(
-    subs: &'a mut Subs,
-    flat_type: &'a FlatType,
-    other: &'a Content,
-) -> Descriptor {
+fn unify_structure(subs: &mut Subs, flat_type: &FlatType, other: &Content) -> Descriptor {
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
@@ -61,7 +55,7 @@ fn unify_structure<'a>(
 }
 
 #[inline(always)]
-fn unify_flat_type<'a>(subs: &'a mut Subs, left: &'a FlatType, right: &'a FlatType) -> Descriptor {
+fn unify_flat_type(subs: &mut Subs, left: &FlatType, right: &FlatType) -> Descriptor {
     use subs::FlatType::*;
 
     match (left, right) {
@@ -112,27 +106,26 @@ fn unify_flat_type<'a>(subs: &'a mut Subs, left: &'a FlatType, right: &'a FlatTy
     }
 }
 
-fn unify_args<'a, I>(subs: &'a mut Subs, left_iter: I, right_iter: I) -> Vec<Variable>
+fn unify_args<'a, I>(subs: &mut Subs, left_iter: I, right_iter: I) -> Vec<Variable>
 where
     I: Iterator<Item = &'a Variable>,
 {
-    let mut answer = Vec::new();
+    left_iter
+        .zip(right_iter)
+        .map(|(l_var, r_var)| {
+            // Look up the descriptors we have for these variables, and unify them.
+            let descriptor = unify_vars(subs, l_var.clone(), r_var.clone());
 
-    for (l_var, r_var) in left_iter.zip(right_iter) {
-        // Look up the descriptors we have for these variables, and unify them.
-        let descriptor = unify_vars(subs, l_var.clone(), r_var.clone());
+            // set r_var to be the unioned value, then union l_var to r_var
+            subs.set(r_var.clone(), descriptor);
+            subs.union(l_var.clone(), r_var.clone());
 
-        // set r_var to be the unioned value, then union l_var to r_var
-        subs.set(r_var.clone(), descriptor);
-        subs.union(l_var.clone(), r_var.clone());
-
-        answer.push(r_var.clone())
-    }
-
-    answer
+            r_var.clone()
+        })
+        .collect()
 }
 
-fn union_vars<'a>(subs: &'a mut Subs, l_var: Variable, r_var: Variable) -> Variable {
+fn union_vars(subs: &mut Subs, l_var: Variable, r_var: Variable) -> Variable {
     // Look up the descriptors we have for these variables, and unify them.
     let descriptor = unify_vars(subs, l_var.clone(), r_var.clone());
 
@@ -144,11 +137,11 @@ fn union_vars<'a>(subs: &'a mut Subs, l_var: Variable, r_var: Variable) -> Varia
 }
 
 #[inline(always)]
-fn unify_rigid<'a>(name: &'a str, other: &'a Content) -> Descriptor {
+fn unify_rigid(name: &String, other: &Content) -> Descriptor {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            from_content(RigidVar(name.to_string()))
+            from_content(RigidVar(name.clone()))
         }
         RigidVar(_) | Structure(_) => {
             // Type mismatch! Rigid can only unify with flex, even if the
@@ -163,7 +156,7 @@ fn unify_rigid<'a>(name: &'a str, other: &'a Content) -> Descriptor {
 }
 
 #[inline(always)]
-fn unify_flex<'a>(opt_name: &'a Option<Box<str>>, other: &'a Content) -> Descriptor {
+fn unify_flex(opt_name: &Option<Box<str>>, other: &Content) -> Descriptor {
     match other {
         FlexVar(None) => {
             // If both are flex, and only left has a name, keep the name around.
@@ -179,7 +172,7 @@ fn unify_flex<'a>(opt_name: &'a Option<Box<str>>, other: &'a Content) -> Descrip
 
 /// TODO this was f/k/a merge() - got rid of the rank stuff...good idea? Bad?
 /// TODO it used to be { rank: std::cmp::min(left_rank, right_rank), ... }
-fn from_content<'a>(content: Content) -> Descriptor {
+fn from_content(content: Content) -> Descriptor {
     Descriptor {
         content,
         rank: 0,
