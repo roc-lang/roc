@@ -1,4 +1,5 @@
 use subs::{Content, FlatType, Subs, Variable};
+use types;
 
 static WILDCARD: &'static str = "*";
 static EMPTY_RECORD: &'static str = "{}";
@@ -61,7 +62,7 @@ fn write_apply(
     // Hardcoded type aliases
     if module_name == "Str" && type_name == "Str" {
         buf.push_str("Str");
-    } else if module_name == "Num" && type_name == "Num" {
+    } else if module_name == types::MOD_NUM && type_name == types::TYPE_NUM {
         let arg = args
             .into_iter()
             .next()

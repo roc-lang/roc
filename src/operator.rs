@@ -1,6 +1,7 @@
 use self::Operator::*;
 use can::symbol::Symbol;
 use std::cmp::Ordering;
+use types;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operator {
@@ -77,19 +78,19 @@ impl Operator {
 
     pub fn desugar(&self) -> Symbol {
         match self {
-            Caret => Symbol::new("Num", "pow"),
-            Star => Symbol::new("Num", "mul"),
+            Caret => Symbol::new(types::MOD_NUM, "pow"),
+            Star => Symbol::new(types::MOD_NUM, "mul"),
             Slash => Symbol::new("Float", "div"),
             DoubleSlash => Symbol::new("Int", "div"),
-            Percent => Symbol::new("Num", "rem"),
-            DoublePercent => Symbol::new("Num", "mod"),
-            Plus => Symbol::new("Num", "plus"),
-            Minus => Symbol::new("Num", "sub"),
+            Percent => Symbol::new(types::MOD_NUM, "rem"),
+            DoublePercent => Symbol::new(types::MOD_NUM, "mod"),
+            Plus => Symbol::new(types::MOD_NUM, "plus"),
+            Minus => Symbol::new(types::MOD_NUM, "sub"),
             Equals => Symbol::new("Bool", "isEqual"),
-            LessThan => Symbol::new("Num", "isLessThan"),
-            GreaterThan => Symbol::new("Num", "isGreaterThan"),
-            LessThanOrEq => Symbol::new("Num", "isLessThanOrEqualTo"),
-            GreaterThanOrEq => Symbol::new("Num", "isGreaterThanOrEqualTo"),
+            LessThan => Symbol::new(types::MOD_NUM, "isLessThan"),
+            GreaterThan => Symbol::new(types::MOD_NUM, "isGreaterThan"),
+            LessThanOrEq => Symbol::new(types::MOD_NUM, "isLessThanOrEqualTo"),
+            GreaterThanOrEq => Symbol::new(types::MOD_NUM, "isGreaterThanOrEqualTo"),
             And => Symbol::new("Bool", "and"),
             Or => Symbol::new("Bool", "or"),
             Pizza => panic!("Cannot desugar the |> operator"),

@@ -8,8 +8,8 @@ use region::{Located, Region};
 use subs::{Subs, Variable};
 use types::Constraint::{self, *};
 use types::Expected::{self, *};
-use types::Reason;
 use types::Type::{self, *};
+use types::{self, Reason};
 
 /// This lets us share bound type variables between nested annotations, e.g.
 ///
@@ -88,8 +88,8 @@ fn num_literal(
 #[inline(always)]
 fn number_literal_type(module_name: &str, type_name: &str) -> Type {
     builtin_type(
-        "Num",
-        "Num",
+        types::MOD_NUM,
+        types::TYPE_NUM,
         vec![builtin_type(module_name, type_name, Vec::new())],
     )
 }
