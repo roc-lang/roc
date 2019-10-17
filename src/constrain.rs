@@ -22,6 +22,7 @@ use types::Type::{self, *};
 /// In elm/compiler this is called RTV - the "Rigid Type Variables" dictionary.
 type BoundTypeVars<'a> = ImMap<&'a str, Type>;
 
+#[derive(Debug)]
 pub struct Constraints(Vec<Constraint>);
 
 impl Constraints {
