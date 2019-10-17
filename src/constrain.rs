@@ -377,41 +377,6 @@ pub fn str_type() -> Type {
     builtin_type("Str", "Str", Vec::new())
 }
 
-fn list(
-    loc_elems: Vec<Located<Expr>>,
-    bound_vars: &BoundTypeVars,
-    subs: &mut Subs,
-    expected: Expected<Type>,
-    region: Region,
-) -> Constraint {
-    let list_var = subs.mk_flex_var(); // `v` in the type (List v)
-    let list_type = Type::Variable(list_var);
-    let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
-
-    for loc_elem in loc_elems {
-        let elem_var = subs.mk_flex_var();
-        let elem_type = Variable(elem_var);
-        let elem_expected = NoExpectation(elem_type.clone());
-        let elem_constraint = constrain(bound_vars, subs, loc_elem, elem_expected);
-        let list_elem_constraint = Eq(
-            list_type.clone(),
-            ForReason(Reason::ElemInList, elem_type, region.clone()),
-            region.clone(),
-        );
-
-        constraints.push(elem_constraint);
-        constraints.push(list_elem_constraint);
-    }
-
-    constraints.push(Eq(
-        builtin_type("List", "List", vec![list_type]),
-        expected,
-        region,
-    ));
-
-    And(constraints)
-}
-
 // pub fn constrain_def(
 // loc_pattern: Located<Pattern>,
 // loc_expr: Located<Expr>,

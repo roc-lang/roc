@@ -592,21 +592,6 @@ fn gen() {
             .expect("Cannot re-add previously compiled function.");
     }
 
-    // TODO write a function which takes a context and expr (etc) and panics
-    // if the given expr is not a function expr, and then takes the contents
-    // of that function and writes them all to the context.
-    //
-    // For now, it needs to support only Float values.
-    //
-    // The function doesn't need to take any arguments yet. In fact, it can
-    // just return 12345.
-    //
-    // The whole key here is that we want a main function which looks like:
-    //
-    // fn main() -> f64 { return 12345; }
-    //
-    // we want fn_val to be equal to that, so we can name it "main" and run it.
-
     // make main(), a function which returns an f64
 
     Emitter::compile(&context, &builder, &fpm, &module, &function).expect("Error compiling main");
@@ -628,6 +613,6 @@ fn gen() {
     };
 
     unsafe {
-        panic!("=> {}", compiled_fn.call());
+        assert_eq!(12345.0, compiled_fn.call());
     }
 }

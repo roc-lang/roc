@@ -3,13 +3,13 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
+extern crate bumpalo;
 extern crate roc;
 
 mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use bumpalo::Bump;
     use helpers::can_expr;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::content_to_string;
@@ -19,9 +19,8 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let arena = Bump::new();
         let (expr, _, _, procedures) = can_expr(src);
-        let mut subs = Subs::new(&arena);
+        let mut subs = Subs::new();
 
         let content = infer_expr(&mut subs, Located::new(0, 0, 0, 0, expr), procedures);
         let actual_str = content_to_string(content, &mut subs);

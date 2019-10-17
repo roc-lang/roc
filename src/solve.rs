@@ -27,6 +27,7 @@ pub fn solve<'a>(env: &Env<'a>, subs: &mut Subs, constraint: &Constraint) {
             subs.union(actual, expected);
         }
         And(sub_constraints) => {
+            // TODO drop And - we shouldn't need it anymore
             for sub_constraint in sub_constraints.iter() {
                 solve(env, subs, sub_constraint);
             }

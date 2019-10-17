@@ -111,7 +111,7 @@ fn canonicalize_expr<'a>(
         ),
         ast::Expr::Record(fields) => {
             if fields.is_empty() {
-                constraints.add(Eq(EmptyRec, expected, region));
+                constraints.add(Eq(EmptyRec, expected, region.clone()));
 
                 (EmptyRecord, Output::new())
             } else {
@@ -119,7 +119,7 @@ fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(string) => {
-            constraints.add(Eq(constrain::str_type(), expected, region));
+            constraints.add(Eq(constrain::str_type(), expected, region.clone()));
 
             (Str((*string).into()), Output::new())
         }
@@ -130,7 +130,7 @@ fn canonicalize_expr<'a>(
                 constraints.add(Eq(
                     constrain::empty_list_type(subs.mk_flex_var()),
                     expected,
-                    region,
+                    region.clone(),
                 ));
 
                 (EmptyList, output)
@@ -165,7 +165,11 @@ fn canonicalize_expr<'a>(
                     can_elems.push(can_expr);
                 }
 
-                constraints.add(Eq(constrain::list_type(list_type), expected, region));
+                constraints.add(Eq(
+                    constrain::list_type(list_type),
+                    expected,
+                    region.clone(),
+                ));
 
                 // A list literal is never a tail call!
                 output.tail_call = None;
