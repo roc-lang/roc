@@ -206,7 +206,7 @@ fn canonicalize_expr<'a>(
         //    (expr, output)
         //}
         ast::Expr::Apply((loc_fn, loc_args)) => {
-            let expected_type = panic!("TODO expected type");
+            let expected_type = panic!("TODO expected type for Apply");
             // Canonicalize the function expression and its arguments
             let (fn_expr, mut output) = canonicalize_expr(
                 env,
@@ -221,7 +221,7 @@ fn canonicalize_expr<'a>(
             let mut outputs = Vec::new();
 
             for loc_arg in loc_args.iter() {
-                let expected_type = panic!("TODO expected type");
+                let expected_type = panic!("TODO expected type for Apply arg");
                 let (arg_expr, arg_out) = canonicalize_expr(
                     env,
                     constraints,
@@ -263,7 +263,7 @@ fn canonicalize_expr<'a>(
                 scope,
                 loc_left.region.clone(),
                 &loc_left.value,
-                panic!("TODO expected type"),
+                panic!("TODO expected type for operator"),
             );
             let (right_expr, mut output) = canonicalize_expr(
                 env,
@@ -272,7 +272,7 @@ fn canonicalize_expr<'a>(
                 scope,
                 loc_right.region.clone(),
                 &loc_right.value,
-                panic!("TODO expected type"),
+                panic!("TODO expected type for operator"),
             );
 
             // Incorporate both expressions into a combined Output value.
@@ -455,7 +455,7 @@ fn canonicalize_expr<'a>(
                             &mut scope,
                             loc_expr.region.clone(),
                             &loc_expr.value,
-                            panic!("TODO expected type"),
+                            panic!("TODO expected type for def"),
                         ),
                     ),
                     Def::AnnotatedBody(
@@ -471,7 +471,7 @@ fn canonicalize_expr<'a>(
                             &mut scope,
                             loc_expr.region.clone(),
                             &loc_expr.value,
-                            panic!("TODO expected type"),
+                            panic!("TODO expected type for def"),
                         ),
                     ),
                 };
@@ -599,7 +599,7 @@ fn canonicalize_expr<'a>(
                 &mut scope,
                 loc_ret.region.clone(),
                 &loc_ret.value,
-                panic!("TODO expected type"),
+                panic!("TODO expected type for Defs"),
             );
 
             // Determine the full set of references by traversing the graph.
@@ -893,26 +893,12 @@ fn canonicalize_expr<'a>(
         //    (expr, output)
         //}
         ast::Expr::SpaceBefore(sub_expr, _spaces) => {
-            return canonicalize_expr(
-                env,
-                constraints,
-                subs,
-                scope,
-                region,
-                sub_expr,
-                panic!("TODO expected type"),
-            );
+            // Continue on; spaces don't do anything.
+            return canonicalize_expr(env, constraints, subs, scope, region, sub_expr, expected);
         }
         ast::Expr::SpaceAfter(sub_expr, _spaces) => {
-            return canonicalize_expr(
-                env,
-                constraints,
-                subs,
-                scope,
-                region,
-                sub_expr,
-                panic!("TODO expected type"),
-            );
+            // Continue on; spaces don't do anything.
+            return canonicalize_expr(env, constraints, subs, scope, region, sub_expr, expected);
         }
         ast::Expr::BlockStr(_)
         | ast::Expr::Field(_, _)
