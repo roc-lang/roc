@@ -72,7 +72,7 @@ mod test_canonicalize {
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _) =
+        let (actual, _, _, _, _, _) =
             can_expr_with(&arena, "Blah", input, &ImMap::default(), &ImMap::default());
 
         assert_eq!(expected, actual);

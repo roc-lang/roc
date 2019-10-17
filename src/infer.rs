@@ -1,44 +1,25 @@
-use can::expr::Expr;
 use can::procedure::Procedure;
 use can::symbol::Symbol;
 use collections::{ImMap, MutMap};
-use constrain::{constrain, constrain_procedure};
-use region::Located;
+use constrain::Constraints;
 use solve::solve;
-use subs::{Content, Subs};
-use types::Constraint;
-use types::Expected::*;
-use types::Type::*;
+use subs::{Content, Subs, Variable};
 
-pub fn infer_expr<'a>(
-    subs: &'a mut Subs,
-    loc_expr: Located<Expr>,
+pub fn infer_expr(
+    subs: &mut Subs,
     procedures: MutMap<Symbol, Procedure>,
+    constraints: &Constraints,
+    expr_var: Variable,
 ) -> Content {
-    panic!("TODO re-constrain procedures.");
-    // let bound_vars = ImMap::default();
-    // let mut env = ImMap::default();
-    // let mut constraints = Vec::with_capacity(1 + procedures.len());
+    let mut env: ImMap<Symbol, Variable> = ImMap::default();
 
-    // First add constraints for all the procedures
-    // for (symbol, proc) in procedures {
-    //     let variable = subs.mk_flex_var();
-    //     let expected = NoExpectation(Variable(variable));
+    for (symbol, proc) in procedures {
+        env.insert(symbol, proc.var);
+    }
 
-    //     constraints.push(constrain_procedure(&bound_vars, subs, proc, expected));
+    for constraint in constraints.iter() {
+        solve(&env, subs, constraint);
+    }
 
-    //     // Record this procedure in the env; variable lookups may reference it!
-    //     env.insert(symbol, variable);
-    // }
-
-    // Next, constrain the expression.
-    // let variable = subs.mk_flex_var();
-    // let expected = NoExpectation(Variable(variable));
-    // let constraint = constrain(&bound_vars, subs, loc_expr, expected);
-
-    // constraints.push(constraint);
-    //
-    // solve(&env, subs, &Constraint::And(constraints.into_bump_slice()));
-
-    // subs.get(variable).content
+    subs.get(expr_var).content
 }

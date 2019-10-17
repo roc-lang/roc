@@ -32,6 +32,14 @@ impl Constraints {
     pub fn add(&mut self, constraint: Constraint) {
         self.0.push(constraint)
     }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Constraint> {
+        self.0.iter()
+    }
+
+    pub fn into_iter(self) -> std::vec::IntoIter<Constraint> {
+        self.0.into_iter()
+    }
 }
 
 pub fn int_literal(
@@ -451,6 +459,7 @@ pub fn str_type() -> Type {
 
 pub fn constrain_procedure<'a>(
     bound_vars: &'a BoundTypeVars<'a>,
+    constraints: &'a mut Constraints,
     subs: &'a mut Subs,
     proc: Procedure,
     expected: Expected<Type>,

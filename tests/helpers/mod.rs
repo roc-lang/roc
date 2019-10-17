@@ -16,7 +16,7 @@ use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
 use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
-use roc::subs::Subs;
+use roc::subs::{Subs, Variable};
 use roc::types::{Expected, Type};
 
 pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
@@ -34,7 +34,16 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 }
 
 #[allow(dead_code)]
-pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
+pub fn can_expr(
+    expr_str: &str,
+) -> (
+    Expr,
+    Output,
+    Vec<Problem>,
+    MutMap<Symbol, Procedure>,
+    Constraints,
+    Variable,
+) {
     can_expr_with(
         &Bump::new(),
         "blah",
@@ -51,7 +60,14 @@ pub fn can_expr_with(
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
     declared_variants: &ImMap<Symbol, Located<Box<str>>>,
-) -> (Expr, Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
+) -> (
+    Expr,
+    Output,
+    Vec<Problem>,
+    MutMap<Symbol, Procedure>,
+    Constraints,
+    Variable,
+) {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?}",
@@ -77,7 +93,14 @@ pub fn can_expr_with(
         expected,
     );
 
-    (loc_expr.value, output, problems, procedures)
+    (
+        loc_expr.value,
+        output,
+        problems,
+        procedures,
+        constraints,
+        variable,
+    )
 }
 
 // pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>

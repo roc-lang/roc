@@ -5,6 +5,7 @@ use can::procedure::{Procedure, References};
 use can::symbol::Symbol;
 use collections::{ImMap, MutMap};
 use region::{Located, Region};
+use subs::Variable;
 
 /// The canonicalization environment for a particular module.
 pub struct Env {
@@ -43,6 +44,7 @@ impl Env {
         body: Located<Expr>,
         definition: Region,
         references: References,
+        var: Variable,
     ) -> () {
         // We can't if the closure is self tail recursive yet, because it doesn't know its final name yet.
         // (Assign sets that.) Assume this is false, and let Assign change it to true after it sets final name.
@@ -55,6 +57,7 @@ impl Env {
             is_self_tail_recursive,
             definition,
             references,
+            var,
         };
 
         self.procedures.insert(symbol, procedure);

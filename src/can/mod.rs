@@ -796,6 +796,8 @@ fn canonicalize_expr<'a>(
                 output.references.locals.remove(&arg_symbol);
             }
 
+            let var = subs.mk_flex_var(); // TODO constrain this!
+
             // We've finished analyzing the closure. Its references.locals are now the values it closes over,
             // since we removed the only locals it shouldn't close over (its arguments).
             // Register it as a top-level procedure in the Env!
@@ -805,6 +807,7 @@ fn canonicalize_expr<'a>(
                 loc_body_expr,
                 region.clone(),
                 output.references.clone(),
+                var,
             );
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).

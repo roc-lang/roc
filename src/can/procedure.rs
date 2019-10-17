@@ -3,6 +3,7 @@ use can::pattern::Pattern;
 use can::symbol::Symbol;
 use collections::ImSet;
 use region::{Located, Region};
+use subs::Variable;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Procedure {
@@ -12,6 +13,7 @@ pub struct Procedure {
     pub args: Vec<Located<Pattern>>,
     pub body: Located<Expr>,
     pub references: References,
+    pub var: Variable,
 }
 
 impl Procedure {
@@ -20,6 +22,7 @@ impl Procedure {
         args: Vec<Located<Pattern>>,
         body: Located<Expr>,
         references: References,
+        var: Variable,
     ) -> Procedure {
         Procedure {
             name: None,
@@ -28,6 +31,7 @@ impl Procedure {
             args,
             body,
             references,
+            var,
         }
     }
 }
