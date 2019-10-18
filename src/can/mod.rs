@@ -357,7 +357,11 @@ fn canonicalize_expr(
             (expr, output)
         }
         ast::Expr::Var(module_parts, name) => {
-            let symbol = Symbol::from_parts(module_parts, name);
+            let symbol = if module_parts.is_empty() {
+                scope.symbol(name)
+            } else {
+                Symbol::from_parts(module_parts, name)
+            };
             let mut output = Output::new(Lookup(symbol, expected, region.clone()));
             let ident = Ident::new(module_parts, name);
             let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
