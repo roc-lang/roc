@@ -162,6 +162,7 @@ fn canonicalize_expr(
                     );
 
                     constraints.push(list_elem_constraint);
+                    constraints.push(elem_out.constraint);
 
                     references = references.union(elem_out.references);
 
