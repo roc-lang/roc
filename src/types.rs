@@ -107,7 +107,7 @@ pub struct OperatorType {
     pub ret: Type,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expected<T> {
     NoExpectation(T),
     ForReason(Reason, T, Region),
@@ -122,7 +122,7 @@ impl<T> Expected<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
     AnonymousFnArg(u8 /* arg index */),
     NamedFnArg(String /* function name */, u8 /* arg index */),
@@ -136,7 +136,7 @@ pub enum Reason {
     ElemInList,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
     Lookup(Symbol, Expected<Type>, Region),
@@ -145,7 +145,7 @@ pub enum Constraint {
     And(Vec<Constraint>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,

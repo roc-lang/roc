@@ -9,6 +9,7 @@ use parse::ast;
 use region::{Located, Region};
 use subs::Subs;
 use subs::Variable;
+use types::Constraint;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -44,7 +45,6 @@ pub enum PatternType {
 pub fn canonicalize_pattern<'a>(
     env: &'a mut Env,
     subs: &mut Subs,
-    constraints: &Constraints,
     scope: &mut Scope,
     pattern_type: &'a PatternType,
     loc_pattern: &'a Located<ast::Pattern<'a>>,

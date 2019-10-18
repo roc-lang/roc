@@ -3,7 +3,7 @@ use can::expr::Expr;
 use can::procedure::Procedure;
 // use can::symbol::Symbol;
 use collections::ImMap;
-// use operator::{ArgSide, Operator};
+use operator::{ArgSide, Operator};
 use region::{Located, Region};
 use subs::{Subs, Variable};
 use types::Constraint::{self, *};
@@ -43,46 +43,37 @@ impl Constraints {
     }
 }
 
-pub fn int_literal(
-    subs: &mut Subs,
-    constraints: &mut Constraints,
-    expected: Expected<Type>,
-    region: Region,
-) {
+pub fn int_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
     let typ = number_literal_type("Int", "Integer");
     let reason = Reason::IntLiteral;
 
-    num_literal(subs, constraints, typ, reason, expected, region)
+    num_literal(subs, typ, reason, expected, region)
 }
 
 #[inline(always)]
-pub fn float_literal(
-    subs: &mut Subs,
-    constraints: &mut Constraints,
-    expected: Expected<Type>,
-    region: Region,
-) {
+pub fn float_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
     let typ = number_literal_type("Float", "FloatingPoint");
     let reason = Reason::FloatLiteral;
 
-    num_literal(subs, constraints, typ, reason, expected, region)
+    num_literal(subs, typ, reason, expected, region)
 }
 
 #[inline(always)]
 fn num_literal(
     subs: &mut Subs,
-    constraints: &mut Constraints,
     literal_type: Type,
     reason: Reason,
     expected: Expected<Type>,
     region: Region,
-) {
+) -> Constraint {
     let num_var = subs.mk_flex_var();
     let num_type = Variable(num_var);
     let expected_literal = ForReason(reason, literal_type, region.clone());
 
-    constraints.add(Eq(num_type.clone(), expected_literal, region.clone()));
-    constraints.add(Eq(num_type, expected, region.clone()));
+    And(vec![
+        Eq(num_type.clone(), expected_literal, region.clone()),
+        Eq(num_type, expected, region.clone()),
+    ])
 }
 
 #[inline(always)]
@@ -195,27 +186,27 @@ pub fn constrain<'a>(
 // }
 
 // #[inline(always)]
-// fn constrain_op_arg(
-// arg_side: ArgSide,
-// bound_vars: &BoundTypeVars,
-// subs: &mut Subs,
-// op: Operator,
-// typ: Type,
-// loc_arg: Located<Expr>,
+// pub fn constrain_op_arg(
+//     arg_side: ArgSide,
+//     bound_vars: &BoundTypeVars,
+//     subs: &mut Subs,
+//     op: Operator,
+//     typ: Type,
+//     loc_arg: Located<Expr>,
 // ) -> (Variable, Constraint) {
-// let region = loc_arg.region.clone();
-// let arg_var = subs.mk_flex_var();
-// let arg_type = Variable(arg_var);
-// let reason = Reason::OperatorArg(op, arg_side);
-// let expected_arg = ForReason(reason, typ, region.clone());
-// let arg_con = And(vec![
-//     // Recursively constrain the variable
-//     constrain(bound_vars, subs, loc_arg, NoExpectation(arg_type.clone())),
-//     // The variable should ultimately equal the hardcoded expected type
-//     Eq(arg_type, expected_arg, region),
-// ]);
+//     let region = loc_arg.region.clone();
+//     let arg_var = subs.mk_flex_var();
+//     let arg_type = Variable(arg_var);
+//     let reason = Reason::OperatorArg(op, arg_side);
+//     let expected_arg = ForReason(reason, typ, region.clone());
+//     let arg_con = And(vec![
+//         // Recursively constrain the variable
+//         constrain(bound_vars, subs, loc_arg, NoExpectation(arg_type.clone())),
+//         // The variable should ultimately equal the hardcoded expected type
+//         Eq(arg_type, expected_arg, region),
+//     ]);
 
-// (arg_var, arg_con)
+//     (arg_var, arg_con)
 // }
 
 // fn constrain_call(
@@ -542,12 +533,6 @@ pub fn constrain_procedure<'a>(
 //     }
 
 //     (vars, pattern_types)
-// }
-
-// struct PatternState {
-//     assignment_types: ImMap<Symbol, Located<Type>>,
-//     vars: Vec<Variable>,
-//     reversed_constraints: Vec<Constraint>,
 // }
 
 // impl PatternState {

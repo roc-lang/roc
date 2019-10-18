@@ -26,6 +26,11 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
 
             subs.union(actual, expected);
         }
+        And(sub_constraints) => {
+            for sub_constraint in sub_constraints.iter() {
+                solve(env, subs, sub_constraint);
+            }
+        }
         Let(let_con) => {
             match let_con.ret_constraint {
                 True => {
@@ -58,12 +63,6 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
 
                     // TODO do an occurs check for each of the assignments!
                 }
-            }
-        }
-        And(sub_constraints) => {
-            // TODO drop And - we shouldn't need it anymore
-            for sub_constraint in sub_constraints.iter() {
-                solve(env, subs, sub_constraint);
             }
         }
     }

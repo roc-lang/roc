@@ -41,7 +41,6 @@ pub fn can_expr(
     Output,
     Vec<Problem>,
     MutMap<Symbol, Procedure>,
-    Constraints,
     Subs,
     Variable,
 ) {
@@ -66,7 +65,6 @@ pub fn can_expr_with(
     Output,
     Vec<Problem>,
     MutMap<Symbol, Procedure>,
-    Constraints,
     Subs,
     Variable,
 ) {
@@ -78,13 +76,11 @@ pub fn can_expr_with(
     });
 
     let mut subs = Subs::new();
-    let mut constraints = Constraints::new();
     let variable = subs.mk_flex_var();
     let expected = Expected::NoExpectation(Type::Variable(variable));
     let home = "Test";
     let (loc_expr, output, problems, procedures) = can::canonicalize_declaration(
         arena,
-        &mut constraints,
         &mut subs,
         home.into(),
         name.into(),
@@ -95,15 +91,7 @@ pub fn can_expr_with(
         expected,
     );
 
-    (
-        loc_expr.value,
-        output,
-        problems,
-        procedures,
-        constraints,
-        subs,
-        variable,
-    )
+    (loc_expr.value, output, problems, procedures, subs, variable)
 }
 
 // pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>

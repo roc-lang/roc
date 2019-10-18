@@ -19,9 +19,9 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (expr, _, _, procedures, constraints, mut subs, variable) = can_expr(src);
+        let (expr, output, _, procedures, mut subs, variable) = can_expr(src);
 
-        let content = infer_expr(&mut subs, procedures, &constraints, variable);
+        let content = infer_expr(&mut subs, procedures, &output.constraint, variable);
         let actual_str = content_to_string(content, &mut subs);
 
         assert_eq!(actual_str, expected.to_string());
