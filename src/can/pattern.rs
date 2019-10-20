@@ -3,13 +3,11 @@ use can::problem::Problem;
 use can::scope::Scope;
 use can::symbol::Symbol;
 use collections::ImMap;
-use constrain::{self, Constraints};
 use ident::{Ident, VariantName};
 use parse::ast;
 use region::{Located, Region};
 use subs::Subs;
 use subs::Variable;
-use types::Constraint;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.

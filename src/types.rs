@@ -5,8 +5,6 @@ use region::Located;
 use region::Region;
 use subs::Variable;
 
-type ModuleName = String;
-
 // The standard modules
 pub const MOD_FLOAT: &'static str = "Float";
 pub const MOD_INT: &'static str = "Int";

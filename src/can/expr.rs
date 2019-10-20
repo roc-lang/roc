@@ -12,13 +12,12 @@ pub enum Expr {
     Float(f64),
     Str(Box<str>),
     List(Variable, Vec<Located<Expr>>),
-    EmptyList,
 
     // Lookups
     Var(Variable, Symbol),
     /// Works the same as Var, but has an important marking purpose.
     /// See 13623e3f5f65ea2d703cf155f16650c1e8246502 for the bug this fixed.
-    FunctionPointer(Variable, Symbol),
+    FunctionPointer(Symbol),
 
     // Pattern Matching
     Case(
@@ -26,7 +25,7 @@ pub enum Expr {
         Box<Located<Expr>>,
         Vec<(Located<Pattern>, Located<Expr>)>,
     ),
-    Define(
+    Defs(
         Variable,
         Vec<(Located<Pattern>, Located<Expr>)>,
         Box<Located<Expr>>,

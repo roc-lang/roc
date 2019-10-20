@@ -129,13 +129,14 @@ fn canonicalize_expr(
         }
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
+                let list_var = subs.mk_flex_var();
                 let constraint = Eq(
-                    constrain::empty_list_type(subs.mk_flex_var()),
+                    constrain::empty_list_type(list_var),
                     expected,
                     region.clone(),
                 );
 
-                (EmptyList, Output::new(constraint))
+                (List(list_var, Vec::new()), Output::new(constraint))
             } else {
                 let mut can_elems = Vec::with_capacity(loc_elems.len());
                 let list_var = subs.mk_flex_var(); // `v` in the type (List v)
@@ -182,7 +183,7 @@ fn canonicalize_expr(
                 // A list literal is never a tail call!
                 output.tail_call = None;
 
-                (List(subs.mk_flex_var(), can_elems), output)
+                (List(list_var, can_elems), output)
             }
         }
 
@@ -214,52 +215,101 @@ fn canonicalize_expr(
         //    (expr, output)
         //}
         ast::Expr::Apply((loc_fn, loc_args)) => {
-            panic!("TODO canonicalize Apply");
-            // let expected_type = panic!("TODO expected type for Apply");
-            // // Canonicalize the function expression and its arguments
-            // let (fn_expr, mut output) = canonicalize_expr(
-            //     env,
-            //     subs,
-            //     scope,
-            //     loc_fn.region.clone(),
-            //     &loc_fn.value,
-            //     expected_type,
-            // );
-            // let mut args = Vec::new();
-            // let mut outputs = Vec::new();
+            // The expression that evaluates to the function being called, e.g. `foo` in
+            // (foo) bar baz
+            let fn_var = subs.mk_flex_var();
+            let fn_type = Variable(fn_var);
+            let fn_region = loc_fn.region.clone();
+            let fn_expected = NoExpectation(fn_type.clone());
+            // TODO look up the name and use NamedFnArg if possible.
+            let fn_reason = Reason::AnonymousFnCall(loc_args.len() as u8);
 
-            // for loc_arg in loc_args.iter() {
-            //     let expected_type = panic!("TODO expected type for Apply arg");
-            //     let (arg_expr, arg_out) = canonicalize_expr(
-            //         env,
-            //         subs,
-            //         scope,
-            //         loc_arg.region.clone(),
-            //         &loc_arg.value,
-            //         expected_type,
-            //     );
+            // Canonicalize the function expression and its arguments
+            let (fn_expr, mut output) = canonicalize_expr(
+                env,
+                subs,
+                scope,
+                loc_fn.region.clone(),
+                &loc_fn.value,
+                fn_expected,
+            );
+            let fn_con = output.constraint;
 
-            //     args.push(arg_expr);
-            //     outputs.push(arg_out);
-            // }
+            // The function's return type
+            let ret_var = subs.mk_flex_var();
+            let ret_type = Variable(ret_var);
 
-            // match &fn_expr.value {
-            //     &Var(_, ref sym) => {
-            //         output.references.calls.insert(sym.clone());
-            //     }
-            //     _ => (),
-            // };
+            // This will be used in the occurs check
+            let mut vars = Vec::with_capacity(2 + loc_args.len());
 
-            // let expr = Call(subs.mk_flex_var(), Box::new(fn_expr), args);
+            vars.push(fn_var);
+            vars.push(ret_var);
 
-            // for arg_out in outputs {
-            //     output.references = output.references.union(arg_out.references);
-            // }
+            let mut arg_types = Vec::with_capacity(loc_args.len());
+            let mut arg_cons = Vec::with_capacity(loc_args.len());
 
-            // // We're not tail-calling a symbol (by name), we're tail-calling a function value.
-            // output.tail_call = None;
+            let mut args = Vec::new();
+            let mut outputs = Vec::new();
 
-            // (expr, output)
+            for (index, loc_arg) in loc_args.iter().enumerate() {
+                let region = loc_arg.region.clone();
+                let arg_var = subs.mk_flex_var();
+                let arg_type = Variable(arg_var);
+                // TODO look up the name and use NamedFnArg if possible.
+                let reason = Reason::AnonymousFnArg(index as u8);
+                let expected_arg = ForReason(reason, arg_type.clone(), region.clone());
+                let (arg_expr, arg_out) = canonicalize_expr(
+                    env,
+                    subs,
+                    scope,
+                    loc_arg.region.clone(),
+                    &loc_arg.value,
+                    expected_arg,
+                );
+
+                let arg_con = arg_out.constraint.clone();
+
+                vars.push(arg_var);
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+
+                args.push(arg_expr);
+                outputs.push(arg_out);
+            }
+
+            match &fn_expr.value {
+                &Var(_, ref sym) => {
+                    output.references.calls.insert(sym.clone());
+                }
+                _ => (),
+            };
+
+            let expr = Call(subs.mk_flex_var(), Box::new(fn_expr), args);
+
+            for arg_out in outputs {
+                output.references = output.references.union(arg_out.references);
+            }
+
+            // We're not tail-calling a symbol (by name), we're tail-calling a function value.
+            output.tail_call = None;
+
+            // TODO occurs check!
+            // return $ exists vars $ CAnd ...
+
+            let expected_fn_type = ForReason(
+                fn_reason,
+                Function(arg_types, Box::new(ret_type.clone())),
+                region.clone(),
+            );
+
+            output.constraint = And(vec![
+                fn_con,
+                Eq(fn_type, expected_fn_type, fn_region),
+                And(arg_cons),
+                Eq(ret_type, expected, region.clone()),
+            ]);
+
+            (expr, output)
         }
         ast::Expr::Operator((loc_left, loc_op, loc_right)) => {
             let op = loc_op.value;
@@ -468,170 +518,198 @@ fn canonicalize_expr(
             can_defs(env, subs, scope.clone(), defs, expected, loc_ret)
         }
         ast::Expr::Closure((loc_arg_patterns, loc_body_expr)) => {
-            panic!("TODO constrain Closure");
-            //    // The globally unique symbol that will refer to this closure once it gets converted
-            //    // into a top-level procedure for code gen.
-            //    //
-            //    // The symbol includes the module name, the top-level declaration name, and the
-            //    // index (0-based) of the closure within that declaration.
-            //    //
-            //    // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
-            //    let symbol = scope.gen_unique_symbol();
+            // The globally unique symbol that will refer to this closure once it gets converted
+            // into a top-level procedure for code gen.
+            //
+            // The symbol includes the module name, the top-level declaration name, and the
+            // index (0-based) of the closure within that declaration.
+            //
+            // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
+            let symbol = scope.gen_unique_symbol();
 
-            //    // The body expression gets a new scope for canonicalization.
-            //    // Shadow `scope` to make sure we don't accidentally use the original one for the
-            //    // rest of this block.
-            //    let mut scope = scope.clone();
+            // The body expression gets a new scope for canonicalization.
+            // Shadow `scope` to make sure we don't accidentally use the original one for the
+            // rest of this block.
+            let mut scope = scope.clone();
 
-            //    let arg_idents: Vec<(Ident, (Symbol, Region))> =
-            //        idents_from_patterns(loc_arg_patterns.iter(), &scope);
+            let arg_idents: Vec<(Ident, (Symbol, Region))> =
+                idents_from_patterns(loc_arg_patterns.iter(), &scope);
 
-            //    // Add the arguments' idents to scope.idents. If there's a collision,
-            //    // it means there was shadowing, which will be handled later.
-            //    scope.idents = union_pairs(scope.idents, arg_idents.iter());
+            // Add the arguments' idents to scope.idents. If there's a collision,
+            // it means there was shadowing, which will be handled later.
+            scope.idents = union_pairs(scope.idents, arg_idents.iter());
 
-            //    let mut can_args: Vec<Located<Pattern>> = Vec::with_capacity(loc_arg_patterns.len());
+            let mut state = PatternState {
+                assignment_types: ImMap::default(),
+                vars: Vec::with_capacity(loc_arg_patterns.len()),
+                reversed_constraints: Vec::with_capacity(1),
+            };
+            let args = constrain_args(loc_arg_patterns.iter(), &scope, subs, &mut state);
+            let mut can_args: Vec<Located<Pattern>> = Vec::with_capacity(loc_arg_patterns.len());
 
-            //    for loc_pattern in loc_arg_patterns.into_iter() {
-            //        // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-            //        // (However, still include it in scope, because you *can* recursively refer to yourself.)
-            //        let mut shadowable_idents = scope.idents.clone();
-            //        remove_idents(&loc_pattern.value, &mut shadowable_idents);
+            for loc_pattern in loc_arg_patterns.into_iter() {
+                // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                let mut shadowable_idents = scope.idents.clone();
+                remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-            //        can_args.push(canonicalize_pattern(
-            //            env,
-            //            subs,
-            //            constraints,
-            //            &mut scope,
-            //            &FunctionArg,
-            //            &loc_pattern,
-            //            &mut shadowable_idents,
-            //        ))
-            //    }
+                can_args.push(canonicalize_pattern(
+                    env,
+                    subs,
+                    &mut scope,
+                    &FunctionArg,
+                    &loc_pattern,
+                    &mut shadowable_idents,
+                ))
+            }
 
-            //    let (loc_body_expr, mut output) = canonicalize_expr(
-            //        env,
-            //        constraints,
-            //        subs,
-            //        &mut scope,
-            //        loc_body_expr.region.clone(),
-            //        &loc_body_expr.value,
-            //        panic!("TODO expected type"),
-            //    );
+            let body_type = NoExpectation(args.ret_type);
+            let (loc_body_expr, mut output) = canonicalize_expr(
+                env,
+                subs,
+                &mut scope,
+                loc_body_expr.region.clone(),
+                &loc_body_expr.value,
+                body_type,
+            );
 
-            //    // Now that we've collected all the references, check to see if any of the args we defined
-            //    // went unreferenced. If any did, report them as unused arguments.
-            //    for (ident, (arg_symbol, region)) in arg_idents {
-            //        if !output.references.has_local(&arg_symbol) {
-            //            // The body never referenced this argument we declared. It's an unused argument!
-            //            env.problem(Problem::UnusedArgument(Located {
-            //                region,
-            //                value: ident,
-            //            }));
-            //        }
+            state.reversed_constraints.reverse();
 
-            //        // We shouldn't ultimately count arguments as referenced locals. Otherwise,
-            //        // we end up with weird conclusions like the expression (\x -> x + 1)
-            //        // references the (nonexistant) local variable x!
-            //        output.references.locals.remove(&arg_symbol);
-            //    }
+            let assignments_constraint = And(state.reversed_constraints);
+            let ret_constraint = output.constraint;
 
-            //    let var = subs.mk_flex_var(); // TODO constrain this!
+            // panic!("TODO occurs check");
 
-            //    // We've finished analyzing the closure. Its references.locals are now the values it closes over,
-            //    // since we removed the only locals it shouldn't close over (its arguments).
-            //    // Register it as a top-level procedure in the Env!
-            //    env.register_closure(
-            //        symbol.clone(),
-            //        can_args,
-            //        loc_body_expr,
-            //        region.clone(),
-            //        output.references.clone(),
-            //        var,
-            //    );
+            // We need a var to record in the procedure for later.
+            // We'll set it equal to the overall `expected` we've been passed.
+            let var = subs.mk_flex_var();
+            let typ = Variable(var);
 
-            //    // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
-            //    (FunctionPointer(subs.mk_flex_var(), symbol), output)
-            //}
+            output.constraint = And(vec![
+                Let(Box::new(LetConstraint {
+                    rigid_vars: Vec::new(),
+                    flex_vars: state.vars,
+                    assignment_types: state.assignment_types,
+                    assignments_constraint,
+                    ret_constraint,
+                })),
+                // "the closure's type is equal to the var we've stored for later use in the proc"
+                Eq(args.typ, NoExpectation(typ.clone()), region.clone()),
+                // "the var we've stored for later is equal to the overall expected type"
+                Eq(typ, expected, region.clone()),
+            ]);
 
-            //ast::Expr::Case(loc_cond, branches) => {
-            //    // Canonicalize the conditional
-            //    let (can_cond, mut output) = canonicalize(env, scope, *loc_cond);
-            //    let mut can_branches = Vec::with_capacity(branches.len());
-            //    let mut recorded_tail_call = false;
+            // Now that we've collected all the references, check to see if any of the args we defined
+            // went unreferenced. If any did, report them as unused arguments.
+            for (ident, (arg_symbol, region)) in arg_idents {
+                if !output.references.has_local(&arg_symbol) {
+                    // The body never referenced this argument we declared. It's an unused argument!
+                    env.problem(Problem::UnusedArgument(Located {
+                        region,
+                        value: ident,
+                    }));
+                }
 
-            //    for (loc_pattern, loc_expr) in branches {
-            //        // Each case branch gets a new scope for canonicalization.
-            //        // Shadow `scope` to make sure we don't accidentally use the original one for the
-            //        // rest of this block.
-            //        let mut scope = scope.clone();
+                // We shouldn't ultimately count arguments as referenced locals. Otherwise,
+                // we end up with weird conclusions like the expression (\x -> x + 1)
+                // references the (nonexistant) local variable x!
+                output.references.locals.remove(&arg_symbol);
+            }
 
-            //        // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-            //        // (However, still include it in scope, because you *can* recursively refer to yourself.)
-            //        let mut shadowable_idents = scope.idents.clone();
-            //        remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
+            // We've finished analyzing the closure. Its references.locals are now the values it closes over,
+            // since we removed the only locals it shouldn't close over (its arguments).
+            // Register it as a top-level procedure in the Env!
+            env.register_closure(
+                symbol.clone(),
+                can_args,
+                loc_body_expr,
+                region.clone(),
+                output.references.clone(),
+                var,
+            );
 
-            //        let loc_can_pattern = canonicalize_pattern(
-            //            env,
-            //            &mut scope,
-            //            &CaseBranch,
-            //            &loc_pattern,
-            //            &mut shadowable_idents,
-            //        );
-
-            //        // Patterns introduce new idents to the scope!
-            //        // Add the assigned identifiers to scope. If there's a collision, it means there
-            //        // was shadowing, which will be handled later.
-            //        let assigned_idents: Vec<(Ident, (Symbol, Region))> =
-            //            idents_from_patterns(std::iter::once(&loc_pattern), &scope);
-
-            //        scope.idents = union_pairs(scope.idents, assigned_idents.iter());
-
-            //        let (can_expr, branch_output) = canonicalize(env, &mut scope, loc_expr);
-
-            //        output.references = output.references.union(branch_output.references);
-
-            //        // If all branches are tail calling the same symbol, then so is the conditional as a whole.
-            //        if !recorded_tail_call {
-            //            // If we haven't recorded output.tail_call yet, record it.
-            //            output.tail_call = branch_output.tail_call;
-            //            recorded_tail_call = true;
-            //        } else if branch_output.tail_call != output.tail_call {
-            //            // If we recorded output.tail_call, but what we recorded differs from what we just saw,
-            //            // then game over. This can't possibly be a self tail call!
-            //            output.tail_call = None;
-            //        }
-
-            //        // Now that we've collected all the references for this branch, check to see if
-            //        // any of the new idents it defined were unused. If any were, report it.
-            //        for (ident, (symbol, region)) in assigned_idents {
-            //            if !output.references.has_local(&symbol) {
-            //                let loc_ident = Located {
-            //                    region: region.clone(),
-            //                    value: ident.clone(),
-            //                };
-
-            //                env.problem(Problem::UnusedAssignment(loc_ident));
-            //            }
-            //        }
-
-            //        can_branches.push((loc_can_pattern, can_expr));
-            //    }
-
-            //    // One of the branches should have flipped this, so this should only happen
-            //    // in the situation where the case had no branches. That can come up, though!
-            //    // A case with no branches is a runtime error, but it will mess things up
-            //    // if code gen mistakenly thinks this is a tail call just because its condition
-            //    // happend to be one. (The condition gave us our initial output value.)
-            //    if !recorded_tail_call {
-            //        output.tail_call = None;
-            //    }
-
-            //    // Incorporate all three expressions into a combined Output value.
-            //    let expr = Case(Box::new(can_cond), can_branches);
-
-            //    (expr, output)
+            // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
+            (FunctionPointer(symbol), output)
         }
+
+        // ast::Expr::Case(loc_cond, branches) => {
+        //     // Canonicalize the conditional
+        //     let (can_cond, mut output) = canonicalize(env, scope, *loc_cond);
+        //     let mut can_branches = Vec::with_capacity(branches.len());
+        //     let mut recorded_tail_call = false;
+
+        //     for (loc_pattern, loc_expr) in branches {
+        //         // Each case branch gets a new scope for canonicalization.
+        //         // Shadow `scope` to make sure we don't accidentally use the original one for the
+        //         // rest of this block.
+        //         let mut scope = scope.clone();
+
+        //         // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+        //         // (However, still include it in scope, because you *can* recursively refer to yourself.)
+        //         let mut shadowable_idents = scope.idents.clone();
+        //         remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
+
+        //         let loc_can_pattern = canonicalize_pattern(
+        //             env,
+        //             &mut scope,
+        //             &CaseBranch,
+        //             &loc_pattern,
+        //             &mut shadowable_idents,
+        //         );
+
+        //         // Patterns introduce new idents to the scope!
+        //         // Add the assigned identifiers to scope. If there's a collision, it means there
+        //         // was shadowing, which will be handled later.
+        //         let assigned_idents: Vec<(Ident, (Symbol, Region))> =
+        //             idents_from_patterns(std::iter::once(&loc_pattern), &scope);
+
+        //         scope.idents = union_pairs(scope.idents, assigned_idents.iter());
+
+        //         let (can_expr, branch_output) = canonicalize(env, &mut scope, loc_expr);
+
+        //         output.references = output.references.union(branch_output.references);
+
+        //         // If all branches are tail calling the same symbol, then so is the conditional as a whole.
+        //         if !recorded_tail_call {
+        //             // If we haven't recorded output.tail_call yet, record it.
+        //             output.tail_call = branch_output.tail_call;
+        //             recorded_tail_call = true;
+        //         } else if branch_output.tail_call != output.tail_call {
+        //             // If we recorded output.tail_call, but what we recorded differs from what we just saw,
+        //             // then game over. This can't possibly be a self tail call!
+        //             output.tail_call = None;
+        //         }
+
+        //         // Now that we've collected all the references for this branch, check to see if
+        //         // any of the new idents it defined were unused. If any were, report it.
+        //         for (ident, (symbol, region)) in assigned_idents {
+        //             if !output.references.has_local(&symbol) {
+        //                 let loc_ident = Located {
+        //                     region: region.clone(),
+        //                     value: ident.clone(),
+        //                 };
+
+        //                 env.problem(Problem::UnusedAssignment(loc_ident));
+        //             }
+        //         }
+
+        //         can_branches.push((loc_can_pattern, can_expr));
+        //     }
+
+        //     // One of the branches should have flipped this, so this should only happen
+        //     // in the situation where the case had no branches. That can come up, though!
+        //     // A case with no branches is a runtime error, but it will mess things up
+        //     // if code gen mistakenly thinks this is a tail call just because its condition
+        //     // happend to be one. (The condition gave us our initial output value.)
+        //     if !recorded_tail_call {
+        //         output.tail_call = None;
+        //     }
+
+        //     // Incorporate all three expressions into a combined Output value.
+        //     let expr = Case(Box::new(can_cond), can_branches);
+
+        //     (expr, output)
+        // }
         ast::Expr::SpaceBefore(sub_expr, _spaces) => {
             // Continue on; spaces don't do anything.
             return canonicalize_expr(env, subs, scope, region, sub_expr, expected);
@@ -1185,7 +1263,16 @@ impl Info {
     }
 }
 
-type BoundTypeVars = ImMap<Box<str>, Type>;
+/// This lets us share bound type variables between nested annotations, e.g.
+///
+/// blah : Map k v -> Int
+/// blah mapping =
+///     nested : Map k v # <-- the same k and v from the top-level annotation
+///     nested = mapping
+///     42
+///
+/// In elm/compiler this is called RTV - the "Rigid Type Variables" dictionary.
+// type BoundTypeVars = ImMap<Box<str>, Type>;
 
 struct PatternState {
     assignment_types: ImMap<Symbol, Located<Type>>,
@@ -1387,7 +1474,7 @@ fn can_defs<'a>(
                 (
                     &ast::Pattern::Identifier(ref name),
                     &Pattern::Identifier(_, ref assigned_symbol),
-                    &FunctionPointer(_, ref symbol),
+                    &FunctionPointer(ref symbol),
                 ) => {
                     // Since everywhere in the code it'll be referred to by its assigned name,
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
@@ -1589,7 +1676,7 @@ fn can_defs<'a>(
             }
 
             (
-                Define(subs.mk_flex_var(), can_assignments, Box::new(ret_expr)),
+                Defs(subs.mk_flex_var(), can_assignments, Box::new(ret_expr)),
                 output,
             )
         }
@@ -1630,4 +1717,59 @@ fn can_defs<'a>(
             )
         }
     }
+}
+
+struct Args {
+    pub vars: Vec<Variable>,
+    pub typ: Type,
+    pub ret_type: Type,
+}
+
+fn constrain_args<'a, I>(args: I, scope: &Scope, subs: &mut Subs, state: &mut PatternState) -> Args
+where
+    I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
+{
+    let (mut vars, arg_types) = patterns_to_variables(args.into_iter(), scope, subs, state);
+
+    let ret_var = subs.mk_flex_var();
+    let ret_type = Type::Variable(ret_var);
+
+    vars.push(ret_var);
+
+    let typ = Type::Function(arg_types, Box::new(ret_type.clone()));
+
+    Args {
+        vars,
+        typ,
+        ret_type,
+    }
+}
+
+fn patterns_to_variables<'a, I>(
+    patterns: I,
+    scope: &Scope,
+    subs: &mut Subs,
+    state: &mut PatternState,
+) -> (Vec<Variable>, Vec<Type>)
+where
+    I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
+{
+    let mut vars = Vec::with_capacity(state.vars.capacity());
+    let mut pattern_types = Vec::with_capacity(state.vars.capacity());
+
+    for loc_pattern in patterns {
+        let pattern_var = subs.mk_flex_var();
+        let pattern_type = Type::Variable(pattern_var);
+
+        state.add_pattern(
+            scope,
+            loc_pattern.clone(),
+            NoExpectation(pattern_type.clone()),
+        );
+
+        vars.push(pattern_var);
+        pattern_types.push(pattern_type);
+    }
+
+    (vars, pattern_types)
 }
