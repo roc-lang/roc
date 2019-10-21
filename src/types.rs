@@ -7,6 +7,7 @@ use subs::Variable;
 
 // The standard modules
 pub const MOD_FLOAT: &'static str = "Float";
+pub const MOD_BOOL: &'static str = "Float";
 pub const MOD_INT: &'static str = "Int";
 pub const MOD_STR: &'static str = "Str";
 pub const MOD_LIST: &'static str = "List";

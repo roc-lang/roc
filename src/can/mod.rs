@@ -12,8 +12,6 @@ use collections::{ImMap, ImSet, MutMap, MutSet};
 use constrain;
 use graph::{strongly_connected_component, topological_sort};
 use ident::Ident;
-use operator::ArgSide;
-use operator::Operator::Pizza;
 use parse::ast::{self, Def};
 use region::{Located, Region};
 use std::i64;
@@ -26,8 +24,8 @@ use types::Type::{self, *};
 
 pub mod env;
 pub mod expr;
+pub mod operator;
 pub mod pattern;
-pub mod precedence;
 pub mod problem;
 pub mod procedure;
 pub mod scope;
@@ -50,12 +48,14 @@ pub fn canonicalize_declaration<'a>(
     Vec<Problem>,
     MutMap<Symbol, Procedure>,
 ) {
-    // Apply operator precedence and associativity rules once, before doing any
-    // other canonicalization. If we did this *during* canonicalization, then each time we
+    // Desugar operators (convert them to Apply calls, taking into account
+    // operator precedence and associativity rules), before doing any other canonicalization.
+    //
+    // If we did this *during* canonicalization, then each time we
     // visited an Operator node we'd recursively try to apply this to each of its nested
     // operators, and thena again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = precedence::apply_precedence_and_associativity(arena, loc_expr);
+    let loc_expr = operator::desugar(arena, loc_expr);
 
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main$foo$" and its first closure will be named "Main$foo$0"
@@ -214,7 +214,7 @@ fn canonicalize_expr(
 
         //    (expr, output)
         //}
-        ast::Expr::Apply((loc_fn, loc_args)) => {
+        ast::Expr::Apply((loc_fn, loc_args, application_style)) => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
             let fn_var = subs.mk_flex_var();
@@ -277,14 +277,20 @@ fn canonicalize_expr(
                 outputs.push(arg_out);
             }
 
-            match &fn_expr.value {
-                &Var(_, ref sym) => {
+            let expr = match &fn_expr.value {
+                &Var(_, ref sym) | &FunctionPointer(_, ref sym) => {
+                    // In the FunctionPointer case, we're calling an inline closure;
+                    // something like ((\a b -> a + b) 1 2)
                     output.references.calls.insert(sym.clone());
-                }
-                _ => (),
-            };
 
-            let expr = Call(subs.mk_flex_var(), Box::new(fn_expr), args);
+                    CallByName(sym.clone(), args, *application_style)
+                }
+                _ => {
+                    // This could be something like ((if True then fn1 else fn2) arg1 arg2).
+                    // Use CallPointer here.
+                    panic!("TODO support function calls that aren't by name, via CallPointer");
+                }
+            };
 
             for arg_out in outputs {
                 output.references = output.references.union(arg_out.references);
@@ -308,101 +314,6 @@ fn canonicalize_expr(
                 And(arg_cons),
                 Eq(ret_type, expected, region.clone()),
             ]);
-
-            (expr, output)
-        }
-        ast::Expr::Operator((loc_left, loc_op, loc_right)) => {
-            let op = loc_op.value;
-            let l_arg_var = subs.mk_flex_var();
-            let l_arg_type = Variable(l_arg_var);
-            // Canonicalize the nested expressions
-            let (left_expr, left_out) = canonicalize_expr(
-                env,
-                subs,
-                scope,
-                loc_left.region.clone(),
-                &loc_left.value,
-                NoExpectation(l_arg_type.clone()),
-            );
-            let l_con = left_out.constraint;
-            let r_arg_var = subs.mk_flex_var();
-            let r_arg_type = Variable(r_arg_var);
-            let (right_expr, mut output) = canonicalize_expr(
-                env,
-                subs,
-                scope,
-                loc_right.region.clone(),
-                &loc_right.value,
-                NoExpectation(r_arg_type.clone()),
-            );
-            let r_con = output.constraint;
-
-            // Incorporate both expressions into a combined Output value.
-            output.references = output.references.union(left_out.references);
-
-            // The pizza operator is the only one that can be a tail call,
-            // because it's the only one that can call a function by name.
-            let expr = match op {
-                Pizza => {
-                    output.tail_call = match right_expr.value {
-                        Var(_, sym) => Some(sym.clone()),
-                        Call(_, loc_boxed_expr, _) => match &loc_boxed_expr.value {
-                            Var(_, sym) => Some(sym.clone()),
-                            _ => None,
-                        },
-                        _ => None,
-                    };
-
-                    panic!("TODO translate |> operator into a Call. NOTE: This will require shifting the above canonicalization code around.");
-                }
-                _ => {
-                    output.tail_call = None;
-
-                    // Left arg constraints
-                    let op_types = Type::for_operator(loc_op.value);
-                    let l_reason = Reason::OperatorArg(op, ArgSide::Left);
-                    let l_expected = ForReason(l_reason, op_types.left, region.clone());
-
-                    // Right arg constraints
-                    let r_reason = Reason::OperatorArg(op, ArgSide::Right);
-                    let r_expected = ForReason(r_reason, op_types.right, region.clone());
-
-                    // Return value constraints
-                    let ret_var = subs.mk_flex_var();
-                    let ret_type = Variable(ret_var);
-                    let ret_reason = Reason::OperatorRet(op);
-                    let expected_ret_type = ForReason(ret_reason, op_types.ret, region.clone());
-
-                    // TODO occurs check!
-                    // let vars = vec![fn_var, ret_var, l_var, r_var];
-                    // return $ exists (funcVar:resultVar:argVars) $ CAnd ...
-
-                    // Combined constraint
-                    output.constraint = And(vec![
-                        // the constraint from constrain on l_expr, expecting its hardcoded type
-                        l_con,
-                        // The variable should ultimately equal the hardcoded expected type
-                        Eq(l_arg_type, l_expected, region.clone()),
-                        // the constraint from constrain on r_expr, expecting its hardcoded type
-                        r_con,
-                        // The variable should ultimately equal the hardcoded expected type
-                        Eq(r_arg_type, r_expected, region.clone()),
-                        // The operator's args and return type should be its hardcoded types
-                        Eq(ret_type.clone(), expected_ret_type, region.clone()),
-                        // Finally, link the operator's return type to the given expected type
-                        Eq(ret_type, expected, region.clone()),
-                    ]);
-
-                    let value = Var(subs.mk_flex_var(), loc_op.value.desugar().into());
-                    let loc_var = Located {
-                        value,
-                        region: loc_op.region.clone(),
-                    };
-                    let args = vec![left_expr, right_expr];
-
-                    Call(subs.mk_flex_var(), Box::new(loc_var), args)
-                }
-            };
 
             (expr, output)
         }
@@ -626,10 +537,11 @@ fn canonicalize_expr(
                 region.clone(),
                 output.references.clone(),
                 var,
+                args.ret_var,
             );
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
-            (FunctionPointer(symbol), output)
+            (FunctionPointer(var, symbol), output)
         }
 
         // ast::Expr::Case(loc_cond, branches) => {
@@ -748,6 +660,9 @@ fn canonicalize_expr(
             let (constraint, answer) = oct_from_parsed(subs, string, env, expected, region.clone());
 
             (answer, Output::new(constraint))
+        }
+        ast::Expr::Operator((loc_left, loc_op, loc_right)) => {
+            panic!("An operator did not get desugared somehow: {:?}", loc_op);
         }
     };
 
@@ -1474,7 +1389,7 @@ fn can_defs<'a>(
                 (
                     &ast::Pattern::Identifier(ref name),
                     &Pattern::Identifier(_, ref assigned_symbol),
-                    &FunctionPointer(ref symbol),
+                    &FunctionPointer(_, ref symbol),
                 ) => {
                     // Since everywhere in the code it'll be referred to by its assigned name,
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
@@ -1723,6 +1638,7 @@ struct Args {
     pub vars: Vec<Variable>,
     pub typ: Type,
     pub ret_type: Type,
+    pub ret_var: Variable,
 }
 
 fn constrain_args<'a, I>(args: I, scope: &Scope, subs: &mut Subs, state: &mut PatternState) -> Args
@@ -1742,6 +1658,7 @@ where
         vars,
         typ,
         ret_type,
+        ret_var,
     }
 }
 

@@ -1,6 +1,7 @@
 use can::pattern::Pattern;
 use can::problem::RuntimeError;
 use can::symbol::Symbol;
+use operator::CalledVia;
 use region::Located;
 use std::i64;
 use subs::Variable;
@@ -17,7 +18,7 @@ pub enum Expr {
     Var(Variable, Symbol),
     /// Works the same as Var, but has an important marking purpose.
     /// See 13623e3f5f65ea2d703cf155f16650c1e8246502 for the bug this fixed.
-    FunctionPointer(Symbol),
+    FunctionPointer(Variable, Symbol),
 
     // Pattern Matching
     Case(
@@ -31,8 +32,8 @@ pub enum Expr {
         Box<Located<Expr>>,
     ),
 
-    // Application
-    Call(Variable, Box<Located<Expr>>, Vec<Located<Expr>>),
+    CallByName(Symbol, Vec<Located<Expr>>, CalledVia),
+    CallPointer(Box<Expr>, Vec<Located<Expr>>, CalledVia),
 
     // Product Types
     Record(Variable, Vec<Located<(Box<str>, Located<Expr>)>>),

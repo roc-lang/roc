@@ -1,6 +1,7 @@
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use operator::CalledVia;
 use operator::Operator;
 use parse::ident::{Ident, MaybeQualified};
 use region::{Loc, Region};
@@ -65,7 +66,7 @@ pub enum Expr<'a> {
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a variant by name, do Apply(Variant(...), ...)
-    Apply(&'a (Loc<Expr<'a>>, Vec<'a, Loc<Expr<'a>>>)),
+    Apply(&'a (Loc<Expr<'a>>, Vec<'a, Loc<Expr<'a>>>, CalledVia)),
     Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
 
     // Conditionals
@@ -383,7 +384,7 @@ pub fn format<'a>(
 
             buf.push_str(name);
         }
-        Apply((loc_expr, loc_args)) => {
+        Apply((loc_expr, loc_args, _)) => {
             if apply_needs_parens {
                 buf.push('(');
             }

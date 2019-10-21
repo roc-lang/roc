@@ -23,7 +23,7 @@ pub mod string_literal;
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use operator::Operator;
+use operator::{CalledVia, Operator};
 use parse;
 use parse::ast::{Attempting, Def, Expr, Pattern, Spaceable};
 use parse::blankspace::{
@@ -163,7 +163,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                 Some(Either::First(loc_args)) => Ok((
                     Located {
                         region: loc_expr_with_extras.region,
-                        value: Expr::Apply(arena.alloc((loc_expr, loc_args))),
+                        value: Expr::Apply(arena.alloc((loc_expr, loc_args, CalledVia::Space))),
                     },
                     state,
                 )),
@@ -231,7 +231,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             }
         }
         Expr::Variant(module_parts, value) => Ok(Pattern::Variant(module_parts, value)),
-        Expr::Apply((loc_val, loc_args)) => {
+        Expr::Apply((loc_val, loc_args, _)) => {
             let region = loc_val.region.clone();
             let value = expr_to_pattern(arena, &loc_val.value)?;
             let val_pattern = arena.alloc(Located { region, value });
@@ -759,7 +759,10 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                         value: ident_to_expr(loc_ident.value),
                     };
 
-                    Ok((Expr::Apply(arena.alloc((loc_expr, loc_args))), state))
+                    Ok((
+                        Expr::Apply(arena.alloc((loc_expr, loc_args, CalledVia::Space))),
+                        state,
+                    ))
                 }
                 Some(Either::Second((spaces_before_equals, Either::First(equals_indent)))) => {
                     let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);

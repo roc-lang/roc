@@ -21,12 +21,14 @@ impl Symbol {
             &VariantName::Qualified(ref path, ref name) => Symbol::new(path, name),
         }
     }
+
+    pub fn into_boxed_str(self) -> Box<str> {
+        self.0
+    }
 }
 
 impl Into<Box<str>> for Symbol {
     fn into(self) -> Box<str> {
-        let Symbol(string) = self;
-
-        string
+        self.0
     }
 }

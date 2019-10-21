@@ -20,6 +20,15 @@ impl Region {
             end_col: 0,
         }
     }
+
+    pub fn span_across(start: &Region, end: &Region) -> Self {
+        Region {
+            start_line: start.start_line,
+            end_line: end.end_line,
+            start_col: start.start_col,
+            end_col: end.end_col,
+        }
+    }
 }
 
 #[test]

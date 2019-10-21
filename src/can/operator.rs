@@ -1,8 +1,10 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use operator::Operator;
-use parse::ast::Expr;
+use operator::Operator::Pizza;
+use operator::{CalledVia, Operator};
+use parse::ast::Expr::{self, *};
 use region::{Located, Region};
+use types;
 
 // Operator precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
 // https://github.com/gluon-lang/gluon
@@ -28,11 +30,9 @@ fn new_op_expr<'a>(
     }
 }
 
-/// Reorder the expression tree based on operator precedence and associativity rules.
-pub fn apply_precedence_and_associativity<'a>(
-    arena: &'a Bump,
-    expr: Located<Expr<'a>>,
-) -> Located<Expr<'a>> {
+/// Reorder the expression tree based on operator precedence and associativity rules,
+/// then replace the Operator nodes with Apply nodes.
+pub fn desugar<'a>(arena: &'a Bump, expr: Located<Expr<'a>>) -> Located<Expr<'a>> {
     use operator::Associativity::*;
     use std::cmp::Ordering;
 
@@ -139,16 +139,116 @@ pub fn apply_precedence_and_associativity<'a>(
         }
     }
 
-    for op in op_stack.into_iter().rev() {
+    for loc_op in op_stack.into_iter().rev() {
         let right = arg_stack.pop().unwrap();
         let left = arg_stack.pop().unwrap();
 
-        arg_stack.push(arena.alloc(new_op_expr(arena, left.clone(), op, right.clone())));
+        let region = Region::span_across(&left.region, &right.region);
+        let expr = match loc_op.value {
+            Pizza => {
+                // Rewrite the Pizza operator into an Apply
+                panic!("TODO desugar |> operator into an Apply");
+            }
+            binop => {
+                // This is a normal binary operator like (+), so desugar it
+                // into the appropriate function call.
+                let (module_parts, name) = desugar_binop(&binop, arena);
+                let mut args = Vec::with_capacity_in(2, arena);
+
+                args.push(left.clone());
+                args.push(right.clone());
+
+                let loc_expr = Located {
+                    value: Expr::Var(module_parts, name),
+                    region: loc_op.region,
+                };
+
+                Apply(arena.alloc((loc_expr, args, CalledVia::Operator(binop))))
+            }
+        };
+
+        arg_stack.push(arena.alloc(Located {
+            region,
+            value: expr,
+        }));
     }
 
     assert_eq!(arg_stack.len(), 1);
 
     arg_stack.pop().unwrap().clone()
+}
+
+#[inline(always)]
+fn desugar_binop<'a>(binop: &Operator, arena: &'a Bump) -> (&'a [&'a str], &'a str) {
+    use self::Operator::*;
+
+    match binop {
+        Caret => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "pow",
+        ),
+        Star => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "mul",
+        ),
+        Slash => (
+            bumpalo::vec![ in arena; types::MOD_FLOAT ].into_bump_slice(),
+            "div",
+        ),
+        DoubleSlash => (
+            bumpalo::vec![ in arena; types::MOD_INT ].into_bump_slice(),
+            "div",
+        ),
+        Percent => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "rem",
+        ),
+        DoublePercent => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "mod",
+        ),
+        Plus => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "plus",
+        ),
+        Minus => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "sub",
+        ),
+        Equals => (
+            bumpalo::vec![ in arena; types::MOD_BOOL ].into_bump_slice(),
+            "isEq",
+        ),
+        NotEquals => (
+            bumpalo::vec![ in arena; types::MOD_BOOL ].into_bump_slice(),
+            "isNotEq",
+        ),
+        LessThan => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "isLt",
+        ),
+        GreaterThan => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "isGt",
+        ),
+        LessThanOrEq => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "isLte",
+        ),
+        GreaterThanOrEq => (
+            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            "isGte",
+        ),
+        And => (
+            bumpalo::vec![ in arena; types::MOD_BOOL ].into_bump_slice(),
+            "and",
+        ),
+        Or => (
+            bumpalo::vec![ in arena; types::MOD_BOOL ].into_bump_slice(),
+            "or",
+        ),
+        Pizza => panic!("Cannot desugar the |> operator"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

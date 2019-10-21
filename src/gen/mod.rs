@@ -26,8 +26,15 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::passes::PassManager;
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
 use inkwell::FloatPredicate;
+
+use can::expr;
+use can::procedure::Procedure;
+use can::symbol::Symbol;
+use collections::ImMap;
+use collections::MutMap;
+use subs::Variable;
 
 // ======================================================================================
 // LEXER ================================================================================
@@ -117,6 +124,101 @@ pub enum Expr {
         variables: Vec<(String, Option<Expr>)>,
         body: Box<Expr>,
     },
+}
+
+pub struct ModuleBuilder<'a> {
+    pub context: &'a Context,
+    pub builder: &'a Builder,
+    pub fpm: &'a PassManager<FunctionValue>,
+    pub module: &'a Module,
+    pub function: &'a Function,
+    pub procedures: &'a MutMap<Symbol, Procedure>,
+
+    fn_value_opt: Option<FunctionValue>,
+}
+
+enum TypedVal {
+    FloatConst(FloatValue),
+    IntConst(IntValue),
+    Typed(Variable, BasicValueEnum),
+}
+
+impl Into<BasicValueEnum> for TypedVal {
+    fn into(self) -> BasicValueEnum {
+        use self::TypedVal::*;
+
+        match self {
+            FloatConst(val) => val.into(),
+            IntConst(val) => val.into(),
+            Typed(_, val) => val,
+        }
+    }
+}
+
+impl<'a> ModuleBuilder<'a> {
+    #[inline]
+    fn get_function(&self, name: &str) -> Option<FunctionValue> {
+        self.module.get_function(name)
+    }
+
+    fn compile_expr(
+        &mut self,
+        expr: &expr::Expr,
+        vars: &mut ImMap<Symbol, PointerValue>,
+    ) -> TypedVal {
+        use self::TypedVal::*;
+        use can::expr::Expr::*;
+
+        match *expr {
+            Int(num) => IntConst(self.context.i64_type().const_int(num as u64, false)),
+            Float(num) => FloatConst(self.context.f64_type().const_float(num)),
+
+            // Var and FunctionPointer do the same thing; they are only different
+            // for the benefit of canonicalization, which uses FunctionPointer
+            // to name functions.
+            Var(type_var, ref symbol) | FunctionPointer(type_var, ref symbol) => {
+                match vars.get(symbol) {
+                    Some(var) => Typed(
+                        type_var,
+                        self.builder
+                            .build_load(*var, &*(symbol.clone()).into_boxed_str()),
+                    ),
+                    None => panic!(
+                        "Roc compiler bug: could not find symbol `{:?}` with type var `{:?}`",
+                        symbol, type_var
+                    ),
+                }
+            }
+
+            Defs(_, _, _) => panic!("TODO gen defs"),
+            CallByName(symbol, loc_args, _) => {
+                let func = self
+                    .get_function(&*(symbol.clone()).into_boxed_str())
+                    .unwrap_or_else(|| {
+                        panic!("Roc compiler error: Unrecognized function `{:?}`", symbol)
+                    });
+                let enum_args: Vec<BasicValueEnum> = loc_args
+                    .iter()
+                    .map(|loc_arg| self.compile_expr(&loc_arg.value, vars).into())
+                    .collect();
+                let proc = self.procedures.get(&symbol).unwrap_or_else(|| {
+                    panic!("Roc compiler error: Unrecognized procedure `{:?}`", symbol)
+                });
+
+                Typed(
+                    proc.ret_var,
+                    self.builder
+                        .build_call(func, &enum_args, "tmp") // TODO replace "tmp"
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap_or_else(|| panic!("Roc compiler error: Invalid call.")),
+                )
+            }
+            Str(_) | List(_, _) | Case(_, _, _) | Record(_, _) | EmptyRecord | RuntimeError(_) => {
+                panic!("TODO compile_expr for {:?}", expr);
+            }
+        }
+    }
 }
 
 impl<'a> Emitter<'a> {
@@ -586,14 +688,7 @@ fn gen() {
         is_anon: false,
     };
 
-    // TODO remove this dead code
-    for prev in &Vec::new() {
-        Emitter::compile(&context, &builder, &fpm, &module, prev)
-            .expect("Cannot re-add previously compiled function.");
-    }
-
     // make main(), a function which returns an f64
-
     Emitter::compile(&context, &builder, &fpm, &module, &function).expect("Error compiling main");
 
     // let fn_type = context.f64_type().fn_type(&Vec::new(), false);

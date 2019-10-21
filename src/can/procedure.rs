@@ -14,6 +14,7 @@ pub struct Procedure {
     pub body: Located<Expr>,
     pub references: References,
     pub var: Variable,
+    pub ret_var: Variable,
 }
 
 impl Procedure {
@@ -23,6 +24,7 @@ impl Procedure {
         body: Located<Expr>,
         references: References,
         var: Variable,
+        ret_var: Variable,
     ) -> Procedure {
         Procedure {
             name: None,
@@ -32,6 +34,7 @@ impl Procedure {
             body,
             references,
             var,
+            ret_var,
         }
     }
 }

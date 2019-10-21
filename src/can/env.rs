@@ -45,6 +45,7 @@ impl Env {
         definition: Region,
         references: References,
         var: Variable,
+        ret_var: Variable,
     ) -> () {
         // We can't if the closure is self tail recursive yet, because it doesn't know its final name yet.
         // (Assign sets that.) Assume this is false, and let Assign change it to true after it sets final name.
@@ -58,6 +59,7 @@ impl Env {
             definition,
             references,
             var,
+            ret_var,
         };
 
         self.procedures.insert(symbol, procedure);
