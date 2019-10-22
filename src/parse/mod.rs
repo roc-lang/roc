@@ -160,13 +160,25 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
             let (loc_expr, opt_extras) = loc_expr_with_extras.value;
 
             match opt_extras {
-                Some(Either::First(loc_args)) => Ok((
-                    Located {
-                        region: loc_expr_with_extras.region,
-                        value: Expr::Apply(arena.alloc((loc_expr, loc_args, CalledVia::Space))),
-                    },
-                    state,
-                )),
+                Some(Either::First(loc_args)) => {
+                    let mut allocated_args = Vec::with_capacity_in(loc_args.len(), arena);
+
+                    for loc_arg in loc_args {
+                        allocated_args.push(&*arena.alloc(loc_arg));
+                    }
+
+                    Ok((
+                        Located {
+                            region: loc_expr_with_extras.region,
+                            value: Expr::Apply(
+                                arena.alloc(loc_expr),
+                                allocated_args,
+                                CalledVia::Space,
+                            ),
+                        },
+                        state,
+                    ))
+                }
                 // '=' after optional spaces
                 Some(Either::Second(Either::Second((spaces_before_equals, equals_indent)))) => {
                     let region = loc_expr.region;
@@ -185,7 +197,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                     };
 
                     let loc_first_pattern = Located {
-                        region: region.clone(),
+                        region: region,
                         value,
                     };
 
@@ -231,15 +243,15 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             }
         }
         Expr::Variant(module_parts, value) => Ok(Pattern::Variant(module_parts, value)),
-        Expr::Apply((loc_val, loc_args, _)) => {
-            let region = loc_val.region.clone();
+        Expr::Apply(loc_val, loc_args, _) => {
+            let region = loc_val.region;
             let value = expr_to_pattern(arena, &loc_val.value)?;
             let val_pattern = arena.alloc(Located { region, value });
 
             let mut arg_patterns = Vec::with_capacity_in(loc_args.len(), arena);
 
             for loc_arg in loc_args {
-                let region = loc_arg.region.clone();
+                let region = loc_arg.region;
                 let value = expr_to_pattern(arena, &loc_arg.value)?;
 
                 arg_patterns.push(Located { region, value });
@@ -263,7 +275,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             let mut loc_patterns = Vec::with_capacity_in(loc_exprs.len(), arena);
 
             for loc_expr in loc_exprs {
-                let region = loc_expr.region.clone();
+                let region = loc_expr.region;
                 let value = expr_to_pattern(arena, &loc_expr.value)?;
 
                 loc_patterns.push(Located { region, value });
@@ -285,10 +297,10 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::AccessorFunction(_)
         | Expr::Field(_, _)
         | Expr::List(_)
-        | Expr::Closure(_)
+        | Expr::Closure(_, _)
         | Expr::Operator(_)
         | Expr::AssignField(_, _)
-        | Expr::Defs(_)
+        | Expr::Defs(_, _)
         | Expr::If(_)
         | Expr::Case(_, _)
         | Expr::MalformedClosure
@@ -430,7 +442,7 @@ fn parse_def_expr<'a>(
                     // their regions will ever be visible to the user.)
                     defs.push((&[], first_def));
 
-                    Ok((Expr::Defs(arena.alloc((defs, loc_ret))), state))
+                    Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
                 }
             },
         )
@@ -507,7 +519,7 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         ),
         |arena, opt_contents| match opt_contents {
             None => Expr::MalformedClosure,
-            Some((params, loc_body)) => Expr::Closure(arena.alloc((params, loc_body))),
+            Some((params, loc_body)) => Expr::Closure(arena.alloc(params), arena.alloc(loc_body)),
         },
     )
 }
@@ -759,8 +771,14 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                         value: ident_to_expr(loc_ident.value),
                     };
 
+                    let mut allocated_args = Vec::with_capacity_in(loc_args.len(), arena);
+
+                    for loc_arg in loc_args {
+                        allocated_args.push(&*arena.alloc(loc_arg));
+                    }
+
                     Ok((
-                        Expr::Apply(arena.alloc((loc_expr, loc_args, CalledVia::Space))),
+                        Expr::Apply(arena.alloc(loc_expr), allocated_args, CalledVia::Space),
                         state,
                     ))
                 }
@@ -880,7 +898,18 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         min_indent,
     );
 
-    attempt(Attempting::List, map(elems, Expr::List))
+    attempt(
+        Attempting::List,
+        map_with_arena(elems, |arena, parsed_elems| {
+            let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
+
+            for parsed_elem in parsed_elems {
+                allocated.push(&*arena.alloc(parsed_elem));
+            }
+
+            Expr::List(allocated)
+        }),
+    )
 }
 
 pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
@@ -912,7 +941,15 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             optional(and(space0(min_indent), equals_with_indent())),
         ),
         move |arena, state, (loc_field_exprs, opt_def)| match opt_def {
-            None => Ok((Expr::Record(loc_field_exprs.value), state)),
+            None => {
+                let mut allocated = Vec::with_capacity_in(loc_field_exprs.value.len(), arena);
+
+                for loc_field_expr in loc_field_exprs.value {
+                    allocated.push(&*arena.alloc(loc_field_expr));
+                }
+
+                Ok((Expr::Record(allocated), state))
+            }
             Some((spaces_before_equals, equals_indent)) => {
                 let region = loc_field_exprs.region;
                 let field_exprs = loc_field_exprs.value;

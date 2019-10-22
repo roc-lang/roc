@@ -30,11 +30,11 @@ fn num_literal(
 ) -> Constraint {
     let num_var = subs.mk_flex_var();
     let num_type = Variable(num_var);
-    let expected_literal = ForReason(reason, literal_type, region.clone());
+    let expected_literal = ForReason(reason, literal_type, region);
 
     And(vec![
-        Eq(num_type.clone(), expected_literal, region.clone()),
-        Eq(num_type, expected, region.clone()),
+        Eq(num_type.clone(), expected_literal, region),
+        Eq(num_type, expected, region),
     ])
 }
 

@@ -51,7 +51,7 @@ pub fn canonicalize_pattern<'a>(
     use self::PatternType::*;
     use can::ast::Pattern::*;
 
-    let region = loc_pattern.region.clone();
+    let region = loc_pattern.region;
     let pattern = match &loc_pattern.value {
         &Identifier(ref name) => {
             let unqualified_ident = Ident::Unqualified(name.to_string());
@@ -66,7 +66,7 @@ pub fn canonicalize_pattern<'a>(
             match shadowable_idents.get(&unqualified_ident) {
                 Some((_, region)) => {
                     let loc_shadowed_ident = Located {
-                        region: region.clone(),
+                        region: *region,
                         value: unqualified_ident,
                     };
 
@@ -86,7 +86,7 @@ pub fn canonicalize_pattern<'a>(
                     match scope.idents.get(&qualified_ident) {
                         Some((_, region)) => {
                             let loc_shadowed_ident = Located {
-                                region: region.clone(),
+                                region: *region,
                                 value: qualified_ident,
                             };
 
@@ -105,7 +105,7 @@ pub fn canonicalize_pattern<'a>(
 
                             // This is a fresh identifier that wasn't already in scope.
                             // Add it to scope!
-                            let symbol_and_region = (symbol.clone(), region.clone());
+                            let symbol_and_region = (symbol.clone(), region);
 
                             // Add this to both scope.idents *and* shadowable_idents.
                             // The latter is relevant when recursively canonicalizing Variant patterns,
@@ -114,7 +114,7 @@ pub fn canonicalize_pattern<'a>(
                             scope
                                 .idents
                                 .insert(new_ident.clone(), symbol_and_region.clone());
-                            shadowable_idents.insert(new_ident, symbol_and_region);
+                            shadowable_idents.insert(new_ident, symbol_and_region.clone());
 
                             Pattern::Identifier(subs.mk_flex_var(), symbol)
                         }
@@ -162,7 +162,7 @@ pub fn canonicalize_pattern<'a>(
                 Pattern::Variant(subs.mk_flex_var(), symbol)
             } else {
                 let loc_name = Located {
-                    region: region.clone(),
+                    region: region,
                     value: variant,
                 };
                 // We couldn't find the variant name in scope. NAMING PROBLEM!
@@ -188,7 +188,7 @@ pub fn canonicalize_pattern<'a>(
         // },
         &Underscore => match pattern_type {
             CaseBranch | FunctionArg => Pattern::Underscore(subs.mk_flex_var()),
-            Assignment => unsupported_pattern(env, Assignment, region.clone()),
+            Assignment => unsupported_pattern(env, Assignment, region),
         },
 
         // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
@@ -204,7 +204,7 @@ pub fn canonicalize_pattern<'a>(
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
 fn unsupported_pattern<'a>(env: &'a mut Env, pattern_type: PatternType, region: Region) -> Pattern {
-    env.problem(Problem::UnsupportedPattern(pattern_type, region.clone()));
+    env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
 }

@@ -17,6 +17,8 @@ pub const MOD_NUM: &'static str = "Num";
 pub const MOD_DEFAULT: &'static str = "Default";
 
 pub const TYPE_NUM: &'static str = "Num";
+pub const TYPE_INTEGER: &'static str = "Integer";
+pub const TYPE_FLOATINGPOINT: &'static str = "FloatingPoint";
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Type {

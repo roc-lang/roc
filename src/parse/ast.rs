@@ -45,8 +45,8 @@ pub enum Expr<'a> {
     AccessorFunction(&'a str),
 
     // Collection Literals
-    List(Vec<'a, Loc<Expr<'a>>>),
-    Record(Vec<'a, Loc<Expr<'a>>>),
+    List(Vec<'a, &'a Loc<Expr<'a>>>),
+    Record(Vec<'a, &'a Loc<Expr<'a>>>),
     AssignField(Loc<&'a str>, &'a Loc<Expr<'a>>),
 
     // Lookups
@@ -54,19 +54,17 @@ pub enum Expr<'a> {
     Variant(&'a [&'a str], &'a str),
 
     // Pattern Matching
-    Closure(&'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)),
+    Closure(&'a Vec<'a, Loc<Pattern<'a>>>, &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
     Defs(
-        &'a (
-            Vec<'a, (&'a [CommentOrNewline<'a>], Def<'a>)>,
-            Loc<Expr<'a>>,
-        ),
+        Vec<'a, (&'a [CommentOrNewline<'a>], Def<'a>)>,
+        &'a Loc<Expr<'a>>,
     ),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a variant by name, do Apply(Variant(...), ...)
-    Apply(&'a (Loc<Expr<'a>>, Vec<'a, Loc<Expr<'a>>>, CalledVia)),
+    Apply(&'a Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>, CalledVia),
     Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
 
     // Conditionals
@@ -384,7 +382,7 @@ pub fn format<'a>(
 
             buf.push_str(name);
         }
-        Apply((loc_expr, loc_args, _)) => {
+        Apply(loc_expr, loc_args, _) => {
             if apply_needs_parens {
                 buf.push('(');
             }
@@ -434,10 +432,10 @@ pub fn format<'a>(
 
             buf.push('}');
         }
-        Closure((loc_patterns, loc_ret)) => {
+        Closure(loc_patterns, loc_ret) => {
             buf.push('\\');
 
-            for loc_pattern in loc_patterns {
+            for loc_pattern in loc_patterns.iter() {
                 buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
 
                 buf.push(' ');
@@ -447,7 +445,7 @@ pub fn format<'a>(
 
             buf.push_str(&format(arena, &loc_ret.value, indent, false));
         }
-        Defs((defs, ret)) => {
+        Defs(defs, ret) => {
             // The first def is actually at the end of the list, because
             // it gets added there with .push() for efficiency. (The order of parsed defs doesn't
             // matter because canonicalization sorts them anyway.) The other

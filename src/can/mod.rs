@@ -55,11 +55,11 @@ pub fn canonicalize_declaration<'a>(
     // visited an Operator node we'd recursively try to apply this to each of its nested
     // operators, and thena again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar(arena, loc_expr);
+    let loc_expr = operator::desugar(arena, &loc_expr);
 
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
-    // scope_prefix will be "Main$foo$" and its first closure will be named "Main$foo$0"
-    let scope_prefix = format!("{}${}$", home, name).into();
+    // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
+    let scope_prefix = format!("{}.{}$", home, name).into();
     let mut scope = Scope::new(scope_prefix, declared_idents.clone());
     let mut env = Env::new(home, declared_variants.clone());
     let (loc_expr, output) = canonicalize_expr(
@@ -103,19 +103,18 @@ fn canonicalize_expr(
 
     let (expr, output) = match expr {
         ast::Expr::Int(string) => {
-            let (constraint, answer) = int_from_parsed(subs, string, env, expected, region.clone());
+            let (constraint, answer) = int_from_parsed(subs, string, env, expected, region);
 
             (answer, Output::new(constraint))
         }
         ast::Expr::Float(string) => {
-            let (constraint, answer) =
-                float_from_parsed(subs, string, env, expected, region.clone());
+            let (constraint, answer) = float_from_parsed(subs, string, env, expected, region);
 
             (answer, Output::new(constraint))
         }
         ast::Expr::Record(fields) => {
             if fields.is_empty() {
-                let constraint = Eq(EmptyRec, expected, region.clone());
+                let constraint = Eq(EmptyRec, expected, region);
 
                 (EmptyRecord, Output::new(constraint))
             } else {
@@ -123,18 +122,14 @@ fn canonicalize_expr(
             }
         }
         ast::Expr::Str(string) => {
-            let constraint = Eq(constrain::str_type(), expected, region.clone());
+            let constraint = Eq(constrain::str_type(), expected, region);
 
             (Str((*string).into()), Output::new(constraint))
         }
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 let list_var = subs.mk_flex_var();
-                let constraint = Eq(
-                    constrain::empty_list_type(list_var),
-                    expected,
-                    region.clone(),
-                );
+                let constraint = Eq(constrain::empty_list_type(list_var), expected, region);
 
                 (List(list_var, Vec::new()), Output::new(constraint))
             } else {
@@ -150,14 +145,14 @@ fn canonicalize_expr(
                     let elem_expected = NoExpectation(elem_type.clone());
                     let list_elem_constraint = Eq(
                         list_type.clone(),
-                        ForReason(Reason::ElemInList, elem_type, region.clone()),
-                        region.clone(),
+                        ForReason(Reason::ElemInList, elem_type, region),
+                        region,
                     );
                     let (can_expr, elem_out) = canonicalize_expr(
                         env,
                         subs,
                         scope,
-                        loc_elem.region.clone(),
+                        loc_elem.region,
                         &loc_elem.value,
                         elem_expected,
                     );
@@ -170,11 +165,7 @@ fn canonicalize_expr(
                     can_elems.push(can_expr);
                 }
 
-                constraints.push(Eq(
-                    constrain::list_type(list_type),
-                    expected,
-                    region.clone(),
-                ));
+                constraints.push(Eq(constrain::list_type(list_type), expected, region));
 
                 let mut output = Output::new(And(constraints));
 
@@ -214,26 +205,19 @@ fn canonicalize_expr(
 
         //    (expr, output)
         //}
-        ast::Expr::Apply((loc_fn, loc_args, application_style)) => {
+        ast::Expr::Apply(loc_fn, loc_args, application_style) => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
             let fn_var = subs.mk_flex_var();
             let fn_type = Variable(fn_var);
-            let fn_region = loc_fn.region.clone();
+            let fn_region = loc_fn.region;
             let fn_expected = NoExpectation(fn_type.clone());
             // TODO look up the name and use NamedFnArg if possible.
             let fn_reason = Reason::AnonymousFnCall(loc_args.len() as u8);
 
             // Canonicalize the function expression and its arguments
-            let (fn_expr, mut output) = canonicalize_expr(
-                env,
-                subs,
-                scope,
-                loc_fn.region.clone(),
-                &loc_fn.value,
-                fn_expected,
-            );
-            let fn_con = output.constraint;
+            let (fn_expr, mut output) =
+                canonicalize_expr(env, subs, scope, loc_fn.region, &loc_fn.value, fn_expected);
 
             // The function's return type
             let ret_var = subs.mk_flex_var();
@@ -252,17 +236,17 @@ fn canonicalize_expr(
             let mut outputs = Vec::new();
 
             for (index, loc_arg) in loc_args.iter().enumerate() {
-                let region = loc_arg.region.clone();
+                let region = loc_arg.region;
                 let arg_var = subs.mk_flex_var();
                 let arg_type = Variable(arg_var);
                 // TODO look up the name and use NamedFnArg if possible.
                 let reason = Reason::AnonymousFnArg(index as u8);
-                let expected_arg = ForReason(reason, arg_type.clone(), region.clone());
+                let expected_arg = ForReason(reason, arg_type.clone(), region);
                 let (arg_expr, arg_out) = canonicalize_expr(
                     env,
                     subs,
                     scope,
-                    loc_arg.region.clone(),
+                    loc_arg.region,
                     &loc_arg.value,
                     expected_arg,
                 );
@@ -277,6 +261,9 @@ fn canonicalize_expr(
                 outputs.push(arg_out);
             }
 
+            // We're not tail-calling a symbol (by name), we're tail-calling a function value.
+            output.tail_call = None;
+
             let expr = match &fn_expr.value {
                 &Var(_, ref sym) | &FunctionPointer(_, ref sym) => {
                     // In the FunctionPointer case, we're calling an inline closure;
@@ -285,10 +272,14 @@ fn canonicalize_expr(
 
                     CallByName(sym.clone(), args, *application_style)
                 }
-                _ => {
+                &RuntimeError(_) => {
+                    // We can't call a runtime error; bail out by propagating it!
+                    return (fn_expr, output);
+                }
+                not_var => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
                     // Use CallPointer here.
-                    panic!("TODO support function calls that aren't by name, via CallPointer");
+                    panic!("TODO support function calls that aren't by name, via CallPointer, in this case: {:?}", not_var);
                 }
             };
 
@@ -296,8 +287,7 @@ fn canonicalize_expr(
                 output.references = output.references.union(arg_out.references);
             }
 
-            // We're not tail-calling a symbol (by name), we're tail-calling a function value.
-            output.tail_call = None;
+            let fn_con = output.constraint;
 
             // TODO occurs check!
             // return $ exists vars $ CAnd ...
@@ -305,14 +295,14 @@ fn canonicalize_expr(
             let expected_fn_type = ForReason(
                 fn_reason,
                 Function(arg_types, Box::new(ret_type.clone())),
-                region.clone(),
+                region,
             );
 
             output.constraint = And(vec![
                 fn_con,
                 Eq(fn_type, expected_fn_type, fn_region),
                 And(arg_cons),
-                Eq(ret_type, expected, region.clone()),
+                Eq(ret_type, expected, region),
             ]);
 
             (expr, output)
@@ -323,13 +313,14 @@ fn canonicalize_expr(
             } else {
                 Symbol::from_parts(module_parts, name)
             };
-            let mut output = Output::new(Lookup(symbol, expected, region.clone()));
+
+            let mut output = Output::new(Lookup(symbol, expected, region));
             let ident = Ident::new(module_parts, name);
             let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
                 Ok(symbol) => Var(subs.mk_flex_var(), symbol),
                 Err(ident) => {
                     let loc_ident = Located {
-                        region: region.clone(),
+                        region: region,
                         value: ident,
                     };
 
@@ -360,7 +351,7 @@ fn canonicalize_expr(
         //                Ok(symbol) => Var(symbol),
         //                Err(ident) => {
         //                    let loc_ident = Located {
-        //                        region: loc_ident.region.clone(),
+        //                        region: loc_ident.region,
         //                        value: ident,
         //                    };
 
@@ -411,7 +402,7 @@ fn canonicalize_expr(
         //        Ok(symbol) => ApplyVariant(symbol, opt_can_args),
         //        Err(variant_name) => {
         //            let loc_variant = Located {
-        //                region: loc_expr.region.clone(),
+        //                region: loc_expr.region,
         //                value: variant_name,
         //            };
 
@@ -423,12 +414,12 @@ fn canonicalize_expr(
 
         //    (can_expr, output)
         //}
-        ast::Expr::Defs((defs, loc_ret)) => {
+        ast::Expr::Defs(defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             // so clone it.
             can_defs(env, subs, scope.clone(), defs, expected, loc_ret)
         }
-        ast::Expr::Closure((loc_arg_patterns, loc_body_expr)) => {
+        ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             // The globally unique symbol that will refer to this closure once it gets converted
             // into a top-level procedure for code gen.
             //
@@ -479,7 +470,7 @@ fn canonicalize_expr(
                 env,
                 subs,
                 &mut scope,
-                loc_body_expr.region.clone(),
+                loc_body_expr.region,
                 &loc_body_expr.value,
                 body_type,
             );
@@ -505,9 +496,9 @@ fn canonicalize_expr(
                     ret_constraint,
                 })),
                 // "the closure's type is equal to the var we've stored for later use in the proc"
-                Eq(args.typ, NoExpectation(typ.clone()), region.clone()),
+                Eq(args.typ, NoExpectation(typ.clone()), region),
                 // "the var we've stored for later is equal to the overall expected type"
-                Eq(typ, expected, region.clone()),
+                Eq(typ, expected, region),
             ]);
 
             // Now that we've collected all the references, check to see if any of the args we defined
@@ -534,7 +525,7 @@ fn canonicalize_expr(
                 symbol.clone(),
                 can_args,
                 loc_body_expr,
-                region.clone(),
+                region,
                 output.references.clone(),
                 var,
                 args.ret_var,
@@ -597,7 +588,7 @@ fn canonicalize_expr(
         //         for (ident, (symbol, region)) in assigned_idents {
         //             if !output.references.has_local(&symbol) {
         //                 let loc_ident = Located {
-        //                     region: region.clone(),
+        //                     region: region,
         //                     value: ident.clone(),
         //                 };
 
@@ -622,14 +613,6 @@ fn canonicalize_expr(
 
         //     (expr, output)
         // }
-        ast::Expr::SpaceBefore(sub_expr, _spaces) => {
-            // Continue on; spaces don't do anything.
-            return canonicalize_expr(env, subs, scope, region, sub_expr, expected);
-        }
-        ast::Expr::SpaceAfter(sub_expr, _spaces) => {
-            // Continue on; spaces don't do anything.
-            return canonicalize_expr(env, subs, scope, region, sub_expr, expected);
-        }
         ast::Expr::BlockStr(_)
         | ast::Expr::Field(_, _)
         | ast::Expr::QualifiedField(_, _)
@@ -647,21 +630,35 @@ fn canonicalize_expr(
             );
         }
         ast::Expr::BinaryInt(string) => {
-            let (constraint, answer) = bin_from_parsed(subs, string, env, expected, region.clone());
+            let (constraint, answer) = bin_from_parsed(subs, string, env, expected, region);
 
             (answer, Output::new(constraint))
         }
         ast::Expr::HexInt(string) => {
-            let (constraint, answer) = hex_from_parsed(subs, string, env, expected, region.clone());
+            let (constraint, answer) = hex_from_parsed(subs, string, env, expected, region);
 
             (answer, Output::new(constraint))
         }
         ast::Expr::OctalInt(string) => {
-            let (constraint, answer) = oct_from_parsed(subs, string, env, expected, region.clone());
+            let (constraint, answer) = oct_from_parsed(subs, string, env, expected, region);
 
             (answer, Output::new(constraint))
         }
-        ast::Expr::Operator((loc_left, loc_op, loc_right)) => {
+        // Below this point, we shouln't see any of these nodes anymore because
+        // operator desugaring should have removed them!
+        ast::Expr::SpaceBefore(sub_expr, _spaces) => {
+            panic!(
+                "A SpaceBefore did not get removed during operator desugaring somehow: {:?}",
+                sub_expr
+            );
+        }
+        ast::Expr::SpaceAfter(sub_expr, _spaces) => {
+            panic!(
+                "A SpaceAfter did not get removed during operator desugaring somehow: {:?}",
+                sub_expr
+            );
+        }
+        ast::Expr::Operator((_, loc_op, _)) => {
             panic!("An operator did not get desugared somehow: {:?}", loc_op);
         }
     };
@@ -892,10 +889,7 @@ fn add_idents_from_pattern<'a>(
         &Identifier(name) => {
             let symbol = scope.symbol(&name);
 
-            answer.push((
-                Ident::Unqualified(name.to_string()),
-                (symbol, region.clone()),
-            ));
+            answer.push((Ident::Unqualified(name.to_string()), (symbol, *region)));
         }
         &QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern.");
@@ -1294,7 +1288,7 @@ fn can_defs<'a>(
                 let value = Expr::RuntimeError(NoImplementation);
                 let loc_expr = Located {
                     value,
-                    region: loc_annotation.region.clone(),
+                    region: loc_annotation.region,
                 };
 
                 (None, (loc_expr, Output::new(True)))
@@ -1336,7 +1330,7 @@ fn can_defs<'a>(
                     env,
                     subs,
                     &mut scope,
-                    loc_expr.region.clone(),
+                    loc_expr.region,
                     &loc_expr.value,
                     NoExpectation(expr_type),
                 );
@@ -1394,6 +1388,7 @@ fn can_defs<'a>(
                     // Since everywhere in the code it'll be referred to by its assigned name,
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
                     let mut procedure = env.procedures.remove(&symbol).unwrap();
+                    let proc_var = procedure.var;
 
                     // The original ident name will be used for debugging and stack traces.
                     procedure.name = Some((*name).into());
@@ -1420,7 +1415,7 @@ fn can_defs<'a>(
 
                     // Return a reference to the assigned symbol, since the auto-generated one no
                     // longer references any entry in the procedure map!
-                    Var(subs.mk_flex_var(), assigned_symbol.clone())
+                    Var(proc_var, assigned_symbol.clone())
                 }
                 _ => loc_can_expr.value,
             };
@@ -1462,7 +1457,7 @@ fn can_defs<'a>(
                     (
                         loc_can_pattern.clone(),
                         Located {
-                            region: loc_can_expr.region.clone(),
+                            region: loc_can_expr.region,
                             value: can_expr.clone(),
                         },
                     ),
@@ -1477,7 +1472,7 @@ fn can_defs<'a>(
         env,
         subs,
         &mut scope,
-        loc_ret.region.clone(),
+        loc_ret.region,
         &loc_ret.value,
         expected,
     );
@@ -1554,7 +1549,7 @@ fn can_defs<'a>(
     for (ident, (symbol, region)) in assigned_idents.clone() {
         if !output.references.has_local(&symbol) {
             let loc_ident = Located {
-                region: region.clone(),
+                region: region,
                 value: ident.clone(),
             };
 
@@ -1619,7 +1614,7 @@ fn can_defs<'a>(
             let mut regions = Vec::with_capacity(can_assignments_by_symbol.len());
 
             for (loc_pattern, loc_expr) in can_assignments_by_symbol.values() {
-                regions.push((loc_pattern.region.clone(), loc_expr.region.clone()));
+                regions.push((loc_pattern.region, loc_expr.region));
             }
 
             (

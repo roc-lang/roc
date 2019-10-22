@@ -71,7 +71,9 @@ impl Operator {
                 LeftAssociative
             }
             And | Or | Caret => RightAssociative,
-            Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => NonAssociative,
+            Equals | NotEquals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => {
+                NonAssociative
+            }
         }
     }
 
@@ -80,7 +82,7 @@ impl Operator {
             Caret => 7,
             Star | Slash | DoubleSlash | DoublePercent | Percent => 6,
             Plus | Minus => 5,
-            Equals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => 4,
+            Equals | NotEquals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => 4,
             And => 3,
             Or => 2,
             Pizza => 1,

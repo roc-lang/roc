@@ -11,7 +11,11 @@ impl Symbol {
     }
 
     pub fn from_parts(module_parts: &[&str], name: &str) -> Symbol {
-        Symbol(format!("{}{}", module_parts.join("."), name).into())
+        Symbol(if module_parts.is_empty() {
+            name.into()
+        } else {
+            format!("{}.{}", module_parts.join("."), name).into()
+        })
     }
 
     pub fn from_variant(variant_name: &VariantName, home: &str) -> Symbol {

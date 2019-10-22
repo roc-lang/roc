@@ -3,7 +3,7 @@ use std::fmt;
 /// TODO replace Located with this
 pub type Loc<T> = Located<T>;
 
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Region {
     pub start_line: u32,
     pub end_line: u32,
@@ -81,7 +81,7 @@ impl<T> Located<T> {
 impl<T> Located<T> {
     pub fn with_value<U>(&self, value: U) -> Located<U> {
         Located {
-            region: self.region.clone(),
+            region: self.region,
             value: value,
         }
     }
@@ -91,7 +91,7 @@ impl<T> Located<T> {
         F: (FnOnce(&T) -> U),
     {
         Located {
-            region: self.region.clone(),
+            region: self.region,
             value: transform(&self.value),
         }
     }
@@ -102,7 +102,7 @@ where
     T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let region = self.region.clone();
+        let region = self.region;
 
         if region.start_line == 0
             && region.start_col == 0
