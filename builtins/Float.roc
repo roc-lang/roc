@@ -1,4 +1,4 @@
-api Float provides Float, FloatingPoint
+api Float provides Float, FloatingPoint, InvalidSqrt, fromNum, round, ceiling, floor, div, mod, recip, sqrt, highestVal, lowestVal, highestIntVal, lowestIntVal, sin, cos, tan, asin, acos, atan
 
 ## Types
 
@@ -29,7 +29,7 @@ api Float provides Float, FloatingPoint
 ## Note that although the IEEE-754 specification describes the values `Infinity`, `-Infinity`, `NaN`, and `-0.0`, Roc avoids these as follows:
 ##
 ## * @Float.sqrt returns `Err InvalidSqrt` when it would otherwise return `NaN`.
-## * Division operations return `Err DivisionByZero` when they would otherwise return `Infinity` or `-Infinity`.
+## * Division operations return `Err DivByZero` when they would otherwise return `Infinity` or `-Infinity`.
 ## * Operations that overflow crash (just like integers do) instead of returning `Infinity` or `-Infinity`.
 ## Under the hood, it is possible to have a zero @Float with a negative sign. However, this implementation detail intentionally conceealed. For equality purpose, `-0.0` is treated as equivalent to `0.0`, just like the spec prescribes. However, @Str.decimal always returns `0.0` when it would otherwise return `-0.0`, and both @Num.isPositive and @Num.isNegative return @False for all zero values. The only way to detect a zero with a negative sign is to convert it to @Bytes and inspect the bits directly.
 Float : Num FloatingPoint
@@ -65,7 +65,7 @@ atan : Float -> Float
 
 ## Other Calculations (arithmetic?)
 
-## Divide two @Float numbers. Return `Err DivisionByZero` if the
+## Divide two @Float numbers. Return `Err DivByZero` if the
 ## second number is zero, because division by zero is undefined in mathematics.
 ##
 ## (To divide an @Int and a @Float, first convert the @Int to a @Float using one of the functions in this module.)
@@ -79,14 +79,14 @@ atan : Float -> Float
 ## > 4.0 / -0.5
 ##
 ## > Float.div 4.0 -0.5
-div : Float, Float -> Result Float DivisionByZero
+div : Float, Float -> Result Float DivByZero
 
 ## Perform modulo on two @Float numbers.
 ##
 ## Modulo is the same as remainder when working with positive numbers,
 ## but if either number is negative, then modulo works differently.
 ##
-## Return `Err DivisionByZero` if the second number is zero, because division by zero is undefined in mathematics.
+## Return `Err DivByZero` if the second number is zero, because division by zero is undefined in mathematics.
 ##
 ## `a % b` is shorthand for `Float.mod a b`.
 ##
@@ -97,10 +97,10 @@ div : Float, Float -> Result Float DivisionByZero
 ## > 4.0 % -0.5
 ##
 ## > Float.mod -8 -3
-mod : Float, Float -> Result Float DivisionByZero
+mod : Float, Float -> Result Float DivByZero
 
 ## Return the reciprocal of the @Float.
-recip : Float -> Result Float Num.DivisionByZero
+recip : Float -> Result Float Num.DivByZero
 recip = \float ->
     1.0 / float
 
@@ -119,46 +119,46 @@ sqrt : Float -> Result Float InvalidSqrt
 
 ## Constants
 
-## An approximation of e.
+## An approximation of e, specifically 2.718281828459045.
 e : Float
-e = 2... #TODO fill this in, and make the docs nicer!
+e = 2.718281828459045
 
-## An approximation of pi.
+## An approximation of pi, specifically 3.141592653589793.
 pi : Float
-pi = 3.14... #TODO fill this in, and make the docs nicer!
+pi = 3.141592653589793
 
 ## Limits
 
-## The highest supported @Float value you can have: [TODO put the number here]
+## The highest supported @Float value you can have, which is approximately 1.8 × 10^308.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
-highestSupported : Float
+highestVal : Float
 
-## The lowest supported @Float value you can have: [TODO put the number here]
+## The lowest supported @Float value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
-lowestSupported : Float
+lowestVal : Float
 
-## The highest integer that can be represented as a @Float without
-## losing precision.
+## The highest integer that can be represented as a @Float without # losing precision. 
+## It is equal to 2^53, which is approximately 9 × 10^15.
 ##
 ## Some integers higher than this can be represented, but they may lose precision. For example:
 ##
-## > Float.highestLosslessInt
+## > Float.highestIntVal
 ##
-## > Float.highestLosslessInt + 100 # Increasing may lose precision
+## > Float.highestIntVal + 100 # Increasing may lose precision
 ##
-## > Float.highestLosslessInt - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
-highestLosslessInt : Float
+## > Float.highestIntVal - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
+highestIntVal : Float
 
-## The lowest integer that can be represented as a @Float without
-## losing precision.
+## The lowest integer that can be represented as a @Float without losing precision. 
+## It is equal to -2^53, which is approximately -9 × 10^15.
 ##
 ## Some integers lower than this can be represented, but they may lose precision. For example:
 ##
-## > Float.lowestLosslessInt
+## > Float.lowestIntVal
 ##
-## > Float.lowestLosslessInt - 100 # Decreasing may lose precision
+## > Float.lowestIntVal - 100 # Decreasing may lose precision
 ##
-## > Float.lowestLosslessInt + 100 # Increasing is fine - but watch out for highestLosslessInt!
-lowestLosslessInt : Float
+## > Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestLosslessInt!
+lowestIntVal : Float

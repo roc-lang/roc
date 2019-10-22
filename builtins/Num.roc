@@ -1,4 +1,4 @@
-api Num provides Num, negate
+api Num provides Num, DivByZero..., negate, abs, add, sub, mul, isOdd, isEven, isPositive, isNegative, isZero
 
 ## Types
 
@@ -22,7 +22,7 @@ api Num provides Num, negate
 Num range := Num range
 
 ## Returned by division operations (@Float.div, @Float.mod, @Int.divFloor, @Int.divMod, and @Float.recip) when they attempt to divide by zero.
-DivisionByZero := DivisionByZero
+DivByZero := DivByZero
 
 ## Convert
 

@@ -22,7 +22,7 @@ pub struct Fraction<T> {
     /// that it makes Frac more error-prone to use outside of Roc.
     ///
     /// * Roc will accept any pattern of bits in this struct, and will type them as
-    ///   Result { ok: Frac, err: DivisionByZero }. Behind the scenes, a pattern match
+    ///   Result { ok: Frac, err: DivByZero }. Behind the scenes, a pattern match
     ///   on this result will map all positive denominators to Ok and all zero or negative
     ///   denominators to Err, so there is no extra memory cost to this being typed as Result.
     /// * Roc's reciprocal function and division operator return Result values as well. Because

@@ -1,4 +1,4 @@
-api Int provides Int, Integer
+api Int provides Int, Integer, divFloor, modFloor
 
 ## Types
 
@@ -25,7 +25,7 @@ Int : Num Integer
 ##
 ## (Use @Float.div for non-flooring division.)
 ##
-## Return `Err DivisionByZero` if the second integer is zero, because division by zero is undefined in mathematics.
+## Return `Err DivByZero` if the second integer is zero, because division by zero is undefined in mathematics.
 ##
 ## `a // b` is shorthand for `Int.divFloor a b`.
 ##
@@ -38,7 +38,7 @@ Int : Num Integer
 ## > Int.divFloor -8 -3
 ##
 ## This is the same as the @// operator.
-divFloor : Int, Int -> Result DivisionByZero Int
+divFloor : Int, Int -> Result DivByZero Int
 
 ## Perform flooring modulo on two integers.
 ##
@@ -49,7 +49,7 @@ divFloor : Int, Int -> Result DivisionByZero Int
 ##
 ## (Use @Float.mod for non-flooring modulo.)
 ##
-## Return `Err DivisionByZero` if the second integer is zero, because division by zero is undefined in mathematics.
+## Return `Err DivByZero` if the second integer is zero, because division by zero is undefined in mathematics.
 ##
 ## `a %% b` is shorthand for `Int.modFloor a b`.
 ##
@@ -60,7 +60,7 @@ divFloor : Int, Int -> Result DivisionByZero Int
 ## > -8 %% -3
 ##
 ## > Int.modFloor -8 -3
-divFloor : Int, Int -> Result DivisionByZero Int
+modFloor : Int, Int -> Result DivByZero Int
 
 
 ## Bitwise
