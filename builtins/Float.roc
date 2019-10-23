@@ -1,4 +1,8 @@
-api Float provides Float, FloatingPoint, InvalidSqrt, fromNum, round, ceiling, floor, div, mod, recip, sqrt, highestVal, lowestVal, highestIntVal, lowestIntVal, sin, cos, tan, asin, acos, atan
+interface Float
+    exposes [ Float, FloatingPoint, InvalidSqrt, fromNum, round, ceiling, floor,
+        div, mod, recip, sqrt, highestVal, lowestVal, highestIntVal, lowestIntVal,
+        sin, cos, tan, asin, acos, atan ]
+    imports []
 
 ## Types
 
