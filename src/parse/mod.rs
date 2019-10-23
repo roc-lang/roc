@@ -25,7 +25,10 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::{CalledVia, Operator};
 use parse;
-use parse::ast::{Attempting, Def, Expr, Pattern, Spaceable};
+use parse::ast::{
+    AppHeader, Attempting, CommentOrNewline, Def, Expr, HeaderEntry, InterfaceHeader, Module,
+    Pattern, Spaceable, TypeAnnotation,
+};
 use parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
 };
@@ -39,12 +42,106 @@ use parse::parser::{
 };
 use region::Located;
 
-// pub fn api<'a>() -> impl Parser<'a, Module<'a>> {
-//     and(
-//         skip_first(string("api"), space1_around(ident())),
-//         skip_first(string("exposes"), space1_around(ident())),
-//     )
-// }
+pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
+    one_of2(interface_module(), app_module())
+}
+
+#[inline(always)]
+fn interface_module<'a>() -> impl Parser<'a, Module<'a>> {
+    map(and(interface_header(), module_defs()), |(header, defs)| {
+        Module::Interface { header, defs }
+    })
+}
+
+#[inline(always)]
+fn app_module<'a>() -> impl Parser<'a, Module<'a>> {
+    map(and(app_header(), module_defs()), |(header, defs)| {
+        Module::App { header, defs }
+    })
+}
+
+#[inline(always)]
+fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
+    map(
+        and(
+            skip_first(string("interface"), and(space1(1), loc(ident()))),
+            and(mod_header_list("exposes"), mod_header_list("imports")),
+        ),
+        |(
+            (after_interface, loc_name_ident),
+            (
+                ((before_exposes, after_exposes), exposes),
+                ((before_imports, after_imports), imports),
+            ),
+        )| {
+            match loc_name_ident.value {
+                Ident::Variant(info) => {
+                    let name = Located {
+                        value: (info.module_parts, info.value),
+                        region: loc_name_ident.region,
+                    };
+
+                    InterfaceHeader {
+                        name,
+                        exposes,
+                        imports,
+                        after_interface,
+                        before_exposes,
+                        after_exposes,
+                        before_imports,
+                        after_imports,
+                    }
+                }
+                _ => panic!("TODO handle malformed module header"),
+            }
+        },
+    )
+}
+
+#[inline(always)]
+fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
+    move |_, _| {
+        panic!("TODO parse app header");
+    }
+}
+
+#[inline(always)]
+fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Def<'a>>> {
+    move |_, _| {
+        panic!("TODO parse defs");
+    }
+}
+
+/// Either "imports" or "exposes" - they both work the same way.
+#[inline(always)]
+fn mod_header_list<'a>(
+    kw: &'static str,
+) -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Vec<'a, Located<HeaderEntry<'a>>>,
+    ),
+> {
+    and(
+        and(skip_second(space1(1), string(kw)), space1(1)),
+        collection(char('['), loc(mod_header_entry()), char(','), char(']'), 1),
+    )
+}
+
+#[inline(always)]
+fn mod_header_entry<'a>() -> impl Parser<'a, HeaderEntry<'a>> {
+    one_of2(
+        map(unqualified_ident(), |ident| HeaderEntry::Val(ident)),
+        map(
+            and(unqualified_variant(), optional(string("..."))),
+            |(ident, opt_ellipsis)| match opt_ellipsis {
+                None => HeaderEntry::TypeOnly(ident),
+                Some(()) => HeaderEntry::TypeAndVariants(ident),
+            },
+        ),
+    )
+}
 
 // pub fn app<'a>() -> impl Parser<'a, Module<'a>> {
 //     skip_first(string("app using Echo"))
@@ -355,29 +452,83 @@ fn equals_for_def<'a>() -> impl Parser<'a, ()> {
 
 /// A definition, consisting of one of these:
 ///
+/// * A custom type definition using (`:=`)
+/// * A type alias using `:`
 /// * A pattern followed by '=' and then an expression
 /// * A type annotation
-/// * Both
+/// * A type annotation followed on the next line by a pattern, an `=`, and an expression
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     // Indented more beyond the original indent.
     let indented_more = min_indent + 1;
 
-    // TODO support type annotations
-    map_with_arena(
-        and(
-            // A pattern followed by '='
-            skip_second(
-                space0_after(loc_closure_param(min_indent), min_indent),
-                equals_for_def(),
+    one_of2(
+        // Type alias or custom type (uppercase ident followed by `:` or `:=` and type annotation)
+        map_with_arena(
+            and(
+                skip_second(
+                    // TODO FIXME this may need special logic to parse the first part of the type,
+                    // then parse the rest with increased indentation. The current implementation
+                    // may not correctly handle scenarios like this:
+                    //
+                    // Result
+                    // ok err :=
+                    //
+                    // ...which should actually be something like:
+                    //
+                    // Result
+                    //   ok err :=
+                    //
+                    // This seems likely enough to be broken that it's worth trying to reproduce
+                    // and then fix! (Or, if everything is somehow fine, delete this comment.)
+                    space0_after(loc(type_annotation(min_indent)), min_indent),
+                    char(':'),
+                ),
+                either(
+                    // Custom type
+                    skip_first(
+                        // The `=` in `:=` (at this point we already consumed the `:`)
+                        char('='),
+                        one_or_more(space0_before(loc(type_annotation(min_indent)), min_indent)),
+                    ),
+                    // Alias
+                    space0_before(loc(type_annotation(min_indent)), min_indent),
+                ),
             ),
-            // Spaces after the '=' (at a normal indentation level) and then the expr.
-            // The expr itself must be indented more than the pattern and '='
-            space0_before(
-                loc(move |arena, state| parse_expr(indented_more, arena, state)),
-                min_indent,
-            ),
+            |arena, (loc_type_name, rest)| match rest {
+                Either::First(loc_ann) => Def::CustomType(loc_type_name, loc_ann),
+                Either::Second(anns) => Def::TypeAlias(loc_type_name, anns),
+            },
         ),
-        |arena, (loc_pattern, loc_expr)| Def::BodyOnly(loc_pattern, arena.alloc(loc_expr)),
+        // Constant or annotation
+        map_with_arena(
+            and(
+                // A pattern followed by '=' or ':'
+                space0_after(loc_closure_param(min_indent), min_indent),
+                either(
+                    // Constant
+                    skip_first(
+                        equals_for_def(),
+                        // Spaces after the '=' (at a normal indentation level) and then the expr.
+                        // The expr itself must be indented more than the pattern and '='
+                        space0_before(
+                            loc(move |arena, state| parse_expr(indented_more, arena, state)),
+                            min_indent,
+                        ),
+                    ),
+                    // Annotation
+                    skip_first(
+                        char(':'),
+                        // Spaces after the ':' (at a normal indentation level) and then the type.
+                        // The type itself must be indented more than the pattern and ':'
+                        space0_before(loc(type_annotation(indented_more)), min_indent),
+                    ),
+                ),
+            ),
+            |arena, (loc_pattern, expr_or_ann)| match expr_or_ann {
+                Either::First(loc_expr) => Def::Body(loc_pattern, arena.alloc(loc_expr)),
+                Either::Second(loc_ann) => Def::Annotation(loc_pattern, loc_ann),
+            },
+        ),
     )
 }
 
@@ -814,6 +965,12 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             }
         },
     )
+}
+
+pub fn type_annotation<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
+    move |_, _| {
+        panic!("TODO");
+    }
 }
 
 pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {

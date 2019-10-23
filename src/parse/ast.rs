@@ -8,9 +8,49 @@ use region::{Loc, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
-    Api(&'a [&'a str], &'a str, Vec<'a, Def<'a>>),
-    App(&'a [&'a str], &'a str),
+    Interface {
+        header: InterfaceHeader<'a>,
+        defs: Vec<'a, Def<'a>>,
+    },
+    App {
+        header: AppHeader<'a>,
+        defs: Vec<'a, Def<'a>>,
+    },
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InterfaceHeader<'a> {
+    pub name: Loc<(&'a [&'a str], &'a str)>,
+    pub exposes: Vec<'a, Loc<HeaderEntry<'a>>>,
+    pub imports: Vec<'a, Loc<HeaderEntry<'a>>>,
+
+    // Potential comments and newlines - these will typically all be empty.
+    pub after_interface: &'a [CommentOrNewline<'a>],
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub after_exposes: &'a [CommentOrNewline<'a>],
+    pub before_imports: &'a [CommentOrNewline<'a>],
+    pub after_imports: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppHeader<'a> {
+    pub imports: Vec<'a, Loc<HeaderEntry<'a>>>,
+
+    // Potential comments and newlines - these will typically all be empty.
+    pub after_app: &'a [CommentOrNewline<'a>],
+    pub before_imports: &'a [CommentOrNewline<'a>],
+    pub after_imports: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HeaderEntry<'a> {
+    Val(&'a str),
+    TypeOnly(&'a str),
+    TypeAndVariants(&'a str),
+    SpaceBefore(&'a HeaderEntry<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a HeaderEntry<'a>, &'a [CommentOrNewline<'a>]),
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -89,9 +129,19 @@ pub enum Expr<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Def<'a> {
-    AnnotationOnly(Loc<TypeAnnotation<'a>>),
-    BodyOnly(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
-    AnnotatedBody(Loc<TypeAnnotation<'a>>, Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+    // TODO in canonicalization, validate the pattern; only certain patterns
+    // are allowed in annotations.
+    Annotation(Loc<Pattern<'a>>, Loc<TypeAnnotation<'a>>),
+    // TODO in canonicalization, check to see if there are any newlines after the
+    // annotation; if not, and if it's followed by a Body, then the annotation
+    // applies to that expr! (TODO: verify that the pattern for both annotation and body match.)
+    // No need to track that relationship in any data structure.
+    Body(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+    // TODO also in canonicalization, if there is a CustomType or TypeAlias
+    // inside an Expr, give an error like "hey you need to move this to the
+    // top level" - it'll parse fine, we just won't accept it there.
+    CustomType(Loc<TypeAnnotation<'a>>, Vec<'a, Loc<TypeAnnotation<'a>>>),
+    TypeAlias(Loc<TypeAnnotation<'a>>, Loc<TypeAnnotation<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -245,6 +295,15 @@ impl<'a> Spaceable<'a> for TypeAnnotation<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         TypeAnnotation::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for HeaderEntry<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        HeaderEntry::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        HeaderEntry::SpaceAfter(self, spaces)
     }
 }
 
