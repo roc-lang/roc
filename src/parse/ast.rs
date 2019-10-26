@@ -97,7 +97,7 @@ pub enum Expr<'a> {
     Closure(&'a Vec<'a, Loc<Pattern<'a>>>, &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
     Defs(
-        Vec<'a, (&'a [CommentOrNewline<'a>], Def<'a>)>,
+        Vec<'a, (&'a [CommentOrNewline<'a>], &'a Def<'a>)>,
         &'a Loc<Expr<'a>>,
     ),
 
@@ -540,20 +540,17 @@ pub fn format<'a>(
 }
 
 pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<'a> {
-    use self::Def::*;
-
     let mut buf = String::new_in(arena);
 
     match def {
-        Def::AnnotationOnly(_region) => panic!("TODO have format_def support AnnotationOnly"),
-        BodyOnly(loc_pattern, loc_expr) => {
+        Def::Annotation(_, _) => panic!("TODO have format_def support Annotation"),
+        Def::Body(loc_pattern, loc_expr) => {
             buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
             buf.push_str(" = ");
             buf.push_str(&format(arena, &loc_expr.value, indent, false));
         }
-        AnnotatedBody(_loc_annotation, _loc_pattern, _loc_expr) => {
-            panic!("TODO have format_def support AnnotationOnly")
-        }
+        Def::CustomType(_, _) => panic!("TODO have format_def support CustomType"),
+        Def::TypeAlias(_, _) => panic!("TODO have format_def support TypeAlias"),
     }
 
     buf

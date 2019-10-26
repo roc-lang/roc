@@ -231,15 +231,12 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
 
             for (_, def) in pairs {
                 let def = match def {
-                    Def::AnnotationOnly(ann) => Def::AnnotationOnly(ann.clone()),
-                    Def::BodyOnly(pattern, loc_expr) => {
-                        Def::BodyOnly(pattern.clone(), desugar(arena, loc_expr))
+                    Def::Body(pattern, loc_expr) => {
+                        &*arena.alloc(Def::Body(pattern.clone(), desugar(arena, loc_expr)))
                     }
-                    Def::AnnotatedBody(annotation, pattern, loc_body) => Def::AnnotatedBody(
-                        annotation.clone(),
-                        pattern.clone(),
-                        desugar(arena, loc_body),
-                    ),
+                    Def::Annotation(_, _) => def,
+                    Def::CustomType(_, _) => def,
+                    Def::TypeAlias(_, _) => def,
                 };
 
                 desugared_defs.push((Vec::new_in(arena).into_bump_slice(), def));

@@ -35,10 +35,10 @@ use parse::blankspace::{
 use parse::ident::{ident, Ident, MaybeQualified};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by, one_of16,
-    one_of2, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second, string,
-    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
-    State,
+    allocated, and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by,
+    one_of16, one_of2, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second,
+    string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
+    Parser, State,
 };
 use region::Located;
 
@@ -569,7 +569,10 @@ fn parse_def_expr<'a>(
                     loc(move |arena, state| parse_expr(indented_more, arena, state)),
                     and(
                         // Optionally parse additional defs.
-                        zero_or_more(and(space1(original_indent), def(original_indent))),
+                        zero_or_more(and(
+                            space1(original_indent),
+                            allocated(def(original_indent)),
+                        )),
                         // Parse the final expression that will be returned.
                         // It should be indented the same amount as the original.
                         space1_before(
@@ -585,13 +588,13 @@ fn parse_def_expr<'a>(
                 } else {
                     let first_def: Def<'a> =
                         // TODO if Parser were FnOnce instead of Fn, this might not need .clone()?
-                        Def::BodyOnly(loc_first_pattern.clone(), arena.alloc(loc_first_body));
+                        Def::Body(loc_first_pattern.clone(), arena.alloc(loc_first_body));
 
                     // Add the first def to the end of the defs. (It's fine that we
                     // reorder the first one to the end, because canonicalize will
                     // re-sort all of these based on dependencies anyway. Only
                     // their regions will ever be visible to the user.)
-                    defs.push((&[], first_def));
+                    defs.push((&[], arena.alloc(first_def)));
 
                     Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
                 }
@@ -969,7 +972,7 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
 pub fn type_annotation<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     move |_, _| {
-        panic!("TODO");
+        panic!("TODO parse type_annotation");
     }
 }
 

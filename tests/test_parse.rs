@@ -701,10 +701,10 @@ mod test_parse {
     fn one_def() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
-        let def = Def::BodyOnly(
+        let def = &*arena.alloc(Def::Body(
             Located::new(1, 1, 0, 1, Identifier("x")),
             arena.alloc(Located::new(1, 1, 2, 3, Int("5"))),
-        );
+        ));
         let defs = bumpalo::vec![in &arena; (Vec::new_in(&arena).into_bump_slice(), def)];
         let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(3, 3, 0, 2, ret);
@@ -730,10 +730,10 @@ mod test_parse {
     fn one_spaced_def() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
-        let def = Def::BodyOnly(
+        let def = &*arena.alloc(Def::Body(
             Located::new(1, 1, 0, 1, Identifier("x")),
             arena.alloc(Located::new(1, 1, 4, 5, Int("5"))),
-        );
+        ));
         let defs = bumpalo::vec![in &arena; (Vec::new_in(&arena).into_bump_slice(), def)];
         let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(3, 3, 0, 2, ret);
@@ -760,14 +760,14 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let newline = bumpalo::vec![in &arena; Newline];
-        let def1 = Def::BodyOnly(
+        let def1 = &*arena.alloc(Def::Body(
             Located::new(1, 1, 0, 1, Identifier("x")),
             arena.alloc(Located::new(1, 1, 4, 5, Int("5"))),
-        );
-        let def2 = Def::BodyOnly(
+        ));
+        let def2 = &*arena.alloc(Def::Body(
             Located::new(2, 2, 0, 1, Identifier("y")),
             arena.alloc(Located::new(2, 2, 4, 5, Int("6"))),
-        );
+        ));
         // NOTE: The first def always gets reordered to the end (because it
         // gets added by .push(), since that's more efficient and since
         // canonicalization is going to re-sort these all anyway.)
@@ -805,14 +805,14 @@ mod test_parse {
             Located::new(1, 1, 2, 3, Identifier("x")),
             Located::new(1, 1, 5, 6, Identifier("y"))
         ];
-        let def1 = Def::BodyOnly(
+        let def1 = &*arena.alloc(Def::Body(
             Located::new(1, 1, 0, 8, RecordDestructure(fields)),
             arena.alloc(Located::new(1, 1, 11, 12, Int("5"))),
-        );
-        let def2 = Def::BodyOnly(
+        ));
+        let def2 = &*arena.alloc(Def::Body(
             Located::new(2, 2, 0, 1, Identifier("y")),
             arena.alloc(Located::new(2, 2, 4, 5, Int("6"))),
-        );
+        ));
         // NOTE: The first def always gets reordered to the end (because it
         // gets added by .push(), since that's more efficient and since
         // canonicalization is going to re-sort these all anyway.)

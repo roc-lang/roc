@@ -1252,7 +1252,7 @@ fn can_defs<'a>(
     env: &mut Env,
     subs: &mut Subs,
     scope: Scope,
-    defs: &'a bumpalo::collections::Vec<'a, (&'a [ast::CommentOrNewline<'a>], Def<'a>)>,
+    defs: &'a bumpalo::collections::Vec<'a, (&'a [ast::CommentOrNewline<'a>], &'a Def<'a>)>,
     expected: Expected<Type>,
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output) {
@@ -1262,9 +1262,10 @@ fn can_defs<'a>(
     // was shadowing, which will be handled later.
     let assigned_idents: Vec<(Ident, (Symbol, Region))> = idents_from_patterns(
         defs.clone().iter().flat_map(|(_, def)| match def {
-            Def::AnnotationOnly(_region) => None,
-            Def::BodyOnly(loc_pattern, _expr) => Some(loc_pattern),
-            Def::AnnotatedBody(_loc_annotation, loc_pattern, _expr) => Some(loc_pattern),
+            Def::Annotation(_, _) => None,
+            Def::Body(loc_pattern, _) => Some(loc_pattern),
+            Def::TypeAlias(_, _) => None,
+            Def::CustomType(_, _) => None,
         }),
         &scope,
     );
@@ -1279,12 +1280,33 @@ fn can_defs<'a>(
     // Used in constraint generation
     let rigid_info = Info::with_capacity(defs.len());
     let mut flex_info = Info::with_capacity(defs.len());
+    let mut iter = defs.iter().peekable();
 
-    for (_, def) in defs {
+    while let Some((_, def)) = iter.next() {
         // Each assignment gets to have all the idents in scope that are assigned in this
         // block. Order of assignments doesn't matter, thanks to referential transparency!
         let (opt_loc_pattern, (loc_can_expr, can_output)) = match def {
-            Def::AnnotationOnly(loc_annotation) => {
+            Def::Annotation(loc_pattern, loc_annotation) => {
+                // TODO implement this:
+                //
+                // Is this a standalone annotation, or is it annotating the
+                // next def? This is annotating the next def iff:
+                //
+                // 1. There is a next def.
+                // 2. It is a Def::Body.
+                // 3. Its Pattern contains at least one SpaceBefore.
+                // 4. The count of all Newlines across all of its SpaceBefores is exactly 1.
+                //
+                // This tells us we're an annotation in the following scenario:
+                //
+                // foo : String
+                // foo = "blah"
+                //
+                // Knowing that, we then need to incorporate the annotation's type constraints
+                // into the next def's. To do this, we extract the next def from the iterator
+                // immediately, then canonicalize it to get its Variable, then use that
+                // Variable to generate the extra constraints.
+
                 let value = Expr::RuntimeError(NoImplementation);
                 let loc_expr = Located {
                     value,
@@ -1293,7 +1315,7 @@ fn can_defs<'a>(
 
                 (None, (loc_expr, Output::new(True)))
             }
-            Def::BodyOnly(loc_pattern, loc_expr) => {
+            Def::Body(loc_pattern, loc_expr) => {
                 // Make types for the pattern and the body expr.
                 let expr_var = subs.mk_flex_var();
                 let expr_type = Type::Variable(expr_var);
@@ -1345,8 +1367,11 @@ fn can_defs<'a>(
 
                 (Some(loc_pattern), (loc_can_expr, output))
             }
-            Def::AnnotatedBody(_loc_annotation, _loc_pattern, _loc_expr) => {
-                panic!("TODO handle annotated def")
+            Def::CustomType(_, _) => {
+                panic!("TODO error - custom types can only be defined at the toplevel")
+            }
+            Def::TypeAlias(_, _) => {
+                panic!("TODO error - type aliases can only be defined at the toplevel")
             }
         };
 

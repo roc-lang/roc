@@ -177,6 +177,18 @@ where
     }
 }
 
+pub fn allocated<'a, P, Val>(parser: P) -> impl Parser<'a, &'a Val>
+where
+    P: Parser<'a, Val>,
+    Val: 'a,
+{
+    move |arena, state: State<'a>| {
+        let (answer, state) = parser.parse(arena, state)?;
+
+        Ok((&*arena.alloc(answer), state))
+    }
+}
+
 pub fn not_followed_by<'a, P, ByParser, By, Val>(parser: P, by: ByParser) -> impl Parser<'a, Val>
 where
     ByParser: Parser<'a, By>,
