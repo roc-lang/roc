@@ -622,8 +622,7 @@ fn canonicalize_expr(
         | ast::Expr::Variant(_, _)
         | ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
-        | ast::Expr::PrecedenceConflict(_, _, _)
-        | ast::Expr::AssignField(_, _) => {
+        | ast::Expr::PrecedenceConflict(_, _, _) => {
             panic!(
                 "TODO restore the rest of canonicalize()'s branches {:?}",
                 local_successors(&References::new(), &MutMap::default())
@@ -1286,7 +1285,7 @@ fn can_defs<'a>(
         // Each assignment gets to have all the idents in scope that are assigned in this
         // block. Order of assignments doesn't matter, thanks to referential transparency!
         let (opt_loc_pattern, (loc_can_expr, can_output)) = match def {
-            Def::Annotation(loc_pattern, loc_annotation) => {
+            Def::Annotation(_loc_pattern, loc_annotation) => {
                 // TODO implement this:
                 //
                 // Is this a standalone annotation, or is it annotating the

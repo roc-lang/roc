@@ -1,12 +1,15 @@
 pub mod ast;
 pub mod blankspace;
+pub mod collection;
 pub mod ident;
 pub mod keyword;
 pub mod module;
 pub mod number_literal;
 pub mod parser;
 pub mod problems;
+pub mod record;
 pub mod string_literal;
+pub mod type_annotation;
 
 /// All module definitions begin with one of these:
 ///
@@ -20,26 +23,27 @@ pub mod string_literal;
 /// another module.
 ///
 /// parsing the file
-use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::{CalledVia, Operator};
 use parse;
 use parse::ast::{
-    AppHeader, Attempting, CommentOrNewline, Def, Expr, HeaderEntry, InterfaceHeader, Module,
-    Pattern, Spaceable, TypeAnnotation,
+    AppHeader, AssignedField, Attempting, CommentOrNewline, Def, Expr, HeaderEntry,
+    InterfaceHeader, MaybeQualified, Module, Pattern, Spaceable,
 };
 use parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
 };
-use parse::ident::{ident, Ident, MaybeQualified};
+use parse::collection::collection;
+use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
     allocated, and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by,
-    one_of16, one_of2, one_of5, one_of9, one_or_more, optional, sep_by0, skip_first, skip_second,
-    string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
-    Parser, State,
+    one_of16, one_of2, one_of5, one_of9, one_or_more, optional, skip_first, skip_second, string,
+    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
+    State,
 };
+use parse::record::record;
 use region::Located;
 
 pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
@@ -368,14 +372,18 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             spaces,
         )),
 
-        Expr::Record(loc_exprs) => {
-            let mut loc_patterns = Vec::with_capacity_in(loc_exprs.len(), arena);
+        Expr::Record(loc_assigned_fields) => {
+            // Record(Loc<Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>>),
+            let /*mut*/ loc_patterns = Vec::with_capacity_in(loc_assigned_fields.len(), arena);
 
-            for loc_expr in loc_exprs {
-                let region = loc_expr.region;
-                let value = expr_to_pattern(arena, &loc_expr.value)?;
+            for _loc_assigned_field in loc_assigned_fields {
+                panic!("TODO finish converting record literal to pattern.");
+                // match loc_assigned_field.value {
+                // let region = loc_assigned_field.region;
+                // let value = expr_to_pattern(arena, &loc_assigned_field.value)?;
 
-                loc_patterns.push(Located { region, value });
+                // loc_patterns.push(Located { region, value });
+                // }
             }
 
             Ok(Pattern::RecordDestructure(loc_patterns))
@@ -396,7 +404,6 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::List(_)
         | Expr::Closure(_, _)
         | Expr::Operator(_)
-        | Expr::AssignField(_, _)
         | Expr::Defs(_, _)
         | Expr::If(_)
         | Expr::Case(_, _)
@@ -463,7 +470,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
 
     one_of2(
         // Type alias or custom type (uppercase ident followed by `:` or `:=` and type annotation)
-        map_with_arena(
+        map(
             and(
                 skip_second(
                     // TODO FIXME this may need special logic to parse the first part of the type,
@@ -480,7 +487,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                     //
                     // This seems likely enough to be broken that it's worth trying to reproduce
                     // and then fix! (Or, if everything is somehow fine, delete this comment.)
-                    space0_after(loc(type_annotation(min_indent)), min_indent),
+                    space0_after(type_annotation::located(min_indent), min_indent),
                     char(':'),
                 ),
                 either(
@@ -488,13 +495,16 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                     skip_first(
                         // The `=` in `:=` (at this point we already consumed the `:`)
                         char('='),
-                        one_or_more(space0_before(loc(type_annotation(min_indent)), min_indent)),
+                        one_or_more(space0_before(
+                            type_annotation::located(min_indent),
+                            min_indent,
+                        )),
                     ),
                     // Alias
-                    space0_before(loc(type_annotation(min_indent)), min_indent),
+                    space0_before(type_annotation::located(min_indent), min_indent),
                 ),
             ),
-            |arena, (loc_type_name, rest)| match rest {
+            |(loc_type_name, rest)| match rest {
                 Either::First(loc_ann) => Def::CustomType(loc_type_name, loc_ann),
                 Either::Second(anns) => Def::TypeAlias(loc_type_name, anns),
             },
@@ -520,7 +530,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                         char(':'),
                         // Spaces after the ':' (at a normal indentation level) and then the type.
                         // The type itself must be indented more than the pattern and ':'
-                        space0_before(loc(type_annotation(indented_more)), min_indent),
+                        space0_before(type_annotation::located(indented_more), min_indent),
                     ),
                 ),
             ),
@@ -970,12 +980,6 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     )
 }
 
-pub fn type_annotation<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
-    move |_, _| {
-        panic!("TODO parse type_annotation");
-    }
-}
-
 pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {
     then(loc(ident()), move |_arena, state, loc_ident| {
         Ok((ident_to_expr(loc_ident.value), state))
@@ -1072,68 +1076,33 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     )
 }
 
+// Parser<'a, Vec<'a, Located<AssignedField<'a, S>>>>
 pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    let field = map_with_arena(
-        and(
-            // You must have a field name, e.g. "email"
-            loc(unqualified_ident()),
-            // Having a value is optional; both `{ email }` and `{ email: blah }` work
-            optional(skip_first(
-                char(':'),
-                space0_before(
-                    loc(move |arena, state| parse_expr(min_indent, arena, state)),
-                    min_indent,
-                ),
-            )),
-        ),
-        |arena, (label, opt_loc_expr)| match opt_loc_expr {
-            Some(loc_expr) => Expr::AssignField(label, arena.alloc(loc_expr)),
-            // If no value was provided, record it as a Var.
-            // Canonicalize will know what to do with a Var later.
-            None => Expr::Var(&[], label.value),
-        },
-    );
-    let fields = collection(char('{'), loc(field), char(','), char('}'), min_indent);
-
     then(
         and(
-            attempt(Attempting::Record, loc(fields)),
+            attempt(
+                Attempting::Record,
+                loc(record(loc(expr(min_indent)), min_indent)),
+            ),
             optional(and(space0(min_indent), equals_with_indent())),
         ),
-        move |arena, state, (loc_field_exprs, opt_def)| match opt_def {
+        move |arena, state, (loc_assigned_fields, opt_def)| match opt_def {
             None => {
-                let mut allocated = Vec::with_capacity_in(loc_field_exprs.value.len(), arena);
-
-                for loc_field_expr in loc_field_exprs.value {
-                    allocated.push(&*arena.alloc(loc_field_expr));
-                }
-
-                Ok((Expr::Record(allocated), state))
+                // This is a record literal, not a destructure.
+                Ok((Expr::Record(loc_assigned_fields.value), state))
             }
             Some((spaces_before_equals, equals_indent)) => {
-                let region = loc_field_exprs.region;
-                let field_exprs = loc_field_exprs.value;
-                let mut loc_patterns = Vec::with_capacity_in(field_exprs.len(), arena);
+                // This is a record destructure def.
+                let region = loc_assigned_fields.region;
+                let assigned_fields = loc_assigned_fields.value;
+                let mut loc_patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
 
-                for loc_field_expr in field_exprs {
-                    let region = loc_field_expr.region;
-
-                    // If this is a record destructure, these should all be
-                    // unqualified Var expressions!
-                    let value = match loc_field_expr.value {
-                        Expr::Var(module_parts, value) => {
-                            if module_parts.is_empty() {
-                                Pattern::Identifier(value)
-                            } else {
-                                Pattern::QualifiedIdentifier(MaybeQualified {
-                                    module_parts,
-                                    value,
-                                })
-                            }
-                        }
+                for loc_assigned_field in assigned_fields {
+                    let region = loc_assigned_field.region;
+                    let value = match loc_assigned_field.value {
+                        AssignedField::LabelOnly(label, _) => Pattern::Identifier(label.value),
                         _ => {
                             panic!("TODO handle malformed record destructure.");
-                            // Malformed("???"),
                         }
                     };
 
@@ -1171,95 +1140,6 @@ fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
     variant_or_ident(|first_char| first_char.is_uppercase())
 }
 
-/// This could be:
-///
-/// * A record field, e.g. "email" in `.email` or in `email:`
-/// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
-    variant_or_ident(|first_char| first_char.is_lowercase())
-}
-
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
     map(parse::string_literal::parse(), Expr::Str)
-}
-
-fn variant_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str>
-where
-    F: Fn(char) -> bool,
-{
-    move |arena, state: State<'a>| {
-        let mut chars = state.input.chars();
-
-        // pred will determine if this is a variant or ident (based on capitalization)
-        let first_letter = match chars.next() {
-            Some(first_char) => {
-                if pred(first_char) {
-                    first_char
-                } else {
-                    return Err(unexpected(
-                        first_char,
-                        0,
-                        state,
-                        Attempting::RecordFieldLabel,
-                    ));
-                }
-            }
-            None => {
-                return Err(unexpected_eof(0, Attempting::RecordFieldLabel, state));
-            }
-        };
-
-        let mut buf = String::with_capacity_in(1, arena);
-
-        buf.push(first_letter);
-
-        while let Some(ch) = chars.next() {
-            // After the first character, only these are allowed:
-            //
-            // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-            // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-            // * A ':' indicating the end of the field
-            if ch.is_alphabetic() || ch.is_ascii_digit() {
-                buf.push(ch);
-            } else {
-                // This is the end of the field. We're done!
-                break;
-            }
-        }
-
-        let chars_parsed = buf.len();
-
-        Ok((
-            buf.into_bump_str(),
-            state.advance_without_indenting(chars_parsed)?,
-        ))
-    }
-}
-
-/// Parse zero or more elements between two braces (e.g. square braces).
-/// Elements can be optionally surrounded by spaces, and are separated by a
-/// delimiter (e.g comma-separated). Braces and delimiters get discarded.
-pub fn collection<'a, Elem, OpeningBrace, ClosingBrace, Delimiter, S>(
-    opening_brace: OpeningBrace,
-    elem: Elem,
-    delimiter: Delimiter,
-    closing_brace: ClosingBrace,
-    min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<S>>>
-where
-    OpeningBrace: Parser<'a, ()>,
-    Elem: Parser<'a, Located<S>>,
-    Elem: 'a,
-    Delimiter: Parser<'a, ()>,
-    S: Spaceable<'a>,
-    S: 'a,
-    ClosingBrace: Parser<'a, ()>,
-{
-    skip_first(
-        opening_brace,
-        skip_second(
-            sep_by0(delimiter, space0_around(elem, min_indent)),
-            closing_brace,
-        ),
-    )
 }

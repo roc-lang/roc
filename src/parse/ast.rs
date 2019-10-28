@@ -3,7 +3,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::CalledVia;
 use operator::Operator;
-use parse::ident::{Ident, MaybeQualified};
+use parse::ident::Ident;
 use region::{Loc, Region};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -51,6 +51,42 @@ pub enum HeaderEntry<'a> {
     SpaceAfter(&'a HeaderEntry<'a>, &'a [CommentOrNewline<'a>]),
 }
 
+/// An optional qualifier (the `Foo.Bar` in `Foo.Bar.baz`).
+/// If module_parts is empty, this is unqualified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaybeQualified<'a, Val> {
+    pub module_parts: &'a [&'a str],
+    pub value: Val,
+}
+
+impl<'a> MaybeQualified<'a, &'a str> {
+    pub fn len(&self) -> usize {
+        let mut answer = self.value.len();
+
+        for part in self.module_parts {
+            answer += part.len();
+        }
+
+        answer
+    }
+}
+
+impl<'a> MaybeQualified<'a, &'a [&'a str]> {
+    pub fn len(&self) -> usize {
+        let mut answer = 0;
+
+        for module_part in self.module_parts {
+            answer += module_part.len();
+        }
+
+        for value_part in self.module_parts {
+            answer += value_part.len();
+        }
+
+        answer
+    }
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -86,8 +122,7 @@ pub enum Expr<'a> {
 
     // Collection Literals
     List(Vec<'a, &'a Loc<Expr<'a>>>),
-    Record(Vec<'a, &'a Loc<Expr<'a>>>),
-    AssignField(Loc<&'a str>, &'a Loc<Expr<'a>>),
+    Record(Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // Lookups
     Var(&'a [&'a str], &'a str),
@@ -146,21 +181,49 @@ pub enum Def<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
-    EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(&'a [TypeAnnotation<'a>], &'a TypeAnnotation<'a>),
 
     /// Applying a type to some arguments (e.g. Map.Map String Int)
-    Apply(&'a [&'a str], &'a str, &'a [&'a TypeAnnotation<'a>]),
+    Apply(&'a [&'a str], &'a str, &'a [Loc<TypeAnnotation<'a>>]),
 
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
+
+    /// A plain record, e.g. `{ name: String, email: Email }`
+    Record(Vec<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>),
+
+    /// A record fragment, e.g. `{ name: String, email: Email }...r`
+    RecordFragment(
+        Vec<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>,
+        // the fragment type variable, e.g. the `r` in `{ name: String }...r`
+        &'a Loc<TypeAnnotation<'a>>,
+    ),
+
+    /// The `*` type variable, e.g. in (List *)
+    Wildcard,
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
 
     /// A malformed type annotation, which will code gen to a runtime error
+    Malformed(&'a str),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssignedField<'a, Val> {
+    // Both a label and a value, e.g. `{ name: "blah" }`
+    LabeledValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+
+    // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
+    LabelOnly(Loc<&'a str>, &'a [CommentOrNewline<'a>]),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
+
+    /// A malformed assigned field, which will code gen to a runtime error
     Malformed(&'a str),
 }
 
@@ -307,6 +370,15 @@ impl<'a> Spaceable<'a> for HeaderEntry<'a> {
     }
 }
 
+impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        AssignedField::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        AssignedField::SpaceAfter(self, spaces)
+    }
+}
+
 #[test]
 fn expr_size() {
     // The size of the Expr data structure should be exactly 6 machine words.
@@ -388,6 +460,8 @@ pub enum Attempting {
     Module,
     Record,
     Identifier,
+    ConcreteType,
+    TypeVariable,
     CaseCondition,
     CaseBranch,
 }
@@ -482,10 +556,10 @@ pub fn format<'a>(
             buf.push('o');
             buf.push_str(string);
         }
-        Record(fields) => {
+        Record(loc_fields) => {
             buf.push('{');
 
-            for _field in fields {
+            for _field in loc_fields {
                 panic!("TODO implement Display for record fields.");
             }
 

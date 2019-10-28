@@ -2,8 +2,8 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::Operator::Pizza;
 use operator::{CalledVia, Operator};
-use parse::ast::Def;
 use parse::ast::Expr::{self, *};
+use parse::ast::{AssignedField, Def};
 use region::{Located, Region};
 use types;
 
@@ -70,22 +70,23 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 value,
             })
         }
-        Record(elems) => {
-            let mut new_elems = Vec::with_capacity_in(elems.len(), arena);
+        Record(fields) => {
+            let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
-            for elem in elems {
-                new_elems.push(desugar(arena, elem));
+            for field in fields {
+                let value = desugar_field(arena, &field.value);
+
+                new_fields.push(Located {
+                    value,
+                    region: field.region,
+                });
             }
 
             arena.alloc(Located {
                 region: loc_expr.region,
-                value: Record(new_elems),
+                value: Record(new_fields),
             })
         }
-        AssignField(string, sub_expr) => arena.alloc(Located {
-            value: AssignField(string.clone(), desugar(arena, sub_expr)),
-            region: loc_expr.region,
-        }),
         Closure(loc_patterns, loc_ret) => arena.alloc(Located {
             region: loc_expr.region,
             value: Closure(loc_patterns, desugar(arena, loc_ret)),
@@ -295,6 +296,28 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             )
         }
         other => panic!("TODO desugar {:?}", other),
+    }
+}
+
+fn desugar_field<'a>(
+    arena: &'a Bump,
+    field: &'a AssignedField<'a, Expr<'a>>,
+) -> AssignedField<'a, Expr<'a>> {
+    use parse::ast::AssignedField::*;
+
+    match field {
+        LabeledValue(ref loc_str, spaces, loc_expr) => {
+            AssignedField::LabeledValue(loc_str.clone(), spaces, desugar(arena, loc_expr))
+        }
+        LabelOnly(ref loc_str, spaces) => LabelOnly(loc_str.clone(), spaces),
+        SpaceBefore(ref field, spaces) => {
+            SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces)
+        }
+        SpaceAfter(ref field, spaces) => {
+            SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces)
+        }
+
+        Malformed(string) => Malformed(string),
     }
 }
 

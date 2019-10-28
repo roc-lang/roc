@@ -2,7 +2,7 @@ use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use collections::arena_join;
-use parse::ast::Attempting;
+use parse::ast::{Attempting, MaybeQualified};
 use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 
 /// The parser accepts all of these in any position where any one of them could
@@ -34,42 +34,6 @@ impl<'a> Ident<'a> {
             AccessorFunction(string) => string.len(),
             Malformed(string) => string.len(),
         }
-    }
-}
-
-/// An optional qualifier (the `Foo.Bar` in `Foo.Bar.baz`).
-/// If module_parts is empty, this is unqualified.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MaybeQualified<'a, Val> {
-    pub module_parts: &'a [&'a str],
-    pub value: Val,
-}
-
-impl<'a> MaybeQualified<'a, &'a str> {
-    pub fn len(&self) -> usize {
-        let mut answer = self.value.len();
-
-        for part in self.module_parts {
-            answer += part.len();
-        }
-
-        answer
-    }
-}
-
-impl<'a> MaybeQualified<'a, &'a [&'a str]> {
-    pub fn len(&self) -> usize {
-        let mut answer = 0;
-
-        for module_part in self.module_parts {
-            answer += module_part.len();
-        }
-
-        for value_part in self.module_parts {
-            answer += value_part.len();
-        }
-
-        answer
     }
 }
 
@@ -319,6 +283,67 @@ pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
     }
 }
 
+pub fn variant_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str>
+where
+    F: Fn(char) -> bool,
+{
+    move |arena, state: State<'a>| {
+        let mut chars = state.input.chars();
+
+        // pred will determine if this is a variant or ident (based on capitalization)
+        let first_letter = match chars.next() {
+            Some(first_char) => {
+                if pred(first_char) {
+                    first_char
+                } else {
+                    return Err(unexpected(
+                        first_char,
+                        0,
+                        state,
+                        Attempting::RecordFieldLabel,
+                    ));
+                }
+            }
+            None => {
+                return Err(unexpected_eof(0, Attempting::RecordFieldLabel, state));
+            }
+        };
+
+        let mut buf = String::with_capacity_in(1, arena);
+
+        buf.push(first_letter);
+
+        while let Some(ch) = chars.next() {
+            // After the first character, only these are allowed:
+            //
+            // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
+            // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+            // * A ':' indicating the end of the field
+            if ch.is_alphabetic() || ch.is_ascii_digit() {
+                buf.push(ch);
+            } else {
+                // This is the end of the field. We're done!
+                break;
+            }
+        }
+
+        let chars_parsed = buf.len();
+
+        Ok((
+            buf.into_bump_str(),
+            state.advance_without_indenting(chars_parsed)?,
+        ))
+    }
+}
+
+/// This could be:
+///
+/// * A record field, e.g. "email" in `.email` or in `email:`
+/// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
+pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+    variant_or_ident(|first_char| first_char.is_lowercase())
+}
+
 // TESTS
 
 // fn test_parse<'a>(input: &'a str) -> Result<Ident<'a>, Fail> {
@@ -364,3 +389,4 @@ pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
 // fn parse_var() {
 //     assert_eq!(test_parse("foo"), Ok(var(vec![], "foo")))
 // }
+//
