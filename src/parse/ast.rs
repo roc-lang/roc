@@ -633,6 +633,15 @@ pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<
         }
         Def::CustomType(_, _) => panic!("TODO have format_def support CustomType"),
         Def::TypeAlias(_, _) => panic!("TODO have format_def support TypeAlias"),
+        Def::SpaceBefore(sub_def, spaces) => {
+            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+            buf.push_str(&format_def(arena, sub_def, indent));
+        }
+        Def::SpaceAfter(sub_def, spaces) => {
+            buf.push_str(&format_def(arena, sub_def, indent));
+
+            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+        }
     }
 
     buf

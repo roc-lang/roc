@@ -1380,6 +1380,8 @@ fn can_defs<'a>(
             Def::TypeAlias(_, _) => {
                 panic!("TODO error - type aliases can only be defined at the toplevel")
             }
+            Def::SpaceBefore(_, _) => panic!("TODO support SpaceBefore in canonical defs"),
+            Def::SpaceAfter(_, _) => panic!("TODO support SpaceAfter in canonical defs"),
         };
 
         // If we have a pattern, then the def has a body (that is, it's not a
