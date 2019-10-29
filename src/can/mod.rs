@@ -55,7 +55,7 @@ pub fn canonicalize_declaration<'a>(
     // visited an Operator node we'd recursively try to apply this to each of its nested
     // operators, and thena again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar(arena, &loc_expr);
+    let loc_expr = operator::desugar(arena, loc_expr.value, loc_expr.region);
 
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
@@ -1287,7 +1287,7 @@ fn can_defs<'a>(
     // Used in constraint generation
     let rigid_info = Info::with_capacity(defs.len());
     let mut flex_info = Info::with_capacity(defs.len());
-    let mut iter = defs.iter();
+    let mut iter = defs.into_iter();
 
     while let Some(loc_def) = iter.next() {
         // Each assignment gets to have all the idents in scope that are assigned in this
