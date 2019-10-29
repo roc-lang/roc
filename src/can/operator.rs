@@ -33,11 +33,11 @@ fn new_op_expr<'a>(
 
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the Operator nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
-pub fn desugar<'a>(arena: &'a Bump, expr: Expr<'a>, region: Region) -> Located<Expr<'a>> {
+pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Located<Expr<'a>> {
     use operator::Associativity::*;
     use std::cmp::Ordering;
 
-    match expr {
+    match &loc_expr.value {
         Float(_)
         | Int(_)
         | HexInt(_)
@@ -51,33 +51,30 @@ pub fn desugar<'a>(arena: &'a Bump, expr: Expr<'a>, region: Region) -> Located<E
         | MalformedIdent(_)
         | MalformedClosure
         | PrecedenceConflict(_, _, _)
-        | Variant(_, _) => Located {
-            value: expr,
-            region,
-        },
+        | Variant(_, _) => loc_expr,
 
-        Field(sub_expr, paths) => Located {
-            region,
-            value: Field(
-                arena.alloc(desugar(arena, sub_expr.value, sub_expr.region)),
-                paths.clone(),
-            ),
-        },
+        Field(sub_expr, paths) => arena.alloc(Located {
+            region: loc_expr.region,
+            value: Field(desugar(arena, sub_expr), paths.clone()),
+        }),
         List(elems) => {
             let mut new_elems = Vec::with_capacity_in(elems.len(), arena);
 
-            for loc_elem in elems.into_iter() {
-                new_elems.push(&*arena.alloc(desugar(arena, loc_elem.value, loc_elem.region)));
+            for elem in elems {
+                new_elems.push(desugar(arena, elem));
             }
             let value: Expr<'a> = List(new_elems);
 
-            Located { region, value }
+            arena.alloc(Located {
+                region: loc_expr.region,
+                value,
+            })
         }
         Record(fields) => {
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
             for field in fields {
-                let value = desugar_field(arena, field.value);
+                let value = desugar_field(arena, &field.value);
 
                 new_fields.push(Located {
                     value,
@@ -85,23 +82,17 @@ pub fn desugar<'a>(arena: &'a Bump, expr: Expr<'a>, region: Region) -> Located<E
                 });
             }
 
-            Located {
-                region,
+            arena.alloc(Located {
+                region: loc_expr.region,
                 value: Record(new_fields),
-            }
+            })
         }
-        Closure(loc_patterns, loc_ret) => Located {
-            region,
-            value: Closure(
-                loc_patterns,
-                &*arena.alloc(desugar(arena, loc_ret.value, loc_ret.region)),
-            ),
-        },
+        Closure(loc_patterns, loc_ret) => arena.alloc(Located {
+            region: loc_expr.region,
+            value: Closure(loc_patterns, desugar(arena, loc_ret)),
+        }),
         Operator(_) => {
-            let mut infixes = Infixes::new(arena.alloc(Located {
-                value: expr,
-                region,
-            }));
+            let mut infixes = Infixes::new(arena.alloc(loc_expr));
             let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
             let mut op_stack: Vec<Located<Operator>> = Vec::new_in(arena);
 
@@ -176,7 +167,7 @@ pub fn desugar<'a>(arena: &'a Bump, expr: Expr<'a>, region: Region) -> Located<E
                                                     arena.alloc(broken_expr),
                                                 );
 
-                                                return Located { region, value };
+                                                return arena.alloc(Located { region, value });
                                             }
 
                                             _ => {
@@ -233,7 +224,7 @@ pub fn desugar<'a>(arena: &'a Bump, expr: Expr<'a>, region: Region) -> Located<E
 
             assert_eq!(arg_stack.len(), 1);
 
-            *arg_stack.pop().unwrap()
+            arg_stack.pop().unwrap()
         }
 
         Defs(defs, loc_ret) => {
@@ -241,36 +232,30 @@ pub fn desugar<'a>(arena: &'a Bump, expr: Expr<'a>, region: Region) -> Located<E
 
             for loc_def in defs.into_iter() {
                 let loc_def = &*arena.alloc(Located {
-                    value: desugar_def(arena, loc_def.value),
+                    // TODO try to avoid this clone() if possible
+                    value: desugar_def(arena, loc_def.value, loc_expr),
                     region: loc_def.region,
                 });
 
                 desugared_defs.push(loc_def);
             }
 
-            Located {
-                value: Defs(
-                    desugared_defs,
-                    &*arena.alloc(desugar(arena, loc_ret.value, loc_ret.region)),
-                ),
-                region,
-            }
+            arena.alloc(Located {
+                value: Defs(desugared_defs, desugar(arena, loc_ret)),
+                region: loc_expr.region,
+            })
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
 
-            for loc_arg in loc_args.into_iter() {
-                desugared_args.push(&*arena.alloc(desugar(arena, loc_arg.value, loc_arg.region)));
+            for loc_arg in loc_args {
+                desugared_args.push(desugar(arena, loc_arg));
             }
 
-            Located {
-                value: Apply(
-                    arena.alloc(desugar(arena, loc_fn.value, loc_fn.region)),
-                    desugared_args,
-                    called_via.clone(),
-                ),
-                region,
-            }
+            arena.alloc(Located {
+                value: Apply(desugar(arena, loc_fn), desugared_args, called_via.clone()),
+                region: loc_expr.region,
+            })
         }
         // If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
         // Case(
@@ -282,15 +267,17 @@ pub fn desugar<'a>(arena: &'a Bump, expr: Expr<'a>, region: Region) -> Located<E
             // and should be dropped.
             desugar(
                 arena,
-                // TODO FIXME performance disaster!!! Must remove this clone!
-                //
-                // This won't be easy because:
-                //
-                // * If this function takes an &'a Expr, then Infixes hits a problem.
-                // * If SpaceBefore holds a Loc<&'a Expr>, then Spaceable hits a problem.
-                // * If all the existing &'a Loc<Expr> values become Loc<&'a Expr>...who knows?
-                // (*expr).clone(),
-                *expr, region,
+                arena.alloc(Located {
+                    // TODO FIXME performance disaster!!! Must remove this clone!
+                    //
+                    // This won't be easy because:
+                    //
+                    // * If this function takes an &'a Expr, then Infixes hits a problem.
+                    // * If SpaceBefore holds a Loc<&'a Expr>, then Spaceable hits a problem.
+                    // * If all the existing &'a Loc<Expr> values become Loc<&'a Expr>...who knows?
+                    value: (*expr).clone(),
+                    region: loc_expr.region,
+                }),
             )
         }
         SpaceAfter(expr, _) => {
@@ -298,47 +285,44 @@ pub fn desugar<'a>(arena: &'a Bump, expr: Expr<'a>, region: Region) -> Located<E
             // and should be dropped.
             desugar(
                 arena,
-                // TODO FIXME performance disaster!!! Must remove this clone! (Not easy.)
-                // (*expr).clone(),
-                *expr, region,
+                arena.alloc(Located {
+                    // TODO FIXME performance disaster!!! Must remove this clone! (Not easy.)
+                    value: (*expr).clone(),
+                    region: loc_expr.region,
+                }),
             )
         }
         other => panic!("TODO desugar {:?}", other),
     }
 }
 
-fn desugar_def<'a>(arena: &'a Bump, def: Def<'a>) -> Def<'a> {
+fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>, loc_expr: &'a Located<Expr<'a>>) -> Def<'a> {
     match def {
-        Def::Body(pattern, loc_expr) => Def::Body(
-            pattern,
-            arena.alloc(desugar(arena, loc_expr.value, loc_expr.region)),
-        ),
+        Def::Body(pattern, loc_expr) => Def::Body(pattern.clone(), desugar(arena, loc_expr)),
         Def::Annotation(_, _) => def,
         Def::CustomType(_, _) => def,
         Def::TypeAlias(_, _) => def,
-        Def::SpaceBefore(other_def, _) | Def::SpaceAfter(other_def, _) => {
-            desugar_def(arena, *other_def)
-        }
+        Def::SpaceBefore(other_def, _) => desugar_def(arena, other_def, loc_expr),
+        Def::SpaceAfter(_, _) => def,
     }
 }
 
 fn desugar_field<'a>(
     arena: &'a Bump,
-    field: AssignedField<'a, Expr<'a>>,
+    field: &'a AssignedField<'a, Expr<'a>>,
 ) -> AssignedField<'a, Expr<'a>> {
     use parse::ast::AssignedField::*;
-
     match field {
-        LabeledValue(ref loc_str, spaces, loc_expr) => AssignedField::LabeledValue(
-            loc_str.clone(),
-            spaces,
-            arena.alloc(desugar(arena, loc_expr.value, loc_expr.region)),
-        ),
-        LabelOnly(loc_str, spaces) => LabelOnly(loc_str, spaces),
-        SpaceBefore(field, spaces) => {
-            SpaceBefore(arena.alloc(desugar_field(arena, *field)), spaces)
+        LabeledValue(ref loc_str, spaces, loc_expr) => {
+            AssignedField::LabeledValue(loc_str.clone(), spaces, desugar(arena, loc_expr))
         }
-        SpaceAfter(field, spaces) => SpaceAfter(arena.alloc(desugar_field(arena, *field)), spaces),
+        LabelOnly(ref loc_str, spaces) => LabelOnly(loc_str.clone(), spaces),
+        SpaceBefore(ref field, spaces) => {
+            SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces)
+        }
+        SpaceAfter(ref field, spaces) => {
+            SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces)
+        }
 
         Malformed(string) => Malformed(string),
     }
