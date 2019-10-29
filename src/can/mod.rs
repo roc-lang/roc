@@ -1279,7 +1279,7 @@ fn can_defs<'a>(
     // Used in constraint generation
     let rigid_info = Info::with_capacity(defs.len());
     let mut flex_info = Info::with_capacity(defs.len());
-    let mut iter = defs.iter().peekable();
+    let mut iter = defs.iter();
 
     while let Some((_, def)) = iter.next() {
         // Each assignment gets to have all the idents in scope that are assigned in this
