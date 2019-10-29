@@ -563,6 +563,7 @@ fn parse_def_expr<'a>(
     } else if equals_sign_indent < original_indent {
         panic!("TODO the = in this declaration seems outdented");
     } else {
+        println!("parse_def_expr 2");
         // Indented more beyond the original indent.
         let indented_more = original_indent + 1;
 
@@ -576,23 +577,30 @@ fn parse_def_expr<'a>(
                     //
                     // It should be indented more than the original, and it will
                     // end when outdented again.
-                    loc(move |arena, state| parse_expr(indented_more, arena, state)),
+                    loc(move |arena, state| {
+                        println!("parsing expr...");
+                        parse_expr(indented_more, arena, state)
+                    }),
                     and(
                         // Optionally parse additional defs.
-                        zero_or_more(and(
-                            space1(original_indent),
-                            allocated(def(original_indent)),
-                        )),
+                        zero_or_more(allocated(space1_before(
+                            loc(def(original_indent)),
+                            original_indent,
+                        ))),
                         // Parse the final expression that will be returned.
                         // It should be indented the same amount as the original.
                         space1_before(
-                            loc(move |arena, state| parse_expr(original_indent, arena, state)),
+                            loc(move |arena, state| {
+                                println!("Parsing return expr...");
+                                parse_expr(original_indent, arena, state)
+                            }),
                             original_indent,
                         ),
                     ),
                 ),
             ),
             move |arena, state, (loc_first_body, (mut defs, loc_ret))| {
+                println!("concluding parse_def_expr...");
                 if state.indent_col != original_indent {
                     panic!("TODO return expr was indented differently from original def",);
                 } else {
@@ -600,11 +608,16 @@ fn parse_def_expr<'a>(
                         // TODO if Parser were FnOnce instead of Fn, this might not need .clone()?
                         Def::Body(loc_first_pattern.clone(), arena.alloc(loc_first_body));
 
+                    let loc_first_def = Located {
+                        value: first_def,
+                        region: loc_first_pattern.region.clone(),
+                    };
+
                     // Add the first def to the end of the defs. (It's fine that we
                     // reorder the first one to the end, because canonicalize will
-                    // re-sort all of these based on dependencies anyway. Only
+                    // sort all these defs based on their mutual dependencies anyway. Only
                     // their regions will ever be visible to the user.)
-                    defs.push((&[], arena.alloc(first_def)));
+                    defs.push(arena.alloc(loc_first_def));
 
                     Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
                 }
@@ -986,6 +999,7 @@ pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {
     })
 }
 
+/// Like equals_for_def(), except it produces the indent_col of the state rather than ()
 pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
     move |_arena, state: State<'a>| {
         let mut iter = state.input.chars();

@@ -131,10 +131,7 @@ pub enum Expr<'a> {
     // Pattern Matching
     Closure(&'a Vec<'a, Loc<Pattern<'a>>>, &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
-    Defs(
-        Vec<'a, (&'a [CommentOrNewline<'a>], &'a Def<'a>)>,
-        &'a Loc<Expr<'a>>,
-    ),
+    Defs(Vec<'a, &'a Loc<Def<'a>>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
@@ -177,6 +174,11 @@ pub enum Def<'a> {
     // top level" - it'll parse fine, we just won't accept it there.
     CustomType(Loc<TypeAnnotation<'a>>, Vec<'a, Loc<TypeAnnotation<'a>>>),
     TypeAlias(Loc<TypeAnnotation<'a>>, Loc<TypeAnnotation<'a>>),
+
+    // Blank Space (e.g. comments, spaces, newlines) before or after a def.
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -376,6 +378,15 @@ impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         AssignedField::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for Def<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Def::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Def::SpaceAfter(self, spaces)
     }
 }
 
@@ -583,18 +594,15 @@ pub fn format<'a>(
             // it gets added there with .push() for efficiency. (The order of parsed defs doesn't
             // matter because canonicalization sorts them anyway.) The other
             // defs in the list are in their usual order.
-            let (first_spaces, first_def) = defs.last().unwrap_or_else(|| {
+            let loc_first_def = defs.last().unwrap_or_else(|| {
                 panic!("Tried to format Defs which somehow had an empty list of defs!")
             });
             let other_spaced_defs = &defs[0..defs.len() - 1];
 
-            buf.push_str(&format_spaces(arena, first_spaces.iter(), indent));
+            buf.push_str(&format_def(arena, &loc_first_def.value, indent));
 
-            buf.push_str(&format_def(arena, first_def, indent));
-
-            for (spaces, def) in other_spaced_defs.iter() {
-                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-                buf.push_str(&format_def(arena, def, indent));
+            for loc_def in other_spaced_defs.iter() {
+                buf.push_str(&format_def(arena, &loc_def.value, indent));
             }
 
             buf.push_str(&format(arena, &ret.value, indent, false));

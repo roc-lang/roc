@@ -1246,12 +1246,23 @@ fn add_pattern_to_lookup_types<'a>(
     }
 }
 
+fn pattern_from_def<'a>(def: &'a Def<'a>) -> Option<&'a Located<ast::Pattern<'a>>> {
+    match def {
+        Def::Annotation(_, _) => None,
+        Def::Body(ref loc_pattern, _) => Some(loc_pattern),
+        Def::TypeAlias(_, _) => None,
+        Def::CustomType(_, _) => None,
+        Def::SpaceBefore(ref other_def, _) => pattern_from_def(other_def),
+        Def::SpaceAfter(ref other_def, _) => pattern_from_def(other_def),
+    }
+}
+
 #[inline(always)]
 fn can_defs<'a>(
     env: &mut Env,
     subs: &mut Subs,
     scope: Scope,
-    defs: &'a bumpalo::collections::Vec<'a, (&'a [ast::CommentOrNewline<'a>], &'a Def<'a>)>,
+    defs: &'a bumpalo::collections::Vec<'a, &'a Located<Def<'a>>>,
     expected: Expected<Type>,
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output) {
@@ -1260,12 +1271,9 @@ fn can_defs<'a>(
     // Add the assigned identifiers to scope. If there's a collision, it means there
     // was shadowing, which will be handled later.
     let assigned_idents: Vec<(Ident, (Symbol, Region))> = idents_from_patterns(
-        defs.clone().iter().flat_map(|(_, def)| match def {
-            Def::Annotation(_, _) => None,
-            Def::Body(loc_pattern, _) => Some(loc_pattern),
-            Def::TypeAlias(_, _) => None,
-            Def::CustomType(_, _) => None,
-        }),
+        // TODO can we get rid of this clone? It's recursively cloning expressions...
+        defs.iter()
+            .flat_map(|loc_def| pattern_from_def(&loc_def.value)),
         &scope,
     );
 
@@ -1281,10 +1289,10 @@ fn can_defs<'a>(
     let mut flex_info = Info::with_capacity(defs.len());
     let mut iter = defs.iter();
 
-    while let Some((_, def)) = iter.next() {
+    while let Some(loc_def) = iter.next() {
         // Each assignment gets to have all the idents in scope that are assigned in this
         // block. Order of assignments doesn't matter, thanks to referential transparency!
-        let (opt_loc_pattern, (loc_can_expr, can_output)) = match def {
+        let (opt_loc_pattern, (loc_can_expr, can_output)) = match loc_def.value {
             Def::Annotation(_loc_pattern, loc_annotation) => {
                 // TODO implement this:
                 //
@@ -1449,7 +1457,7 @@ fn can_defs<'a>(
             // Store the referenced locals in the refs_by_assignment map, so we can later figure out
             // which assigned names reference each other.
             for (ident, (symbol, region)) in
-                idents_from_patterns(std::iter::once(loc_pattern), &scope)
+                idents_from_patterns(std::iter::once(&loc_pattern), &scope)
             {
                 let refs =
                             // Functions' references don't count in assignments.

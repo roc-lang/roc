@@ -227,20 +227,17 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             arg_stack.pop().unwrap()
         }
 
-        Defs(pairs, loc_ret) => {
-            let mut desugared_defs = Vec::with_capacity_in(pairs.len(), arena);
+        Defs(defs, loc_ret) => {
+            let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
-            for (_, def) in pairs {
-                let def = match def {
-                    Def::Body(pattern, loc_expr) => {
-                        &*arena.alloc(Def::Body(pattern.clone(), desugar(arena, loc_expr)))
-                    }
-                    Def::Annotation(_, _) => def,
-                    Def::CustomType(_, _) => def,
-                    Def::TypeAlias(_, _) => def,
-                };
+            for loc_def in defs.into_iter() {
+                let loc_def = &*arena.alloc(Located {
+                    // TODO try to avoid this clone() if possible
+                    value: desugar_def(arena, loc_def.value, loc_expr),
+                    region: loc_def.region,
+                });
 
-                desugared_defs.push((Vec::new_in(arena).into_bump_slice(), def));
+                desugared_defs.push(loc_def);
             }
 
             arena.alloc(Located {
@@ -299,12 +296,22 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
     }
 }
 
+fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>, loc_expr: &'a Located<Expr<'a>>) -> Def<'a> {
+    match def {
+        Def::Body(pattern, loc_expr) => Def::Body(pattern.clone(), desugar(arena, loc_expr)),
+        Def::Annotation(_, _) => def,
+        Def::CustomType(_, _) => def,
+        Def::TypeAlias(_, _) => def,
+        Def::SpaceBefore(other_def, _) => desugar_def(arena, other_def, loc_expr),
+        Def::SpaceAfter(_, _) => def,
+    }
+}
+
 fn desugar_field<'a>(
     arena: &'a Bump,
     field: &'a AssignedField<'a, Expr<'a>>,
 ) -> AssignedField<'a, Expr<'a>> {
     use parse::ast::AssignedField::*;
-
     match field {
         LabeledValue(ref loc_str, spaces, loc_expr) => {
             AssignedField::LabeledValue(loc_str.clone(), spaces, desugar(arena, loc_expr))
