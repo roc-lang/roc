@@ -231,11 +231,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
             for loc_def in defs.into_iter() {
-                let loc_def = &*arena.alloc(Located {
-                    // TODO try to avoid this clone() if possible
-                    value: desugar_def(arena, loc_def.value, loc_expr),
-                    region: loc_def.region,
-                });
+                let loc_def = desugar_def(arena, &loc_def, loc_expr);
 
                 desugared_defs.push(loc_def);
             }
@@ -296,14 +292,27 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
     }
 }
 
-fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>, loc_expr: &'a Located<Expr<'a>>) -> Def<'a> {
-    match def {
-        Def::Body(pattern, loc_expr) => Def::Body(pattern.clone(), desugar(arena, loc_expr)),
-        Def::Annotation(_, _) => def,
-        Def::CustomType(_, _) => def,
-        Def::TypeAlias(_, _) => def,
-        Def::SpaceBefore(other_def, _) => desugar_def(arena, other_def, loc_expr),
-        Def::SpaceAfter(_, _) => def,
+fn desugar_def<'a>(
+    arena: &'a Bump,
+    loc_def: &'a Located<Def<'a>>,
+    loc_expr: &'a Located<Expr<'a>>,
+) -> &'a Located<Def<'a>> {
+    match loc_def.value {
+        Def::Body(ref pattern, loc_expr) => arena.alloc(Located {
+            value: Def::Body(pattern.clone(), desugar(arena, loc_expr)),
+            region: loc_def.region,
+        }),
+        Def::Annotation(_, _) => loc_def,
+        Def::CustomType(_, _) => loc_def,
+        Def::TypeAlias(_, _) => loc_def,
+        Def::SpaceBefore(other_def, _) | Def::SpaceAfter(other_def, _) => desugar_def(
+            arena,
+            arena.alloc(Located {
+                value: other_def.clone(),
+                region: loc_def.region,
+            }),
+            loc_expr,
+        ),
     }
 }
 

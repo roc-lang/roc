@@ -1293,7 +1293,7 @@ fn can_defs<'a>(
         // Each assignment gets to have all the idents in scope that are assigned in this
         // block. Order of assignments doesn't matter, thanks to referential transparency!
         let (opt_loc_pattern, (loc_can_expr, can_output)) = match loc_def.value {
-            Def::Annotation(_loc_pattern, loc_annotation) => {
+            Def::Annotation(ref _loc_pattern, ref loc_annotation) => {
                 // TODO implement this:
                 //
                 // Is this a standalone annotation, or is it annotating the
@@ -1322,7 +1322,7 @@ fn can_defs<'a>(
 
                 (None, (loc_expr, Output::new(True)))
             }
-            Def::Body(loc_pattern, loc_expr) => {
+            Def::Body(ref loc_pattern, loc_expr) => {
                 // Make types for the pattern and the body expr.
                 let expr_var = subs.mk_flex_var();
                 let expr_type = Type::Variable(expr_var);
@@ -1459,7 +1459,7 @@ fn can_defs<'a>(
             // Store the referenced locals in the refs_by_assignment map, so we can later figure out
             // which assigned names reference each other.
             for (ident, (symbol, region)) in
-                idents_from_patterns(std::iter::once(&loc_pattern), &scope)
+                idents_from_patterns(std::iter::once(loc_pattern), &scope)
             {
                 let refs =
                             // Functions' references don't count in assignments.
