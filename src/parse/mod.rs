@@ -563,7 +563,6 @@ fn parse_def_expr<'a>(
     } else if equals_sign_indent < original_indent {
         panic!("TODO the = in this declaration seems outdented");
     } else {
-        println!("parse_def_expr 2");
         // Indented more beyond the original indent.
         let indented_more = original_indent + 1;
 
@@ -577,10 +576,7 @@ fn parse_def_expr<'a>(
                     //
                     // It should be indented more than the original, and it will
                     // end when outdented again.
-                    loc(move |arena, state| {
-                        println!("parsing expr...");
-                        parse_expr(indented_more, arena, state)
-                    }),
+                    loc(move |arena, state| parse_expr(indented_more, arena, state)),
                     and(
                         // Optionally parse additional defs.
                         zero_or_more(allocated(space1_before(
@@ -590,17 +586,13 @@ fn parse_def_expr<'a>(
                         // Parse the final expression that will be returned.
                         // It should be indented the same amount as the original.
                         space1_before(
-                            loc(move |arena, state| {
-                                println!("Parsing return expr...");
-                                parse_expr(original_indent, arena, state)
-                            }),
+                            loc(move |arena, state| parse_expr(original_indent, arena, state)),
                             original_indent,
                         ),
                     ),
                 ),
             ),
             move |arena, state, (loc_first_body, (mut defs, loc_ret))| {
-                println!("concluding parse_def_expr...");
                 if state.indent_col != original_indent {
                     panic!("TODO return expr was indented differently from original def",);
                 } else {
