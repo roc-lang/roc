@@ -72,8 +72,16 @@ mod test_gen {
         };
 
         // make main(), a function which returns an f64
-        ModuleBuilder::build(&context, &builder, &fpm, &procedures, &module, &function)
-            .expect("Error compiling main");
+        ModuleBuilder::build(
+            &context,
+            &builder,
+            &fpm,
+            &procedures,
+            &subs,
+            &module,
+            &function,
+        )
+        .expect("Error compiling main");
 
         // make execution engine
         module

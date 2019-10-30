@@ -39,9 +39,9 @@ use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
     allocated, and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by,
-    one_of16, one_of2, one_of5, one_of9, one_or_more, optional, skip_first, skip_second, string,
-    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
-    State,
+    one_of16, one_of2, one_of5, one_of6, one_of9, one_or_more, optional, skip_first, skip_second,
+    string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
+    Parser, State,
 };
 use parse::record::record;
 use region::Located;
@@ -725,13 +725,20 @@ fn parse_closure_param<'a>(
 }
 
 fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
-    one_of5(
+    one_of6(
         underscore_pattern(),
         variant_pattern(),
         ident_pattern(),
         record_destructure(min_indent),
         string_pattern(),
+        int_pattern(),
     )
+}
+
+fn int_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
+    map_with_arena(number_literal(), |arena, expr| {
+        expr_to_pattern(arena, &expr).unwrap()
+    })
 }
 
 fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
