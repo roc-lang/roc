@@ -253,11 +253,19 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        // If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
-        // Case(
-        //     &'a Loc<Expr<'a>>,
-        //     Vec<'a, &'a (Loc<Pattern<'a>>, Loc<Expr<'a>>)>,
-        // ),
+        Case(
+            loc_cond_expr,
+            branches, // Vec<'a, &'a (Loc<Pattern<'a>>, Loc<Expr<'a>>)>,
+        ) => {
+            let loc_desugared_cond = &*arena.alloc(desugar(arena, &loc_cond_expr));
+
+            let desugared_branches = Vec::with_capacity_in(branches.len(), arena);
+
+            arena.alloc(Located {
+                value: Case(loc_desugared_cond, desugared_branches),
+                region: loc_expr.region,
+            })
+        }
         SpaceBefore(expr, _) => {
             // Since we've already begun canonicalization, these are no longer needed
             // and should be dropped.
