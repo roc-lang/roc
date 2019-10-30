@@ -535,90 +535,89 @@ fn canonicalize_expr(
             (FunctionPointer(var, symbol), output)
         }
 
-        // ast::Expr::Case(loc_cond, branches) => {
-        //     // Canonicalize the conditional
-        //     let (can_cond, mut output) = canonicalize(env, scope, *loc_cond);
-        //     let mut can_branches = Vec::with_capacity(branches.len());
-        //     let mut recorded_tail_call = false;
+        ast::Expr::Case(loc_cond, branches) => {
+            // Canonicalize the conditional
+            let (can_cond, mut output) = canonicalize(env, scope, *loc_cond);
+            let mut can_branches = Vec::with_capacity(branches.len());
+            let mut recorded_tail_call = false;
 
-        //     for (loc_pattern, loc_expr) in branches {
-        //         // Each case branch gets a new scope for canonicalization.
-        //         // Shadow `scope` to make sure we don't accidentally use the original one for the
-        //         // rest of this block.
-        //         let mut scope = scope.clone();
+            for (loc_pattern, loc_expr) in branches {
+                // Each case branch gets a new scope for canonicalization.
+                // Shadow `scope` to make sure we don't accidentally use the original one for the
+                // rest of this block.
+                let mut scope = scope.clone();
 
-        //         // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-        //         // (However, still include it in scope, because you *can* recursively refer to yourself.)
-        //         let mut shadowable_idents = scope.idents.clone();
-        //         remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
+                // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                let mut shadowable_idents = scope.idents.clone();
+                remove_idents(loc_pattern.value.clone(), &mut shadowable_idents);
 
-        //         let loc_can_pattern = canonicalize_pattern(
-        //             env,
-        //             &mut scope,
-        //             &CaseBranch,
-        //             &loc_pattern,
-        //             &mut shadowable_idents,
-        //         );
+                let loc_can_pattern = canonicalize_pattern(
+                    env,
+                    &mut scope,
+                    &CaseBranch,
+                    &loc_pattern,
+                    &mut shadowable_idents,
+                );
 
-        //         // Patterns introduce new idents to the scope!
-        //         // Add the assigned identifiers to scope. If there's a collision, it means there
-        //         // was shadowing, which will be handled later.
-        //         let assigned_idents: Vec<(Ident, (Symbol, Region))> =
-        //             idents_from_patterns(std::iter::once(&loc_pattern), &scope);
+                // Patterns introduce new idents to the scope!
+                // Add the assigned identifiers to scope. If there's a collision, it means there
+                // was shadowing, which will be handled later.
+                let assigned_idents: Vec<(Ident, (Symbol, Region))> =
+                    idents_from_patterns(std::iter::once(&loc_pattern), &scope);
 
-        //         scope.idents = union_pairs(scope.idents, assigned_idents.iter());
+                scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
-        //         let (can_expr, branch_output) = canonicalize(env, &mut scope, loc_expr);
+                let (can_expr, branch_output) = canonicalize(env, &mut scope, loc_expr);
 
-        //         output.references = output.references.union(branch_output.references);
+                output.references = output.references.union(branch_output.references);
 
-        //         // If all branches are tail calling the same symbol, then so is the conditional as a whole.
-        //         if !recorded_tail_call {
-        //             // If we haven't recorded output.tail_call yet, record it.
-        //             output.tail_call = branch_output.tail_call;
-        //             recorded_tail_call = true;
-        //         } else if branch_output.tail_call != output.tail_call {
-        //             // If we recorded output.tail_call, but what we recorded differs from what we just saw,
-        //             // then game over. This can't possibly be a self tail call!
-        //             output.tail_call = None;
-        //         }
+                // If all branches are tail calling the same symbol, then so is the conditional as a whole.
+                if !recorded_tail_call {
+                    // If we haven't recorded output.tail_call yet, record it.
+                    output.tail_call = branch_output.tail_call;
+                    recorded_tail_call = true;
+                } else if branch_output.tail_call != output.tail_call {
+                    // If we recorded output.tail_call, but what we recorded differs from what we just saw,
+                    // then game over. This can't possibly be a self tail call!
+                    output.tail_call = None;
+                }
 
-        //         // Now that we've collected all the references for this branch, check to see if
-        //         // any of the new idents it defined were unused. If any were, report it.
-        //         for (ident, (symbol, region)) in assigned_idents {
-        //             if !output.references.has_local(&symbol) {
-        //                 let loc_ident = Located {
-        //                     region: region,
-        //                     value: ident.clone(),
-        //                 };
+                // Now that we've collected all the references for this branch, check to see if
+                // any of the new idents it defined were unused. If any were, report it.
+                for (ident, (symbol, region)) in assigned_idents {
+                    if !output.references.has_local(&symbol) {
+                        let loc_ident = Located {
+                            region: region,
+                            value: ident.clone(),
+                        };
 
-        //                 env.problem(Problem::UnusedAssignment(loc_ident));
-        //             }
-        //         }
+                        env.problem(Problem::UnusedAssignment(loc_ident));
+                    }
+                }
 
-        //         can_branches.push((loc_can_pattern, can_expr));
-        //     }
+                can_branches.push((loc_can_pattern, can_expr));
+            }
 
-        //     // One of the branches should have flipped this, so this should only happen
-        //     // in the situation where the case had no branches. That can come up, though!
-        //     // A case with no branches is a runtime error, but it will mess things up
-        //     // if code gen mistakenly thinks this is a tail call just because its condition
-        //     // happend to be one. (The condition gave us our initial output value.)
-        //     if !recorded_tail_call {
-        //         output.tail_call = None;
-        //     }
+            // One of the branches should have flipped this, so this should only happen
+            // in the situation where the case had no branches. That can come up, though!
+            // A case with no branches is a runtime error, but it will mess things up
+            // if code gen mistakenly thinks this is a tail call just because its condition
+            // happend to be one. (The condition gave us our initial output value.)
+            if !recorded_tail_call {
+                output.tail_call = None;
+            }
 
-        //     // Incorporate all three expressions into a combined Output value.
-        //     let expr = Case(Box::new(can_cond), can_branches);
+            // Incorporate all three expressions into a combined Output value.
+            let expr = Case(Box::new(can_cond), can_branches);
 
-        //     (expr, output)
-        // }
+            (expr, output)
+        }
         ast::Expr::BlockStr(_)
         | ast::Expr::Field(_, _)
         | ast::Expr::QualifiedField(_, _)
         | ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)
-        | ast::Expr::Case(_, _)
         | ast::Expr::Variant(_, _)
         | ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
