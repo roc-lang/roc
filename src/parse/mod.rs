@@ -530,7 +530,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                         char(':'),
                         // Spaces after the ':' (at a normal indentation level) and then the type.
                         // The type itself must be indented more than the pattern and ':'
-                        space0_before(type_annotation::located(indented_more), min_indent),
+                        space0_before(type_annotation::located(indented_more), indented_more),
                     ),
                 ),
             ),
