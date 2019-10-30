@@ -16,9 +16,9 @@ pub enum Pattern {
     Identifier(Variable, Symbol),
     Variant(Variable, Symbol),
     AppliedVariant(Variable, Symbol, Vec<Located<Pattern>>),
-    IntLiteral(Variable, i64),
-    FloatLiteral(Variable, f64),
-    ExactString(Variable, Box<str>),
+    IntLiteral(i64),
+    FloatLiteral(f64),
+    ExactString(Box<str>),
     EmptyRecordLiteral(Variable),
     Underscore(Variable),
 
