@@ -38,10 +38,9 @@ use parse::collection::collection;
 use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    allocated, and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by,
-    one_of16, one_of2, one_of5, one_of9, one_or_more, optional, skip_first, skip_second, string,
-    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
-    State,
+    and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by, one_of16,
+    one_of2, one_of5, one_of9, one_or_more, optional, skip_first, skip_second, string, then,
+    unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser, State,
 };
 use parse::record::record;
 use region::Located;
@@ -579,10 +578,8 @@ fn parse_def_expr<'a>(
                     loc(move |arena, state| parse_expr(indented_more, arena, state)),
                     and(
                         // Optionally parse additional defs.
-                        zero_or_more(allocated(space1_before(
-                            loc(def(original_indent)),
-                            original_indent,
-                        ))),
+                        // TODO this is broken - it doesn't keep parsing *all* the remaining defs
+                        zero_or_more(and(space1(original_indent), loc(def(original_indent)))),
                         // Parse the final expression that will be returned.
                         // It should be indented the same amount as the original.
                         space1_before(
@@ -592,7 +589,7 @@ fn parse_def_expr<'a>(
                     ),
                 ),
             ),
-            move |arena, state, (loc_first_body, (mut defs, loc_ret))| {
+            move |arena, state, (loc_first_body, (pairs, loc_ret))| {
                 if state.indent_col != original_indent {
                     panic!("TODO return expr was indented differently from original def",);
                 } else {
@@ -605,11 +602,23 @@ fn parse_def_expr<'a>(
                         region: loc_first_pattern.region.clone(),
                     };
 
+                    let mut defs = Vec::with_capacity_in(pairs.len(), arena);
+
+                    for (space_list, loc_def) in pairs {
+                        defs.push(
+                            &*arena.alloc(
+                                arena
+                                    .alloc(loc_def.value)
+                                    .with_spaces_before(space_list, loc_def.region),
+                            ),
+                        );
+                    }
+
                     // Add the first def to the end of the defs. (It's fine that we
                     // reorder the first one to the end, because canonicalize will
                     // sort all these defs based on their mutual dependencies anyway. Only
                     // their regions will ever be visible to the user.)
-                    defs.push(arena.alloc(loc_first_def));
+                    defs.push(&*arena.alloc(loc_first_def));
 
                     Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
                 }
