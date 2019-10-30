@@ -482,29 +482,29 @@ mod test_infer {
 
     // OPERATORS
 
-    #[test]
-    fn div_operator() {
-        infer_eq(
-            indoc!(
-                r#"
-                \l r -> l / r
-            "#
-            ),
-            "Float, Float -> Float",
-        );
-    }
+    // #[test]
+    // fn div_operator() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             \l r -> l / r
+    //         "#
+    //         ),
+    //         "Float, Float -> Float",
+    //     );
+    // }
 
-    #[test]
-    fn basic_float_division() {
-        infer_eq(
-            indoc!(
-                r#"
-                1 / 2
-            "#
-            ),
-            "Float",
-        );
-    }
+    // #[test]
+    // fn basic_float_division() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             1 / 2
+    //         "#
+    //         ),
+    //         "Float",
+    //     );
+    // }
 
     #[test]
     fn basic_int_division() {
