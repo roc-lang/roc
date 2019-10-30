@@ -122,4 +122,27 @@ mod test_gen {
             assert_eq!(321, compiled_fn.call());
         }
     }
+
+    #[test]
+    fn gen_case() {
+        let ee = gen_engine(indoc!(
+            r#"
+            case 1 when
+                2 -> 33
+                1 -> 48
+            "#
+        ));
+
+        let maybe_fn = unsafe { ee.get_function::<unsafe extern "C" fn() -> i64>("main") };
+        let compiled_fn = match maybe_fn {
+            Ok(f) => f,
+            Err(err) => {
+                panic!("!> Error during execution: {:?}", err);
+            }
+        };
+
+        unsafe {
+            assert_eq!(48, compiled_fn.call());
+        }
+    }
 }
