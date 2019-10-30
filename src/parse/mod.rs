@@ -469,6 +469,36 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     let indented_more = min_indent + 1;
 
     one_of2(
+        // Constant or annotation
+        map_with_arena(
+            and(
+                // A pattern followed by '=' or ':'
+                space0_after(loc_closure_param(min_indent), min_indent),
+                either(
+                    // Constant
+                    skip_first(
+                        equals_for_def(),
+                        // Spaces after the '=' (at a normal indentation level) and then the expr.
+                        // The expr itself must be indented more than the pattern and '='
+                        space0_before(
+                            loc(move |arena, state| parse_expr(indented_more, arena, state)),
+                            min_indent,
+                        ),
+                    ),
+                    // Annotation
+                    skip_first(
+                        char(':'),
+                        // Spaces after the ':' (at a normal indentation level) and then the type.
+                        // The type itself must be indented more than the pattern and ':'
+                        space0_before(type_annotation::located(indented_more), indented_more),
+                    ),
+                ),
+            ),
+            |arena, (loc_pattern, expr_or_ann)| match expr_or_ann {
+                Either::First(loc_expr) => Def::Body(loc_pattern, arena.alloc(loc_expr)),
+                Either::Second(loc_ann) => Def::Annotation(loc_pattern, loc_ann),
+            },
+        ),
         // Type alias or custom type (uppercase ident followed by `:` or `:=` and type annotation)
         map(
             and(
@@ -507,36 +537,6 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
             |(loc_type_name, rest)| match rest {
                 Either::First(loc_ann) => Def::CustomType(loc_type_name, loc_ann),
                 Either::Second(anns) => Def::TypeAlias(loc_type_name, anns),
-            },
-        ),
-        // Constant or annotation
-        map_with_arena(
-            and(
-                // A pattern followed by '=' or ':'
-                space0_after(loc_closure_param(min_indent), min_indent),
-                either(
-                    // Constant
-                    skip_first(
-                        equals_for_def(),
-                        // Spaces after the '=' (at a normal indentation level) and then the expr.
-                        // The expr itself must be indented more than the pattern and '='
-                        space0_before(
-                            loc(move |arena, state| parse_expr(indented_more, arena, state)),
-                            min_indent,
-                        ),
-                    ),
-                    // Annotation
-                    skip_first(
-                        char(':'),
-                        // Spaces after the ':' (at a normal indentation level) and then the type.
-                        // The type itself must be indented more than the pattern and ':'
-                        space0_before(type_annotation::located(indented_more), indented_more),
-                    ),
-                ),
-            ),
-            |arena, (loc_pattern, expr_or_ann)| match expr_or_ann {
-                Either::First(loc_expr) => Def::Body(loc_pattern, arena.alloc(loc_expr)),
-                Either::Second(loc_ann) => Def::Annotation(loc_pattern, loc_ann),
             },
         ),
     )
