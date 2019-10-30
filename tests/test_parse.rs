@@ -21,7 +21,7 @@ mod test_parse {
     use roc::operator::Operator::*;
     use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
-    use roc::parse::ast::Pattern::*;
+    use roc::parse::ast::Pattern::{self, *};
     use roc::parse::ast::{Attempting, Def, Spaceable};
     use roc::parse::parser::{Fail, FailReason};
     use roc::region::{Located, Region};
@@ -849,29 +849,39 @@ mod test_parse {
 
     // CASE
 
-    // #[test]
-    // fn two_branch_case() {
-    //     let arena = Bump::new();
-    //     let module_parts = Vec::new_in(&arena).into_bump_slice();
-    //     let arg1 = Located::new(0, 0, 2, 3, Var(module_parts, "b"));
-    //     let arg2 = Located::new(0, 0, 4, 5, Var(module_parts, "c"));
-    //     let arg3 = Located::new(0, 0, 6, 7, Var(module_parts, "d"));
-    //     let args = bumpalo::vec![in &arena; arg1, arg2, arg3];
-    //     let tuple = arena.alloc((Located::new(0, 0, 0, 1, Var(module_parts, "a")), args));
-    //     let expected = Expr::Apply(tuple);
-    //     let actual = parse_with(
-    //         &arena,
-    //         indoc!(
-    //             r#"
-    //             case foo bar baz when
-    //              "blah" -> foo a b
-    //              "mise" -> bar c d
-    //             "#
-    //         ),
-    //     );
+    #[test]
+    fn two_branch_case() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern1 =
+            Pattern::SpaceBefore(arena.alloc(StrLiteral("blah")), newlines.into_bump_slice());
+        let loc_pattern1 = Located::new(1, 1, 1, 7, pattern1);
+        let expr1 = Int("1");
+        let loc_expr1 = Located::new(1, 1, 11, 12, expr1);
+        let branch1 = &*arena.alloc((loc_pattern1, loc_expr1));
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern2 =
+            Pattern::SpaceBefore(arena.alloc(StrLiteral("mise")), newlines.into_bump_slice());
+        let loc_pattern2 = Located::new(2, 2, 1, 7, pattern2);
+        let expr2 = Int("2");
+        let loc_expr2 = Located::new(2, 2, 11, 12, expr2);
+        let branch2 = &*arena.alloc((loc_pattern2, loc_expr2));
+        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
+        let expected = Expr::Case(arena.alloc(loc_cond), branches);
+        let actual = parse_with(
+            &arena,
+            indoc!(
+                r#"
+                case x when
+                 "blah" -> 1
+                 "mise" -> 2
+                "#
+            ),
+        );
 
-    //     assert_eq!(Ok(expected), actual);
-    // }
+        assert_eq!(Ok(expected), actual);
+    }
 
     // TODO test hex/oct/binary parsing
     //
