@@ -135,13 +135,11 @@ where
     map_with_arena(
         and(space1(min_indent), parser),
         |arena, (space_list, loc_expr)| {
-            if space_list.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_before(space_list, loc_expr.region)
-            }
+            debug_assert!(!space_list.is_empty());
+
+            arena
+                .alloc(loc_expr.value)
+                .with_spaces_before(space_list, loc_expr.region)
         },
     )
 }
