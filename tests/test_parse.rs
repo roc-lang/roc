@@ -774,7 +774,7 @@ mod test_parse {
             )),
             newline.into_bump_slice(),
         );
-        let loc_def2 = &*arena.alloc(Located::new(2, 2, 0, 1, def2));
+        let loc_def2 = &*arena.alloc(Located::new(2, 2, 0, 5, def2));
         // NOTE: The first def always gets reordered to the end (because it
         // gets added by .push(), since that's more efficient and since
         // canonicalization is going to re-sort these all anyway.)
@@ -807,7 +807,7 @@ mod test_parse {
         let newline = bumpalo::vec![in &arena; Newline];
         let fields = bumpalo::vec![in &arena;
             Located::new(1, 1, 2, 3, Identifier("x")),
-            Located::new(1, 1, 5, 6, Identifier("y"))
+            Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
             Located::new(1, 1, 0, 8, RecordDestructure(fields)),
@@ -821,7 +821,7 @@ mod test_parse {
             )),
             newline.into_bump_slice(),
         );
-        let loc_def2 = &*arena.alloc(Located::new(2, 2, 0, 1, def2));
+        let loc_def2 = &*arena.alloc(Located::new(2, 2, 0, 5, def2));
         // NOTE: The first def always gets reordered to the end (because it
         // gets added by .push(), since that's more efficient and since
         // canonicalization is going to re-sort these all anyway.)
