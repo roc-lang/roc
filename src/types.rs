@@ -111,6 +111,7 @@ pub struct OperatorType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expected<T> {
     NoExpectation(T),
+    FromAnnotation(String, usize, AnnotationSource, T),
     ForReason(Reason, T, Region),
 }
 
@@ -121,6 +122,13 @@ impl<T> Expected<T> {
             Expected::ForReason(_, val, _) => val,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnnotationSource {
+    TypedIfBranch(usize /* index */),
+    TypedCaseBranch(usize /* index */),
+    TypedBody,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

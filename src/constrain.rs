@@ -1,9 +1,20 @@
+use collections::ImMap;
 use region::Region;
 use subs::{Subs, Variable};
 use types::Constraint::{self, *};
 use types::Expected::{self, *};
 use types::Type::{self, *};
-use types::{self, Reason};
+use types::{self, LetConstraint, Reason};
+
+pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
+    Constraint::Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars,
+        assignment_types: ImMap::default(),
+        assignments_constraint: constraint,
+        ret_constraint: Constraint::True,
+    }))
+}
 
 pub fn int_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
     let typ = number_literal_type("Int", "Integer");
