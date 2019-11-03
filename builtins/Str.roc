@@ -36,12 +36,20 @@ all : Str, Str -> Bool
 
 ## Combine
 
+## Combine a list of strings into a single string.
+##
+## > Str.join [ "a", "bc", "def" ]
 join : List Str -> Str
 
-joinWith : Str, List Str -> Str
+## Combine a list of strings into a single string, with a separator
+## string in between each.
+##
+## > Str.joinWith [ "one", "two", "three" ] ", "
+joinWith : List Str, Str -> Str
 
-padStart : Int, Str, Str -> Str
 
-padEnd : Int, Str, Str -> Str
+padStart : Str, Int, Str -> Str
+
+padEnd : Str, Int, Str -> Str
 
 
