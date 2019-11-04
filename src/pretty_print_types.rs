@@ -42,7 +42,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         Func(args, ret) => write_fn(args, ret, subs, buf, use_parens),
-        Operator(l_arg, r_arg, ret) => write_fn(vec![l_arg, r_arg], ret, subs, buf, use_parens),
+        BinOp(l_arg, r_arg, ret) => write_fn(vec![l_arg, r_arg], ret, subs, buf, use_parens),
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }

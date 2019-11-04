@@ -136,6 +136,22 @@ impl<'a> State<'a> {
             _ => Err(line_too_long(self.attempting, self.clone())),
         }
     }
+
+    /// Returns a Region corresponding to the current state, but
+    /// with the end_col advanced by the given amount. This is
+    /// useful when parsing something "manually" (using input.chars())
+    /// and thus wanting a Region while not having access to loc().
+    pub fn len_region(&self, length: u16) -> Region {
+        Region {
+            start_col: self.column,
+            start_line: self.line,
+            end_col: self
+                .column
+                .checked_add(length)
+                .unwrap_or_else(|| panic!("len_region overflowed")),
+            end_line: self.line,
+        }
+    }
 }
 
 #[test]

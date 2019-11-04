@@ -18,7 +18,7 @@ mod test_parse {
     use bumpalo::{self, Bump};
     use helpers::parse_with;
     use roc::operator::CalledVia;
-    use roc::operator::Operator::*;
+    use roc::operator::BinOp::*;
     use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
     use roc::parse::ast::Pattern::{self, *};
@@ -256,7 +256,7 @@ mod test_parse {
             Located::new(0, 0, 1, 2, Plus),
             Located::new(0, 0, 2, 3, Int("2")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "1+2");
 
         assert_eq!(Ok(expected), actual);
@@ -270,7 +270,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, Plus),
             Located::new(0, 0, 7, 8, Int("2")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "1  +   2");
 
         assert_eq!(Ok(expected), actual);
@@ -288,7 +288,7 @@ mod test_parse {
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Int("4")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  \n+ 4");
 
         assert_eq!(Ok(expected), actual);
@@ -305,7 +305,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, Star),
             Located::new(1, 1, 2, 3, spaced_int),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  *\n  4");
 
         assert_eq!(Ok(expected), actual);
@@ -322,7 +322,7 @@ mod test_parse {
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Int("4")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  # test!\n+ 4");
 
         assert_eq!(Ok(expected), actual);
@@ -339,7 +339,7 @@ mod test_parse {
             Located::new(0, 0, 4, 5, Star),
             Located::new(1, 1, 1, 3, spaced_int),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "12  * # test!\n 92");
 
         assert_eq!(Ok(expected), actual);
@@ -359,7 +359,7 @@ mod test_parse {
             Located::new(1, 1, 0, 1, Plus),
             Located::new(3, 3, 2, 3, spaced_int2),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  \n+ \n\n  4");
 
         assert_eq!(Ok(expected), actual);
@@ -373,7 +373,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, Minus),
             Located::new(0, 0, 4, 5, Int("5")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "-12-5");
 
         assert_eq!(Ok(expected), actual);
@@ -387,7 +387,7 @@ mod test_parse {
             Located::new(0, 0, 2, 3, Star),
             Located::new(0, 0, 3, 5, Int("11")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "10*11");
 
         assert_eq!(Ok(expected), actual);
@@ -404,9 +404,9 @@ mod test_parse {
         let outer = arena.alloc((
             Located::new(0, 0, 0, 2, Int("31")),
             Located::new(0, 0, 2, 3, Star),
-            Located::new(0, 0, 3, 9, Operator(inner)),
+            Located::new(0, 0, 3, 9, BinOp(inner)),
         ));
-        let expected = Operator(outer);
+        let expected = BinOp(outer);
         let actual = parse_with(&arena, "31*42+534");
 
         assert_eq!(Ok(expected), actual);

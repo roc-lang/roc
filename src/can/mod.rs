@@ -52,7 +52,7 @@ pub fn canonicalize_declaration<'a>(
     // operator precedence and associativity rules), before doing any other canonicalization.
     //
     // If we did this *during* canonicalization, then each time we
-    // visited an Operator node we'd recursively try to apply this to each of its nested
+    // visited an BinOp node we'd recursively try to apply this to each of its nested
     // operators, and thena again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar(arena, &loc_expr);
@@ -648,8 +648,11 @@ fn canonicalize_expr(
                 sub_expr
             );
         }
-        ast::Expr::Operator((_, loc_op, _)) => {
-            panic!("An operator did not get desugared somehow: {:?}", loc_op);
+        ast::Expr::BinOp((_, loc_op, _)) => {
+            panic!("A binary operator did not get desugared somehow: {:?}", loc_op);
+        }
+        ast::Expr::UnaryOp(_, op) => {
+            panic!("A binary operator did not get desugared somehow: {:?}", loc_op);
         }
     };
 

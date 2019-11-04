@@ -1,4 +1,4 @@
-use self::Operator::*;
+use self::BinOp::*;
 use std::cmp::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7,14 +7,22 @@ pub enum CalledVia {
     Space,
 
     /// Calling with an operator, e.g. (bar |> foo) or (1 + 2)
-    Operator(Operator),
+    BinOp(BinOp),
 
-    /// Calling with the unary (!) operator, e.g. (!foo bar baz)
-    UnaryNot,
+    /// Calling with a unary operator, e.g. (!foo bar baz) or (-foo bar baz)
+    UnaryOp(UnaryOp),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operator {
+pub enum UnaryOp {
+    /// (-), e.g. (-x)
+    Negate,
+    /// (!), e.g. (!x)
+    Not,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinOp {
     // highest precedence
     Caret,
     Star,
@@ -62,7 +70,7 @@ pub enum Associativity {
     NonAssociative,
 }
 
-impl Operator {
+impl BinOp {
     pub fn associativity(&self) -> Associativity {
         use self::Associativity::*;
 
@@ -90,13 +98,13 @@ impl Operator {
     }
 }
 
-impl PartialOrd for Operator {
+impl PartialOrd for BinOp {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for Operator {
+impl Ord for BinOp {
     fn cmp(&self, other: &Self) -> Ordering {
         self.precedence().cmp(&other.precedence())
     }

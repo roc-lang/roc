@@ -94,11 +94,11 @@ fn unify_flat_type(subs: &mut Subs, left: &FlatType, right: &FlatType) -> Descri
                 from_content(Error(Problem::MissingArguments))
             }
         }
-        (Operator(l_l_arg, l_r_arg, l_ret), Operator(r_l_arg, r_r_arg, r_ret)) => {
+        (BinOp(l_l_arg, l_r_arg, l_ret), BinOp(r_l_arg, r_r_arg, r_ret)) => {
             let l_arg = union_vars(subs, l_l_arg.clone(), r_l_arg.clone());
             let r_arg = union_vars(subs, l_r_arg.clone(), r_r_arg.clone());
             let ret = union_vars(subs, l_ret.clone(), r_ret.clone());
-            let flat_type = Operator(l_arg, r_arg, ret);
+            let flat_type = BinOp(l_arg, r_arg, ret);
 
             from_content(Structure(flat_type))
         }

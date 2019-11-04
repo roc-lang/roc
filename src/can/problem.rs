@@ -1,6 +1,6 @@
 use can::pattern::PatternType;
 use ident::{Ident, VariantName};
-use operator::Operator;
+use operator::BinOp;
 use region::{Located, Region};
 
 /// Problems that can occur in the course of canonicalization.
@@ -21,7 +21,7 @@ pub enum Problem {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrecedenceProblem {
-    BothNonAssociative(Located<Operator>, Located<Operator>),
+    BothNonAssociative(Located<BinOp>, Located<BinOp>),
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -145,7 +145,7 @@ pub enum FlatType {
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
-    Operator(Variable, Variable, Variable),
+    BinOp(Variable, Variable, Variable),
     Erroneous(Problem),
     EmptyRecord,
 }

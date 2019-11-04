@@ -1,13 +1,13 @@
 use can::symbol::Symbol;
 use collections::ImMap;
-use operator::{ArgSide, Operator};
+use operator::{ArgSide, BinOp};
 use region::Located;
 use region::Region;
 use subs::Variable;
 
 // The standard modules
 pub const MOD_FLOAT: &'static str = "Float";
-pub const MOD_BOOL: &'static str = "Float";
+pub const MOD_BOOL: &'static str = "Bool";
 pub const MOD_INT: &'static str = "Int";
 pub const MOD_STR: &'static str = "Str";
 pub const MOD_LIST: &'static str = "List";
@@ -25,7 +25,7 @@ pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Operator(Box<OperatorType>),
+    BinOp(Box<BinOpType>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
         module_name: Box<str>,
@@ -38,19 +38,6 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn for_operator(op: Operator) -> OperatorType {
-        use self::Operator::*;
-
-        match op {
-            Slash => op_type(Type::float(), Type::float(), Type::float()),
-            DoubleSlash => op_type(Type::int(), Type::int(), Type::int()),
-            // TODO actually, don't put these in types.rs - instead, replace them
-            // with an equivalence to their corresponding stdlib functions - e.g.
-            // Slash generates a new variable and an Eq constraint with Float.div.
-            _ => panic!("TODO types for operator {:?}", op),
-        }
-    }
-
     pub fn num(args: Vec<Type>) -> Self {
         Type::Apply {
             module_name: MOD_NUM.into(),
@@ -97,12 +84,12 @@ impl Type {
     }
 }
 
-fn op_type(left: Type, right: Type, ret: Type) -> OperatorType {
-    OperatorType { left, right, ret }
+fn op_type(left: Type, right: Type, ret: Type) -> BinOpType {
+    BinOpType { left, right, ret }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct OperatorType {
+pub struct BinOpType {
     pub left: Type,
     pub right: Type,
     pub ret: Type,
@@ -137,8 +124,8 @@ pub enum Reason {
     NamedFnArg(String /* function name */, u8 /* arg index */),
     AnonymousFnCall(u8 /* arity */),
     NamedFnCall(String /* function name */, u8 /* arity */),
-    OperatorArg(Operator, ArgSide),
-    OperatorRet(Operator),
+    BinOpArg(BinOp, ArgSide),
+    BinOpRet(BinOp),
     FloatLiteral,
     IntLiteral,
     InterpolatedStringVar,

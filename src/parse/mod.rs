@@ -25,7 +25,7 @@ pub mod type_annotation;
 /// parsing the file
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use operator::{CalledVia, Operator};
+use operator::{BinOp, CalledVia, UnaryOp};
 use parse;
 use parse::ast::{
     AppHeader, AssignedField, Attempting, CommentOrNewline, Def, Expr, HeaderEntry,
@@ -39,12 +39,12 @@ use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
     allocated, and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by,
-    one_of16, one_of2, one_of5, one_of6, one_of9, one_or_more, optional, skip_first, skip_second,
+    one_of10, one_of16, one_of2, one_of5, one_of6, one_or_more, optional, skip_first, skip_second,
     string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
     Parser, State,
 };
 use parse::record::record;
-use region::Located;
+use region::{Located, Region};
 
 pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
     one_of2(interface_module(), app_module())
@@ -147,17 +147,6 @@ fn mod_header_entry<'a>() -> impl Parser<'a, HeaderEntry<'a>> {
     )
 }
 
-// pub fn app<'a>() -> impl Parser<'a, Module<'a>> {
-//     skip_first(string("app using Echo"))
-// }
-
-// pub fn api_bridge<'a>() -> impl Parser<'a, Module<'a>> {
-//     and(
-//         skip_first(string("api bridge"), space1_around(ident())),
-//         skip_first(string("exposes"), space1_around(ident())),
-//     )
-// }
-
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
     // as this causes rustc to stack overflow. Thus, parse_expr must be a
@@ -170,18 +159,41 @@ fn loc_parse_expr_body_without_operators<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
-    one_of9(
+    one_of10(
         loc_parenthetical_expr(min_indent),
         loc(string_literal()),
         loc(number_literal()),
         loc(closure(min_indent)),
         loc(record_literal(min_indent)),
         loc(list_literal(min_indent)),
+        loc(unary_op(min_indent)),
         loc(case_expr(min_indent)),
         loc(if_expr(min_indent)),
         loc(ident_etc(min_indent)),
     )
     .parse(arena, state)
+}
+
+/// Unary (!) or (-)
+///
+/// e.g. `!x` or `-x`
+pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    one_of2(
+        map_with_arena(
+            skip_first(
+                char('!'),
+                loc(move |arena, state| parse_expr(min_indent, arena, state)),
+            ),
+            |arena, loc_expr| Expr::UnaryOp(arena.alloc(loc_expr), UnaryOp::Not),
+        ),
+        map_with_arena(
+            skip_first(
+                char('-'),
+                loc(move |arena, state| parse_expr(min_indent, arena, state)),
+            ),
+            |arena, loc_expr| Expr::UnaryOp(arena.alloc(loc_expr), UnaryOp::Negate),
+        ),
+    )
 }
 
 fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Expr<'a>> {
@@ -191,11 +203,11 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
             move |arena, state| loc_parse_expr_body_without_operators(min_indent, arena, state),
             // Parse the operator, with optional spaces before it.
             //
-            // Since spaces can only wrap an Expr, not an Operator, we have to first
+            // Since spaces can only wrap an Expr, not an BinOp, we have to first
             // parse the spaces and then attach them retroactively to the expression
             // preceding the operator (the one we parsed before considering operators).
             optional(and(
-                and(space0(min_indent), loc(operator())),
+                and(space0(min_indent), loc(binop())),
                 // The spaces *after* the operator can be attached directly to
                 // the expression following the operator.
                 space0_before(
@@ -216,7 +228,7 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
                 };
                 let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
 
-                Expr::Operator(tuple)
+                Expr::BinOp(tuple)
             }
             None => loc_expr1.value,
         },
@@ -403,7 +415,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::Field(_, _)
         | Expr::List(_)
         | Expr::Closure(_, _)
-        | Expr::Operator(_)
+        | Expr::BinOp(_)
         | Expr::Defs(_, _)
         | Expr::If(_)
         | Expr::Case(_, _)
@@ -635,13 +647,14 @@ fn loc_parse_function_arg<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
-    one_of9(
+    one_of10(
         loc_parenthetical_expr(min_indent),
         loc(string_literal()),
         loc(number_literal()),
         loc(closure(min_indent)),
         loc(record_literal(min_indent)),
         loc(list_literal(min_indent)),
+        loc(unary_op(min_indent)),
         loc(case_expr(min_indent)),
         loc(if_expr(min_indent)),
         loc(ident_without_apply()),
@@ -915,7 +928,102 @@ pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 }
 
 pub fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
-    one_or_more(space1_before(loc_function_arg(min_indent), min_indent))
+    // The rules for (-) are special-cased, and they come up here. They work like this:
+    //
+    // x - y  # "x minus y"
+    // x-y    # "x minus y"
+    // x- y   # "x minus y" (probably written in a rush)
+    // x -y   # "call x, passing (-y)"
+    //
+    // Since operators have higher precedence than function application,
+    // any time we encounter a '-' we need to check the spaces around it
+    // to see if it's a binop. If it is, we're immediately done parsing args!
+    one_or_more(move |arena, original_state| {
+        {
+            // First, parse spaces. (We have to do this regardless, because these are
+            // function args we're parsing.)
+            //
+            // The guaranteed presence of spaces means we don't need to consider
+            // the (x-y) and (x- y) scenarios, since those can only come up when
+            // the '-' has no spaces before it.
+            then(space1(min_indent), |arena, state, spaces| {
+                let mut chars = state.input.chars();
+
+                // First, make sure there's actually a '-' character next.
+                // Otherwise, it's definitely neither a unary nor a binary (-) operator!
+                let (loc_expr, state) = if let Some('-') = chars.next() {
+                    // Now look ahead to see if there's a space after it.
+                    // We won't consume that space, so we don't need to parse the
+                    // entire thing - just the first char of it.
+                    if let Some(potential_space) = chars.next() {
+                        match potential_space {
+                            ' ' | '\n' | '#' => {
+                                // This is '-' with space(s) both before it and after it,
+                                // e.g. (x - y)
+                                //
+                                // This must be a binary (-) operator, not unary!
+                                // That means we're immediately done parsing function arguments.
+                                //
+                                // Error out so the binop parsing logic can take over from here.
+                                return Err((
+                                    Fail {
+                                        reason: FailReason::Unexpected('-', state.len_region(1)),
+                                        attempting: state.attempting,
+                                    },
+                                    // Backtrack to before we parsed the spaces;
+                                    // the binop is going to parse those again.
+                                    original_state,
+                                ));
+                            }
+                            _ => {
+                                // This is '-' with space(s) before it, but none after,
+                                // e.g. (x -y)
+                                //
+                                // This must be a unary (-) operator, not binary!
+                                //
+                                // All we consumed here was the one '-' char, so
+                                // calculate the region and new state based on that.
+                                let region = Region {
+                                    start_col: state.column,
+                                    start_line: state.line,
+                                    end_col: state.column + 1,
+                                    end_line: state.line,
+                                };
+                                let state = state.advance_without_indenting(1)?;
+                                // Continue parsing the function arg as normal.
+                                let (loc_expr, state) =
+                                    loc_function_arg(min_indent).parse(arena, state)?;
+                                let value = Expr::UnaryOp(arena.alloc(loc_expr), UnaryOp::Negate);
+
+                                (Located { region, value }, state)
+                            }
+                        }
+                    } else {
+                        // EOF immediately after (-) is a syntax error.
+                        return Err((
+                            Fail {
+                                reason: FailReason::Eof(state.len_region(1)),
+                                attempting: state.attempting,
+                            },
+                            state,
+                        ));
+                    }
+                } else {
+                    // There isn't a '-' next, so proceed as normal.
+                    loc_function_arg(min_indent).parse(arena, state)?
+                };
+
+                Ok((
+                    Located {
+                        region: loc_expr.region,
+                        value: Expr::SpaceBefore(arena.alloc(loc_expr.value), spaces),
+                    },
+                    state,
+                ))
+            })
+        }
+        .parse(arena, original_state)
+    })
 }
 
 /// When we parse an ident like `foo ` it could be any of these:
@@ -1043,26 +1151,26 @@ fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {
     }
 }
 
-pub fn operator<'a>() -> impl Parser<'a, Operator> {
+fn binop<'a>() -> impl Parser<'a, BinOp> {
     one_of16(
         // Sorted from highest to lowest predicted usage in practice,
         // so that successful matches shorrt-circuit as early as possible.
-        map(string("|>"), |_| Operator::Pizza),
-        map(string("=="), |_| Operator::Equals),
-        map(string("&&"), |_| Operator::And),
-        map(string("||"), |_| Operator::Or),
-        map(char('+'), |_| Operator::Plus),
-        map(char('-'), |_| Operator::Minus),
-        map(char('*'), |_| Operator::Star),
-        map(char('/'), |_| Operator::Slash),
-        map(char('<'), |_| Operator::LessThan),
-        map(char('>'), |_| Operator::GreaterThan),
-        map(string("<="), |_| Operator::LessThanOrEq),
-        map(string(">="), |_| Operator::GreaterThanOrEq),
-        map(char('^'), |_| Operator::Caret),
-        map(char('%'), |_| Operator::Percent),
-        map(string("//"), |_| Operator::DoubleSlash),
-        map(string("%%"), |_| Operator::DoublePercent),
+        map(string("|>"), |_| BinOp::Pizza),
+        map(string("=="), |_| BinOp::Equals),
+        map(string("&&"), |_| BinOp::And),
+        map(string("||"), |_| BinOp::Or),
+        map(char('+'), |_| BinOp::Plus),
+        map(char('*'), |_| BinOp::Star),
+        map(char('-'), |_| BinOp::Minus),
+        map(char('/'), |_| BinOp::Slash),
+        map(char('<'), |_| BinOp::LessThan),
+        map(char('>'), |_| BinOp::GreaterThan),
+        map(string("<="), |_| BinOp::LessThanOrEq),
+        map(string(">="), |_| BinOp::GreaterThanOrEq),
+        map(char('^'), |_| BinOp::Caret),
+        map(char('%'), |_| BinOp::Percent),
+        map(string("//"), |_| BinOp::DoubleSlash),
+        map(string("%%"), |_| BinOp::DoublePercent),
     )
 }
 

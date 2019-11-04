@@ -1,4 +1,4 @@
-use operator::Operator;
+use operator::BinOp;
 use region::Located;
 use std::fmt;
 
@@ -31,7 +31,7 @@ pub enum Expr {
 
     // Sugar
     If(Box<Located<Expr>>, Box<Located<Expr>>, Box<Located<Expr>>),
-    Operator(Box<Located<Expr>>, Located<Operator>, Box<Located<Expr>>),
+    BinOp(Box<Located<Expr>>, Located<BinOp>, Box<Located<Expr>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,7 +112,7 @@ impl Expr {
                     .map(|(pattern, body)| (pattern, body.with_value(body.value.walk(transform))))
                     .collect(),
             ),
-            Operator(loc_left, loc_op, loc_right) => Operator(
+            BinOp(loc_left, loc_op, loc_right) => BinOp(
                 Box::new(loc_left.with_value(loc_left.value.walk(transform))),
                 loc_op,
                 Box::new(loc_right.with_value(loc_right.value.walk(transform))),
