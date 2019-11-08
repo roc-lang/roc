@@ -17,8 +17,9 @@ mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
     use helpers::parse_with;
-    use roc::operator::CalledVia;
     use roc::operator::BinOp::*;
+    use roc::operator::CalledVia;
+    use roc::operator::UnaryOp;
     use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
     use roc::parse::ast::Pattern::{self, *};
@@ -366,6 +367,23 @@ mod test_parse {
     }
 
     #[test]
+    fn space_only_after_minus() {
+        // This is an edge case with minus because of unary negation.
+        // (x- y) should parse like subtraction (x - (y)), not function application (x (-y))
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(module_parts, "x")),
+            Located::new(0, 0, 1, 2, Minus),
+            Located::new(0, 0, 3, 4, Var(module_parts, "y")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x- y");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn minus_twelve_minus_five() {
         let arena = Bump::new();
         let tuple = arena.alloc((
@@ -615,6 +633,90 @@ mod test_parse {
             CalledVia::Space,
         );
         let actual = parse_with(&arena, "(whee) 1");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // UNARY OPERATORS
+
+    #[test]
+    fn unary_negation() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let loc_arg1_expr = Located::new(0, 0, 1, 4, Var(module_parts, "foo"));
+        let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
+        let actual = parse_with(&arena, "-foo");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn unary_not() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
+        let loc_arg1_expr = Located::new(0, 0, 1, 5, Var(module_parts, "blah"));
+        let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
+        let actual = parse_with(&arena, "!blah");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn apply_unary_negation() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 7, 9, Int("12")));
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let arg2 = arena.alloc(Located::new(0, 0, 10, 13, Var(module_parts, "foo")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let apply_expr = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 1, 5, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let actual = parse_with(&arena, "-whee  12 foo");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn apply_unary_not() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 7, 9, Int("12")));
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
+        let arg2 = arena.alloc(Located::new(0, 0, 10, 13, Var(module_parts, "foo")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let apply_expr = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 1, 5, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let actual = parse_with(&arena, "!whee  12 foo");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn unary_negation_arg() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 6, 8, Int("12")));
+        let loc_op = Located::new(0, 0, 9, 10, UnaryOp::Negate);
+        let loc_arg1_expr = Located::new(0, 0, 10, 13, Var(module_parts, "foo"));
+        let arg_op = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
+        let arg2 = arena.alloc(Located::new(0, 0, 9, 13, arg_op));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let expected = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 0, 4, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let actual = parse_with(&arena, "whee  12 -foo");
 
         assert_eq!(Ok(expected), actual);
     }

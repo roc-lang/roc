@@ -102,11 +102,37 @@ pub enum Expected<T> {
     ForReason(Reason, T, Region),
 }
 
+/// Like Expected, but for Patterns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PExpected<T> {
+    NoExpectation(T),
+    ForReason(PReason, T, Region),
+}
+
+impl<T> PExpected<T> {
+    pub fn get_type(self) -> T {
+        match self {
+            PExpected::NoExpectation(val) => val,
+            PExpected::ForReason(_, val, _) => val,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PReason {
+    TypedArg { name: Box<str>, index: usize },
+    CaseMatch { index: usize },
+    CtorArg { name: Box<str>, index: usize },
+    ListEntry { index: usize },
+    Tail,
+}
+
 impl<T> Expected<T> {
     pub fn get_type(self) -> T {
         match self {
             Expected::NoExpectation(val) => val,
             Expected::ForReason(_, val, _) => val,
+            Expected::FromAnnotation(_, _, _, val) => val,
         }
     }
 }
@@ -129,6 +155,7 @@ pub enum Reason {
     FloatLiteral,
     IntLiteral,
     InterpolatedStringVar,
+    CaseBranch { index: usize },
     ElemInList,
 }
 
@@ -136,9 +163,23 @@ pub enum Reason {
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
     Lookup(Symbol, Expected<Type>, Region),
+    Pattern(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PatternCategory {
+    Record,
+    EmptyRecord,
+    List,
+    Set,
+    Map,
+    Ctor(Box<str>),
+    Int,
+    Str,
+    Float,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

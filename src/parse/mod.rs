@@ -39,9 +39,9 @@ use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
     allocated, and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by,
-    one_of10, one_of16, one_of2, one_of5, one_of6, one_or_more, optional, skip_first, skip_second,
-    string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult,
-    Parser, State,
+    one_of10, one_of16, one_of2, one_of3, one_of5, one_of6, one_or_more, optional, skip_first,
+    skip_second, string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason,
+    ParseResult, Parser, State,
 };
 use parse::record::record;
 use region::{Located, Region};
@@ -180,18 +180,22 @@ fn loc_parse_expr_body_without_operators<'a>(
 pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     one_of2(
         map_with_arena(
-            skip_first(
-                char('!'),
+            and(
+                loc(char('!')),
                 loc(move |arena, state| parse_expr(min_indent, arena, state)),
             ),
-            |arena, loc_expr| Expr::UnaryOp(arena.alloc(loc_expr), UnaryOp::Not),
+            |arena, (loc_op, loc_expr)| {
+                Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Not))
+            },
         ),
         map_with_arena(
-            skip_first(
-                char('-'),
+            and(
+                loc(char('-')),
                 loc(move |arena, state| parse_expr(min_indent, arena, state)),
             ),
-            |arena, loc_expr| Expr::UnaryOp(arena.alloc(loc_expr), UnaryOp::Negate),
+            |arena, (loc_op, loc_expr)| {
+                Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Negate))
+            },
         ),
     )
 }
@@ -421,6 +425,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::Case(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _)
+        | Expr::UnaryOp(_, _)
         | Expr::QualifiedField(_, _) => Err(Fail {
             attempting: Attempting::Def,
             reason: FailReason::InvalidPattern,
@@ -927,103 +932,76 @@ pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     )
 }
 
-pub fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
-    // The rules for (-) are special-cased, and they come up here. They work like this:
-    //
-    // x - y  # "x minus y"
-    // x-y    # "x minus y"
-    // x- y   # "x minus y" (probably written in a rush)
-    // x -y   # "call x, passing (-y)"
-    //
-    // Since operators have higher precedence than function application,
-    // any time we encounter a '-' we need to check the spaces around it
-    // to see if it's a binop. If it is, we're immediately done parsing args!
-    one_or_more(move |arena, original_state| {
-        {
-            // First, parse spaces. (We have to do this regardless, because these are
-            // function args we're parsing.)
-            //
-            // The guaranteed presence of spaces means we don't need to consider
-            // the (x-y) and (x- y) scenarios, since those can only come up when
-            // the '-' has no spaces before it.
-            then(space1(min_indent), |arena, state, spaces| {
-                let mut chars = state.input.chars();
+/// This is a helper function for parsing function args.
+/// The rules for (-) are special-cased, and they come up in function args.
+///
+/// They work like this:
+///
+/// x - y  # "x minus y"
+/// x-y    # "x minus y"
+/// x- y   # "x minus y" (probably written in a rush)
+/// x -y   # "call x, passing (-y)"
+///
+/// Since operators have higher precedence than function application,
+/// any time we encounter a '-' it is unary iff it is both preceded by spaces
+/// and is *not* followed by a whitespace character.
+#[inline(always)]
+fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
+    then(
+        // Spaces, then '-', then *not* more spaces.
+        not_followed_by(
+            and(space1(min_indent), loc(char('-'))),
+            one_of3(char(' '), char('#'), char('\n')),
+        ),
+        move |arena, state, (spaces, loc_minus_char)| {
+            let region = loc_minus_char.region;
+            let loc_op = Located {
+                region,
+                value: UnaryOp::Negate,
+            };
 
-                // First, make sure there's actually a '-' character next.
-                // Otherwise, it's definitely neither a unary nor a binary (-) operator!
-                let (loc_expr, state) = if let Some('-') = chars.next() {
-                    // Now look ahead to see if there's a space after it.
-                    // We won't consume that space, so we don't need to parse the
-                    // entire thing - just the first char of it.
-                    if let Some(potential_space) = chars.next() {
-                        match potential_space {
-                            ' ' | '\n' | '#' => {
-                                // This is '-' with space(s) both before it and after it,
-                                // e.g. (x - y)
-                                //
-                                // This must be a binary (-) operator, not unary!
-                                // That means we're immediately done parsing function arguments.
-                                //
-                                // Error out so the binop parsing logic can take over from here.
-                                return Err((
-                                    Fail {
-                                        reason: FailReason::Unexpected('-', state.len_region(1)),
-                                        attempting: state.attempting,
-                                    },
-                                    // Backtrack to before we parsed the spaces;
-                                    // the binop is going to parse those again.
-                                    original_state,
-                                ));
-                            }
-                            _ => {
-                                // This is '-' with space(s) before it, but none after,
-                                // e.g. (x -y)
-                                //
-                                // This must be a unary (-) operator, not binary!
-                                //
-                                // All we consumed here was the one '-' char, so
-                                // calculate the region and new state based on that.
-                                let region = Region {
-                                    start_col: state.column,
-                                    start_line: state.line,
-                                    end_col: state.column + 1,
-                                    end_line: state.line,
-                                };
-                                let state = state.advance_without_indenting(1)?;
-                                // Continue parsing the function arg as normal.
-                                let (loc_expr, state) =
-                                    loc_function_arg(min_indent).parse(arena, state)?;
-                                let value = Expr::UnaryOp(arena.alloc(loc_expr), UnaryOp::Negate);
+            // Continue parsing the function arg as normal.
+            let (loc_expr, state) = loc_function_arg(min_indent).parse(arena, state)?;
+            let region = Region {
+                start_col: loc_op.region.start_col,
+                start_line: loc_op.region.start_line,
+                end_col: loc_expr.region.end_col,
+                end_line: loc_expr.region.end_line,
+            };
+            let value = Expr::UnaryOp(arena.alloc(loc_expr), loc_op);
+            let loc_expr = Located {
+                // Start from where the unary op started,
+                // and end where its argument expr ended.
+                // This is relevant in case (for example)
+                // we have an expression involving parens,
+                // for example `-(foo bar)`
+                region,
+                value,
+            };
 
-                                (Located { region, value }, state)
-                            }
-                        }
-                    } else {
-                        // EOF immediately after (-) is a syntax error.
-                        return Err((
-                            Fail {
-                                reason: FailReason::Eof(state.len_region(1)),
-                                attempting: state.attempting,
-                            },
-                            state,
-                        ));
-                    }
-                } else {
-                    // There isn't a '-' next, so proceed as normal.
-                    loc_function_arg(min_indent).parse(arena, state)?
-                };
+            // spaces can be empy if it's all space characters (no newlines or comments).
+            let value = if spaces.is_empty() {
+                loc_expr.value
+            } else {
+                Expr::SpaceBefore(arena.alloc(loc_expr.value), spaces)
+            };
 
-                Ok((
-                    Located {
-                        region: loc_expr.region,
-                        value: Expr::SpaceBefore(arena.alloc(loc_expr.value), spaces),
-                    },
-                    state,
-                ))
-            })
-        }
-        .parse(arena, original_state)
-    })
+            Ok((
+                Located {
+                    region: loc_expr.region,
+                    value,
+                },
+                state,
+            ))
+        },
+    )
+}
+
+fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
+    one_or_more(one_of2(
+        unary_negate_function_arg(min_indent),
+        space1_before(loc_function_arg(min_indent), min_indent),
+    ))
 }
 
 /// When we parse an ident like `foo ` it could be any of these:

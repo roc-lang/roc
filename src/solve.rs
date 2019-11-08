@@ -31,6 +31,9 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
                 solve(env, subs, sub_constraint);
             }
         }
+        Pattern(_, _, _, _) => {
+            panic!("TODO solve patterns");
+        }
         Let(let_con) => {
             match let_con.ret_constraint {
                 True => {

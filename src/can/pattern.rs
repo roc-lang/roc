@@ -8,6 +8,7 @@ use parse::ast;
 use region::{Located, Region};
 use subs::Subs;
 use subs::Variable;
+use types::{Constraint, PExpected, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -47,7 +48,8 @@ pub fn canonicalize_pattern<'a>(
     pattern_type: &'a PatternType,
     loc_pattern: &'a Located<ast::Pattern<'a>>,
     shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
-) -> Located<Pattern> {
+    expected: PExpected<Type>,
+) -> (Located<Pattern>, State) {
     use self::PatternType::*;
     use can::ast::Pattern::*;
 
@@ -195,10 +197,21 @@ pub fn canonicalize_pattern<'a>(
         _ => panic!("TODO finish restoring can_pattern branches"),
     };
 
-    Located {
-        region,
-        value: pattern,
-    }
+    let mut state = State {
+        headers: ImMap::default(),
+        vars: Vec::new(),
+        constraints: Vec::new(),
+    };
+
+    add_constraints(&loc_pattern.value, loc_pattern.region, expected, &mut state);
+
+    (
+        Located {
+            region,
+            value: pattern,
+        },
+        state,
+    )
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
@@ -207,4 +220,71 @@ fn unsupported_pattern<'a>(env: &'a mut Env, pattern_type: PatternType, region: 
     env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
+}
+
+// CONSTRAIN
+
+pub struct State {
+    pub headers: ImMap<Symbol, Located<Type>>,
+    pub vars: Vec<Variable>,
+    pub constraints: Vec<Constraint>,
+}
+
+fn add_constraints<'a>(
+    pattern: &'a ast::Pattern<'a>,
+    region: Region,
+    expected: PExpected<Type>,
+    state: &'a mut State,
+) {
+    use parse::ast::Pattern::*;
+
+    match pattern {
+        Underscore | Malformed(_) | QualifiedIdentifier(_) => {
+            // Neither the _ pattern nor malformed ones add any constraints.
+            ()
+        }
+        Identifier(name) => {
+            state.headers.insert(
+                Symbol::new("TODO pass home into add_constraints, or improve Symbol to not need it for idents in patterns", name),
+                Located {
+                    region,
+                    value: expected.get_type(),
+                },
+            );
+        }
+        IntLiteral(_) | HexIntLiteral(_) | OctalIntLiteral(_) | BinaryIntLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Int,
+                Type::int(),
+                expected,
+            ));
+        }
+
+        FloatLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Float,
+                Type::float(),
+                expected,
+            ));
+        }
+
+        StrLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Str,
+                Type::string(),
+                expected,
+            ));
+        }
+
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
+            add_constraints(pattern, region, expected, state)
+        }
+
+        Variant(_, _) | Apply(_, _) | RecordDestructure(_) | EmptyRecordLiteral => {
+            panic!("TODO add_constraints for {:?}", pattern);
+        }
+    }
 }

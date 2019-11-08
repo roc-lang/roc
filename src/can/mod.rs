@@ -16,11 +16,11 @@ use parse::ast::{self, Def};
 use region::{Located, Region};
 use std::i64;
 use subs::{Subs, Variable};
+use types::AnnotationSource::*;
 use types::Constraint::{self, *};
 use types::Expected::{self, *};
-use types::LetConstraint;
-use types::Reason;
 use types::Type::{self, *};
+use types::{LetConstraint, PExpected, PReason, Reason};
 
 pub mod env;
 pub mod expr;
@@ -31,6 +31,11 @@ pub mod procedure;
 pub mod scope;
 pub mod string;
 pub mod symbol;
+
+/// Whenever we encounter a user-defined type variable (a "rigid" var for short),
+/// for example `a` in the annotation `identity : a -> a`, we add it to this
+/// map so that expressions within that annotation can share these vars.
+type Rigids = ImMap<Box<str>, Type>;
 
 pub fn canonicalize_declaration<'a>(
     arena: &Bump,
@@ -49,11 +54,11 @@ pub fn canonicalize_declaration<'a>(
     MutMap<Symbol, Procedure>,
 ) {
     // Desugar operators (convert them to Apply calls, taking into account
-    // operator precedence and associativity rules), before doing any other canonicalization.
+    // operator precedence and associativity rules), before doing other canonicalization.
     //
     // If we did this *during* canonicalization, then each time we
-    // visited an BinOp node we'd recursively try to apply this to each of its nested
-    // operators, and thena again on *their* nested operators, ultimately applying the
+    // visited a BinOp node we'd recursively try to apply this to each of its nested
+    // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar(arena, &loc_expr);
 
@@ -63,6 +68,7 @@ pub fn canonicalize_declaration<'a>(
     let mut scope = Scope::new(scope_prefix, declared_idents.clone());
     let mut env = Env::new(home, declared_variants.clone());
     let (loc_expr, output) = canonicalize_expr(
+        &ImMap::default(),
         &mut env,
         subs,
         &mut scope,
@@ -92,6 +98,7 @@ impl Output {
 }
 
 fn canonicalize_expr(
+    rigids: &Rigids,
     env: &mut Env,
     subs: &mut Subs,
     scope: &mut Scope,
@@ -149,6 +156,7 @@ fn canonicalize_expr(
                         region,
                     );
                     let (can_expr, elem_out) = canonicalize_expr(
+                        rigids,
                         env,
                         subs,
                         scope,
@@ -216,8 +224,15 @@ fn canonicalize_expr(
             let fn_reason = Reason::AnonymousFnCall(loc_args.len() as u8);
 
             // Canonicalize the function expression and its arguments
-            let (fn_expr, mut output) =
-                canonicalize_expr(env, subs, scope, loc_fn.region, &loc_fn.value, fn_expected);
+            let (fn_expr, mut output) = canonicalize_expr(
+                rigids,
+                env,
+                subs,
+                scope,
+                loc_fn.region,
+                &loc_fn.value,
+                fn_expected,
+            );
 
             // The function's return type
             let ret_var = subs.mk_flex_var();
@@ -243,6 +258,7 @@ fn canonicalize_expr(
                 let reason = Reason::AnonymousFnArg(index as u8);
                 let expected_arg = ForReason(reason, arg_type.clone(), region);
                 let (arg_expr, arg_out) = canonicalize_expr(
+                    rigids,
                     env,
                     subs,
                     scope,
@@ -288,26 +304,21 @@ fn canonicalize_expr(
             }
 
             let fn_con = output.constraint;
-
-            // TODO occurs check!
-            // return $ exists vars $ CAnd ...
-
             let expected_fn_type = ForReason(
                 fn_reason,
                 Function(arg_types, Box::new(ret_type.clone())),
                 region,
             );
 
-            let mut exists_vars = Vec::with_capacity(arg_vars.len() + 2);
-
-            exists_vars = funcVar:resultVar:argVars;
-
-            output.constraint = exists(exists_vars, And(vec![
-                fn_con,
-                Eq(fn_type, expected_fn_type, fn_region),
-                And(arg_cons),
-                Eq(ret_type, expected, region),
-            ]));
+            output.constraint = exists(
+                vars,
+                And(vec![
+                    fn_con,
+                    Eq(fn_type, expected_fn_type, fn_region),
+                    And(arg_cons),
+                    Eq(ret_type, expected, region),
+                ]),
+            );
 
             (expr, output)
         }
@@ -421,7 +432,7 @@ fn canonicalize_expr(
         ast::Expr::Defs(defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             // so clone it.
-            can_defs(env, subs, scope.clone(), defs, expected, loc_ret)
+            can_defs(rigids, env, subs, scope.clone(), defs, expected, loc_ret)
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             // The globally unique symbol that will refer to this closure once it gets converted
@@ -448,7 +459,7 @@ fn canonicalize_expr(
             let mut state = PatternState {
                 assignment_types: ImMap::default(),
                 vars: Vec::with_capacity(loc_arg_patterns.len()),
-                reversed_constraints: Vec::with_capacity(1),
+                constraints: Vec::with_capacity(1),
             };
             let args = constrain_args(loc_arg_patterns.iter(), &scope, subs, &mut state);
             let mut can_args: Vec<Located<Pattern>> = Vec::with_capacity(loc_arg_patterns.len());
@@ -458,19 +469,26 @@ fn canonicalize_expr(
                 // (However, still include it in scope, because you *can* recursively refer to yourself.)
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(&loc_pattern.value, &mut shadowable_idents);
+                let pattern_expected = panic!("TODO implement constraint gen for functions");
 
-                can_args.push(canonicalize_pattern(
+                let (can_arg, state) = canonicalize_pattern(
                     env,
                     subs,
                     &mut scope,
                     &FunctionArg,
                     &loc_pattern,
                     &mut shadowable_idents,
-                ))
+                    pattern_expected,
+                );
+
+                panic!("TODO use state to add to constraints");
+
+                can_args.push(can_arg);
             }
 
             let body_type = NoExpectation(args.ret_type);
             let (loc_body_expr, mut output) = canonicalize_expr(
+                rigids,
                 env,
                 subs,
                 &mut scope,
@@ -479,9 +497,7 @@ fn canonicalize_expr(
                 body_type,
             );
 
-            state.reversed_constraints.reverse();
-
-            let assignments_constraint = And(state.reversed_constraints);
+            let assignments_constraint = And(state.constraints);
             let ret_constraint = output.constraint;
 
             // panic!("TODO occurs check");
@@ -491,19 +507,22 @@ fn canonicalize_expr(
             let var = subs.mk_flex_var();
             let typ = Variable(var);
 
-            output.constraint = exists(args.vars, And(vec![
-                Let(Box::new(LetConstraint {
-                    rigid_vars: Vec::new(),
-                    flex_vars: state.vars,
-                    assignment_types: state.assignment_types,
-                    assignments_constraint,
-                    ret_constraint,
-                })),
-                // "the closure's type is equal to the var we've stored for later use in the proc"
-                Eq(args.typ, NoExpectation(typ.clone()), region),
-                // "the var we've stored for later is equal to the overall expected type"
-                Eq(typ, expected, region),
-            ]));
+            output.constraint = exists(
+                args.vars,
+                And(vec![
+                    Let(Box::new(LetConstraint {
+                        rigid_vars: Vec::new(),
+                        flex_vars: state.vars,
+                        assignment_types: state.assignment_types,
+                        assignments_constraint,
+                        ret_constraint,
+                    })),
+                    // "the closure's type is equal to the var we've stored for later use in the proc"
+                    Eq(args.typ, NoExpectation(typ.clone()), region),
+                    // "the var we've stored for later is equal to the overall expected type"
+                    Eq(typ, expected, region),
+                ]),
+            );
 
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
@@ -540,61 +559,113 @@ fn canonicalize_expr(
         }
 
         ast::Expr::Case(loc_cond, branches) => {
-            // Each pattern must have the same type as the condition expression.
+            // Infer the condition expression's type.
             let pattern_var = subs.mk_flex_var();
             let pattern_type = Variable(pattern_var);
             let (can_cond, mut output) = canonicalize_expr(
+                rigids,
                 env,
                 subs,
                 scope,
                 region,
                 &loc_cond.value,
-                NoExpectation(pattern_type),
+                NoExpectation(pattern_type.clone()),
             );
 
             let mut recorded_tail_call = false;
             let mut can_branches = Vec::with_capacity(branches.len());
             let mut constraints = Vec::with_capacity(branches.len() + 1);
 
-            constraints.push(output.constraint);
-
             match expected {
                 FromAnnotation(name, arity, _, typ) => {
                     for (index, (loc_pattern, loc_expr)) in branches.into_iter().enumerate() {
-                        canonicalize_case_branch(loc_expr);
-                    }
+                        let mut shadowable_idents = scope.idents.clone();
+                        remove_idents(&loc_pattern.value, &mut shadowable_idents);
+                        let (can_pattern, loc_can_expr, branch_con, branch_references) =
+                            canonicalize_case_branch(
+                                env,
+                                subs,
+                                rigids,
+                                scope,
+                                region,
+                                loc_pattern,
+                                loc_expr,
+                                PExpected::ForReason(
+                                    PReason::CaseMatch { index },
+                                    pattern_type.clone(),
+                                    region,
+                                ),
+                                FromAnnotation(
+                                    name.clone(),
+                                    arity,
+                                    TypedCaseBranch(index),
+                                    typ.clone(),
+                                ),
+                                &mut output,
+                                &mut recorded_tail_call,
+                            );
 
-                    // TODO exists check
-                    constraints.push(constrain_case_branch(
-                        rtv,
-                        branch,
-                        PFromContext(region, PCaseMatch(index), ptrnType),
-                        FromAnnotation(name, arity, TypedCaseBranch(index), tipe),
-                    ));
+                        output.references = output.references.union(branch_references);
+
+                        can_branches.push((can_pattern, loc_can_expr));
+
+                        constraints.push(exists(
+                            vec![pattern_var],
+                            // Each branch's pattern must have the same type
+                            // as the condition expression did.
+                            And(vec![output.constraint.clone(), branch_con]),
+                        ));
+                    }
                 }
 
                 _ => {
                     let branch_var = subs.mk_flex_var();
                     let branch_type = Variable(branch_var);
 
-                    constraints.push(constrain_case_branch(
-                        rtv,
-                        branch,
-                        PFromContext(region, PCaseMatch(index), ptrnType),
-                        FromContext(region, CaseBranch(index), branch_type),
-                    ));
+                    for (index, (loc_pattern, loc_expr)) in branches.into_iter().enumerate() {
+                        let mut shadowable_idents = scope.idents.clone();
+                        remove_idents(&loc_pattern.value, &mut shadowable_idents);
+                        let (can_pattern, loc_can_expr, branch_con, branch_references) =
+                            canonicalize_case_branch(
+                                env,
+                                subs,
+                                rigids,
+                                scope,
+                                region,
+                                loc_pattern,
+                                loc_expr,
+                                PExpected::ForReason(
+                                    PReason::CaseMatch { index },
+                                    pattern_type.clone(),
+                                    region,
+                                ),
+                                ForReason(
+                                    Reason::CaseBranch { index },
+                                    branch_type.clone(),
+                                    region,
+                                ),
+                                &mut output,
+                                &mut recorded_tail_call,
+                            );
 
-                    // TODO exists check
-                    constraints.push(Eq(Case, region, branch_type, expected));
+                        output.references = output.references.union(branch_references);
+
+                        can_branches.push((can_pattern, loc_can_expr));
+
+                        constraints.push(exists(
+                            vec![pattern_var],
+                            // Each branch's pattern must have the same type
+                            // as the condition expression did.
+                            And(vec![output.constraint.clone(), branch_con]),
+                        ));
+                    }
                 }
             }
 
-            // One of the branches should have flipped this, so this should only happen
-            // in the situation where the case had no branches. That can come up, though!
             // A case with no branches is a runtime error, but it will mess things up
             // if code gen mistakenly thinks this is a tail call just because its condition
             // happend to be one. (The condition gave us our initial output value.)
-            if !recorded_tail_call {
+            if branches.is_empty() {
                 output.tail_call = None;
             }
 
@@ -649,10 +720,16 @@ fn canonicalize_expr(
             );
         }
         ast::Expr::BinOp((_, loc_op, _)) => {
-            panic!("A binary operator did not get desugared somehow: {:?}", loc_op);
+            panic!(
+                "A binary operator did not get desugared somehow: {:?}",
+                loc_op
+            );
         }
-        ast::Expr::UnaryOp(_, op) => {
-            panic!("A binary operator did not get desugared somehow: {:?}", loc_op);
+        ast::Expr::UnaryOp(_, loc_op) => {
+            panic!(
+                "A binary operator did not get desugared somehow: {:?}",
+                loc_op
+            );
         }
     };
 
@@ -672,7 +749,20 @@ fn canonicalize_expr(
     )
 }
 
-fn canonicalize_case_branch(rtv, pattern: ast::Pattern<'a>, loc_expr: Located<ast::Expr<'a>>, pExpect: PExpected<Type>, bExpect: Expected<Type>) {
+#[inline(always)]
+fn canonicalize_case_branch<'a>(
+    env: &mut Env,
+    subs: &mut Subs,
+    rigids: &Rigids,
+    scope: &Scope,
+    region: Region,
+    loc_pattern: &Located<ast::Pattern<'a>>,
+    loc_expr: &Located<ast::Expr<'a>>,
+    pattern_expected: PExpected<Type>,
+    expr_expected: Expected<Type>,
+    output: &mut Output,
+    recorded_tail_call: &mut bool,
+) -> (Located<Pattern>, Located<Expr>, Constraint, References) {
     // Each case branch gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the
     // rest of this block.
@@ -683,21 +773,6 @@ fn canonicalize_case_branch(rtv, pattern: ast::Pattern<'a>, loc_expr: Located<as
     let mut shadowable_idents = scope.idents.clone();
     remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-    Pattern.State(headers, pvars, rev_cons) = Pattern.add(pattern, pExpect, Pattern.emptyState);
-
-    Constraint::Let([], pvars, headers, (And(rev_cons.reverse())))
-       <$> constrain rtv expr bExpect
-
-
-    let loc_can_pattern = canonicalize_pattern(
-        env,
-        subs,
-        &mut scope,
-        &CaseBranch,
-        &loc_pattern,
-        &mut shadowable_idents,
-    );
-
     // Patterns introduce new idents to the scope!
     // Add the assigned identifiers to scope. If there's a collision, it means there
     // was shadowing, which will be handled later.
@@ -707,21 +782,20 @@ fn canonicalize_case_branch(rtv, pattern: ast::Pattern<'a>, loc_expr: Located<as
     scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
     let (can_expr, branch_output) = canonicalize_expr(
+        rigids,
         env,
         subs,
         &mut scope,
         region,
         &loc_expr.value,
-        expected.clone(),
+        expr_expected,
     );
 
-    output.references = output.references.union(branch_output.references);
-
     // If all branches are tail calling the same symbol, then so is the conditional as a whole.
-    if !recorded_tail_call {
+    if !*recorded_tail_call {
         // If we haven't recorded output.tail_call yet, record it.
         output.tail_call = branch_output.tail_call;
-        recorded_tail_call = true;
+        *recorded_tail_call = true;
     } else if branch_output.tail_call != output.tail_call {
         // If we recorded output.tail_call, but what we recorded differs from what we just saw,
         // then game over. This can't possibly be a self tail call!
@@ -741,7 +815,30 @@ fn canonicalize_case_branch(rtv, pattern: ast::Pattern<'a>, loc_expr: Located<as
         }
     }
 
-    can_branches.push((loc_can_pattern, can_expr));
+    let (loc_can_pattern, state) = canonicalize_pattern(
+        env,
+        subs,
+        &mut scope,
+        &CaseBranch,
+        &loc_pattern,
+        &mut shadowable_idents,
+        pattern_expected,
+    );
+
+    let constraint = Constraint::Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars: state.vars,
+        assignment_types: state.headers,
+        assignments_constraint: Constraint::And(state.constraints),
+        ret_constraint: branch_output.constraint,
+    }));
+
+    (
+        loc_can_pattern,
+        can_expr,
+        constraint,
+        branch_output.references,
+    )
 }
 
 fn union_pairs<'a, K, V, I>(mut map: ImMap<K, V>, pairs: I) -> ImMap<K, V>
@@ -1251,7 +1348,7 @@ impl Info {
 struct PatternState {
     assignment_types: ImMap<Symbol, Located<Type>>,
     vars: Vec<Variable>,
-    reversed_constraints: Vec<Constraint>,
+    constraints: Vec<Constraint>,
 }
 
 impl PatternState {
@@ -1325,6 +1422,7 @@ fn pattern_from_def<'a>(def: &'a Def<'a>) -> Option<&'a Located<ast::Pattern<'a>
 
 #[inline(always)]
 fn can_defs<'a>(
+    rigids: &Rigids,
     env: &mut Env,
     subs: &mut Subs,
     scope: Scope,
@@ -1346,8 +1444,8 @@ fn can_defs<'a>(
     scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
     // Used in canonicalization
-    let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
-    let mut can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
+    let refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
+    let can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
         MutMap::default();
 
     // Used in constraint generation
@@ -1400,7 +1498,7 @@ fn can_defs<'a>(
                 let mut state = PatternState {
                     assignment_types: ImMap::default(),
                     vars: Vec::with_capacity(1),
-                    reversed_constraints: Vec::with_capacity(1),
+                    constraints: Vec::with_capacity(1),
                 };
 
                 state.add_pattern(
@@ -1408,8 +1506,7 @@ fn can_defs<'a>(
                     loc_pattern.clone(),
                     NoExpectation(pattern_type.clone()),
                 );
-                state.reversed_constraints.reverse();
-                let def_constraint = And(state.reversed_constraints);
+                let def_constraint = And(state.constraints);
 
                 // Any time there's a lookup on this symbol in the outer Let,
                 // it should result in this expression's type. After all, this
@@ -1422,6 +1519,7 @@ fn can_defs<'a>(
                 );
 
                 let (loc_can_expr, output) = canonicalize_expr(
+                    rigids,
                     env,
                     subs,
                     &mut scope,
@@ -1458,14 +1556,18 @@ fn can_defs<'a>(
             let mut shadowable_idents = scope.idents.clone();
             remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-            let loc_can_pattern = canonicalize_pattern(
+            let pattern_expected = panic!("TODO need to finish constraining this pattern");
+
+            let (loc_can_pattern, state) = canonicalize_pattern(
                 env,
                 subs,
                 &mut scope,
                 &Assignment,
                 &loc_pattern,
                 &mut shadowable_idents,
+                pattern_expected,
             );
+            panic!("TODO do something with state here");
             let mut renamed_closure_assignment: Option<&Symbol> = None;
 
             // Give closures names (and tail-recursive status) where appropriate.
@@ -1569,6 +1671,7 @@ fn can_defs<'a>(
     // The assignment as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
     let (ret_expr, mut output) = canonicalize_expr(
+        rigids,
         env,
         subs,
         &mut scope,
