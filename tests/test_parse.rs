@@ -702,6 +702,44 @@ mod test_parse {
     }
 
     #[test]
+    fn unary_negation_with_parens() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 8, 10, Int("12")));
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let arg2 = arena.alloc(Located::new(0, 0, 11, 14, Var(module_parts, "foo")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let apply_expr = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 2, 6, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let actual = parse_with(&arena, "-(whee  12 foo)");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn unary_not_with_parens() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 8, 10, Int("12")));
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
+        let arg2 = arena.alloc(Located::new(0, 0, 11, 14, Var(module_parts, "foo")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let apply_expr = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 2, 6, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let actual = parse_with(&arena, "!(whee  12 foo)");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn unary_negation_arg() {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
