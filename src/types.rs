@@ -25,7 +25,6 @@ pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    BinOp(Box<BinOpType>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
         module_name: Box<str>,
@@ -82,13 +81,6 @@ impl Type {
             args: Vec::new(),
         }
     }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct BinOpType {
-    pub left: Type,
-    pub right: Type,
-    pub ret: Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
