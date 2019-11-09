@@ -563,11 +563,18 @@ mod test_infer {
     //    );
     // }
 
-    // #[test]
-    // fn infer_basic_case() {
-    //     assert_eq!(
-    //         infer("case 42 when 1 then 2.5 when _ then 3.5"),
-    //         Builtin(Frac)
-    //     );
-    // }
+    #[test]
+    fn case_with_int_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                case 1 when
+                    1 -> 2
+                    3 -> 4
+            "#
+            ),
+            "Int",
+        );
+    }
+
 }
