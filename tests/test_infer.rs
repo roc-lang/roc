@@ -429,6 +429,20 @@ mod test_infer {
     }
 
     #[test]
+    fn identity_returns_given_type() {
+        infer_eq(
+            indoc!(
+                r#"
+                identity = \a -> a
+
+                identity "hi"
+                "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
     fn call_returns_list() {
         infer_eq(
             indoc!(
