@@ -669,10 +669,8 @@ fn canonicalize_expr(
                 output.tail_call = None;
             }
 
-            let var = panic!("TODO create a var for case and make constraints");
-
             // Incorporate all three expressions into a combined Output value.
-            let expr = Case(var, Box::new(can_cond), can_branches);
+            let expr = Case(pattern_var, Box::new(can_cond), can_branches);
 
             (expr, output)
         }
