@@ -254,7 +254,15 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
         }
         Case(loc_cond_expr, branches) => {
             let loc_desugared_cond = &*arena.alloc(desugar(arena, &loc_cond_expr));
-            let desugared_branches = Vec::with_capacity_in(branches.len(), arena);
+            let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
+
+            for (loc_pattern, loc_branch_expr) in branches.into_iter() {
+                // TODO FIXME cloning performance disaster
+                desugared_branches.push(&*arena.alloc((
+                    loc_pattern.clone(),
+                    desugar(arena, &loc_branch_expr).clone(),
+                )));
+            }
 
             arena.alloc(Located {
                 value: Case(loc_desugared_cond, desugared_branches),
