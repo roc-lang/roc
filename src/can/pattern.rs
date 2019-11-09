@@ -50,15 +50,15 @@ pub fn canonicalize_pattern<'a>(
     subs: &mut Subs,
     scope: &mut Scope,
     pattern_type: &'a PatternType,
-    loc_pattern: &'a Located<ast::Pattern<'a>>,
+    pattern: &'a ast::Pattern<'a>,
+    region: Region,
     shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
     expected: PExpected<Type>,
 ) -> (Located<Pattern>, State) {
     use self::PatternType::*;
     use can::ast::Pattern::*;
 
-    let region = loc_pattern.region;
-    let pattern = match &loc_pattern.value {
+    let can_pattern = match &pattern {
         &Identifier(ref name) => {
             let unqualified_ident = Ident::Unqualified(name.to_string());
 
@@ -178,27 +178,83 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        // &IntLiteral(ref num) => match pattern_type {
-        //     CaseBranch => Pattern::IntLiteral(*num),
-        //     ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
-        // },
+        &FloatLiteral(ref string) => match pattern_type {
+            CaseBranch => {
+                let float = finish_parsing_float(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed float pattern"));
 
-        // &FloatLiteral(ref num) => match pattern_type {
-        //     CaseBranch => Pattern::FloatLiteral(*num),
-        //     ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
-        // },
+                Pattern::FloatLiteral(float)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+        },
 
-        // &ExactString(ref string) => match pattern_type {
-        //     CaseBranch => Pattern::ExactString(string.clone()),
-        //     ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
-        // },
         &Underscore => match pattern_type {
             CaseBranch | FunctionArg => Pattern::Underscore(subs.mk_flex_var()),
             Assignment => unsupported_pattern(env, Assignment, region),
         },
 
+        &IntLiteral(string) => match pattern_type {
+            CaseBranch => {
+                let int = finish_parsing_int(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed int pattern"));
+
+                Pattern::IntLiteral(int)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+        },
+
+        &HexIntLiteral(string) => match pattern_type {
+            CaseBranch => {
+                let int = finish_parsing_hex(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed hex int pattern"));
+
+                Pattern::IntLiteral(int)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+        },
+
+        &OctalIntLiteral(string) => match pattern_type {
+            CaseBranch => {
+                let int = finish_parsing_oct(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed octal int pattern"));
+
+                Pattern::IntLiteral(int)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+        },
+
+        &BinaryIntLiteral(string) => match pattern_type {
+            CaseBranch => {
+                let int = finish_parsing_bin(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed binary int pattern"));
+
+                Pattern::IntLiteral(int)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+        },
+
+        &StrLiteral(string) => match pattern_type {
+            CaseBranch => {
+                panic!("TODO check whether string pattern is malformed.");
+                Pattern::ExactString((*string).into())
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+        },
+
         // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
-        _ => panic!("TODO finish restoring can_pattern branches"),
+        &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
+            return canonicalize_pattern(
+                env,
+                subs,
+                scope,
+                pattern_type,
+                sub_pattern,
+                region,
+                shadowable_idents,
+                expected,
+            )
+        }
+        _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
 
     let mut state = State {
@@ -207,12 +263,12 @@ pub fn canonicalize_pattern<'a>(
         constraints: Vec::new(),
     };
 
-    add_constraints(&loc_pattern.value, loc_pattern.region, expected, &mut state);
+    add_constraints(&pattern, region, expected, &mut state);
 
     (
         Located {
             region,
-            value: pattern,
+            value: can_pattern,
         },
         state,
     )

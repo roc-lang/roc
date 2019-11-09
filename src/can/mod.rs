@@ -485,7 +485,8 @@ fn canonicalize_expr(
                     subs,
                     &mut scope,
                     &FunctionArg,
-                    &loc_pattern,
+                    &loc_pattern.value,
+                    loc_pattern.region,
                     &mut shadowable_idents,
                     pattern_expected,
                 );
@@ -567,8 +568,8 @@ fn canonicalize_expr(
 
         ast::Expr::Case(loc_cond, branches) => {
             // Infer the condition expression's type.
-            let pattern_var = subs.mk_flex_var();
-            let pattern_type = Variable(pattern_var);
+            let cond_var = subs.mk_flex_var();
+            let cond_type = Variable(cond_var);
             let (can_cond, mut output) = canonicalize_expr(
                 rigids,
                 env,
@@ -576,12 +577,13 @@ fn canonicalize_expr(
                 scope,
                 region,
                 &loc_cond.value,
-                NoExpectation(pattern_type.clone()),
+                NoExpectation(cond_type.clone()),
             );
 
             let mut recorded_tail_call = false;
             let mut can_branches = Vec::with_capacity(branches.len());
             let mut constraints = Vec::with_capacity(branches.len() + 1);
+            let expr_con = output.constraint.clone();
 
             match expected {
                 FromAnnotation(name, arity, _, typ) => {
@@ -599,7 +601,7 @@ fn canonicalize_expr(
                                 loc_expr,
                                 PExpected::ForReason(
                                     PReason::CaseMatch { index },
-                                    pattern_type.clone(),
+                                    cond_type.clone(),
                                     region,
                                 ),
                                 FromAnnotation(
@@ -617,10 +619,10 @@ fn canonicalize_expr(
                         can_branches.push((can_pattern, loc_can_expr));
 
                         constraints.push(exists(
-                            vec![pattern_var],
+                            vec![cond_var],
                             // Each branch's pattern must have the same type
                             // as the condition expression did.
-                            And(vec![output.constraint.clone(), branch_con]),
+                            And(vec![expr_con.clone(), branch_con]),
                         ));
                     }
                 }
@@ -628,10 +630,13 @@ fn canonicalize_expr(
                 _ => {
                     let branch_var = subs.mk_flex_var();
                     let branch_type = Variable(branch_var);
+                    let mut branch_cons = Vec::with_capacity(branches.len());
 
                     for (index, (loc_pattern, loc_expr)) in branches.into_iter().enumerate() {
                         let mut shadowable_idents = scope.idents.clone();
+
                         remove_idents(&loc_pattern.value, &mut shadowable_idents);
+
                         let (can_pattern, loc_can_expr, branch_con, branch_references) =
                             canonicalize_case_branch(
                                 env,
@@ -643,7 +648,7 @@ fn canonicalize_expr(
                                 loc_expr,
                                 PExpected::ForReason(
                                     PReason::CaseMatch { index },
-                                    pattern_type.clone(),
+                                    cond_type.clone(),
                                     region,
                                 ),
                                 ForReason(
@@ -659,13 +664,22 @@ fn canonicalize_expr(
 
                         can_branches.push((can_pattern, loc_can_expr));
 
-                        constraints.push(exists(
-                            vec![pattern_var],
+                        branch_cons.push(branch_con);
+                    }
+
+                    constraints.push(exists(
+                        vec![cond_var],
+                        And(vec![
+                            // Record the original conditional expression's constraint.
+                            expr_con.clone(),
                             // Each branch's pattern must have the same type
                             // as the condition expression did.
-                            And(vec![output.constraint.clone(), branch_con]),
-                        ));
-                    }
+                            And(branch_cons),
+                            // The return type of each branch must equal
+                            // the return type of the entire case-expression.
+                            Eq(branch_type, expected, region),
+                        ]),
+                    ));
                 }
             }
 
@@ -676,8 +690,10 @@ fn canonicalize_expr(
                 output.tail_call = None;
             }
 
+            output.constraint = And(constraints);
+
             // Incorporate all three expressions into a combined Output value.
-            let expr = Case(pattern_var, Box::new(can_cond), can_branches);
+            let expr = Case(cond_var, Box::new(can_cond), can_branches);
 
             // TODO check for exhaustiveness. If this `case` is non-exaustive, then:
             //
@@ -830,7 +846,8 @@ fn canonicalize_case_branch<'a>(
         subs,
         &mut scope,
         &CaseBranch,
-        &loc_pattern,
+        &loc_pattern.value,
+        loc_pattern.region,
         &mut shadowable_idents,
         pattern_expected,
     );
@@ -1454,7 +1471,8 @@ fn can_defs<'a>(
                 subs,
                 &mut scope,
                 &Assignment,
-                &loc_pattern,
+                &loc_pattern.value,
+                loc_pattern.region,
                 &mut shadowable_idents,
                 pattern_expected,
             );
