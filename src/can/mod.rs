@@ -469,7 +469,9 @@ fn canonicalize_expr(
                 // (However, still include it in scope, because you *can* recursively refer to yourself.)
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(&loc_pattern.value, &mut shadowable_idents);
-                let pattern_expected = panic!("TODO implement constraint gen for functions");
+
+                let pattern_var = subs.mk_flex_var();
+                let pattern_expected = PExpected::NoExpectation(Type::Variable(pattern_var));
 
                 let (can_arg, state) = canonicalize_pattern(
                     env,
@@ -480,8 +482,6 @@ fn canonicalize_expr(
                     &mut shadowable_idents,
                     pattern_expected,
                 );
-
-                panic!("TODO use state to add to constraints");
 
                 can_args.push(can_arg);
             }
@@ -1442,8 +1442,8 @@ fn can_defs<'a>(
     scope.idents = union_pairs(scope.idents, assigned_idents.iter());
 
     // Used in canonicalization
-    let refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
-    let can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
+    let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
+    let mut can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
         MutMap::default();
 
     // Used in constraint generation
@@ -1554,7 +1554,8 @@ fn can_defs<'a>(
             let mut shadowable_idents = scope.idents.clone();
             remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-            let pattern_expected = panic!("TODO need to finish constraining this pattern");
+            let pattern_var = subs.mk_flex_var();
+            let pattern_expected = PExpected::NoExpectation(Type::Variable(pattern_var));
 
             let (loc_can_pattern, state) = canonicalize_pattern(
                 env,
@@ -1565,7 +1566,6 @@ fn can_defs<'a>(
                 &mut shadowable_idents,
                 pattern_expected,
             );
-            panic!("TODO do something with state here");
             let mut renamed_closure_assignment: Option<&Symbol> = None;
 
             // Give closures names (and tail-recursive status) where appropriate.
