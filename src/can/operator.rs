@@ -51,7 +51,6 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
         | MalformedIdent(_)
         | MalformedClosure
         | PrecedenceConflict(_, _, _)
-        | UnaryOp(_, _)
         | Variant(_, _) => loc_expr,
 
         Field(sub_expr, paths) => arena.alloc(Located {

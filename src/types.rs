@@ -84,10 +84,6 @@ impl Type {
     }
 }
 
-fn op_type(left: Type, right: Type, ret: Type) -> BinOpType {
-    BinOpType { left, right, ret }
-}
-
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct BinOpType {
     pub left: Type,
