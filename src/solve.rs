@@ -31,8 +31,12 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
                 solve(env, subs, sub_constraint);
             }
         }
-        Pattern(_, _, _, _) => {
-            panic!("TODO solve patterns");
+        Pattern(_region, _category, typ, expected) => {
+            // TODO use region?
+            let actual = type_to_variable(subs, typ.clone());
+            let expected = type_to_variable(subs, expected.clone().get_type());
+
+            subs.union(actual, expected);
         }
         Let(let_con) => {
             match let_con.ret_constraint {
