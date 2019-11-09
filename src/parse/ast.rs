@@ -113,7 +113,8 @@ pub enum Expr<'a> {
     // String Literals
     Str(&'a str),
     BlockStr(&'a [&'a str]),
-    /// e.g. `(expr).foo.bar`
+    /// e.g. `(expr).foo.bar` - we rule out nested lookups in canonicalization,
+    /// but we want to keep the nesting here to give a nicer error message.
     Field(&'a Loc<Expr<'a>>, Vec<'a, &'a str>),
     /// e.g. `Foo.Bar.baz.qux`
     QualifiedField(&'a [&'a str], &'a [&'a str]),

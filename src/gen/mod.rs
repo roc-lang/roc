@@ -273,6 +273,7 @@ impl<'a> ModuleBuilder<'a> {
             | List(_, _)
             | Record(_, _)
             | EmptyRecord
+            | Field(_, _)
             | RuntimeError(_) => {
                 panic!("TODO compile_expr for {:?}", expr);
             }
