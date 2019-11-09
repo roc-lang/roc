@@ -461,18 +461,20 @@ mod test_infer {
     // TODO BoundTypeVariables
     // TODO conditionals
 
-    //     #[test]
-    //     fn indirect_always() {
-    //         infer_eq(
-    //             indoc!(r#"
-    //                 always = \val -> (\_ -> val)
-    //                 alwaysFoo = always "foo"
+    #[test]
+    fn indirect_always() {
+        infer_eq(
+            indoc!(
+                r#"
+                    always = \val -> (\_ -> val)
+                    alwaysFoo = always "foo"
 
-    //                 alwaysFoo 42
-    //             "#),
-    //             "Str"
-    //         );
-    //     }
+                    alwaysFoo 42
+                "#
+            ),
+            "Str",
+        );
+    }
 
     //     #[test]
     //     fn identity() {
@@ -508,49 +510,51 @@ mod test_infer {
     //     );
     // }
 
-    // #[test]
-    // fn basic_float_division() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             1 / 2
-    //         "#
-    //         ),
-    //         "Float",
-    //     );
-    // }
+    //     #[test]
+    //     fn basic_float_division() {
+    //         infer_eq(
+    //             indoc!(
+    //                 r#"
+    //                 1 / 2
+    //             "#
+    //             ),
+    //             "Float",
+    //         );
+    //     }
 
-    #[test]
-    fn basic_int_division() {
-        infer_eq(
-            indoc!(
-                r#"
-                1 // 2
-            "#
-            ),
-            "Int",
-        );
-    }
+    //     #[test]
+    //     fn basic_int_division() {
+    //         infer_eq(
+    //             indoc!(
+    //                 r#"
+    //                 1 // 2
+    //             "#
+    //             ),
+    //             "Int",
+    //         );
+    //     }
 
-    // #[test]
-    // fn basic_addition() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             1 + 2
-    //         "#
-    //         ),
-    //         "Num *",
-    //     );
-    // }
+    //     #[test]
+    //     fn basic_addition() {
+    //         infer_eq(
+    //             indoc!(
+    //                 r#"
+    //                 1 + 2
+    //             "#
+    //             ),
+    //             "Int",
+    //         );
+    //     }
 
     // #[test]
     // fn basic_circular_type() {
-    //     assert_eq!(
-    //         infer(indoc!(r#"
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
     //             \x -> x x
-    //         "#)),
-    //         Erroneous(Problem::CircularType)
+    //         "#
+    //         ),
+    //         "<Type Mismatch: Circular Type>",
     //     );
     // }
 
@@ -583,8 +587,8 @@ mod test_infer {
             indoc!(
                 r#"
                 case 1 when
-                    1 -> 2
-                    3 -> 4
+                 1 -> 2
+                 3 -> 4
             "#
             ),
             "Int",
