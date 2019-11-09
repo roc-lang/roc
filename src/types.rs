@@ -3,6 +3,7 @@ use collections::ImMap;
 use operator::{ArgSide, BinOp};
 use region::Located;
 use region::Region;
+use std::fmt;
 use subs::Variable;
 
 // The standard modules
@@ -20,7 +21,7 @@ pub const TYPE_NUM: &'static str = "Num";
 pub const TYPE_INTEGER: &'static str = "Integer";
 pub const TYPE_FLOATINGPOINT: &'static str = "FloatingPoint";
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
@@ -34,6 +35,55 @@ pub enum Type {
     Variable(Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
+}
+
+impl fmt::Debug for Type {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Type::EmptyRec => write!(f, "{}", "{}"),
+            Type::Function(args, ret) => {
+                for (index, arg) in args.iter().enumerate() {
+                    if index > 0 {
+                        ", ".fmt(f)?;
+                    }
+
+                    arg.fmt(f)?;
+                }
+
+                " -> ".fmt(f)?;
+
+                ret.fmt(f)
+            }
+            Type::Variable(var) => write!(f, "<{:?}>", var),
+
+            Type::Apply {
+                module_name,
+                name,
+                args,
+            } => {
+                write!(f, "{}", "(")?;
+
+                if !module_name.is_empty() {
+                    write!(f, "{}.", module_name)?;
+                }
+
+                write!(f, "{}", name)?;
+
+                for arg in args {
+                    write!(f, " {:?}", arg)?;
+                }
+
+                write!(f, "{}", ")")
+            }
+            Type::Erroneous(problem) => {
+                "Erroneous(".fmt(f)?;
+
+                problem.fmt(f)?;
+
+                ")".fmt(f)
+            }
+        }
+    }
 }
 
 impl Type {
