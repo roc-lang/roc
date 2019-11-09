@@ -187,6 +187,7 @@ fn canonicalize_expr(
         }
 
         //ast::Expr::If(loc_cond, loc_true, loc_false) => {
+        //    panic!("TODO Emit a case-expression with False first for the else branch, then _");
         //    // Canonicalize the nested expressions
         //    let (cond_expr, cond_out) = canonicalize(env, scope, *loc_cond);
         //    let (true_expr, true_out) = canonicalize(env, scope, *loc_true);
@@ -671,6 +672,11 @@ fn canonicalize_expr(
 
             // Incorporate all three expressions into a combined Output value.
             let expr = Case(pattern_var, Box::new(can_cond), can_branches);
+
+            // TODO check for exhaustiveness. If this `case` is non-exaustive, then:
+            //
+            // 1. Record a Problem.
+            // 2. Add an extra _ branch at the end which throws a runtime error.
 
             (expr, output)
         }
