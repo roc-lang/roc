@@ -39,7 +39,7 @@ use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
     allocated, and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by,
-    one_of10, one_of16, one_of2, one_of3, one_of5, one_of6, one_or_more, optional, skip_first,
+    one_of10, one_of17, one_of2, one_of3, one_of5, one_of6, one_or_more, optional, skip_first,
     skip_second, string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason,
     ParseResult, Parser, State,
 };
@@ -1130,25 +1130,30 @@ fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {
 }
 
 fn binop<'a>() -> impl Parser<'a, BinOp> {
-    one_of16(
+    one_of17(
         // Sorted from highest to lowest predicted usage in practice,
         // so that successful matches shorrt-circuit as early as possible.
+        // The only exception to this is that operators which begin
+        // with other valid operators (e.g. "<=" begins with "<") must
+        // come before the shorter ones; otherwise, they will never
+        // be reached because the shorter one will pass and consume!
         map(string("|>"), |_| BinOp::Pizza),
         map(string("=="), |_| BinOp::Equals),
+        map(string("!="), |_| BinOp::NotEquals),
         map(string("&&"), |_| BinOp::And),
         map(string("||"), |_| BinOp::Or),
         map(char('+'), |_| BinOp::Plus),
         map(char('*'), |_| BinOp::Star),
         map(char('-'), |_| BinOp::Minus),
-        map(char('/'), |_| BinOp::Slash),
-        map(char('<'), |_| BinOp::LessThan),
-        map(char('>'), |_| BinOp::GreaterThan),
-        map(string("<="), |_| BinOp::LessThanOrEq),
-        map(string(">="), |_| BinOp::GreaterThanOrEq),
-        map(char('^'), |_| BinOp::Caret),
-        map(char('%'), |_| BinOp::Percent),
         map(string("//"), |_| BinOp::DoubleSlash),
+        map(char('/'), |_| BinOp::Slash),
+        map(string("<="), |_| BinOp::LessThanOrEq),
+        map(char('<'), |_| BinOp::LessThan),
+        map(string(">="), |_| BinOp::GreaterThanOrEq),
+        map(char('>'), |_| BinOp::GreaterThan),
+        map(char('^'), |_| BinOp::Caret),
         map(string("%%"), |_| BinOp::DoublePercent),
+        map(char('%'), |_| BinOp::Percent),
     )
 }
 

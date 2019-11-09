@@ -1195,6 +1195,121 @@ where
     )
 }
 
+pub fn one_of17<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, P16, P17, A>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+    p11: P11,
+    p12: P12,
+    p13: P13,
+    p14: P14,
+    p15: P15,
+    p16: P16,
+    p17: P17,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+    P11: Parser<'a, A>,
+    P12: Parser<'a, A>,
+    P13: Parser<'a, A>,
+    P14: Parser<'a, A>,
+    P15: Parser<'a, A>,
+    P16: Parser<'a, A>,
+    P17: Parser<'a, A>,
+{
+    one_of2(
+        p1,
+        one_of16(
+            p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17,
+        ),
+    )
+}
+
+pub fn one_of18<
+    'a,
+    P1,
+    P2,
+    P3,
+    P4,
+    P5,
+    P6,
+    P7,
+    P8,
+    P9,
+    P10,
+    P11,
+    P12,
+    P13,
+    P14,
+    P15,
+    P16,
+    P17,
+    P18,
+    A,
+>(
+    p1: P1,
+    p2: P2,
+    p3: P3,
+    p4: P4,
+    p5: P5,
+    p6: P6,
+    p7: P7,
+    p8: P8,
+    p9: P9,
+    p10: P10,
+    p11: P11,
+    p12: P12,
+    p13: P13,
+    p14: P14,
+    p15: P15,
+    p16: P16,
+    p17: P17,
+    p18: P18,
+) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+    P3: Parser<'a, A>,
+    P4: Parser<'a, A>,
+    P5: Parser<'a, A>,
+    P6: Parser<'a, A>,
+    P7: Parser<'a, A>,
+    P8: Parser<'a, A>,
+    P9: Parser<'a, A>,
+    P10: Parser<'a, A>,
+    P11: Parser<'a, A>,
+    P12: Parser<'a, A>,
+    P13: Parser<'a, A>,
+    P14: Parser<'a, A>,
+    P15: Parser<'a, A>,
+    P16: Parser<'a, A>,
+    P17: Parser<'a, A>,
+    P18: Parser<'a, A>,
+{
+    one_of2(
+        p1,
+        one_of17(
+            p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18,
+        ),
+    )
+}
+
 // DEBUG COMBINATORS
 //
 // These use dyn for runtime dynamic dispatch. It prevents combinatoric
