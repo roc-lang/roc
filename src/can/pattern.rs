@@ -1,4 +1,8 @@
 use can::env::Env;
+use can::num::{
+    finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
+    finish_parsing_oct,
+};
 use can::problem::Problem;
 use can::scope::Scope;
 use can::symbol::Symbol;

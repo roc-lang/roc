@@ -1,5 +1,9 @@
 use self::env::Env;
 use self::expr::Expr::{self, *};
+use self::num::{
+    finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
+    finish_parsing_oct, float_expr_from_result, int_expr_from_result,
+};
 use self::pattern::PatternType::*;
 use self::pattern::{canonicalize_pattern, Pattern};
 use self::problem::Problem;
@@ -14,7 +18,6 @@ use graph::{strongly_connected_component, topological_sort};
 use ident::Ident;
 use parse::ast::{self, Def};
 use region::{Located, Region};
-use std::i64;
 use subs::{Subs, Variable};
 use types::AnnotationSource::*;
 use types::Constraint::{self, *};
@@ -24,6 +27,7 @@ use types::{LetConstraint, PExpected, PReason, Reason};
 
 pub mod env;
 pub mod expr;
+pub mod num;
 pub mod operator;
 pub mod pattern;
 pub mod problem;
@@ -110,12 +114,14 @@ fn canonicalize_expr(
 
     let (expr, output) = match expr {
         ast::Expr::Int(string) => {
-            let (constraint, answer) = int_from_parsed(subs, string, env, expected, region);
+            let (constraint, answer) =
+                int_expr_from_result(subs, finish_parsing_int(string), env, expected, region);
 
             (answer, Output::new(constraint))
         }
         ast::Expr::Float(string) => {
-            let (constraint, answer) = float_from_parsed(subs, string, env, expected, region);
+            let (constraint, answer) =
+                float_expr_from_result(subs, finish_parsing_float(string), env, expected, region);
 
             (answer, Output::new(constraint))
         }
@@ -695,18 +701,18 @@ fn canonicalize_expr(
             );
         }
         ast::Expr::BinaryInt(string) => {
-            let (constraint, answer) = bin_from_parsed(subs, string, env, expected, region);
-
+            let (constraint, answer) =
+                int_expr_from_result(subs, finish_parsing_bin(string), env, expected, region);
             (answer, Output::new(constraint))
         }
         ast::Expr::HexInt(string) => {
-            let (constraint, answer) = hex_from_parsed(subs, string, env, expected, region);
-
+            let (constraint, answer) =
+                int_expr_from_result(subs, finish_parsing_hex(string), env, expected, region);
             (answer, Output::new(constraint))
         }
         ast::Expr::OctalInt(string) => {
-            let (constraint, answer) = oct_from_parsed(subs, string, env, expected, region);
-
+            let (constraint, answer) =
+                int_expr_from_result(subs, finish_parsing_oct(string), env, expected, region);
             (answer, Output::new(constraint))
         }
         // Below this point, we shouln't see any of these nodes anymore because
@@ -1201,126 +1207,6 @@ fn resolve_ident<'a>(
 //        Err(variant_name)
 //    }
 //}
-
-#[inline(always)]
-fn float_from_parsed(
-    subs: &mut Subs,
-    raw: &str,
-    env: &mut Env,
-    expected: Expected<Type>,
-    region: Region,
-) -> (Constraint, Expr) {
-    // Ignore underscores.
-    match raw.replace("_", "").parse::<f64>() {
-        Ok(float) if float.is_finite() => (
-            constrain::float_literal(subs, expected, region),
-            Expr::Float(float),
-        ),
-        _ => {
-            let runtime_error = FloatOutsideRange(raw.into());
-
-            env.problem(Problem::RuntimeError(runtime_error.clone()));
-
-            (True, Expr::RuntimeError(runtime_error))
-        }
-    }
-}
-
-#[inline(always)]
-fn int_from_parsed(
-    subs: &mut Subs,
-    raw: &str,
-    env: &mut Env,
-    expected: Expected<Type>,
-    region: Region,
-) -> (Constraint, Expr) {
-    // Ignore underscores.
-    match raw.replace("_", "").parse::<i64>() {
-        Ok(int) => (
-            constrain::int_literal(subs, expected, region),
-            Expr::Int(int),
-        ),
-        Err(_) => {
-            let runtime_error = IntOutsideRange(raw.into());
-
-            env.problem(Problem::RuntimeError(runtime_error.clone()));
-
-            (True, Expr::RuntimeError(runtime_error))
-        }
-    }
-}
-
-#[inline(always)]
-fn hex_from_parsed<'a>(
-    subs: &mut Subs,
-    raw: &'a str,
-    env: &'a mut Env,
-    expected: Expected<Type>,
-    region: Region,
-) -> (Constraint, Expr) {
-    // Ignore underscores.
-    match i64::from_str_radix(raw.replace("_", "").as_str(), 16) {
-        Ok(int) => (
-            constrain::int_literal(subs, expected, region),
-            Expr::Int(int),
-        ),
-        Err(parse_err) => {
-            let runtime_error = InvalidHex(parse_err, raw.into());
-
-            env.problem(Problem::RuntimeError(runtime_error.clone()));
-
-            (True, Expr::RuntimeError(runtime_error))
-        }
-    }
-}
-
-#[inline(always)]
-fn oct_from_parsed<'a>(
-    subs: &mut Subs,
-    raw: &'a str,
-    env: &'a mut Env,
-    expected: Expected<Type>,
-    region: Region,
-) -> (Constraint, Expr) {
-    // Ignore underscores.
-    match i64::from_str_radix(raw.replace("_", "").as_str(), 8) {
-        Ok(int) => (
-            constrain::int_literal(subs, expected, region),
-            Expr::Int(int),
-        ),
-        Err(parse_err) => {
-            let runtime_error = InvalidOctal(parse_err, raw.into());
-
-            env.problem(Problem::RuntimeError(runtime_error.clone()));
-
-            (True, Expr::RuntimeError(runtime_error))
-        }
-    }
-}
-
-#[inline(always)]
-fn bin_from_parsed<'a>(
-    subs: &mut Subs,
-    raw: &'a str,
-    env: &'a mut Env,
-    expected: Expected<Type>,
-    region: Region,
-) -> (Constraint, Expr) {
-    // Ignore underscores.
-    match i64::from_str_radix(raw.replace("_", "").as_str(), 2) {
-        Ok(int) => (
-            constrain::int_literal(subs, expected, region),
-            Expr::Int(int),
-        ),
-        Err(parse_err) => {
-            let runtime_error = InvalidBinary(parse_err, raw.into());
-
-            env.problem(Problem::RuntimeError(runtime_error.clone()));
-
-            (True, Expr::RuntimeError(runtime_error))
-        }
-    }
-}
 
 struct Info {
     pub vars: Vec<Variable>,
