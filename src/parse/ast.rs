@@ -1,6 +1,7 @@
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use fmt;
 use operator::CalledVia;
 use operator::Operator;
 use parse::ident::Ident;
@@ -570,6 +571,14 @@ pub fn format<'a>(
         Record(loc_fields) => {
             buf.push('{');
 
+            let is_multiline = loc_fields
+                .iter()
+                .any(|loc_field| fmt::is_multiline_field(&loc_field.value));
+
+            if !is_multiline && !loc_fields.is_empty() {
+                buf.push(' ');
+            }
+
             let mut iter = loc_fields.iter().peekable();
 
             while let Some(field) = iter.next() {
@@ -581,8 +590,12 @@ pub fn format<'a>(
                 ));
 
                 if let Some(_) = iter.peek() {
-                    buf.push(',');
+                    buf.push_str(", ");
                 }
+            }
+
+            if !is_multiline && !loc_fields.is_empty() {
+                buf.push(' ');
             }
 
             buf.push('}');
@@ -815,7 +828,6 @@ pub fn format_field<'a>(
 
     match assigned_field {
         LabeledValue(name, spaces, value) => {
-            buf.push(' ');
             buf.push_str(name.value);
 
             if spaces.len() > 0 {
@@ -823,13 +835,11 @@ pub fn format_field<'a>(
                 buf.push_str(&format_spaces(arena, spaces.iter(), indent));
             }
 
-            buf.push(' ');
             buf.push(':');
             buf.push(' ');
             buf.push_str(&format(arena, &value.value, indent, apply_needs_parens));
         }
         LabelOnly(name, spaces) => {
-            buf.push(' ');
             buf.push_str(name.value);
 
             if spaces.len() > 0 {
