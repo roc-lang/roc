@@ -237,6 +237,18 @@ pub enum CommentOrNewline<'a> {
     BlockComment(&'a [&'a str]),
 }
 
+impl<'a> CommentOrNewline<'a> {
+    pub fn contains_newline(&self) -> bool {
+        use self::CommentOrNewline::*;
+
+        match self {
+            // Line comments have an implicit newline at the end
+            Newline | LineComment(_) => true,
+            BlockComment(lines) => lines.len() > 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier

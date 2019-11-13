@@ -1,4 +1,3 @@
-use parse::ast::CommentOrNewline::Newline;
 use parse::ast::{AssignedField, Expr, Pattern};
 
 pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
@@ -9,7 +8,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
     match expr {
         // Return whether these spaces contain any Newlines
         SpaceBefore(_, spaces) | SpaceAfter(_, spaces) => {
-            spaces.iter().any(|space| space == &Newline)
+            spaces.iter().any(|space| space.contains_newline())
         }
 
         // These expressions never have newlines
