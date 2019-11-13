@@ -180,20 +180,21 @@ mod test_format {
 
     #[test]
     fn one_field() {
-        assert_formats_same("{ x : 4 }");
+        assert_formats_same("{ x: 4 }");
     }
 
     #[test]
     fn two_fields() {
-        assert_formats_same("{ x : 4, y : 42 }");
+        assert_formats_same("{ x: 4, y: 42 }");
     }
 
     #[test]
     fn two_fields_newline() {
         assert_formats_same(indoc!(
             r#"
-            { x : 4
-            , y : 42
+            {
+                x: 4,
+                y: 42
             }
         "#
         ));
@@ -212,7 +213,7 @@ mod test_format {
 
     #[test]
     fn field_with_comments() {
-        assert_formats_same("{ ### before ### x ### after ### : 4 }");
+        assert_formats_same("{ ### before ### x: ### after ### 4 }");
     }
 
     #[test]
