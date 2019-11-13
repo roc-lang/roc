@@ -11,18 +11,6 @@ pub mod record;
 pub mod string_literal;
 pub mod type_annotation;
 
-/// All module definitions begin with one of these:
-///
-/// app
-/// api
-/// api bridge
-///
-/// We parse these to guard against mistakes; in general, the build tool
-/// is responsible for determining the root module (either an `app` or `api bridge`
-/// module), and then all `api` modules should only ever be imported from
-/// another module.
-///
-/// parsing the file
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::{BinOp, CalledVia, UnaryOp};
