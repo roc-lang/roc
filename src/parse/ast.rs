@@ -570,8 +570,19 @@ pub fn format<'a>(
         Record(loc_fields) => {
             buf.push('{');
 
-            for _field in loc_fields {
-                panic!("TODO implement Display for record fields.");
+            let mut iter = loc_fields.iter().peekable();
+
+            while let Some(field) = iter.next() {
+                buf.push_str(&format_field(
+                    arena,
+                    &field.value,
+                    indent,
+                    apply_needs_parens,
+                ));
+
+                if let Some(_) = iter.peek() {
+                    buf.push(',');
+                }
             }
 
             buf.push('}');
@@ -787,6 +798,54 @@ where
                 consecutive_newlines = 0;
             }
         }
+    }
+
+    buf
+}
+
+pub fn format_field<'a>(
+    arena: &'a Bump,
+    assigned_field: &'a AssignedField<'a, Expr<'a>>,
+    indent: u16,
+    apply_needs_parens: bool,
+) -> String<'a> {
+    use self::AssignedField::*;
+
+    let mut buf = String::new_in(arena);
+
+    match assigned_field {
+        LabeledValue(name, spaces, value) => {
+            buf.push(' ');
+            buf.push_str(name.value);
+
+            if spaces.len() > 0 {
+                buf.push(' ');
+                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+            }
+
+            buf.push(' ');
+            buf.push(':');
+            buf.push(' ');
+            buf.push_str(&format(arena, &value.value, indent, apply_needs_parens));
+        }
+        LabelOnly(name, spaces) => {
+            buf.push(' ');
+            buf.push_str(name.value);
+
+            if spaces.len() > 0 {
+                buf.push(' ');
+                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+            }
+        }
+        AssignedField::SpaceBefore(sub_expr, spaces) => {
+            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+            buf.push_str(&format_field(arena, sub_expr, indent, apply_needs_parens));
+        }
+        AssignedField::SpaceAfter(sub_expr, spaces) => {
+            buf.push_str(&format_field(arena, sub_expr, indent, apply_needs_parens));
+            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+        }
+        Malformed(string) => buf.push_str(string),
     }
 
     buf
