@@ -480,7 +480,7 @@ fn canonicalize_expr(
                 let pattern_var = subs.mk_flex_var();
                 let pattern_expected = PExpected::NoExpectation(Type::Variable(pattern_var));
 
-                let (can_arg, state) = canonicalize_pattern(
+                let (can_arg, _state) = canonicalize_pattern(
                     env,
                     subs,
                     &mut scope,
@@ -1466,7 +1466,7 @@ fn can_defs<'a>(
             let pattern_var = subs.mk_flex_var();
             let pattern_expected = PExpected::NoExpectation(Type::Variable(pattern_var));
 
-            let (loc_can_pattern, state) = canonicalize_pattern(
+            let (loc_can_pattern, _state) = canonicalize_pattern(
                 env,
                 subs,
                 &mut scope,

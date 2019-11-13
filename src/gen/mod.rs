@@ -53,7 +53,7 @@ pub struct ModuleBuilder<'a> {
     pub function: &'a Function,
 
     procedures: &'a MutMap<Symbol, Procedure>,
-    subs: &'a Subs,
+    _subs: &'a Subs,
     fn_value_opt: Option<FunctionValue>,
 }
 
@@ -98,7 +98,7 @@ impl<'a> ModuleBuilder<'a> {
             module,
             function,
             procedures,
-            subs,
+            _subs: subs,
             fn_value_opt: None,
         };
 

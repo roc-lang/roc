@@ -233,10 +233,10 @@ pub fn canonicalize_pattern<'a>(
             ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
         },
 
-        &StrLiteral(string) => match pattern_type {
+        &StrLiteral(_string) => match pattern_type {
             CaseBranch => {
                 panic!("TODO check whether string pattern is malformed.");
-                Pattern::ExactString((*string).into())
+                // Pattern::ExactString((*string).into())
             }
             ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
         },
