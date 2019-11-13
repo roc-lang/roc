@@ -114,6 +114,22 @@ mod test_infer {
         );
     }
 
+    // #[test]
+    // fn concat_different_types() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             empty = []
+    //             one = List.concat [ 1 ] empty
+    //             str = List.concat [ "blah" ] empty
+
+    //             empty
+    //         "#
+    //         ),
+    //         "List *",
+    //     );
+    // }
+
     #[test]
     fn list_of_one_int() {
         infer_eq(
