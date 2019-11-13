@@ -587,15 +587,29 @@ mod test_infer {
     // #[test]
     // fn no_higher_ranked_types() {
     //     // This should error because it can't type of alwaysFive
-    //        infer_eq(
-    //        indoc!(r#"
-    //            alwaysFive = \_ -> 5
-
-    //            [ alwaysFive "foo", alwaysFive [] ]
-    //        "#),
-    //        "<type mismatch>"
-    //    );
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             \always -> [ always [], always "" ]
+    //        "#
+    //         ),
+    //         "<type mismatch>",
+    //     );
     // }
+
+    #[test]
+    fn always_with_list() {
+        infer_eq(
+            indoc!(
+                r#"
+               alwaysFive = \_ -> 5
+
+               [ alwaysFive "foo", alwaysFive [] ]
+           "#
+            ),
+            "List Int",
+        );
+    }
 
     #[test]
     fn case_with_int_literals() {
