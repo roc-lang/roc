@@ -234,7 +234,7 @@ pub enum AssignedField<'a, Val> {
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
-    BlockComment(&'a [&'a str]),
+    BlockComment(&'a [&'a str]), // TODO decide whether Roc should actually have block comments
 }
 
 impl<'a> CommentOrNewline<'a> {
