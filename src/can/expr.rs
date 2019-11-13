@@ -20,7 +20,8 @@ pub enum Expr {
     /// See 13623e3f5f65ea2d703cf155f16650c1e8246502 for the bug this fixed.
     FunctionPointer(Variable, Symbol),
 
-    // Look up a field on a record, e.g. (expr).foo.
+    /// Look up exactly one field on a record, e.g. (expr).foo.
+    /// Canonicalization will convert chains to single-access, e.g. foo.bar.baz to (foo.bar).baz.
     Field(Box<Located<Expr>>, Box<str>),
 
     // Pattern Matching
