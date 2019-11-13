@@ -50,7 +50,7 @@ impl fmt::Debug for Type {
                     arg.fmt(f)?;
                 }
 
-                " -> ".fmt(f)?;
+                write!(f, " -> ")?;
 
                 ret.fmt(f)
             }
@@ -61,7 +61,7 @@ impl fmt::Debug for Type {
                 name,
                 args,
             } => {
-                write!(f, "{}", "(")?;
+                write!(f, "(")?;
 
                 if !module_name.is_empty() {
                     write!(f, "{}.", module_name)?;
@@ -73,14 +73,14 @@ impl fmt::Debug for Type {
                     write!(f, " {:?}", arg)?;
                 }
 
-                write!(f, "{}", ")")
+                write!(f, ")")
             }
             Type::Erroneous(problem) => {
-                "Erroneous(".fmt(f)?;
+                write!(f, "Erroneous(")?;
 
                 problem.fmt(f)?;
 
-                ")".fmt(f)
+                write!(f, ")")
             }
         }
     }
