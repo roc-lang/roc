@@ -199,7 +199,32 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 let value = match loc_op.value {
                     Pizza => {
                         // Rewrite the Pizza operator into an Apply
-                        panic!("TODO desugar |> operator into an Apply");
+
+                        match &right.value {
+                            Apply(function, arguments, _called_via) => {
+                                let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
+
+                                args.push(*arena.alloc(left));
+
+                                for arg in arguments {
+                                    args.push(arg);
+                                }
+
+                                Apply(function, args, CalledVia::BinOp(Pizza))
+                            }
+                            expr => {
+                                // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
+                                let mut args = Vec::with_capacity_in(1, arena);
+                                args.push(*arena.alloc(left));
+
+                                let function = arena.alloc(Located {
+                                    value: expr.clone(),
+                                    region: right.region,
+                                });
+
+                                Apply(function, args, CalledVia::BinOp(Pizza))
+                            }
+                        }
                     }
                     binop => {
                         // This is a normal binary operator like (+), so desugar it
