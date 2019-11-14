@@ -519,11 +519,17 @@ pub fn format<'a>(
     match expr {
         SpaceBefore(sub_expr, spaces) => {
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+
+            // inserts `{ x: ### after ### 4 }`
+            //                            ^
+            if let Some(self::CommentOrNewline::BlockComment(_)) = spaces.iter().last() {
+                buf.push(' ');
+            }
+
             buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
         }
         SpaceAfter(sub_expr, spaces) => {
             buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
-
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
         }
         Str(string) => {
@@ -843,7 +849,6 @@ pub fn format_field<'a>(
             buf.push_str(name.value);
 
             if !spaces.is_empty() {
-                buf.push(' ');
                 buf.push_str(&format_spaces(arena, spaces.iter(), indent));
             }
 
@@ -861,6 +866,7 @@ pub fn format_field<'a>(
         }
         AssignedField::SpaceBefore(sub_expr, spaces) => {
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+            buf.push(' ');
             buf.push_str(&format_field(arena, sub_expr, indent, apply_needs_parens));
         }
         AssignedField::SpaceAfter(sub_expr, spaces) => {
