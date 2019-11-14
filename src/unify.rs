@@ -90,14 +90,6 @@ fn unify_flat_type(subs: &mut Subs, left: &FlatType, right: &FlatType) -> Descri
                 from_content(Error(Problem::MissingArguments))
             }
         }
-        (BinOp(l_l_arg, l_r_arg, l_ret), BinOp(r_l_arg, r_r_arg, r_ret)) => {
-            let l_arg = union_vars(subs, *l_l_arg, *r_l_arg);
-            let r_arg = union_vars(subs, *l_r_arg, *r_r_arg);
-            let ret = union_vars(subs, *l_ret, *r_ret);
-            let flat_type = BinOp(l_arg, r_arg, ret);
-
-            from_content(Structure(flat_type))
-        }
         _ => from_content(Error(Problem::GenericMismatch)),
     }
 }
