@@ -269,6 +269,7 @@ impl<'a> ModuleBuilder<'a> {
                 }
             }
             Str(_)
+            | BlockStr(_)
             | CallPointer(_, _, _)
             | List(_, _)
             | Record(_, _)
