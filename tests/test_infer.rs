@@ -489,7 +489,6 @@ mod test_infer {
     }
 
     // TODO type annotations
-    // TODO fix identity inference
     // TODO BoundTypeVariables
     // TODO conditionals
 
