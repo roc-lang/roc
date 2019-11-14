@@ -67,6 +67,10 @@ impl Subs {
         self.utable.probe_value(key)
     }
 
+    pub fn get_root_key(&mut self, key: Variable) -> Variable {
+        self.utable.get_root_key(key)
+    }
+
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key);
         let unified = unify::unify_var_val(self, l_key, &r_value);

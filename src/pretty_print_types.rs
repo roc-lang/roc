@@ -4,6 +4,79 @@ use types;
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 
+/// Generate names for all type variables, replacing FlexVar(None) with
+/// FlexVar(Some(name)) where appropriate. Example: for the identity
+/// function, generate a name of "a" for both its argument and return
+/// type variables.
+pub fn name_all_type_vars(letters_used: usize, variable: Variable, subs: &mut Subs) {
+    use subs::Content::*;
+    use subs::FlatType::*;
+
+    let mut letters_used = letters_used;
+
+    match subs.get(variable).content {
+        Structure(Apply {
+            module_name: _,
+            name: _,
+            args,
+        }) => {
+            for var in args {
+                let root = subs.get_root_key(var);
+
+                // If this var is *not* its own root, then the
+                // root var necessarily appears in multiple places.
+                // Generate a name for it!
+                if var != root {
+                    name_root(letters_used, root, subs);
+
+                    letters_used += 1;
+                }
+            }
+        }
+        Structure(Func(arg_vars, ret_var)) => {
+            for var in arg_vars {
+                let root = subs.get_root_key(var);
+
+                if var != root {
+                    name_root(letters_used, root, subs);
+
+                    letters_used += 1;
+                }
+            }
+
+            let root = subs.get_root_key(ret_var);
+
+            if ret_var != root {
+                name_root(letters_used, root, subs);
+            }
+        }
+        _ => (),
+    }
+}
+
+fn name_root(letters_used: usize, root: Variable, subs: &mut Subs) {
+    use subs::Content::*;
+
+    let generated_name = if letters_used == 0 {
+        // This should generate "a", then "b", etc.
+        "a"
+    } else {
+        panic!("TODO finish type variable naming algorithm");
+    };
+
+    let mut descriptor = subs.get(root);
+
+    match descriptor.content {
+        FlexVar(None) => {
+            descriptor.content = FlexVar(Some(generated_name.into()));
+
+            // TODO is this necessary, or was mutating descriptor in place sufficient?
+            subs.set(root, descriptor);
+        }
+        _ => (),
+    }
+}
+
 pub fn content_to_string(content: Content, subs: &mut Subs) -> String {
     let mut buf = String::new();
 

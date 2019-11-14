@@ -12,7 +12,7 @@ mod helpers;
 mod test_infer {
     use helpers::can_expr;
     use roc::infer::infer_expr;
-    use roc::pretty_print_types::content_to_string;
+    use roc::pretty_print_types::{content_to_string, name_all_type_vars};
 
     // HELPERS
 
@@ -20,6 +20,9 @@ mod test_infer {
         let (_, output, _, procedures, mut subs, variable) = can_expr(src);
 
         let content = infer_expr(&mut subs, procedures, &output.constraint, variable);
+
+        name_all_type_vars(0, variable, &mut subs);
+
         let actual_str = content_to_string(content, &mut subs);
 
         assert_eq!(actual_str, expected.to_string());
