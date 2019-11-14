@@ -1,4 +1,4 @@
-use parse::ast::{AssignedField, Expr, Pattern};
+use parse::ast::{AssignedField, CommentOrNewline, Expr, Pattern};
 
 pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
     use parse::ast::Expr::*;
@@ -65,10 +65,29 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
     }
 }
 
-pub fn is_multiline_field<'a, Val>(_field: &'a AssignedField<'a, Val>) -> bool {
-    panic!("TODO return iff there are any newlines")
+pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
+    use self::AssignedField::*;
+
+    match field {
+        LabeledValue(_, spaces, _) => is_multiline_spaces(spaces),
+        LabelOnly(_, spaces) => is_multiline_spaces(spaces),
+        AssignedField::SpaceBefore(_, spaces) => is_multiline_spaces(spaces),
+        AssignedField::SpaceAfter(_, spaces) => is_multiline_spaces(spaces),
+        // TODO I think this is what you want, but check in practice
+        Malformed(text) => text.chars().any(|c| c == '\n'),
+    }
 }
 
 pub fn is_multiline_pattern<'a>(_pattern: &'a Pattern<'a>) -> bool {
     panic!("TODO return iff there are any newlines")
+}
+
+pub fn is_multiline_spaces<'a>(spaces: &'a [CommentOrNewline<'a>]) -> bool {
+    use self::CommentOrNewline::*;
+
+    spaces.iter().any(|w| match w {
+        Newline => true,
+        LineComment(_) => false,
+        BlockComment(lines) => lines.len() > 1,
+    })
 }
