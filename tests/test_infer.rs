@@ -534,6 +534,19 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn anonymous_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    (\a -> a) 3.14
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
     fn identity_function() {
         infer_eq(
             indoc!(
