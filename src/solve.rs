@@ -39,13 +39,13 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
             subs.union(actual, expected);
         }
         Let(let_con) => {
-            match let_con.ret_constraint {
+            match &let_con.ret_constraint {
                 True => {
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(env, subs, &let_con.assignments_constraint)
                 }
-                ref ret_con => {
+                ret_con => {
                     // Solve the assignments' constraints first.
                     solve(env, subs, &let_con.assignments_constraint);
 
