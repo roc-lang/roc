@@ -19,5 +19,5 @@ pub fn infer_expr(
 
     solve(&env, subs, constraint);
 
-    subs.get(expr_var).content
+    subs.get(dbg!(expr_var)).content
 }

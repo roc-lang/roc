@@ -530,15 +530,17 @@ mod test_infer {
             "Int",
         );
     }
-    //     #[test]
-    //     fn identity() {
-    //         infer_eq(
-    //             indoc!(r#"
-    //                 \val -> val
-    //             "#),
-    //             "a -> a"
-    //         );
-    //     }
+
+    fn identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \val -> val
+                "#
+            ),
+            "a -> a",
+        );
+    }
 
     //     #[test]
     //     fn always_function() {

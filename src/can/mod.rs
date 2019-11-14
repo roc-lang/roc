@@ -4,6 +4,7 @@ use self::num::{
     finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
     finish_parsing_oct, float_expr_from_result, int_expr_from_result,
 };
+use self::pattern::PatternState;
 use self::pattern::PatternType::*;
 use self::pattern::{canonicalize_pattern, Pattern};
 use self::problem::Problem;
@@ -471,12 +472,13 @@ fn canonicalize_expr(
             scope.idents = union_pairs(scope.idents, arg_idents.iter());
 
             let mut state = PatternState {
-                assignment_types: ImMap::default(),
+                headers: ImMap::default(),
                 vars: Vec::with_capacity(loc_arg_patterns.len()),
                 constraints: Vec::with_capacity(1),
             };
-            let args = constrain_args(loc_arg_patterns.iter(), &scope, subs, &mut state);
             let mut can_args: Vec<Located<Pattern>> = Vec::with_capacity(loc_arg_patterns.len());
+            let mut vars = Vec::with_capacity(state.vars.capacity());
+            let mut pattern_types = Vec::with_capacity(state.vars.capacity());
 
             for loc_pattern in loc_arg_patterns.into_iter() {
                 // Exclude the current ident from shadowable_idents; you can't shadow yourself!
@@ -485,10 +487,14 @@ fn canonicalize_expr(
                 remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
                 let pattern_var = subs.mk_flex_var();
-                let pattern_expected = PExpected::NoExpectation(Type::Variable(pattern_var));
+                let pattern_type = Type::Variable(pattern_var);
+                let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
 
-                let (can_arg, _state) = canonicalize_pattern(
+                pattern_types.push(pattern_type);
+
+                let can_arg = canonicalize_pattern(
                     env,
+                    &mut state,
                     subs,
                     &mut scope,
                     FunctionArg,
@@ -498,10 +504,19 @@ fn canonicalize_expr(
                     pattern_expected,
                 );
 
+                vars.push(pattern_var);
+
                 can_args.push(can_arg);
             }
 
-            let body_type = NoExpectation(args.ret_type);
+            let ret_var = subs.mk_flex_var();
+            let ret_type = Type::Variable(ret_var);
+
+            state.vars.push(ret_var);
+
+            let fn_typ = Type::Function(pattern_types, Box::new(ret_type.clone()));
+
+            let body_type = NoExpectation(ret_type);
             let (loc_body_expr, mut output) = canonicalize_expr(
                 rigids,
                 env,
@@ -523,17 +538,17 @@ fn canonicalize_expr(
             let typ = Variable(var);
 
             output.constraint = exists(
-                args.vars,
+                state.vars.clone(),
                 And(vec![
                     Let(Box::new(LetConstraint {
                         rigid_vars: Vec::new(),
                         flex_vars: state.vars,
-                        assignment_types: state.assignment_types,
+                        assignment_types: state.headers,
                         assignments_constraint,
                         ret_constraint,
                     })),
                     // "the closure's type is equal to the var we've stored for later use in the proc"
-                    Eq(args.typ, NoExpectation(typ.clone()), region),
+                    Eq(fn_typ, NoExpectation(typ.clone()), region),
                     // "the var we've stored for later is equal to the overall expected type"
                     Eq(typ, expected, region),
                 ]),
@@ -566,7 +581,7 @@ fn canonicalize_expr(
                 region,
                 output.references.clone(),
                 var,
-                args.ret_var,
+                ret_var,
             );
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
@@ -847,8 +862,15 @@ fn canonicalize_case_branch<'a>(
         }
     }
 
-    let (loc_can_pattern, state) = canonicalize_pattern(
+    let mut state = PatternState {
+        headers: ImMap::default(),
+        vars: Vec::with_capacity(1),
+        constraints: Vec::with_capacity(1),
+    };
+
+    let loc_can_pattern = canonicalize_pattern(
         env,
+        &mut state,
         subs,
         &mut scope,
         CaseBranch,
@@ -1258,48 +1280,6 @@ impl Info {
 /// In elm/compiler this is called RTV - the "Rigid Type Variables" dictionary.
 // type BoundTypeVars = ImMap<Box<str>, Type>;
 
-struct PatternState {
-    assignment_types: ImMap<Symbol, Located<Type>>,
-    vars: Vec<Variable>,
-    constraints: Vec<Constraint>,
-}
-
-impl PatternState {
-    pub fn add_pattern(
-        &mut self,
-        scope: &Scope,
-        loc_pattern: Located<ast::Pattern>,
-        expected: Expected<Type>,
-    ) {
-        let region = loc_pattern.region;
-
-        match loc_pattern.value {
-            ast::Pattern::Identifier(name) => {
-                let symbol = scope.symbol(&name);
-
-                self.add_to_assignment_types(region, symbol, expected)
-            }
-            ast::Pattern::Underscore => (),
-            _ => panic!("TODO other patterns"),
-        }
-    }
-
-    fn add_to_assignment_types(
-        &mut self,
-        region: Region,
-        symbol: Symbol,
-        expected: Expected<Type>,
-    ) {
-        self.assignment_types.insert(
-            symbol,
-            Located {
-                region,
-                value: expected.get_type(),
-            },
-        );
-    }
-}
-
 fn add_pattern_to_lookup_types<'a>(
     scope: &Scope,
     loc_pattern: Located<ast::Pattern<'a>>,
@@ -1367,6 +1347,10 @@ fn can_defs<'a>(
     let iter = defs.iter();
 
     for loc_def in iter {
+        // Make types for the body expr, even if we won't end up having a body.
+        let expr_var = subs.mk_flex_var();
+        let expr_type = Type::Variable(expr_var);
+
         // Each assignment gets to have all the idents in scope that are assigned in this
         // block. Order of assignments doesn't matter, thanks to referential transparency!
         let (opt_loc_pattern, (loc_can_expr, can_output)) = match loc_def.value {
@@ -1400,37 +1384,6 @@ fn can_defs<'a>(
                 (None, (loc_expr, Output::new(True)))
             }
             Def::Body(ref loc_pattern, loc_expr) => {
-                // Make types for the pattern and the body expr.
-                let expr_var = subs.mk_flex_var();
-                let expr_type = Type::Variable(expr_var);
-                let pattern_var = subs.mk_flex_var();
-                let pattern_type = Type::Variable(pattern_var);
-
-                flex_info.vars.push(pattern_var);
-
-                let mut state = PatternState {
-                    assignment_types: ImMap::default(),
-                    vars: Vec::with_capacity(1),
-                    constraints: Vec::with_capacity(1),
-                };
-
-                state.add_pattern(
-                    &scope,
-                    loc_pattern.clone(),
-                    NoExpectation(pattern_type.clone()),
-                );
-                let def_constraint = And(state.constraints);
-
-                // Any time there's a lookup on this symbol in the outer Let,
-                // it should result in this expression's type. After all, this
-                // is the type to which this symbol is assigned!
-                add_pattern_to_lookup_types(
-                    &scope,
-                    loc_pattern.clone(),
-                    &mut flex_info.assignment_types,
-                    expr_type.clone(),
-                );
-
                 let (loc_can_expr, output) = canonicalize_expr(
                     rigids,
                     env,
@@ -1438,16 +1391,8 @@ fn can_defs<'a>(
                     &mut scope,
                     loc_expr.region,
                     &loc_expr.value,
-                    NoExpectation(expr_type),
+                    NoExpectation(expr_type.clone()),
                 );
-
-                flex_info.constraints.push(Let(Box::new(LetConstraint {
-                    rigid_vars: Vec::new(),
-                    flex_vars: state.vars,
-                    assignment_types: state.assignment_types,
-                    assignments_constraint: def_constraint,
-                    ret_constraint: output.constraint.clone(),
-                })));
 
                 (Some(loc_pattern), (loc_can_expr, output))
             }
@@ -1470,10 +1415,18 @@ fn can_defs<'a>(
             remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
             let pattern_var = subs.mk_flex_var();
-            let pattern_expected = PExpected::NoExpectation(Type::Variable(pattern_var));
+            let pattern_type = Type::Variable(pattern_var);
+            let pattern_expected = PExpected::NoExpectation(pattern_type);
 
-            let (loc_can_pattern, _state) = canonicalize_pattern(
+            let mut state = PatternState {
+                headers: ImMap::default(),
+                vars: Vec::with_capacity(1),
+                constraints: Vec::with_capacity(1),
+            };
+
+            let loc_can_pattern = canonicalize_pattern(
                 env,
+                &mut state,
                 subs,
                 &mut scope,
                 Assignment,
@@ -1482,6 +1435,28 @@ fn can_defs<'a>(
                 &mut shadowable_idents,
                 pattern_expected,
             );
+
+            flex_info.vars.push(pattern_var);
+
+            // Any time there's a lookup on this symbol in the outer Let,
+            // it should result in this expression's type. After all, this
+            // is the type to which this symbol is assigned!
+            add_pattern_to_lookup_types(
+                &scope,
+                // TODO can we we avoid this clone?
+                loc_pattern.clone(),
+                &mut flex_info.assignment_types,
+                expr_type.clone(),
+            );
+
+            flex_info.constraints.push(Let(Box::new(LetConstraint {
+                rigid_vars: Vec::new(),
+                flex_vars: state.vars,
+                assignment_types: state.headers,
+                assignments_constraint: And(state.constraints),
+                ret_constraint: can_output.constraint.clone(),
+            })));
+
             let mut renamed_closure_assignment: Option<&Symbol> = None;
 
             // Give closures names (and tail-recursive status) where appropriate.
@@ -1744,61 +1719,4 @@ fn can_defs<'a>(
             )
         }
     }
-}
-
-struct Args {
-    pub vars: Vec<Variable>,
-    pub typ: Type,
-    pub ret_type: Type,
-    pub ret_var: Variable,
-}
-
-fn constrain_args<'a, I>(args: I, scope: &Scope, subs: &mut Subs, state: &mut PatternState) -> Args
-where
-    I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
-{
-    let (mut vars, arg_types) = patterns_to_variables(args, scope, subs, state);
-
-    let ret_var = subs.mk_flex_var();
-    let ret_type = Type::Variable(ret_var);
-
-    vars.push(ret_var);
-
-    let typ = Type::Function(arg_types, Box::new(ret_type.clone()));
-
-    Args {
-        vars,
-        typ,
-        ret_type,
-        ret_var,
-    }
-}
-
-fn patterns_to_variables<'a, I>(
-    patterns: I,
-    scope: &Scope,
-    subs: &mut Subs,
-    state: &mut PatternState,
-) -> (Vec<Variable>, Vec<Type>)
-where
-    I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
-{
-    let mut vars = Vec::with_capacity(state.vars.capacity());
-    let mut pattern_types = Vec::with_capacity(state.vars.capacity());
-
-    for loc_pattern in patterns {
-        let pattern_var = subs.mk_flex_var();
-        let pattern_type = Type::Variable(pattern_var);
-
-        state.add_pattern(
-            scope,
-            loc_pattern.clone(),
-            NoExpectation(pattern_type.clone()),
-        );
-
-        vars.push(pattern_var);
-        pattern_types.push(pattern_type);
-    }
-
-    (vars, pattern_types)
 }

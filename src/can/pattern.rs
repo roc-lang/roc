@@ -47,6 +47,7 @@ pub enum PatternType {
 
 pub fn canonicalize_pattern<'a>(
     env: &'a mut Env,
+    state: &'a mut PatternState,
     subs: &mut Subs,
     scope: &mut Scope,
     pattern_type: PatternType,
@@ -54,7 +55,7 @@ pub fn canonicalize_pattern<'a>(
     region: Region,
     shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
     expected: PExpected<Type>,
-) -> (Located<Pattern>, State) {
+) -> Located<Pattern> {
     use self::PatternType::*;
     use can::ast::Pattern::*;
 
@@ -245,6 +246,7 @@ pub fn canonicalize_pattern<'a>(
         &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
             return canonicalize_pattern(
                 env,
+                state,
                 subs,
                 scope,
                 pattern_type,
@@ -257,21 +259,12 @@ pub fn canonicalize_pattern<'a>(
         _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
 
-    let mut state = State {
-        headers: ImMap::default(),
-        vars: Vec::new(),
-        constraints: Vec::new(),
-    };
+    add_constraints(&pattern, region, expected, state);
 
-    add_constraints(&pattern, region, expected, &mut state);
-
-    (
-        Located {
-            region,
-            value: can_pattern,
-        },
-        state,
-    )
+    Located {
+        region,
+        value: can_pattern,
+    }
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
@@ -284,7 +277,7 @@ fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region)
 
 // CONSTRAIN
 
-pub struct State {
+pub struct PatternState {
     pub headers: ImMap<Symbol, Located<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
@@ -294,7 +287,7 @@ fn add_constraints<'a>(
     pattern: &'a ast::Pattern<'a>,
     region: Region,
     expected: PExpected<Type>,
-    state: &'a mut State,
+    state: &'a mut PatternState,
 ) {
     use parse::ast::Pattern::*;
 
