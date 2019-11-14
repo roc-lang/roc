@@ -259,7 +259,7 @@ pub fn canonicalize_pattern<'a>(
         _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
 
-    add_constraints(&pattern, region, expected, state);
+    add_constraints(&pattern, &scope, region, expected, state);
 
     Located {
         region,
@@ -285,6 +285,7 @@ pub struct PatternState {
 
 fn add_constraints<'a>(
     pattern: &'a ast::Pattern<'a>,
+    scope: &'a Scope,
     region: Region,
     expected: PExpected<Type>,
     state: &'a mut PatternState,
@@ -297,7 +298,7 @@ fn add_constraints<'a>(
         }
         Identifier(name) => {
             state.headers.insert(
-                Symbol::new("TODO pass home into add_constraints, or improve Symbol to not need it for idents in patterns", name),
+                scope.symbol(name),
                 Located {
                     region,
                     value: expected.get_type(),
@@ -332,7 +333,7 @@ fn add_constraints<'a>(
         }
 
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
-            add_constraints(pattern, region, expected, state)
+            add_constraints(pattern, scope, region, expected, state)
         }
 
         Variant(_, _) | Apply(_, _) | RecordDestructure(_) | EmptyRecordLiteral => {
