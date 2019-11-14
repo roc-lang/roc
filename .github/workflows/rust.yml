@@ -9,6 +9,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
+    - name: Cache
+      uses: actions/cache@v1.0.0
+    - name: Install LLVM
+      run: ./ci/install-llvm.sh 8
+      shell: bash
     - name: Build
       run: cargo build --verbose
     - name: Run tests
