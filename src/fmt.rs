@@ -73,7 +73,6 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
         LabelOnly(_, spaces) => is_multiline_spaces(spaces),
         AssignedField::SpaceBefore(_, spaces) => is_multiline_spaces(spaces),
         AssignedField::SpaceAfter(_, spaces) => is_multiline_spaces(spaces),
-        // TODO I think this is what you want, but check in practice
         Malformed(text) => text.chars().any(|c| c == '\n'),
     }
 }
