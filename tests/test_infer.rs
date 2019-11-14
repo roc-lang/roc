@@ -64,6 +64,19 @@ mod test_infer {
         );
     }
 
+    // #[test]
+    // fn block_string_literal() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             """type
+    //             inference!"""
+    //         "#
+    //         ),
+    //         "Str",
+    //     );
+    // }
+
     // LIST
 
     #[test]
@@ -624,5 +637,4 @@ mod test_infer {
             "Int",
         );
     }
-
 }
