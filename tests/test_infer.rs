@@ -531,7 +531,7 @@ mod test_infer {
         );
     }
 
-    fn identity() {
+    fn identity_function() {
         infer_eq(
             indoc!(
                 r#"
