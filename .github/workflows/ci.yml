@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v1
       - name: Install LLVM
-        run: ./ci/install-llvm.sh 8
+        run: sudo ./ci/install-llvm.sh 8
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
