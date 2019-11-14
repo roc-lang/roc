@@ -236,7 +236,9 @@ fn canonicalize_expr(
             let fn_region = loc_fn.region;
             let fn_expected = NoExpectation(fn_type.clone());
             // TODO look up the name and use NamedFnArg if possible.
-            let fn_reason = Reason::AnonymousFnCall(loc_args.len() as u8);
+            let fn_reason = Reason::AnonymousFnCall {
+                arity: loc_args.len() as u8,
+            };
 
             // Canonicalize the function expression and its arguments
             let (fn_expr, mut output) = canonicalize_expr(
@@ -270,7 +272,9 @@ fn canonicalize_expr(
                 let arg_var = subs.mk_flex_var();
                 let arg_type = Variable(arg_var);
                 // TODO look up the name and use NamedFnArg if possible.
-                let reason = Reason::AnonymousFnArg(index as u8);
+                let reason = Reason::AnonymousFnArg {
+                    arg_index: index as u8,
+                };
                 let expected_arg = ForReason(reason, arg_type.clone(), region);
                 let (arg_expr, arg_out) = canonicalize_expr(
                     rigids,
