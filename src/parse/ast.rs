@@ -842,7 +842,7 @@ pub fn format_field<'a>(
         LabeledValue(name, spaces, value) => {
             buf.push_str(name.value);
 
-            if spaces.len() > 0 {
+            if spaces.is_empty() {
                 buf.push(' ');
                 buf.push_str(&format_spaces(arena, spaces.iter(), indent));
             }
@@ -854,7 +854,7 @@ pub fn format_field<'a>(
         LabelOnly(name, spaces) => {
             buf.push_str(name.value);
 
-            if spaces.len() > 0 {
+            if spaces.is_empty() {
                 buf.push(' ');
                 buf.push_str(&format_spaces(arena, spaces.iter(), indent));
             }
