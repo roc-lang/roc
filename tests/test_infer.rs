@@ -558,15 +558,17 @@ mod test_infer {
         );
     }
 
-    //     #[test]
-    //     fn always_function() {
-    //         infer_eq(
-    //             indoc!(r#"
-    //                 \val -> \_ -> val
-    //             "#),
-    //             "a -> (* -> a)"
-    //         );
-    //     }
+    #[test]
+    fn always_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \val -> \_ -> val
+                "#
+            ),
+            "a -> (* -> a)",
+        );
+    }
 
     // OPERATORS
 
