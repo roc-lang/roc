@@ -71,7 +71,7 @@ pub enum Associativity {
 }
 
 impl BinOp {
-    pub fn associativity(&self) -> Associativity {
+    pub fn associativity(self) -> Associativity {
         use self::Associativity::*;
 
         match self {
@@ -85,7 +85,7 @@ impl BinOp {
         }
     }
 
-    fn precedence(&self) -> u8 {
+    fn precedence(self) -> u8 {
         match self {
             Caret => 7,
             Star | Slash | DoubleSlash | DoublePercent | Percent => 6,

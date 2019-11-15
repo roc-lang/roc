@@ -49,7 +49,7 @@ pub fn canonicalize_pattern<'a>(
     env: &'a mut Env,
     subs: &mut Subs,
     scope: &mut Scope,
-    pattern_type: &'a PatternType,
+    pattern_type: PatternType,
     pattern: &'a ast::Pattern<'a>,
     region: Region,
     shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
@@ -168,7 +168,7 @@ pub fn canonicalize_pattern<'a>(
                 Pattern::Variant(subs.mk_flex_var(), symbol)
             } else {
                 let loc_name = Located {
-                    region: region,
+                    region,
                     value: variant,
                 };
                 // We couldn't find the variant name in scope. NAMING PROBLEM!
@@ -185,7 +185,7 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::FloatLiteral(float)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
         },
 
         &Underscore => match pattern_type {
@@ -200,7 +200,7 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
         },
 
         &HexIntLiteral(string) => match pattern_type {
@@ -210,7 +210,7 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
         },
 
         &OctalIntLiteral(string) => match pattern_type {
@@ -220,7 +220,7 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
         },
 
         &BinaryIntLiteral(string) => match pattern_type {
@@ -230,7 +230,7 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
         },
 
         &StrLiteral(_string) => match pattern_type {
@@ -238,7 +238,7 @@ pub fn canonicalize_pattern<'a>(
                 panic!("TODO check whether string pattern is malformed.");
                 // Pattern::ExactString((*string).into())
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
         },
 
         // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
@@ -276,7 +276,7 @@ pub fn canonicalize_pattern<'a>(
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
-fn unsupported_pattern<'a>(env: &'a mut Env, pattern_type: PatternType, region: Region) -> Pattern {
+fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region) -> Pattern {
     env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
@@ -301,7 +301,6 @@ fn add_constraints<'a>(
     match pattern {
         Underscore | Malformed(_) | QualifiedIdentifier(_) => {
             // Neither the _ pattern nor malformed ones add any constraints.
-            ()
         }
         Identifier(name) => {
             state.headers.insert(

@@ -204,7 +204,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                     binop => {
                         // This is a normal binary operator like (+), so desugar it
                         // into the appropriate function call.
-                        let (module_parts, name) = desugar_binop(&binop, arena);
+                        let (module_parts, name) = desugar_binop(binop, arena);
                         let mut args = Vec::with_capacity_in(2, arena);
 
                         args.push(*arena.alloc(left));
@@ -248,7 +248,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             }
 
             arena.alloc(Located {
-                value: Apply(desugar(arena, loc_fn), desugared_args, called_via.clone()),
+                value: Apply(desugar(arena, loc_fn), desugared_args, *called_via),
                 region: loc_expr.region,
             })
         }
@@ -372,7 +372,7 @@ fn desugar_field<'a>(
 }
 
 #[inline(always)]
-fn desugar_binop<'a>(binop: &BinOp, arena: &'a Bump) -> (&'a [&'a str], &'a str) {
+fn desugar_binop(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
     use self::BinOp::*;
 
     match binop {

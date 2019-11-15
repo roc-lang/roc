@@ -33,7 +33,7 @@ impl Env {
         }
     }
 
-    pub fn problem(&mut self, problem: Problem) -> () {
+    pub fn problem(&mut self, problem: Problem) {
         self.problems.push(problem)
     }
 
@@ -46,7 +46,7 @@ impl Env {
         references: References,
         var: Variable,
         ret_var: Variable,
-    ) -> () {
+    ) {
         // We can't if the closure is self tail recursive yet, because it doesn't know its final name yet.
         // (Assign sets that.) Assume this is false, and let Assign change it to true after it sets final name.
         let is_self_tail_recursive = false;

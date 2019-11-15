@@ -35,6 +35,10 @@ impl<'a> Ident<'a> {
             Malformed(string) => string.len(),
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Parse an identifier into a string.
@@ -254,7 +258,7 @@ where
     // Consume the remaining chars in the identifier.
     let mut next_char = None;
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         // We can't use ch.is_alphanumeric() here because that passes for
         // things that are "numeric" but not ASCII digits, like `¾`
         if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
@@ -313,7 +317,7 @@ where
 
         buf.push(first_letter);
 
-        while let Some(ch) = chars.next() {
+        for ch in chars {
             // After the first character, only these are allowed:
             //
             // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers

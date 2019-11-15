@@ -110,7 +110,7 @@ impl<'a> ModuleBuilder<'a> {
         let arg_types = proto
             .args
             .iter()
-            .map(|(_, typ)| typ.clone())
+            .map(|(_, typ)| *typ)
             .collect::<Vec<BasicTypeEnum>>();
 
         let fn_type = proto.ret.fn_type(&arg_types, false);
@@ -253,7 +253,7 @@ impl<'a> ModuleBuilder<'a> {
                     panic!("TODO support case-expressions of fewer than 2 branches.");
                 }
                 if branches.len() == 2 {
-                    let mut iter = branches.into_iter();
+                    let mut iter = branches.iter();
 
                     let (pattern, branch_expr) = iter.next().unwrap();
 

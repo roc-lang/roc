@@ -1,8 +1,8 @@
 use subs::{Content, FlatType, Subs, Variable};
 use types;
 
-static WILDCARD: &'static str = "*";
-static EMPTY_RECORD: &'static str = "{}";
+static WILDCARD: &str = "*";
+static EMPTY_RECORD: &str = "{}";
 
 pub fn content_to_string(content: Content, subs: &mut Subs) -> String {
     let mut buf = String::new();

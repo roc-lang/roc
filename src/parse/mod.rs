@@ -301,10 +301,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                         Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_equals)
                     };
 
-                    let loc_first_pattern = Located {
-                        region: region,
-                        value,
-                    };
+                    let loc_first_pattern = Located { region, value };
 
                     // Continue parsing the expression as a Def.
                     let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
@@ -607,7 +604,7 @@ fn parse_def_expr<'a>(
 
                     let loc_first_def = Located {
                         value: first_def,
-                        region: loc_first_pattern.region.clone(),
+                        region: loc_first_pattern.region,
                     };
 
                     // Add the first def to the end of the defs. (It's fine that we
@@ -764,7 +761,7 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
             char('}'),
             min_indent,
         ),
-        |loc_fields| Pattern::RecordDestructure(loc_fields),
+        Pattern::RecordDestructure,
     )
 }
 
@@ -1103,11 +1100,11 @@ pub fn case_with_indent<'a>() -> impl Parser<'a, u16> {
     move |arena, state: State<'a>| {
         string(keyword::CASE)
             .parse(arena, state)
-            .map(|((), state)| ((state.indent_col, state)))
+            .map(|((), state)| (state.indent_col, state))
     }
 }
 
-fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {
+fn ident_to_expr(src: Ident<'_>) -> Expr<'_> {
     match src {
         Ident::Var(info) => Expr::Var(info.module_parts, info.value),
         Ident::Variant(info) => Expr::Variant(info.module_parts, info.value),

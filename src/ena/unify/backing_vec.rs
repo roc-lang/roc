@@ -33,6 +33,8 @@ pub trait UnificationStore:
 
     fn len(&self) -> usize;
 
+    fn is_empty(&self) -> bool;
+
     fn push(&mut self, value: VarValue<Self::Key>);
 
     fn reserve(&mut self, num_new_values: usize);
@@ -94,6 +96,10 @@ impl<K: UnifyKey> UnificationStore for InPlace<K> {
 
     fn len(&self) -> usize {
         self.values.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.len() == 0
     }
 
     #[inline]

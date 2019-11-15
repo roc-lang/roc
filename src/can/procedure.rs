@@ -42,7 +42,7 @@ impl Procedure {
 /// These are all ordered sets because they end up getting traversed in a graph search
 /// to determine how assignments shuold be ordered. We want builds to be reproducible,
 /// so it's important that building the same code gives the same order every time!
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct References {
     pub locals: ImSet<Symbol>,
     pub globals: ImSet<Symbol>,

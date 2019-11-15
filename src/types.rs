@@ -7,19 +7,19 @@ use std::fmt;
 use subs::Variable;
 
 // The standard modules
-pub const MOD_FLOAT: &'static str = "Float";
-pub const MOD_BOOL: &'static str = "Bool";
-pub const MOD_INT: &'static str = "Int";
-pub const MOD_STR: &'static str = "Str";
-pub const MOD_LIST: &'static str = "List";
-pub const MOD_MAP: &'static str = "Map";
-pub const MOD_SET: &'static str = "Set";
-pub const MOD_NUM: &'static str = "Num";
-pub const MOD_DEFAULT: &'static str = "Default";
+pub const MOD_FLOAT: &str = "Float";
+pub const MOD_BOOL: &str = "Bool";
+pub const MOD_INT: &str = "Int";
+pub const MOD_STR: &str = "Str";
+pub const MOD_LIST: &str = "List";
+pub const MOD_MAP: &str = "Map";
+pub const MOD_SET: &str = "Set";
+pub const MOD_NUM: &str = "Num";
+pub const MOD_DEFAULT: &str = "Default";
 
-pub const TYPE_NUM: &'static str = "Num";
-pub const TYPE_INTEGER: &'static str = "Integer";
-pub const TYPE_FLOATINGPOINT: &'static str = "FloatingPoint";
+pub const TYPE_NUM: &str = "Num";
+pub const TYPE_INTEGER: &str = "Integer";
+pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
 
 #[derive(PartialEq, Eq, Clone)]
 pub enum Type {
@@ -40,7 +40,7 @@ pub enum Type {
 impl fmt::Debug for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Type::EmptyRec => write!(f, "{}", "{}"),
+            Type::EmptyRec => write!(f, "{{}}"),
             Type::Function(args, ret) => {
                 for (index, arg) in args.iter().enumerate() {
                     if index > 0 {

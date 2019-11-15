@@ -57,31 +57,31 @@ pub fn float_expr_from_result(
 }
 
 #[inline(always)]
-pub fn finish_parsing_int<'a>(raw: &'a str) -> Result<i64, &'a str> {
+pub fn finish_parsing_int(raw: &str) -> Result<i64, &str> {
     // Ignore underscores.
     raw.replace("_", "").parse::<i64>().map_err(|_| raw)
 }
 
 #[inline(always)]
-pub fn finish_parsing_hex<'a>(raw: &'a str) -> Result<i64, &'a str> {
+pub fn finish_parsing_hex(raw: &str) -> Result<i64, &str> {
     // Ignore underscores.
     i64::from_str_radix(raw.replace("_", "").as_str(), 16).map_err(|_| raw)
 }
 
 #[inline(always)]
-pub fn finish_parsing_oct<'a>(raw: &'a str) -> Result<i64, &'a str> {
+pub fn finish_parsing_oct(raw: &str) -> Result<i64, &str> {
     // Ignore underscores.
     i64::from_str_radix(raw.replace("_", "").as_str(), 8).map_err(|_| raw)
 }
 
 #[inline(always)]
-pub fn finish_parsing_bin<'a>(raw: &'a str) -> Result<i64, &'a str> {
+pub fn finish_parsing_bin(raw: &str) -> Result<i64, &str> {
     // Ignore underscores.
     i64::from_str_radix(raw.replace("_", "").as_str(), 2).map_err(|_| raw)
 }
 
 #[inline(always)]
-pub fn finish_parsing_float<'a>(raw: &'a str) -> Result<f64, &'a str> {
+pub fn finish_parsing_float(raw: &str) -> Result<f64, &str> {
     // Ignore underscores.
     match raw.replace("_", "").parse::<f64>() {
         Ok(float) if float.is_finite() => Ok(float),
