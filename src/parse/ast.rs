@@ -584,26 +584,38 @@ pub fn format<'a>(
                 .iter()
                 .any(|loc_field| fmt::is_multiline_field(&loc_field.value));
 
-            if !is_multiline && !loc_fields.is_empty() {
-                buf.push(' ');
-            }
-
             let mut iter = loc_fields.iter().peekable();
+            let field_indent = if is_multiline {
+                indent + 4
+            } else {
+                if !loc_fields.is_empty() {
+                    buf.push(' ');
+                }
+
+                indent
+            };
 
             while let Some(field) = iter.next() {
                 buf.push_str(&format_field(
                     arena,
                     &field.value,
-                    indent,
+                    is_multiline,
+                    field_indent,
                     apply_needs_parens,
                 ));
 
                 if let Some(_) = iter.peek() {
-                    buf.push_str(", ");
+                    buf.push(',');
+
+                    if !is_multiline {
+                        buf.push(' ');
+                    }
                 }
             }
 
-            if !is_multiline && !loc_fields.is_empty() {
+            if is_multiline {
+                buf.push('\n');
+            } else if !loc_fields.is_empty() {
                 buf.push(' ');
             }
 
@@ -814,9 +826,33 @@ where
     buf
 }
 
+/// Like format_spaces, but remove newlines and keep only comments.
+fn format_comments_only<'a, I>(arena: &'a Bump, spaces: I, _indent: u16) -> String<'a>
+where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    use self::CommentOrNewline::*;
+
+    let mut buf = String::new_in(arena);
+
+    for space in spaces {
+        match space {
+            Newline => {}
+            LineComment(comment) => {
+                buf.push('#');
+                buf.push_str(comment);
+                buf.push('\n');
+            }
+        }
+    }
+
+    buf
+}
+
 pub fn format_field<'a>(
     arena: &'a Bump,
     assigned_field: &'a AssignedField<'a, Expr<'a>>,
+    is_multiline: bool,
     indent: u16,
     apply_needs_parens: bool,
 ) -> String<'a> {
@@ -826,6 +862,14 @@ pub fn format_field<'a>(
 
     match assigned_field {
         LabeledValue(name, spaces, value) => {
+            if is_multiline {
+                buf.push('\n');
+
+                for _ in 0..indent {
+                    buf.push(' ');
+                }
+            }
+
             buf.push_str(name.value);
 
             if !spaces.is_empty() {
@@ -837,6 +881,14 @@ pub fn format_field<'a>(
             buf.push_str(&format(arena, &value.value, indent, apply_needs_parens));
         }
         LabelOnly(name, spaces) => {
+            if is_multiline {
+                buf.push('\n');
+
+                for _ in 0..indent {
+                    buf.push(' ');
+                }
+            }
+
             buf.push_str(name.value);
 
             if !spaces.is_empty() {
@@ -845,12 +897,24 @@ pub fn format_field<'a>(
             }
         }
         AssignedField::SpaceBefore(sub_expr, spaces) => {
-            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            buf.push_str(&format_field(arena, sub_expr, indent, apply_needs_parens));
+            buf.push_str(&format_comments_only(arena, spaces.iter(), indent));
+            buf.push_str(&format_field(
+                arena,
+                sub_expr,
+                is_multiline,
+                indent,
+                apply_needs_parens,
+            ));
         }
         AssignedField::SpaceAfter(sub_expr, spaces) => {
-            buf.push_str(&format_field(arena, sub_expr, indent, apply_needs_parens));
-            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+            buf.push_str(&format_field(
+                arena,
+                sub_expr,
+                is_multiline,
+                indent,
+                apply_needs_parens,
+            ));
+            buf.push_str(&format_comments_only(arena, spaces.iter(), indent));
         }
         Malformed(string) => buf.push_str(string),
     }
