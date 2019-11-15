@@ -32,15 +32,17 @@ interface Float
 ##
 ## Note that although the IEEE-754 specification describes the values `Infinity`, `-Infinity`, `NaN`, and `-0.0`, Roc avoids these as follows:
 ##
-## * @Float.sqrt returns `Err InvalidSqrt` when it would otherwise return `NaN`.
-## * Division operations return `Err DivByZero` when they would otherwise return `Infinity` or `-Infinity`.
+## * @Float.sqrt returns @(Err InvalidSqrt) when it would otherwise return `NaN`.
+## * Division operations return @(Err DivByZero) when they would otherwise return `Infinity` or `-Infinity`.
 ## * Operations that overflow crash (just like integers do) instead of returning `Infinity` or `-Infinity`.
 ## Under the hood, it is possible to have a zero @Float with a negative sign. However, this implementation detail intentionally conceealed. For equality purpose, `-0.0` is treated as equivalent to `0.0`, just like the spec prescribes. However, @Str.decimal always returns `0.0` when it would otherwise return `-0.0`, and both @Num.isPositive and @Num.isNegative return @False for all zero values. The only way to detect a zero with a negative sign is to convert it to @Bytes and inspect the bits directly.
 Float : Num FloatingPoint
 
+## Returned in an @Err by functions like @Float.div and @Float.mod when their arguments would
+## result in division by zero. Division by zero is not allowed!
 FloatingPoint := FloatingPoint
 
-## Returned by @Float.sqrt when given a negative number.
+## Returned in an @Err by @Float.sqrt when given a negative number.
 InvalidSqrt := InvalidSqrt
 
 ## Conversions
@@ -143,7 +145,7 @@ highestVal : Float
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
 lowestVal : Float
 
-## The highest integer that can be represented as a @Float without # losing precision. 
+## The highest integer that can be represented as a @Float without # losing precision.
 ## It is equal to 2^53, which is approximately 9 × 10^15.
 ##
 ## Some integers higher than this can be represented, but they may lose precision. For example:
@@ -155,7 +157,7 @@ lowestVal : Float
 ## > Float.highestIntVal - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
 highestIntVal : Float
 
-## The lowest integer that can be represented as a @Float without losing precision. 
+## The lowest integer that can be represented as a @Float without losing precision.
 ## It is equal to -2^53, which is approximately -9 × 10^15.
 ##
 ## Some integers lower than this can be represented, but they may lose precision. For example:

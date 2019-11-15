@@ -1,19 +1,19 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use operator::Operator::Pizza;
-use operator::{CalledVia, Operator};
+use operator::BinOp::Pizza;
+use operator::{BinOp, CalledVia};
 use parse::ast::Expr::{self, *};
 use parse::ast::{AssignedField, Def};
 use region::{Located, Region};
 use types;
 
-// Operator precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
+// BinOp precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
 // https://github.com/gluon-lang/gluon
 // Thank you, Markus!
 fn new_op_expr<'a>(
     arena: &'a Bump,
     left: Located<Expr<'a>>,
-    op: Located<Operator>,
+    op: Located<BinOp>,
     right: Located<Expr<'a>>,
 ) -> Located<Expr<'a>> {
     let new_region = Region {
@@ -23,7 +23,7 @@ fn new_op_expr<'a>(
         end_line: right.region.end_line,
         end_col: right.region.end_col,
     };
-    let new_expr = Expr::Operator(arena.alloc((left, op, right)));
+    let new_expr = Expr::BinOp(arena.alloc((left, op, right)));
 
     Located {
         value: new_expr,
@@ -32,7 +32,7 @@ fn new_op_expr<'a>(
 }
 
 /// Reorder the expression tree based on operator precedence and associativity rules,
-/// then replace the Operator nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
+/// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
 pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Located<Expr<'a>> {
     use operator::Associativity::*;
     use std::cmp::Ordering;
@@ -91,10 +91,10 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             region: loc_expr.region,
             value: Closure(loc_patterns, desugar(arena, loc_ret)),
         }),
-        Operator(_) => {
+        BinOp(_) => {
             let mut infixes = Infixes::new(arena.alloc(loc_expr));
             let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
-            let mut op_stack: Vec<Located<Operator>> = Vec::new_in(arena);
+            let mut op_stack: Vec<Located<BinOp>> = Vec::new_in(arena);
 
             while let Some(token) = infixes.next() {
                 match token {
@@ -179,7 +179,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                                                 //
                                                 // By design, Roc neither allows custom operators nor has any built-in operators with
                                                 // the same precedence and different associativity, so this should never happen!
-                                                panic!("Operators had the same associativity, but different precedence. This should never happen!");
+                                                panic!("BinOps had the same associativity, but different precedence. This should never happen!");
                                             }
                                         }
                                     }
@@ -204,7 +204,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                     binop => {
                         // This is a normal binary operator like (+), so desugar it
                         // into the appropriate function call.
-                        let (module_parts, name) = desugar_binop(&binop, arena);
+                        let (module_parts, name) = desugar_binop(binop, arena);
                         let mut args = Vec::with_capacity_in(2, arena);
 
                         args.push(*arena.alloc(left));
@@ -215,7 +215,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                             region: loc_op.region,
                         });
 
-                        Apply(loc_expr, args, CalledVia::Operator(binop))
+                        Apply(loc_expr, args, CalledVia::BinOp(binop))
                     }
                 };
 
@@ -226,7 +226,6 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
 
             arg_stack.pop().unwrap()
         }
-
         Defs(defs, loc_ret) => {
             let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
@@ -249,17 +248,52 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             }
 
             arena.alloc(Located {
-                value: Apply(desugar(arena, loc_fn), desugared_args, called_via.clone()),
+                value: Apply(desugar(arena, loc_fn), desugared_args, *called_via),
                 region: loc_expr.region,
             })
         }
-        // If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
-        // Case(
-        //     &'a Loc<Expr<'a>>,
-        //     Vec<'a, &'a (Loc<Pattern<'a>>, Loc<Expr<'a>>)>,
-        // ),
+        Case(loc_cond_expr, branches) => {
+            let loc_desugared_cond = &*arena.alloc(desugar(arena, &loc_cond_expr));
+            let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
+
+            for (loc_pattern, loc_branch_expr) in branches.into_iter() {
+                // TODO FIXME cloning performance disaster
+                desugared_branches.push(&*arena.alloc((
+                    loc_pattern.clone(),
+                    desugar(arena, &loc_branch_expr).clone(),
+                )));
+            }
+
+            arena.alloc(Located {
+                value: Case(loc_desugared_cond, desugared_branches),
+                region: loc_expr.region,
+            })
+        }
+        UnaryOp(loc_arg, loc_op) => {
+            use operator::UnaryOp::*;
+
+            let region = loc_op.region;
+            let op = loc_op.value;
+            let value = match op {
+                Negate => Var(
+                    bumpalo::vec![in arena; types::MOD_NUM].into_bump_slice(),
+                    "negate",
+                ),
+                Not => Var(
+                    bumpalo::vec![in arena; types::MOD_BOOL].into_bump_slice(),
+                    "not",
+                ),
+            };
+            let loc_fn_var = arena.alloc(Located { region, value });
+            let desugared_args = bumpalo::vec![in arena; desugar(arena, loc_arg)];
+
+            arena.alloc(Located {
+                value: Apply(loc_fn_var, desugared_args, CalledVia::UnaryOp(op)),
+                region: loc_expr.region,
+            })
+        }
         SpaceBefore(expr, _) => {
-            // Since we've already begun canonicalization, these are no longer needed
+            // Since we've already begun canonicalization, spaces are no longer needed
             // and should be dropped.
             desugar(
                 arena,
@@ -277,7 +311,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             )
         }
         SpaceAfter(expr, _) => {
-            // Since we've already begun canonicalization, these are no longer needed
+            // Since we've already begun canonicalization, spaces are no longer needed
             // and should be dropped.
             desugar(
                 arena,
@@ -338,8 +372,8 @@ fn desugar_field<'a>(
 }
 
 #[inline(always)]
-fn desugar_binop<'a>(binop: &Operator, arena: &'a Bump) -> (&'a [&'a str], &'a str) {
-    use self::Operator::*;
+fn desugar_binop(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
+    use self::BinOp::*;
 
     match binop {
         Caret => (
@@ -413,7 +447,7 @@ fn desugar_binop<'a>(binop: &Operator, arena: &'a Bump) -> (&'a [&'a str], &'a s
 #[derive(Debug, Clone, PartialEq)]
 enum InfixToken<'a> {
     Arg(&'a Located<Expr<'a>>),
-    Op(Located<Operator>),
+    Op(Located<BinOp>),
 }
 
 /// An iterator that takes an expression that has had its operators grouped
@@ -444,7 +478,7 @@ struct Infixes<'a> {
     /// The next part of the expression that we need to flatten
     remaining_expr: Option<&'a Located<Expr<'a>>>,
     /// Cached operator from a previous iteration
-    next_op: Option<Located<Operator>>,
+    next_op: Option<Located<BinOp>>,
 }
 
 impl<'a> Infixes<'a> {
@@ -466,7 +500,7 @@ impl<'a> Iterator for Infixes<'a> {
                 .remaining_expr
                 .take()
                 .map(|loc_expr| match loc_expr.value {
-                    Expr::Operator((left, op, right)) => {
+                    Expr::BinOp((left, op, right)) => {
                         self.remaining_expr = Some(right);
                         self.next_op = Some(op.clone());
 

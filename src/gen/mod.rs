@@ -1,13 +1,16 @@
 extern crate inkwell;
 
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::passes::PassManager;
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
+use inkwell::{FloatPredicate, IntPredicate};
 
 use can::expr::Expr;
+use can::pattern::Pattern::{self, *};
 use can::procedure::Procedure;
 use can::symbol::Symbol;
 use collections::ImMap;
@@ -50,6 +53,7 @@ pub struct ModuleBuilder<'a> {
     pub function: &'a Function,
 
     procedures: &'a MutMap<Symbol, Procedure>,
+    _subs: &'a Subs,
     fn_value_opt: Option<FunctionValue>,
 }
 
@@ -83,6 +87,7 @@ impl<'a> ModuleBuilder<'a> {
         builder: &'a Builder,
         pass_manager: &'a PassManager<FunctionValue>,
         procedures: &'a MutMap<Symbol, Procedure>,
+        subs: &'a Subs,
         module: &'a Module,
         function: &Function,
     ) -> Result<FunctionValue, &'static str> {
@@ -93,6 +98,7 @@ impl<'a> ModuleBuilder<'a> {
             module,
             function,
             procedures,
+            _subs: subs,
             fn_value_opt: None,
         };
 
@@ -104,7 +110,7 @@ impl<'a> ModuleBuilder<'a> {
         let arg_types = proto
             .args
             .iter()
-            .map(|(_, typ)| typ.clone())
+            .map(|(_, typ)| *typ)
             .collect::<Vec<BasicTypeEnum>>();
 
         let fn_type = proto.ret.fn_type(&arg_types, false);
@@ -242,16 +248,136 @@ impl<'a> ModuleBuilder<'a> {
                         .unwrap_or_else(|| panic!("Roc compiler error: Invalid call.")),
                 )
             }
+            Case(_, ref loc_cond_expr, ref branches) => {
+                if branches.len() < 2 {
+                    panic!("TODO support case-expressions of fewer than 2 branches.");
+                }
+                if branches.len() == 2 {
+                    let mut iter = branches.iter();
+
+                    let (pattern, branch_expr) = iter.next().unwrap();
+
+                    self.compile_case_branch(
+                        &loc_cond_expr.value,
+                        pattern.value.clone(),
+                        &branch_expr.value,
+                        &iter.next().unwrap().1.value,
+                        vars,
+                    )
+                } else {
+                    panic!("TODO support case-expressions of more than 2 branches.");
+                }
+            }
             Str(_)
             | CallPointer(_, _, _)
             | List(_, _)
-            | Case(_, _, _)
             | Record(_, _)
             | EmptyRecord
+            | Field(_, _)
             | RuntimeError(_) => {
                 panic!("TODO compile_expr for {:?}", expr);
             }
         }
+    }
+
+    fn compile_case_branch(
+        &mut self,
+        cond_expr: &Expr,
+        pattern: Pattern,
+        branch_expr: &Expr,
+        else_expr: &Expr,
+        vars: &mut ImMap<Symbol, PointerValue>,
+    ) -> TypedVal {
+        use self::TypedVal::*;
+
+        match self.compile_expr(cond_expr, vars) {
+            FloatConst(float_val) => match pattern {
+                FloatLiteral(target_val) => {
+                    let comparison = self.builder.build_float_compare(
+                        FloatPredicate::OEQ,
+                        float_val,
+                        self.context.f64_type().const_float(target_val),
+                        "casecond",
+                    );
+
+                    let (then_bb, else_bb, then_val, else_val) =
+                        self.branch_ingredients(comparison, branch_expr, else_expr, vars);
+                    let phi = self.builder.build_phi(self.context.f64_type(), "casetmp");
+
+                    phi.add_incoming(&[
+                        (&Into::<BasicValueEnum>::into(then_val), &then_bb),
+                        (&Into::<BasicValueEnum>::into(else_val), &else_bb),
+                    ]);
+
+                    FloatConst(phi.as_basic_value().into_float_value())
+                }
+
+                _ => panic!("TODO support pattern matching on floats other than literals."),
+            },
+
+            IntConst(int_val) => match pattern {
+                IntLiteral(target_val) => {
+                    let comparison = self.builder.build_int_compare(
+                        IntPredicate::EQ,
+                        int_val,
+                        self.context.i64_type().const_int(target_val as u64, false),
+                        "casecond",
+                    );
+
+                    let (then_bb, else_bb, then_val, else_val) =
+                        self.branch_ingredients(comparison, branch_expr, else_expr, vars);
+                    let phi = self.builder.build_phi(self.context.i64_type(), "casetmp");
+
+                    phi.add_incoming(&[
+                        (&Into::<BasicValueEnum>::into(then_val), &then_bb),
+                        (&Into::<BasicValueEnum>::into(else_val), &else_bb),
+                    ]);
+
+                    IntConst(phi.as_basic_value().into_int_value())
+                }
+                _ => panic!("TODO support pattern matching on ints other than literals."),
+            },
+            Typed(_var, _basic_value_enum) => panic!(
+                "TODO handle pattern matching on conditionals other than int and float literals."
+            ),
+        }
+    }
+
+    fn branch_ingredients(
+        &mut self,
+        comparison: IntValue,
+        branch_expr: &Expr,
+        else_expr: &Expr,
+        vars: &mut ImMap<Symbol, PointerValue>,
+    ) -> (BasicBlock, BasicBlock, TypedVal, TypedVal) {
+        let parent = self.fn_value();
+
+        // build branch
+        let then_bb = self.context.append_basic_block(&parent, "then");
+        let else_bb = self.context.append_basic_block(&parent, "else");
+        let cont_bb = self.context.append_basic_block(&parent, "casecont");
+
+        self.builder
+            .build_conditional_branch(comparison, &then_bb, &else_bb);
+
+        // build then block
+        self.builder.position_at_end(&then_bb);
+        let then_val = self.compile_expr(branch_expr, vars);
+        self.builder.build_unconditional_branch(&cont_bb);
+
+        let then_bb = self.builder.get_insert_block().unwrap();
+
+        // build else block
+        self.builder.position_at_end(&else_bb);
+        let else_val = self.compile_expr(else_expr, vars);
+        self.builder.build_unconditional_branch(&cont_bb);
+
+        let else_bb = self.builder.get_insert_block().unwrap();
+
+        // emit merge block
+        self.builder.position_at_end(&cont_bb);
+
+        (then_bb, else_bb, then_val, else_val)
     }
 }
 

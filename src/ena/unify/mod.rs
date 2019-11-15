@@ -151,9 +151,9 @@ impl<K: UnifyKey> VarValue<K> {
 
     fn new(parent: K, value: K::Value, rank: u32) -> VarValue<K> {
         VarValue {
-            parent: parent, // this is a root
-            value: value,
-            rank: rank,
+            parent, // this is a root
+            value,
+            rank,
         }
     }
 
@@ -241,6 +241,11 @@ impl<S: UnificationStore> UnificationTable<S> {
     /// Returns the number of keys created so far.
     pub fn len(&self) -> usize {
         self.values.len()
+    }
+
+    /// Returns true iff there have been no keys created yet.
+    pub fn is_empty(&self) -> bool {
+        self.values.len() == 0
     }
 
     /// Returns the keys of all variables created since the `snapshot`.

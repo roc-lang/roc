@@ -19,10 +19,10 @@ impl Symbol {
     }
 
     pub fn from_variant(variant_name: &VariantName, home: &str) -> Symbol {
-        match &variant_name {
-            &VariantName::Unqualified(ref name) => Symbol::new(home, name),
+        match variant_name {
+            VariantName::Unqualified(name) => Symbol::new(home, name),
 
-            &VariantName::Qualified(ref path, ref name) => Symbol::new(path, name),
+            VariantName::Qualified(path, name) => Symbol::new(path, name),
         }
     }
 

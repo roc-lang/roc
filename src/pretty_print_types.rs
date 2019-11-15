@@ -1,8 +1,8 @@
 use subs::{Content, FlatType, Subs, Variable};
 use types;
 
-static WILDCARD: &'static str = "*";
-static EMPTY_RECORD: &'static str = "{}";
+static WILDCARD: &str = "*";
+static EMPTY_RECORD: &str = "{}";
 
 pub fn content_to_string(content: Content, subs: &mut Subs) -> String {
     let mut buf = String::new();
@@ -42,7 +42,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         Func(args, ret) => write_fn(args, ret, subs, buf, use_parens),
-        Operator(l_arg, r_arg, ret) => write_fn(vec![l_arg, r_arg], ret, subs, buf, use_parens),
+        BinOp(l_arg, r_arg, ret) => write_fn(vec![l_arg, r_arg], ret, subs, buf, use_parens),
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }

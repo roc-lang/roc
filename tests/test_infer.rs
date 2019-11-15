@@ -114,6 +114,22 @@ mod test_infer {
         );
     }
 
+    // #[test]
+    // fn concat_different_types() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             empty = []
+    //             one = List.concat [ 1 ] empty
+    //             str = List.concat [ "blah" ] empty
+
+    //             empty
+    //         "#
+    //         ),
+    //         "List *",
+    //     );
+    // }
+
     #[test]
     fn list_of_one_int() {
         infer_eq(
@@ -429,6 +445,20 @@ mod test_infer {
     }
 
     #[test]
+    fn identity_returns_given_type() {
+        infer_eq(
+            indoc!(
+                r#"
+                identity = \a -> a
+
+                identity "hi"
+                "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
     fn call_returns_list() {
         infer_eq(
             indoc!(
@@ -447,18 +477,20 @@ mod test_infer {
     // TODO BoundTypeVariables
     // TODO conditionals
 
-    //     #[test]
-    //     fn indirect_always() {
-    //         infer_eq(
-    //             indoc!(r#"
-    //                 always = \val -> (\_ -> val)
-    //                 alwaysFoo = always "foo"
+    #[test]
+    fn indirect_always() {
+        infer_eq(
+            indoc!(
+                r#"
+                    always = \val -> (\_ -> val)
+                    alwaysFoo = always "foo"
 
-    //                 alwaysFoo 42
-    //             "#),
-    //             "Str"
-    //         );
-    //     }
+                    alwaysFoo 42
+                "#
+            ),
+            "Str",
+        );
+    }
 
     //     #[test]
     //     fn identity() {
@@ -494,49 +526,51 @@ mod test_infer {
     //     );
     // }
 
-    // #[test]
-    // fn basic_float_division() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             1 / 2
-    //         "#
-    //         ),
-    //         "Float",
-    //     );
-    // }
+    //     #[test]
+    //     fn basic_float_division() {
+    //         infer_eq(
+    //             indoc!(
+    //                 r#"
+    //                 1 / 2
+    //             "#
+    //             ),
+    //             "Float",
+    //         );
+    //     }
 
-    #[test]
-    fn basic_int_division() {
-        infer_eq(
-            indoc!(
-                r#"
-                1 // 2
-            "#
-            ),
-            "Int",
-        );
-    }
+    //     #[test]
+    //     fn basic_int_division() {
+    //         infer_eq(
+    //             indoc!(
+    //                 r#"
+    //                 1 // 2
+    //             "#
+    //             ),
+    //             "Int",
+    //         );
+    //     }
 
-    // #[test]
-    // fn basic_addition() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             1 + 2
-    //         "#
-    //         ),
-    //         "Num *",
-    //     );
-    // }
+    //     #[test]
+    //     fn basic_addition() {
+    //         infer_eq(
+    //             indoc!(
+    //                 r#"
+    //                 1 + 2
+    //             "#
+    //             ),
+    //             "Int",
+    //         );
+    //     }
 
     // #[test]
     // fn basic_circular_type() {
-    //     assert_eq!(
-    //         infer(indoc!(r#"
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
     //             \x -> x x
-    //         "#)),
-    //         Erroneous(Problem::CircularType)
+    //         "#
+    //         ),
+    //         "<Type Mismatch: Circular Type>",
     //     );
     // }
 
@@ -553,21 +587,41 @@ mod test_infer {
     // #[test]
     // fn no_higher_ranked_types() {
     //     // This should error because it can't type of alwaysFive
-    //        infer_eq(
-    //        indoc!(r#"
-    //            alwaysFive = \_ -> 5
-
-    //            [ alwaysFive "foo", alwaysFive [] ]
-    //        "#),
-    //        "<type mismatch>"
-    //    );
-    // }
-
-    // #[test]
-    // fn infer_basic_case() {
-    //     assert_eq!(
-    //         infer("case 42 when 1 then 2.5 when _ then 3.5"),
-    //         Builtin(Frac)
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             \always -> [ always [], always "" ]
+    //        "#
+    //         ),
+    //         "<type mismatch>",
     //     );
     // }
+
+    #[test]
+    fn always_with_list() {
+        infer_eq(
+            indoc!(
+                r#"
+               alwaysFive = \_ -> 5
+
+               [ alwaysFive "foo", alwaysFive [] ]
+           "#
+            ),
+            "List Int",
+        );
+    }
+
+    #[test]
+    fn case_with_int_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                case 1 when
+                 1 -> 2
+                 3 -> 4
+            "#
+            ),
+            "Int",
+        );
+    }
 }

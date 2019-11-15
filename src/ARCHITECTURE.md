@@ -12,7 +12,7 @@ For example, parsing would translate this string...
 
 ...into this `Expr` value:
 
-    Operator(Int(1), Plus, Int(2))
+    BinOp(Int(1), Plus, Int(2))
 
 > Technically it would be `Box::new(Int(1))` and `Box::new(Int(2))`, but that's beside the point for now.
 
@@ -58,10 +58,10 @@ For example, let's say we had this code:
 
 The parser will translate this into the following `Expr`:
 
-    Operator(
+    BinOp(
         Int(1),
         Plus,
-        Operator(Int(2), Minus, Int(3))
+        BinOp(Int(2), Minus, Int(3))
     )
 
 The `eval` function will take this `Expr` and translate it into this much simpler `Expr`:
@@ -74,18 +74,18 @@ At this point it's become so simple that we can display it to the end user as th
 
 `eval` accomplishes this by doing a `match` on an `Expr` and resolving every operation it encounters. For example, when it first sees this:
 
-    Operator(
+    BinOp(
         Int(1),
         Plus,
-        Operator(Int(8), Minus, Int(3))
+        BinOp(Int(8), Minus, Int(3))
     )
 
 The first thing it does is to call `eval` on the right `Expr` values on either side of the `Plus`. That results in:
 
 1. Calling `eval` on `Int(1)`, which returns `Int(1)` since it can't be reduced any further.
-2. Calling `eval` on `Operator(Int(8), Minus, Int(3))`, which in fact can be reduced further.
+2. Calling `eval` on `BinOp(Int(8), Minus, Int(3))`, which in fact can be reduced further.
 
-Since the second call to `eval` will match on another `Operator`, it's once again going to recursively call `eval` on both of its `Expr` values. Since those are both `Int` values, though, their `eval` calls will return them right away without doing anything else.
+Since the second call to `eval` will match on another `BinOp`, it's once again going to recursively call `eval` on both of its `Expr` values. Since those are both `Int` values, though, their `eval` calls will return them right away without doing anything else.
 
 Now that it's evaluated the expressions on either side of the `Minus`, `eval` will look at the particular operator being applied to those expressoins (in this case, a minus operator) and check to see if the expressions it was given work with that operation.
 
@@ -97,7 +97,7 @@ Assuming there's no type problem, `eval` can go ahead and run the Rust code of `
 
 That concludes our original recursive call to `eval`, after which point we'll be evaluating this expression:
 
-    Operator(
+    BinOp(
         Int(1),
         Plus,
         Int(5)

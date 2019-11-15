@@ -157,9 +157,9 @@ mod test_canonicalize {
     //                is_self_tail_recursive: false,
     //                definition: Region::zero(),
     //                args: vec![loc(Pattern::Identifier(sym("arg")))],
-    //                body: loc(Expr::Operator(
+    //                body: loc(Expr::BinOp(
     //                    loc_box(Expr::Var(sym("arg"))),
-    //                    loc(Operator::Plus),
+    //                    loc(BinOp::Plus),
     //                    loc_box(Expr::Int(1))
     //                )),
     //                references: References {
@@ -631,11 +631,11 @@ mod test_canonicalize {
     //// fn two_operator_precedence() {
     ////     assert_eq!(
     ////         parse_with_precedence("x + y * 5"),
-    ////         Ok((Operator(
+    ////         Ok((BinOp(
     ////                 loc_box(var("x")),
     ////                 loc(Plus),
     ////                 loc_box(
-    ////                     Operator(
+    ////                     BinOp(
     ////                         loc_box(var("y")),
     ////                         loc(Star),
     ////                         loc_box(Int(5))
@@ -647,9 +647,9 @@ mod test_canonicalize {
 
     ////     assert_eq!(
     ////         parse_with_precedence("x * y + 5"),
-    ////         Ok((Operator(
+    ////         Ok((BinOp(
     ////                 loc_box(
-    ////                     Operator(
+    ////                     BinOp(
     ////                         loc_box(var("x")),
     ////                         loc(Star),
     ////                         loc_box(var("y")),
@@ -666,9 +666,9 @@ mod test_canonicalize {
     //// fn compare_and() {
     ////     assert_eq!(
     ////         parse_with_precedence("x > 1 || True"),
-    ////         Ok((Operator(
+    ////         Ok((BinOp(
     ////                 loc_box(
-    ////                     Operator(
+    ////                     BinOp(
     ////                         loc_box(var("x")),
     ////                         loc(GreaterThan),
     ////                         loc_box(Int(1))

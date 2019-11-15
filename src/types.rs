@@ -1,31 +1,31 @@
 use can::symbol::Symbol;
 use collections::ImMap;
-use operator::{ArgSide, Operator};
+use operator::{ArgSide, BinOp};
 use region::Located;
 use region::Region;
+use std::fmt;
 use subs::Variable;
 
 // The standard modules
-pub const MOD_FLOAT: &'static str = "Float";
-pub const MOD_BOOL: &'static str = "Float";
-pub const MOD_INT: &'static str = "Int";
-pub const MOD_STR: &'static str = "Str";
-pub const MOD_LIST: &'static str = "List";
-pub const MOD_MAP: &'static str = "Map";
-pub const MOD_SET: &'static str = "Set";
-pub const MOD_NUM: &'static str = "Num";
-pub const MOD_DEFAULT: &'static str = "Default";
+pub const MOD_FLOAT: &str = "Float";
+pub const MOD_BOOL: &str = "Bool";
+pub const MOD_INT: &str = "Int";
+pub const MOD_STR: &str = "Str";
+pub const MOD_LIST: &str = "List";
+pub const MOD_MAP: &str = "Map";
+pub const MOD_SET: &str = "Set";
+pub const MOD_NUM: &str = "Num";
+pub const MOD_DEFAULT: &str = "Default";
 
-pub const TYPE_NUM: &'static str = "Num";
-pub const TYPE_INTEGER: &'static str = "Integer";
-pub const TYPE_FLOATINGPOINT: &'static str = "FloatingPoint";
+pub const TYPE_NUM: &str = "Num";
+pub const TYPE_INTEGER: &str = "Integer";
+pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Operator(Box<OperatorType>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
         module_name: Box<str>,
@@ -37,20 +37,56 @@ pub enum Type {
     Erroneous(Problem),
 }
 
-impl Type {
-    pub fn for_operator(op: Operator) -> OperatorType {
-        use self::Operator::*;
+impl fmt::Debug for Type {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Type::EmptyRec => write!(f, "{{}}"),
+            Type::Function(args, ret) => {
+                for (index, arg) in args.iter().enumerate() {
+                    if index > 0 {
+                        ", ".fmt(f)?;
+                    }
 
-        match op {
-            Slash => op_type(Type::float(), Type::float(), Type::float()),
-            DoubleSlash => op_type(Type::int(), Type::int(), Type::int()),
-            // TODO actually, don't put these in types.rs - instead, replace them
-            // with an equivalence to their corresponding stdlib functions - e.g.
-            // Slash generates a new variable and an Eq constraint with Float.div.
-            _ => panic!("TODO types for operator {:?}", op),
+                    arg.fmt(f)?;
+                }
+
+                write!(f, " -> ")?;
+
+                ret.fmt(f)
+            }
+            Type::Variable(var) => write!(f, "<{:?}>", var),
+
+            Type::Apply {
+                module_name,
+                name,
+                args,
+            } => {
+                write!(f, "(")?;
+
+                if !module_name.is_empty() {
+                    write!(f, "{}.", module_name)?;
+                }
+
+                write!(f, "{}", name)?;
+
+                for arg in args {
+                    write!(f, " {:?}", arg)?;
+                }
+
+                write!(f, ")")
+            }
+            Type::Erroneous(problem) => {
+                write!(f, "Erroneous(")?;
+
+                problem.fmt(f)?;
+
+                write!(f, ")")
+            }
         }
     }
+}
 
+impl Type {
     pub fn num(args: Vec<Type>) -> Self {
         Type::Apply {
             module_name: MOD_NUM.into(),
@@ -97,21 +133,36 @@ impl Type {
     }
 }
 
-fn op_type(left: Type, right: Type, ret: Type) -> OperatorType {
-    OperatorType { left, right, ret }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct OperatorType {
-    pub left: Type,
-    pub right: Type,
-    pub ret: Type,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expected<T> {
     NoExpectation(T),
+    FromAnnotation(String, usize, AnnotationSource, T),
     ForReason(Reason, T, Region),
+}
+
+/// Like Expected, but for Patterns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PExpected<T> {
+    NoExpectation(T),
+    ForReason(PReason, T, Region),
+}
+
+impl<T> PExpected<T> {
+    pub fn get_type(self) -> T {
+        match self {
+            PExpected::NoExpectation(val) => val,
+            PExpected::ForReason(_, val, _) => val,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PReason {
+    TypedArg { name: Box<str>, index: usize },
+    CaseMatch { index: usize },
+    CtorArg { name: Box<str>, index: usize },
+    ListEntry { index: usize },
+    Tail,
 }
 
 impl<T> Expected<T> {
@@ -119,8 +170,16 @@ impl<T> Expected<T> {
         match self {
             Expected::NoExpectation(val) => val,
             Expected::ForReason(_, val, _) => val,
+            Expected::FromAnnotation(_, _, _, val) => val,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnnotationSource {
+    TypedIfBranch(usize /* index */),
+    TypedCaseBranch(usize /* index */),
+    TypedBody,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,11 +188,12 @@ pub enum Reason {
     NamedFnArg(String /* function name */, u8 /* arg index */),
     AnonymousFnCall(u8 /* arity */),
     NamedFnCall(String /* function name */, u8 /* arity */),
-    OperatorArg(Operator, ArgSide),
-    OperatorRet(Operator),
+    BinOpArg(BinOp, ArgSide),
+    BinOpRet(BinOp),
     FloatLiteral,
     IntLiteral,
     InterpolatedStringVar,
+    CaseBranch { index: usize },
     ElemInList,
 }
 
@@ -141,9 +201,23 @@ pub enum Reason {
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
     Lookup(Symbol, Expected<Type>, Region),
+    Pattern(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PatternCategory {
+    Record,
+    EmptyRecord,
+    List,
+    Set,
+    Map,
+    Ctor(Box<str>),
+    Int,
+    Str,
+    Float,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

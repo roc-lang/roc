@@ -17,11 +17,12 @@ mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
     use helpers::parse_with;
+    use roc::operator::BinOp::*;
     use roc::operator::CalledVia;
-    use roc::operator::Operator::*;
+    use roc::operator::UnaryOp;
     use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
-    use roc::parse::ast::Pattern::*;
+    use roc::parse::ast::Pattern::{self, *};
     use roc::parse::ast::{Attempting, Def, Spaceable};
     use roc::parse::parser::{Fail, FailReason};
     use roc::region::{Located, Region};
@@ -256,7 +257,7 @@ mod test_parse {
             Located::new(0, 0, 1, 2, Plus),
             Located::new(0, 0, 2, 3, Int("2")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "1+2");
 
         assert_eq!(Ok(expected), actual);
@@ -270,7 +271,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, Plus),
             Located::new(0, 0, 7, 8, Int("2")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "1  +   2");
 
         assert_eq!(Ok(expected), actual);
@@ -288,7 +289,7 @@ mod test_parse {
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Int("4")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  \n+ 4");
 
         assert_eq!(Ok(expected), actual);
@@ -305,7 +306,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, Star),
             Located::new(1, 1, 2, 3, spaced_int),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  *\n  4");
 
         assert_eq!(Ok(expected), actual);
@@ -322,7 +323,7 @@ mod test_parse {
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Int("4")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  # test!\n+ 4");
 
         assert_eq!(Ok(expected), actual);
@@ -339,7 +340,7 @@ mod test_parse {
             Located::new(0, 0, 4, 5, Star),
             Located::new(1, 1, 1, 3, spaced_int),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "12  * # test!\n 92");
 
         assert_eq!(Ok(expected), actual);
@@ -359,8 +360,25 @@ mod test_parse {
             Located::new(1, 1, 0, 1, Plus),
             Located::new(3, 3, 2, 3, spaced_int2),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  \n+ \n\n  4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn space_only_after_minus() {
+        // This is an edge case with minus because of unary negation.
+        // (x- y) should parse like subtraction (x - (y)), not function application (x (-y))
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(module_parts, "x")),
+            Located::new(0, 0, 1, 2, Minus),
+            Located::new(0, 0, 3, 4, Var(module_parts, "y")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x- y");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -373,7 +391,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, Minus),
             Located::new(0, 0, 4, 5, Int("5")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "-12-5");
 
         assert_eq!(Ok(expected), actual);
@@ -387,7 +405,7 @@ mod test_parse {
             Located::new(0, 0, 2, 3, Star),
             Located::new(0, 0, 3, 5, Int("11")),
         ));
-        let expected = Operator(tuple);
+        let expected = BinOp(tuple);
         let actual = parse_with(&arena, "10*11");
 
         assert_eq!(Ok(expected), actual);
@@ -404,9 +422,9 @@ mod test_parse {
         let outer = arena.alloc((
             Located::new(0, 0, 0, 2, Int("31")),
             Located::new(0, 0, 2, 3, Star),
-            Located::new(0, 0, 3, 9, Operator(inner)),
+            Located::new(0, 0, 3, 9, BinOp(inner)),
         ));
-        let expected = Operator(outer);
+        let expected = BinOp(outer);
         let actual = parse_with(&arena, "31*42+534");
 
         assert_eq!(Ok(expected), actual);
@@ -615,6 +633,128 @@ mod test_parse {
             CalledVia::Space,
         );
         let actual = parse_with(&arena, "(whee) 1");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // UNARY OPERATORS
+
+    #[test]
+    fn unary_negation() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let loc_arg1_expr = Located::new(0, 0, 1, 4, Var(module_parts, "foo"));
+        let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
+        let actual = parse_with(&arena, "-foo");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn unary_not() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
+        let loc_arg1_expr = Located::new(0, 0, 1, 5, Var(module_parts, "blah"));
+        let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
+        let actual = parse_with(&arena, "!blah");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn apply_unary_negation() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 7, 9, Int("12")));
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let arg2 = arena.alloc(Located::new(0, 0, 10, 13, Var(module_parts, "foo")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let apply_expr = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 1, 5, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let actual = parse_with(&arena, "-whee  12 foo");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn apply_unary_not() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 7, 9, Int("12")));
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
+        let arg2 = arena.alloc(Located::new(0, 0, 10, 13, Var(module_parts, "foo")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let apply_expr = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 1, 5, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let actual = parse_with(&arena, "!whee  12 foo");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn unary_negation_with_parens() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 8, 10, Int("12")));
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let arg2 = arena.alloc(Located::new(0, 0, 11, 14, Var(module_parts, "foo")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let apply_expr = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 2, 6, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let actual = parse_with(&arena, "-(whee  12 foo)");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn unary_not_with_parens() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 8, 10, Int("12")));
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
+        let arg2 = arena.alloc(Located::new(0, 0, 11, 14, Var(module_parts, "foo")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let apply_expr = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 2, 6, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let actual = parse_with(&arena, "!(whee  12 foo)");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn unary_negation_arg() {
+        let arena = Bump::new();
+        let module_parts = Vec::new_in(&arena).into_bump_slice();
+        let arg1 = arena.alloc(Located::new(0, 0, 6, 8, Int("12")));
+        let loc_op = Located::new(0, 0, 9, 10, UnaryOp::Negate);
+        let loc_arg1_expr = Located::new(0, 0, 10, 13, Var(module_parts, "foo"));
+        let arg_op = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
+        let arg2 = arena.alloc(Located::new(0, 0, 9, 13, arg_op));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let expected = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 0, 4, Var(module_parts, "whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let actual = parse_with(&arena, "whee  12 -foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -849,29 +989,73 @@ mod test_parse {
 
     // CASE
 
-    // #[test]
-    // fn two_branch_case() {
-    //     let arena = Bump::new();
-    //     let module_parts = Vec::new_in(&arena).into_bump_slice();
-    //     let arg1 = Located::new(0, 0, 2, 3, Var(module_parts, "b"));
-    //     let arg2 = Located::new(0, 0, 4, 5, Var(module_parts, "c"));
-    //     let arg3 = Located::new(0, 0, 6, 7, Var(module_parts, "d"));
-    //     let args = bumpalo::vec![in &arena; arg1, arg2, arg3];
-    //     let tuple = arena.alloc((Located::new(0, 0, 0, 1, Var(module_parts, "a")), args));
-    //     let expected = Expr::Apply(tuple);
-    //     let actual = parse_with(
-    //         &arena,
-    //         indoc!(
-    //             r#"
-    //             case foo bar baz when
-    //              "blah" -> foo a b
-    //              "mise" -> bar c d
-    //             "#
-    //         ),
-    //     );
+    #[test]
+    fn two_branch_case() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern1 =
+            Pattern::SpaceBefore(arena.alloc(StrLiteral("blah")), newlines.into_bump_slice());
+        let loc_pattern1 = Located::new(1, 1, 1, 7, pattern1);
+        let expr1 = Int("1");
+        let loc_expr1 = Located::new(1, 1, 11, 12, expr1);
+        let branch1 = &*arena.alloc((loc_pattern1, loc_expr1));
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern2 =
+            Pattern::SpaceBefore(arena.alloc(StrLiteral("mise")), newlines.into_bump_slice());
+        let loc_pattern2 = Located::new(2, 2, 1, 7, pattern2);
+        let expr2 = Int("2");
+        let loc_expr2 = Located::new(2, 2, 11, 12, expr2);
+        let branch2 = &*arena.alloc((loc_pattern2, loc_expr2));
+        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
+        let expected = Expr::Case(arena.alloc(loc_cond), branches);
+        let actual = parse_with(
+            &arena,
+            indoc!(
+                r#"
+                case x when
+                 "blah" -> 1
+                 "mise" -> 2
+                "#
+            ),
+        );
 
-    //     assert_eq!(Ok(expected), actual);
-    // }
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn case_with_numbers() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern1 =
+            Pattern::SpaceBefore(arena.alloc(IntLiteral("1")), newlines.into_bump_slice());
+        let loc_pattern1 = Located::new(1, 1, 1, 2, pattern1);
+        let expr1 = Int("2");
+        let loc_expr1 = Located::new(1, 1, 6, 7, expr1);
+        let branch1 = &*arena.alloc((loc_pattern1, loc_expr1));
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern2 =
+            Pattern::SpaceBefore(arena.alloc(IntLiteral("3")), newlines.into_bump_slice());
+        let loc_pattern2 = Located::new(2, 2, 1, 2, pattern2);
+        let expr2 = Int("4");
+        let loc_expr2 = Located::new(2, 2, 6, 7, expr2);
+        let branch2 = &*arena.alloc((loc_pattern2, loc_expr2));
+        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
+        let expected = Expr::Case(arena.alloc(loc_cond), branches);
+        let actual = parse_with(
+            &arena,
+            indoc!(
+                r#"
+                case x when
+                 1 -> 2
+                 3 -> 4
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
 
     // TODO test hex/oct/binary parsing
     //

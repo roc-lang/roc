@@ -1,4 +1,8 @@
 use can::env::Env;
+use can::num::{
+    finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
+    finish_parsing_oct,
+};
 use can::problem::Problem;
 use can::scope::Scope;
 use can::symbol::Symbol;
@@ -8,6 +12,7 @@ use parse::ast;
 use region::{Located, Region};
 use subs::Subs;
 use subs::Variable;
+use types::{Constraint, PExpected, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -16,9 +21,9 @@ pub enum Pattern {
     Identifier(Variable, Symbol),
     Variant(Variable, Symbol),
     AppliedVariant(Variable, Symbol, Vec<Located<Pattern>>),
-    IntLiteral(Variable, i64),
-    FloatLiteral(Variable, f64),
-    ExactString(Variable, Box<str>),
+    IntLiteral(i64),
+    FloatLiteral(f64),
+    ExactString(Box<str>),
     EmptyRecordLiteral(Variable),
     Underscore(Variable),
 
@@ -44,15 +49,16 @@ pub fn canonicalize_pattern<'a>(
     env: &'a mut Env,
     subs: &mut Subs,
     scope: &mut Scope,
-    pattern_type: &'a PatternType,
-    loc_pattern: &'a Located<ast::Pattern<'a>>,
+    pattern_type: PatternType,
+    pattern: &'a ast::Pattern<'a>,
+    region: Region,
     shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
-) -> Located<Pattern> {
+    expected: PExpected<Type>,
+) -> (Located<Pattern>, State) {
     use self::PatternType::*;
     use can::ast::Pattern::*;
 
-    let region = loc_pattern.region;
-    let pattern = match &loc_pattern.value {
+    let can_pattern = match &pattern {
         &Identifier(ref name) => {
             let unqualified_ident = Ident::Unqualified(name.to_string());
 
@@ -162,7 +168,7 @@ pub fn canonicalize_pattern<'a>(
                 Pattern::Variant(subs.mk_flex_var(), symbol)
             } else {
                 let loc_name = Located {
-                    region: region,
+                    region,
                     value: variant,
                 };
                 // We couldn't find the variant name in scope. NAMING PROBLEM!
@@ -172,39 +178,172 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        // &IntLiteral(ref num) => match pattern_type {
-        //     CaseBranch => Pattern::IntLiteral(*num),
-        //     ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
-        // },
+        &FloatLiteral(ref string) => match pattern_type {
+            CaseBranch => {
+                let float = finish_parsing_float(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed float pattern"));
 
-        // &FloatLiteral(ref num) => match pattern_type {
-        //     CaseBranch => Pattern::FloatLiteral(*num),
-        //     ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
-        // },
+                Pattern::FloatLiteral(float)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+        },
 
-        // &ExactString(ref string) => match pattern_type {
-        //     CaseBranch => Pattern::ExactString(string.clone()),
-        //     ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, *ptype, region),
-        // },
         &Underscore => match pattern_type {
             CaseBranch | FunctionArg => Pattern::Underscore(subs.mk_flex_var()),
             Assignment => unsupported_pattern(env, Assignment, region),
         },
 
+        &IntLiteral(string) => match pattern_type {
+            CaseBranch => {
+                let int = finish_parsing_int(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed int pattern"));
+
+                Pattern::IntLiteral(int)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+        },
+
+        &HexIntLiteral(string) => match pattern_type {
+            CaseBranch => {
+                let int = finish_parsing_hex(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed hex int pattern"));
+
+                Pattern::IntLiteral(int)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+        },
+
+        &OctalIntLiteral(string) => match pattern_type {
+            CaseBranch => {
+                let int = finish_parsing_oct(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed octal int pattern"));
+
+                Pattern::IntLiteral(int)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+        },
+
+        &BinaryIntLiteral(string) => match pattern_type {
+            CaseBranch => {
+                let int = finish_parsing_bin(string)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed binary int pattern"));
+
+                Pattern::IntLiteral(int)
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+        },
+
+        &StrLiteral(_string) => match pattern_type {
+            CaseBranch => {
+                panic!("TODO check whether string pattern is malformed.");
+                // Pattern::ExactString((*string).into())
+            }
+            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+        },
+
         // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
-        _ => panic!("TODO finish restoring can_pattern branches"),
+        &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
+            return canonicalize_pattern(
+                env,
+                subs,
+                scope,
+                pattern_type,
+                sub_pattern,
+                region,
+                shadowable_idents,
+                expected,
+            )
+        }
+        _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
 
-    Located {
-        region,
-        value: pattern,
-    }
+    let mut state = State {
+        headers: ImMap::default(),
+        vars: Vec::new(),
+        constraints: Vec::new(),
+    };
+
+    add_constraints(&pattern, region, expected, &mut state);
+
+    (
+        Located {
+            region,
+            value: can_pattern,
+        },
+        state,
+    )
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
-fn unsupported_pattern<'a>(env: &'a mut Env, pattern_type: PatternType, region: Region) -> Pattern {
+fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region) -> Pattern {
     env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
+}
+
+// CONSTRAIN
+
+pub struct State {
+    pub headers: ImMap<Symbol, Located<Type>>,
+    pub vars: Vec<Variable>,
+    pub constraints: Vec<Constraint>,
+}
+
+fn add_constraints<'a>(
+    pattern: &'a ast::Pattern<'a>,
+    region: Region,
+    expected: PExpected<Type>,
+    state: &'a mut State,
+) {
+    use parse::ast::Pattern::*;
+
+    match pattern {
+        Underscore | Malformed(_) | QualifiedIdentifier(_) => {
+            // Neither the _ pattern nor malformed ones add any constraints.
+        }
+        Identifier(name) => {
+            state.headers.insert(
+                Symbol::new("TODO pass home into add_constraints, or improve Symbol to not need it for idents in patterns", name),
+                Located {
+                    region,
+                    value: expected.get_type(),
+                },
+            );
+        }
+        IntLiteral(_) | HexIntLiteral(_) | OctalIntLiteral(_) | BinaryIntLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Int,
+                Type::int(),
+                expected,
+            ));
+        }
+
+        FloatLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Float,
+                Type::float(),
+                expected,
+            ));
+        }
+
+        StrLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Str,
+                Type::string(),
+                expected,
+            ));
+        }
+
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
+            add_constraints(pattern, region, expected, state)
+        }
+
+        Variant(_, _) | Apply(_, _) | RecordDestructure(_) | EmptyRecordLiteral => {
+            panic!("TODO add_constraints for {:?}", pattern);
+        }
+    }
 }

@@ -3,7 +3,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use fmt;
 use operator::CalledVia;
-use operator::Operator;
+use operator::{BinOp, UnaryOp};
 use parse::ident::Ident;
 use region::{Loc, Region};
 
@@ -70,6 +70,10 @@ impl<'a> MaybeQualified<'a, &'a str> {
 
         answer
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<'a> MaybeQualified<'a, &'a [&'a str]> {
@@ -85,6 +89,10 @@ impl<'a> MaybeQualified<'a, &'a [&'a str]> {
         }
 
         answer
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -114,7 +122,8 @@ pub enum Expr<'a> {
     // String Literals
     Str(&'a str),
     BlockStr(&'a [&'a str]),
-    /// e.g. `(expr).foo.bar`
+    /// e.g. `(expr).foo.bar` - we rule out nested lookups in canonicalization,
+    /// but we want to keep the nesting here to give a nicer error message.
     Field(&'a Loc<Expr<'a>>, Vec<'a, &'a str>),
     /// e.g. `Foo.Bar.baz.qux`
     QualifiedField(&'a [&'a str], &'a [&'a str]),
@@ -138,7 +147,8 @@ pub enum Expr<'a> {
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a variant by name, do Apply(Variant(...), ...)
     Apply(&'a Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>, CalledVia),
-    Operator(&'a (Loc<Expr<'a>>, Loc<Operator>, Loc<Expr<'a>>)),
+    BinOp(&'a (Loc<Expr<'a>>, Loc<BinOp>, Loc<Expr<'a>>)),
+    UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
     // Conditionals
     If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
@@ -157,7 +167,7 @@ pub enum Expr<'a> {
     MalformedClosure,
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
-    PrecedenceConflict(Loc<Operator>, Loc<Operator>, &'a Loc<Expr<'a>>),
+    PrecedenceConflict(Loc<BinOp>, Loc<BinOp>, &'a Loc<Expr<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

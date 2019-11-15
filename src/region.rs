@@ -82,7 +82,7 @@ impl<T> Located<T> {
     pub fn with_value<U>(&self, value: U) -> Located<U> {
         Located {
             region: self.region,
-            value: value,
+            value,
         }
     }
 

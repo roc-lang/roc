@@ -11,21 +11,9 @@ pub mod record;
 pub mod string_literal;
 pub mod type_annotation;
 
-/// All module definitions begin with one of these:
-///
-/// app
-/// api
-/// api bridge
-///
-/// We parse these to guard against mistakes; in general, the build tool
-/// is responsible for determining the root module (either an `app` or `api bridge`
-/// module), and then all `api` modules should only ever be imported from
-/// another module.
-///
-/// parsing the file
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use operator::{CalledVia, Operator};
+use operator::{BinOp, CalledVia, UnaryOp};
 use parse;
 use parse::ast::{
     AppHeader, AssignedField, Attempting, CommentOrNewline, Def, Expr, HeaderEntry,
@@ -39,12 +27,12 @@ use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
     allocated, and, attempt, between, char, either, loc, map, map_with_arena, not, not_followed_by,
-    one_of16, one_of2, one_of5, one_of9, one_or_more, optional, skip_first, skip_second, string,
-    then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason, ParseResult, Parser,
-    State,
+    one_of10, one_of17, one_of2, one_of3, one_of5, one_of6, one_or_more, optional, skip_first,
+    skip_second, string, then, unexpected, unexpected_eof, zero_or_more, Either, Fail, FailReason,
+    ParseResult, Parser, State,
 };
 use parse::record::record;
-use region::Located;
+use region::{Located, Region};
 
 pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
     one_of2(interface_module(), app_module())
@@ -147,17 +135,6 @@ fn mod_header_entry<'a>() -> impl Parser<'a, HeaderEntry<'a>> {
     )
 }
 
-// pub fn app<'a>() -> impl Parser<'a, Module<'a>> {
-//     skip_first(string("app using Echo"))
-// }
-
-// pub fn api_bridge<'a>() -> impl Parser<'a, Module<'a>> {
-//     and(
-//         skip_first(string("api bridge"), space1_around(ident())),
-//         skip_first(string("exposes"), space1_around(ident())),
-//     )
-// }
-
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
     // as this causes rustc to stack overflow. Thus, parse_expr must be a
@@ -170,18 +147,45 @@ fn loc_parse_expr_body_without_operators<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
-    one_of9(
+    one_of10(
         loc_parenthetical_expr(min_indent),
         loc(string_literal()),
         loc(number_literal()),
         loc(closure(min_indent)),
         loc(record_literal(min_indent)),
         loc(list_literal(min_indent)),
+        loc(unary_op(min_indent)),
         loc(case_expr(min_indent)),
         loc(if_expr(min_indent)),
         loc(ident_etc(min_indent)),
     )
     .parse(arena, state)
+}
+
+/// Unary (!) or (-)
+///
+/// e.g. `!x` or `-x`
+pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+    one_of2(
+        map_with_arena(
+            and(
+                loc(char('!')),
+                loc(move |arena, state| parse_expr(min_indent, arena, state)),
+            ),
+            |arena, (loc_op, loc_expr)| {
+                Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Not))
+            },
+        ),
+        map_with_arena(
+            and(
+                loc(char('-')),
+                loc(move |arena, state| parse_expr(min_indent, arena, state)),
+            ),
+            |arena, (loc_op, loc_expr)| {
+                Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Negate))
+            },
+        ),
+    )
 }
 
 fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Expr<'a>> {
@@ -191,11 +195,11 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
             move |arena, state| loc_parse_expr_body_without_operators(min_indent, arena, state),
             // Parse the operator, with optional spaces before it.
             //
-            // Since spaces can only wrap an Expr, not an Operator, we have to first
+            // Since spaces can only wrap an Expr, not an BinOp, we have to first
             // parse the spaces and then attach them retroactively to the expression
             // preceding the operator (the one we parsed before considering operators).
             optional(and(
-                and(space0(min_indent), loc(operator())),
+                and(space0(min_indent), loc(binop())),
                 // The spaces *after* the operator can be attached directly to
                 // the expression following the operator.
                 space0_before(
@@ -216,7 +220,7 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
                 };
                 let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
 
-                Expr::Operator(tuple)
+                Expr::BinOp(tuple)
             }
             None => loc_expr1.value,
         },
@@ -297,10 +301,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                         Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_equals)
                     };
 
-                    let loc_first_pattern = Located {
-                        region: region,
-                        value,
-                    };
+                    let loc_first_pattern = Located { region, value };
 
                     // Continue parsing the expression as a Def.
                     let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
@@ -403,12 +404,13 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::Field(_, _)
         | Expr::List(_)
         | Expr::Closure(_, _)
-        | Expr::Operator(_)
+        | Expr::BinOp(_)
         | Expr::Defs(_, _)
         | Expr::If(_)
         | Expr::Case(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _)
+        | Expr::UnaryOp(_, _)
         | Expr::QualifiedField(_, _) => Err(Fail {
             attempting: Attempting::Def,
             reason: FailReason::InvalidPattern,
@@ -602,7 +604,7 @@ fn parse_def_expr<'a>(
 
                     let loc_first_def = Located {
                         value: first_def,
-                        region: loc_first_pattern.region.clone(),
+                        region: loc_first_pattern.region,
                     };
 
                     // Add the first def to the end of the defs. (It's fine that we
@@ -635,13 +637,14 @@ fn loc_parse_function_arg<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
-    one_of9(
+    one_of10(
         loc_parenthetical_expr(min_indent),
         loc(string_literal()),
         loc(number_literal()),
         loc(closure(min_indent)),
         loc(record_literal(min_indent)),
         loc(list_literal(min_indent)),
+        loc(unary_op(min_indent)),
         loc(case_expr(min_indent)),
         loc(if_expr(min_indent)),
         loc(ident_without_apply()),
@@ -725,13 +728,20 @@ fn parse_closure_param<'a>(
 }
 
 fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
-    one_of5(
+    one_of6(
         underscore_pattern(),
         variant_pattern(),
         ident_pattern(),
         record_destructure(min_indent),
         string_pattern(),
+        int_pattern(),
     )
+}
+
+fn int_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
+    map_with_arena(number_literal(), |arena, expr| {
+        expr_to_pattern(arena, &expr).unwrap()
+    })
 }
 
 fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
@@ -751,7 +761,7 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
             char('}'),
             min_indent,
         ),
-        |loc_fields| Pattern::RecordDestructure(loc_fields),
+        Pattern::RecordDestructure,
     )
 }
 
@@ -907,8 +917,76 @@ pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     )
 }
 
-pub fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
-    one_or_more(space1_before(loc_function_arg(min_indent), min_indent))
+/// This is a helper function for parsing function args.
+/// The rules for (-) are special-cased, and they come up in function args.
+///
+/// They work like this:
+///
+/// x - y  # "x minus y"
+/// x-y    # "x minus y"
+/// x- y   # "x minus y" (probably written in a rush)
+/// x -y   # "call x, passing (-y)"
+///
+/// Since operators have higher precedence than function application,
+/// any time we encounter a '-' it is unary iff it is both preceded by spaces
+/// and is *not* followed by a whitespace character.
+#[inline(always)]
+fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
+    then(
+        // Spaces, then '-', then *not* more spaces.
+        not_followed_by(
+            and(space1(min_indent), loc(char('-'))),
+            one_of3(char(' '), char('#'), char('\n')),
+        ),
+        move |arena, state, (spaces, loc_minus_char)| {
+            let region = loc_minus_char.region;
+            let loc_op = Located {
+                region,
+                value: UnaryOp::Negate,
+            };
+
+            // Continue parsing the function arg as normal.
+            let (loc_expr, state) = loc_function_arg(min_indent).parse(arena, state)?;
+            let region = Region {
+                start_col: loc_op.region.start_col,
+                start_line: loc_op.region.start_line,
+                end_col: loc_expr.region.end_col,
+                end_line: loc_expr.region.end_line,
+            };
+            let value = Expr::UnaryOp(arena.alloc(loc_expr), loc_op);
+            let loc_expr = Located {
+                // Start from where the unary op started,
+                // and end where its argument expr ended.
+                // This is relevant in case (for example)
+                // we have an expression involving parens,
+                // for example `-(foo bar)`
+                region,
+                value,
+            };
+
+            // spaces can be empy if it's all space characters (no newlines or comments).
+            let value = if spaces.is_empty() {
+                loc_expr.value
+            } else {
+                Expr::SpaceBefore(arena.alloc(loc_expr.value), spaces)
+            };
+
+            Ok((
+                Located {
+                    region: loc_expr.region,
+                    value,
+                },
+                state,
+            ))
+        },
+    )
+}
+
+fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
+    one_or_more(one_of2(
+        unary_negate_function_arg(min_indent),
+        space1_before(loc_function_arg(min_indent), min_indent),
+    ))
 }
 
 /// When we parse an ident like `foo ` it could be any of these:
@@ -1022,11 +1100,11 @@ pub fn case_with_indent<'a>() -> impl Parser<'a, u16> {
     move |arena, state: State<'a>| {
         string(keyword::CASE)
             .parse(arena, state)
-            .map(|((), state)| ((state.indent_col, state)))
+            .map(|((), state)| (state.indent_col, state))
     }
 }
 
-fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {
+fn ident_to_expr(src: Ident<'_>) -> Expr<'_> {
     match src {
         Ident::Var(info) => Expr::Var(info.module_parts, info.value),
         Ident::Variant(info) => Expr::Variant(info.module_parts, info.value),
@@ -1036,26 +1114,31 @@ fn ident_to_expr<'a>(src: Ident<'a>) -> Expr<'a> {
     }
 }
 
-pub fn operator<'a>() -> impl Parser<'a, Operator> {
-    one_of16(
+fn binop<'a>() -> impl Parser<'a, BinOp> {
+    one_of17(
         // Sorted from highest to lowest predicted usage in practice,
         // so that successful matches shorrt-circuit as early as possible.
-        map(string("|>"), |_| Operator::Pizza),
-        map(string("=="), |_| Operator::Equals),
-        map(string("&&"), |_| Operator::And),
-        map(string("||"), |_| Operator::Or),
-        map(char('+'), |_| Operator::Plus),
-        map(char('-'), |_| Operator::Minus),
-        map(char('*'), |_| Operator::Star),
-        map(char('/'), |_| Operator::Slash),
-        map(char('<'), |_| Operator::LessThan),
-        map(char('>'), |_| Operator::GreaterThan),
-        map(string("<="), |_| Operator::LessThanOrEq),
-        map(string(">="), |_| Operator::GreaterThanOrEq),
-        map(char('^'), |_| Operator::Caret),
-        map(char('%'), |_| Operator::Percent),
-        map(string("//"), |_| Operator::DoubleSlash),
-        map(string("%%"), |_| Operator::DoublePercent),
+        // The only exception to this is that operators which begin
+        // with other valid operators (e.g. "<=" begins with "<") must
+        // come before the shorter ones; otherwise, they will never
+        // be reached because the shorter one will pass and consume!
+        map(string("|>"), |_| BinOp::Pizza),
+        map(string("=="), |_| BinOp::Equals),
+        map(string("!="), |_| BinOp::NotEquals),
+        map(string("&&"), |_| BinOp::And),
+        map(string("||"), |_| BinOp::Or),
+        map(char('+'), |_| BinOp::Plus),
+        map(char('*'), |_| BinOp::Star),
+        map(char('-'), |_| BinOp::Minus),
+        map(string("//"), |_| BinOp::DoubleSlash),
+        map(char('/'), |_| BinOp::Slash),
+        map(string("<="), |_| BinOp::LessThanOrEq),
+        map(char('<'), |_| BinOp::LessThan),
+        map(string(">="), |_| BinOp::GreaterThanOrEq),
+        map(char('>'), |_| BinOp::GreaterThan),
+        map(char('^'), |_| BinOp::Caret),
+        map(string("%%"), |_| BinOp::DoublePercent),
+        map(char('%'), |_| BinOp::Percent),
     )
 }
 

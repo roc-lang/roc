@@ -257,11 +257,11 @@ impl Clone for RocStr {
     fn clone(&self) -> Self {
         let inner = if flagged_as_short_string(self.len_msbyte()) {
             InnerStr {
-                raw: (unsafe { self.0.raw }).clone(),
+                raw: (unsafe { self.0.raw }),
             }
         } else {
             InnerStr {
-                long: (unsafe { self.0.long }).clone(),
+                long: (unsafe { self.0.long }),
             }
         };
 
