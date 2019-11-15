@@ -6,14 +6,6 @@ use parse::ast::Spaceable;
 use parse::parser::{and, map_with_arena, unexpected, unexpected_eof, Parser, State};
 use region::Located;
 
-/// What type of comment (if any) are we currently parsing?
-#[derive(Debug, PartialEq, Eq)]
-enum CommentParsing {
-    Line,
-    Block,
-    No,
-}
-
 /// Parses the given expression with 0 or more (spaces/comments/newlines) before and/or after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
 /// If any newlines or comments were found, the Expr will be wrapped in a SpaceBefore and/or
@@ -211,20 +203,42 @@ fn spaces<'a>(
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
     move |arena: &'a Bump, state: State<'a>| {
         let original_state = state.clone();
-        let mut chars = state.input.chars().peekable();
+        let chars = state.input.chars().peekable();
         let mut space_list = Vec::new_in(arena);
         let mut chars_parsed = 0;
-        let mut comment_lines: Vec<'a, &'a str> = Vec::new_in(arena);
         let mut comment_line_buf = String::new_in(arena);
-        let mut comment_parsing = CommentParsing::No;
+        let mut is_parsing_comment = false;
         let mut state = state;
         let mut any_newlines = false;
 
-        while let Some(ch) = chars.next() {
+        for ch in chars {
             chars_parsed += 1;
 
-            match comment_parsing {
-                CommentParsing::No => match ch {
+            if is_parsing_comment {
+                match ch {
+                    ' ' => {
+                        // If we're in a line comment, this won't affect indentation anyway.
+                        state = state.advance_without_indenting(1)?;
+
+                        comment_line_buf.push(ch);
+                    }
+                    '\n' => {
+                        state = state.newline()?;
+
+                        // This was a newline, so end this line comment.
+                        space_list.push(LineComment(comment_line_buf.into_bump_str()));
+                        comment_line_buf = String::new_in(arena);
+
+                        is_parsing_comment = false;
+                    }
+                    nonblank => {
+                        state = state.advance_without_indenting(1)?;
+
+                        comment_line_buf.push(nonblank);
+                    }
+                }
+            } else {
+                match ch {
                     ' ' => {
                         // Don't check indentation here; it might not be enough
                         // indentation yet, but maybe it will be after more spaces happen!
@@ -248,7 +262,7 @@ fn spaces<'a>(
                             .advance_without_indenting(1)?;
 
                         // We're now parsing a line comment!
-                        comment_parsing = CommentParsing::Line;
+                        is_parsing_comment = true;
                     }
                     nonblank => {
                         return if require_at_least_one && chars_parsed <= 1 {
@@ -271,134 +285,6 @@ fn spaces<'a>(
 
                             Ok((space_list.into_bump_slice(), state))
                         };
-                    }
-                },
-                CommentParsing::Line => {
-                    match ch {
-                        ' ' => {
-                            // If we're in a line comment, this won't affect indentation anyway.
-                            state = state.advance_without_indenting(1)?;
-
-                            comment_line_buf.push(ch);
-                        }
-                        '\n' => {
-                            state = state.newline()?;
-
-                            // This was a newline, so end this line comment.
-                            space_list.push(LineComment(comment_line_buf.into_bump_str()));
-                            comment_line_buf = String::new_in(arena);
-
-                            comment_parsing = CommentParsing::No;
-                        }
-                        '#' if comment_line_buf.is_empty() => {
-                            if chars.peek() == Some(&'#') {
-                                // Consume the '#' we peeked in the conditional.
-                                chars.next();
-
-                                // Advance past the '#' we parsed and the one
-                                // we peeked (and then consumed manually).
-                                state = state.advance_without_indenting(2)?;
-
-                                // This must be the start of a block comment,
-                                // since we are parsing a LineComment with an empty buffer
-                                // (meaning the previous char must have been '#'),
-                                // then we parsed a '#' right after it, and finally
-                                // we peeked and saw a third '#' after that.
-                                // "###" begins a block comment!
-                                comment_parsing = CommentParsing::Block;
-                            } else {
-                                state = state.advance_without_indenting(1)?;
-
-                                comment_line_buf.push('#');
-                            }
-                        }
-                        nonblank => {
-                            state = state.advance_without_indenting(1)?;
-
-                            comment_line_buf.push(nonblank);
-                        }
-                    }
-                }
-                CommentParsing::Block => {
-                    match ch {
-                        ' ' => {
-                            // Block comments *do* interact with indentation.
-                            state = state.advance_spaces(1)?;
-
-                            comment_line_buf.push(ch);
-                        }
-                        '\n' => {
-                            state = state.newline()?;
-
-                            // End the current line and start a fresh one.
-                            comment_lines.push(comment_line_buf.into_bump_str());
-
-                            comment_line_buf = String::new_in(arena);
-                        }
-                        '#' => {
-                            // Three '#' chars in a row means the block comment is finished.
-                            //
-                            // We want to peek ahead two characters to see if there
-                            // are another two '#' there. If so, this comment is done.
-                            // Otherwise, we want to proceed as normal.
-                            //
-                            // Since we can only peek one character at a time,
-                            // we need to be careful with how we use peek() and next()
-                            // here to avoid accidentally recording extraneous '#' characters
-                            // while also making sure not to drop them if we don't
-                            // encounter the full "###" after all.
-                            match chars.peek() {
-                                Some('#') => {
-                                    // Consume the second '#'.
-                                    chars.next();
-
-                                    // We've now seen two '#' in a row. Is a third next?
-                                    match chars.peek() {
-                                        Some('#') => {
-                                            // Consume the third '#'.
-                                            chars.next();
-
-                                            // We're done! This is the end of the block comment.
-                                            state = state.advance_without_indenting(3)?;
-
-                                            // End the current line and start a fresh one.
-                                            comment_lines.push(comment_line_buf.into_bump_str());
-
-                                            comment_line_buf = String::new_in(arena);
-
-                                            // Add the block comment to the list.
-                                            space_list.push(BlockComment(
-                                                comment_lines.into_bump_slice(),
-                                            ));
-
-                                            // Start a fresh comment line list.
-                                            comment_lines = Vec::new_in(arena);
-
-                                            comment_parsing = CommentParsing::No;
-                                        }
-                                        _ => {
-                                            // It was only two '#' in a row, so record them
-                                            // and move on as normal.
-                                            state = state.advance_without_indenting(2)?;
-
-                                            comment_line_buf.push_str("##");
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    // This was a standalone '#' not followed by a second '#',
-                                    // so record it and move on as normal.
-                                    state = state.advance_without_indenting(1)?;
-
-                                    comment_line_buf.push('#');
-                                }
-                            }
-                        }
-                        nonblank => {
-                            state = state.advance_without_indenting(1)?;
-
-                            comment_line_buf.push(nonblank);
-                        }
                     }
                 }
             }

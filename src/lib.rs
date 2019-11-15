@@ -12,6 +12,7 @@ pub mod string;
 
 pub mod constrain;
 pub mod ena;
+pub mod fmt;
 pub mod infer;
 pub mod pretty_print_types;
 pub mod solve;

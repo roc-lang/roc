@@ -1,6 +1,7 @@
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use fmt;
 use operator::CalledVia;
 use operator::{BinOp, UnaryOp};
 use parse::ident::Ident;
@@ -243,7 +244,17 @@ pub enum AssignedField<'a, Val> {
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
-    BlockComment(&'a [&'a str]),
+}
+
+impl<'a> CommentOrNewline<'a> {
+    pub fn contains_newline(&self) -> bool {
+        use self::CommentOrNewline::*;
+
+        match self {
+            // Line comments have an implicit newline at the end
+            Newline | LineComment(_) => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -520,7 +531,6 @@ pub fn format<'a>(
         }
         SpaceAfter(sub_expr, spaces) => {
             buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
-
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
         }
         Str(string) => {
@@ -580,8 +590,43 @@ pub fn format<'a>(
         Record(loc_fields) => {
             buf.push('{');
 
-            for _field in loc_fields {
-                panic!("TODO implement Display for record fields.");
+            let is_multiline = loc_fields
+                .iter()
+                .any(|loc_field| fmt::is_multiline_field(&loc_field.value));
+
+            let mut iter = loc_fields.iter().peekable();
+            let field_indent = if is_multiline {
+                indent + 4
+            } else {
+                if !loc_fields.is_empty() {
+                    buf.push(' ');
+                }
+
+                indent
+            };
+
+            while let Some(field) = iter.next() {
+                buf.push_str(&format_field(
+                    arena,
+                    &field.value,
+                    is_multiline,
+                    field_indent,
+                    apply_needs_parens,
+                ));
+
+                if let Some(_) = iter.peek() {
+                    buf.push(',');
+
+                    if !is_multiline {
+                        buf.push(' ');
+                    }
+                }
+            }
+
+            if is_multiline {
+                buf.push('\n');
+            } else if !loc_fields.is_empty() {
+                buf.push(' ');
             }
 
             buf.push('}');
@@ -785,18 +830,103 @@ where
                 // Reset to 1 because we just printed a \n
                 consecutive_newlines = 1;
             }
-            BlockComment(lines) => {
-                buf.push_str("###");
+        }
+    }
 
-                for line in lines.iter() {
-                    buf.push_str(line);
-                }
+    buf
+}
 
-                buf.push_str("###");
+/// Like format_spaces, but remove newlines and keep only comments.
+fn format_comments_only<'a, I>(arena: &'a Bump, spaces: I, _indent: u16) -> String<'a>
+where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    use self::CommentOrNewline::*;
 
-                consecutive_newlines = 0;
+    let mut buf = String::new_in(arena);
+
+    for space in spaces {
+        match space {
+            Newline => {}
+            LineComment(comment) => {
+                buf.push('#');
+                buf.push_str(comment);
+                buf.push('\n');
             }
         }
+    }
+
+    buf
+}
+
+pub fn format_field<'a>(
+    arena: &'a Bump,
+    assigned_field: &'a AssignedField<'a, Expr<'a>>,
+    is_multiline: bool,
+    indent: u16,
+    apply_needs_parens: bool,
+) -> String<'a> {
+    use self::AssignedField::*;
+
+    let mut buf = String::new_in(arena);
+
+    match assigned_field {
+        LabeledValue(name, spaces, value) => {
+            if is_multiline {
+                buf.push('\n');
+
+                for _ in 0..indent {
+                    buf.push(' ');
+                }
+            }
+
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+            }
+
+            buf.push(':');
+            buf.push(' ');
+            buf.push_str(&format(arena, &value.value, indent, apply_needs_parens));
+        }
+        LabelOnly(name, spaces) => {
+            if is_multiline {
+                buf.push('\n');
+
+                for _ in 0..indent {
+                    buf.push(' ');
+                }
+            }
+
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                buf.push(' ');
+                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+            }
+        }
+        AssignedField::SpaceBefore(sub_expr, spaces) => {
+            buf.push_str(&format_comments_only(arena, spaces.iter(), indent));
+            buf.push_str(&format_field(
+                arena,
+                sub_expr,
+                is_multiline,
+                indent,
+                apply_needs_parens,
+            ));
+        }
+        AssignedField::SpaceAfter(sub_expr, spaces) => {
+            buf.push_str(&format_field(
+                arena,
+                sub_expr,
+                is_multiline,
+                indent,
+                apply_needs_parens,
+            ));
+            buf.push_str(&format_comments_only(arena, spaces.iter(), indent));
+        }
+        Malformed(string) => buf.push_str(string),
     }
 
     buf

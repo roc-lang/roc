@@ -178,6 +178,60 @@ mod test_format {
         assert_formats_same("{}");
     }
 
+    #[test]
+    fn one_field() {
+        assert_formats_same("{ x: 4 }");
+    }
+
+    #[test]
+    fn two_fields() {
+        assert_formats_same("{ x: 4, y: 42 }");
+    }
+
+    #[test]
+    fn two_fields_newline() {
+        assert_formats_same(indoc!(
+            r#"
+            {
+                x: 4,
+                y: 42
+            }
+        "#
+        ));
+    }
+
+    #[test]
+    fn two_fields_center_newline() {
+        assert_formats_to(
+            indoc!(
+                r#"
+            { x: 4,
+                y: 42
+            }
+        "#
+            ),
+            indoc!(
+                r#"
+            {
+                x: 4,
+                y: 42
+            }
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn one_unnamed_field() {
+        assert_formats_same(indoc!(
+            r#"
+            foo = 4
+
+            { foo }
+        "#
+        ));
+    }
+
     // IF
 
     #[test]
