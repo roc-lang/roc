@@ -511,7 +511,7 @@ mod test_infer {
                 r#"
                 always = \a b -> a
 
-                1 |> always "foo" 
+                1 |> always "foo"
                 "#
             ),
             "Int",
@@ -649,4 +649,5 @@ mod test_infer {
             "Int",
         );
     }
+
 }

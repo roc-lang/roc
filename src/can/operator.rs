@@ -204,7 +204,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                             Apply(function, arguments, _called_via) => {
                                 let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
 
-                                args.push(*arena.alloc(left));
+                                args.push(left);
 
                                 for arg in arguments {
                                     args.push(arg);
@@ -232,8 +232,8 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                         let (module_parts, name) = desugar_binop(&binop, arena);
                         let mut args = Vec::with_capacity_in(2, arena);
 
-                        args.push(*arena.alloc(left));
-                        args.push(*arena.alloc(right));
+                        args.push(left);
+                        args.push(right);
 
                         let loc_expr = arena.alloc(Located {
                             value: Expr::Var(module_parts, name),
