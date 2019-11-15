@@ -142,7 +142,7 @@ fn canonicalize_expr(
         ast::Expr::BlockStr(lines) => {
             let constraint = Eq(constrain::str_type(), expected, region);
 
-            let joined = lines.iter().map(|s| &**s).collect::<Vec<&str>>().join("\n");
+            let joined = lines.iter().map(|s| *s).collect::<Vec<&str>>().join("\n");
 
             (BlockStr(joined.into()), Output::new(constraint))
         }
