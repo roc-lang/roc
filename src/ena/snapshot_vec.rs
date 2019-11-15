@@ -112,6 +112,10 @@ impl<D: SnapshotVecDelegate> SnapshotVec<D> {
         self.values.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.values.len() == 0
+    }
+
     pub fn push(&mut self, elem: D::Value) -> usize {
         let len = self.values.len();
         self.values.push(elem);
@@ -273,8 +277,7 @@ impl<D: SnapshotVecDelegate> Extend<D::Value> for SnapshotVec<D> {
         let final_len = self.values.len();
 
         if self.in_snapshot() {
-            self.undo_log
-                .extend((initial_len..final_len).map(|len| NewElem(len)));
+            self.undo_log.extend((initial_len..final_len).map(NewElem));
         }
     }
 }

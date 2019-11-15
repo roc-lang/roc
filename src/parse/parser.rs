@@ -412,7 +412,7 @@ where
                 }
             }
         }
-        Err((_, new_state)) => return Ok((Vec::new_in(arena), new_state)),
+        Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
     }
 }
 
@@ -450,23 +450,23 @@ where
     }
 }
 
-pub fn unexpected_eof<'a>(
+pub fn unexpected_eof(
     chars_consumed: usize,
     attempting: Attempting,
-    state: State<'a>,
-) -> (Fail, State<'a>) {
+    state: State<'_>,
+) -> (Fail, State<'_>) {
     checked_unexpected(chars_consumed, state, |region| Fail {
         reason: FailReason::Eof(region),
         attempting,
     })
 }
 
-pub fn unexpected<'a>(
+pub fn unexpected(
     ch: char,
     chars_consumed: usize,
-    state: State<'a>,
+    state: State<'_>,
     attempting: Attempting,
-) -> (Fail, State<'a>) {
+) -> (Fail, State<'_>) {
     checked_unexpected(chars_consumed, state, |region| Fail {
         reason: FailReason::Unexpected(ch, region),
         attempting,
@@ -477,11 +477,11 @@ pub fn unexpected<'a>(
 /// and provide it as a way to construct a Problem.
 /// If maximum line length was exceeded, return a Problem indicating as much.
 #[inline(always)]
-fn checked_unexpected<'a, F>(
+fn checked_unexpected<F>(
     chars_consumed: usize,
-    state: State<'a>,
+    state: State<'_>,
     problem_from_region: F,
-) -> (Fail, State<'a>)
+) -> (Fail, State<'_>)
 where
     F: FnOnce(Region) -> Fail,
 {
@@ -505,7 +505,7 @@ where
     }
 }
 
-fn line_too_long<'a>(attempting: Attempting, state: State<'a>) -> (Fail, State<'a>) {
+fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) {
     let reason = FailReason::LineTooLong(state.line);
     let fail = Fail { reason, attempting };
     // Set column to MAX and advance the parser to end of input.
@@ -553,7 +553,7 @@ pub fn string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
 pub fn string_impl<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
     // We can't have newlines because we don't attempt to advance the row
     // in the state, only the column.
-    debug_assert!(!keyword.contains("\n"));
+    debug_assert!(!keyword.contains('\n'));
 
     move |_arena, state: State<'a>| {
         let input = state.input;
@@ -627,7 +627,7 @@ where
                     }
                 }
             }
-            Err((_, new_state)) => return Ok((Vec::new_in(arena), new_state)),
+            Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
         }
     }
 }
@@ -835,6 +835,7 @@ where
     one_of2(p1, one_of2(p2, p3))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of4<'a, P1, P2, P3, P4, A>(p1: P1, p2: P2, p3: P3, p4: P4) -> impl Parser<'a, A>
 where
     P1: Parser<'a, A>,
@@ -845,6 +846,7 @@ where
     one_of2(p1, one_of3(p2, p3, p4))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of5<'a, P1, P2, P3, P4, P5, A>(
     p1: P1,
     p2: P2,
@@ -862,6 +864,7 @@ where
     one_of2(p1, one_of4(p2, p3, p4, p5))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of6<'a, P1, P2, P3, P4, P5, P6, A>(
     p1: P1,
     p2: P2,
@@ -881,6 +884,7 @@ where
     one_of2(p1, one_of5(p2, p3, p4, p5, p6))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of7<'a, P1, P2, P3, P4, P5, P6, P7, A>(
     p1: P1,
     p2: P2,
@@ -902,6 +906,7 @@ where
     one_of2(p1, one_of6(p2, p3, p4, p5, p6, p7))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of8<'a, P1, P2, P3, P4, P5, P6, P7, P8, A>(
     p1: P1,
     p2: P2,
@@ -925,6 +930,7 @@ where
     one_of2(p1, one_of7(p2, p3, p4, p5, p6, p7, p8))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of9<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, A>(
     p1: P1,
     p2: P2,
@@ -950,6 +956,7 @@ where
     one_of2(p1, one_of8(p2, p3, p4, p5, p6, p7, p8, p9))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of10<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, A>(
     p1: P1,
     p2: P2,
@@ -977,6 +984,7 @@ where
     one_of2(p1, one_of9(p2, p3, p4, p5, p6, p7, p8, p9, p10))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of11<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, A>(
     p1: P1,
     p2: P2,
@@ -1006,6 +1014,7 @@ where
     one_of2(p1, one_of10(p2, p3, p4, p5, p6, p7, p8, p9, p10, p11))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of12<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, A>(
     p1: P1,
     p2: P2,
@@ -1037,6 +1046,7 @@ where
     one_of2(p1, one_of11(p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of13<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, A>(
     p1: P1,
     p2: P2,
@@ -1073,6 +1083,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of14<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, A>(
     p1: P1,
     p2: P2,
@@ -1111,6 +1122,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of15<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, A>(
     p1: P1,
     p2: P2,
@@ -1151,6 +1163,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of16<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, P16, A>(
     p1: P1,
     p2: P2,
@@ -1195,6 +1208,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of17<'a, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, P16, P17, A>(
     p1: P1,
     p2: P2,
@@ -1241,6 +1255,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn one_of18<
     'a,
     P1,

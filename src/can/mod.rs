@@ -342,7 +342,7 @@ fn canonicalize_expr(
                 Ok(symbol) => Var(subs.mk_flex_var(), symbol),
                 Err(ident) => {
                     let loc_ident = Located {
-                        region: region,
+                        region,
                         value: ident,
                     };
 
@@ -484,7 +484,7 @@ fn canonicalize_expr(
                     env,
                     subs,
                     &mut scope,
-                    &FunctionArg,
+                    FunctionArg,
                     &loc_pattern.value,
                     loc_pattern.region,
                     &mut shadowable_idents,
@@ -833,7 +833,7 @@ fn canonicalize_case_branch<'a>(
     for (ident, (symbol, region)) in assigned_idents {
         if !output.references.has_local(&symbol) {
             let loc_ident = Located {
-                region: region,
+                region,
                 value: ident.clone(),
             };
 
@@ -845,7 +845,7 @@ fn canonicalize_case_branch<'a>(
         env,
         subs,
         &mut scope,
-        &CaseBranch,
+        CaseBranch,
         &loc_pattern.value,
         loc_pattern.region,
         &mut shadowable_idents,
@@ -1074,16 +1074,16 @@ fn add_idents_from_pattern<'a>(
 ) {
     use parse::ast::Pattern::*;
 
-    match &pattern {
-        &Identifier(name) => {
+    match pattern {
+        Identifier(name) => {
             let symbol = scope.symbol(&name);
 
             answer.push((Ident::Unqualified(name.to_string()), (symbol, *region)));
         }
-        &QualifiedIdentifier(_name) => {
+        QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern.");
         }
-        &Apply(_, _) => {
+        Apply(_, _) => {
             panic!("TODO implement Apply pattern.");
             // &AppliedVariant(_, ref opt_loc_args) => match opt_loc_args {
             // &None => (),
@@ -1095,23 +1095,23 @@ fn add_idents_from_pattern<'a>(
             // },
         }
 
-        &RecordDestructure(_) => {
+        RecordDestructure(_) => {
             panic!("TODO implement RecordDestructure pattern in add_idents_from_pattern.");
         }
-        &SpaceBefore(pattern, _) | &SpaceAfter(pattern, _) => {
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             add_idents_from_pattern(region, pattern, scope, answer)
         }
-        &Variant(_, _)
-        | &IntLiteral(_)
-        | &HexIntLiteral(_)
-        | &OctalIntLiteral(_)
-        | &BinaryIntLiteral(_)
-        | &FloatLiteral(_)
-        | &StrLiteral(_)
-        | &EmptyRecordLiteral
-        | &Malformed(_)
-        | &Underscore => (),
+        Variant(_, _)
+        | IntLiteral(_)
+        | HexIntLiteral(_)
+        | OctalIntLiteral(_)
+        | BinaryIntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | EmptyRecordLiteral
+        | Malformed(_)
+        | Underscore => (),
     }
 }
 
@@ -1358,9 +1358,9 @@ fn can_defs<'a>(
     // Used in constraint generation
     let rigid_info = Info::with_capacity(defs.len());
     let mut flex_info = Info::with_capacity(defs.len());
-    let mut iter = defs.iter();
+    let iter = defs.iter();
 
-    while let Some(loc_def) = iter.next() {
+    for loc_def in iter {
         // Each assignment gets to have all the idents in scope that are assigned in this
         // block. Order of assignments doesn't matter, thanks to referential transparency!
         let (opt_loc_pattern, (loc_can_expr, can_output)) = match loc_def.value {
@@ -1470,7 +1470,7 @@ fn can_defs<'a>(
                 env,
                 subs,
                 &mut scope,
-                &Assignment,
+                Assignment,
                 &loc_pattern.value,
                 loc_pattern.region,
                 &mut shadowable_idents,
@@ -1504,9 +1504,9 @@ fn can_defs<'a>(
                     procedure.name = Some((*name).into());
 
                     // The closure is self tail recursive iff it tail calls itself (by assigned name).
-                    procedure.is_self_tail_recursive = match &can_output.tail_call {
-                        &None => false,
-                        &Some(ref symbol) => symbol == assigned_symbol,
+                    procedure.is_self_tail_recursive = match can_output.tail_call {
+                        None => false,
+                        Some(ref symbol) => symbol == assigned_symbol,
                     };
 
                     // Re-insert the procedure into the map, under its assigned name. This way,
@@ -1660,7 +1660,7 @@ fn can_defs<'a>(
     for (ident, (symbol, region)) in assigned_idents.clone() {
         if !output.references.has_local(&symbol) {
             let loc_ident = Located {
-                region: region,
+                region,
                 value: ident.clone(),
             };
 
@@ -1751,7 +1751,7 @@ fn constrain_args<'a, I>(args: I, scope: &Scope, subs: &mut Subs, state: &mut Pa
 where
     I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
 {
-    let (mut vars, arg_types) = patterns_to_variables(args.into_iter(), scope, subs, state);
+    let (mut vars, arg_types) = patterns_to_variables(args, scope, subs, state);
 
     let ret_var = subs.mk_flex_var();
     let ret_type = Type::Variable(ret_var);

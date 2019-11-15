@@ -19,7 +19,7 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
         Lookup(symbol, expected_type, _region) => {
             // TODO use region?
             let actual =
-                subs.copy_var(env.get(&symbol).unwrap_or_else(|| {
+                subs.copy_var(*env.get(&symbol).unwrap_or_else(|| {
                     panic!("Could not find symbol {:?} in env {:?}", symbol, env)
                 }));
             let expected = type_to_variable(subs, expected_type.clone().get_type());
@@ -75,7 +75,7 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
     }
 }
 
-fn type_to_variable<'a>(subs: &'a mut Subs, typ: Type) -> Variable {
+fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
         Apply {
@@ -90,8 +90,8 @@ fn type_to_variable<'a>(subs: &'a mut Subs, typ: Type) -> Variable {
             }
 
             let flat_type = FlatType::Apply {
-                module_name: module_name.into(),
-                name: name.into(),
+                module_name,
+                name,
                 args: arg_vars,
             };
             let content = Content::Structure(flat_type);

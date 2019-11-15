@@ -27,9 +27,9 @@ impl Ident {
         }
     }
     pub fn is_qualified(&self) -> bool {
-        match &self {
-            &Ident::Unqualified(_) => false,
-            &Ident::Qualified(_, _) => true,
+        match self {
+            Ident::Unqualified(_) => false,
+            Ident::Qualified(_, _) => true,
         }
     }
 

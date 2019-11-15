@@ -20,7 +20,7 @@ pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a
         loc_parenthetical_type(min_indent),
         loc(record_type(min_indent)),
         loc(applied_type(min_indent)),
-        loc(move |arena, state| parse_type_variable(arena, state)),
+        loc(parse_type_variable),
     )
 }
 
@@ -62,7 +62,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
 fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     map(
         and(
-            move |arena, state| parse_concrete_type(arena, state),
+            parse_concrete_type,
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
             zero_or_more(space1_before(
@@ -220,7 +220,7 @@ fn parse_type_variable<'a>(
 
     let mut chars_parsed = 1;
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         // After the first character, only these are allowed:
         //
         // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
@@ -261,7 +261,7 @@ where
     }
 
     // Consume the remaining chars in the identifier.
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         // We can't use ch.is_alphanumeric() here because that passes for
         // things that are "numeric" but not ASCII digits, like `¾`
         if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {

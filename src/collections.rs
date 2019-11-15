@@ -33,7 +33,7 @@ where
     if let Some(first) = strings.next() {
         buf.push_str(&first);
 
-        while let Some(string) = strings.next() {
+        for string in strings {
             buf.reserve(join_str.len() + string.len());
 
             buf.push_str(join_str);

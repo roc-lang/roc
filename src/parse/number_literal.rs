@@ -41,7 +41,7 @@ where
     // We already parsed 1 character (which may have been a minus sign).
     let mut chars_parsed = 1;
 
-    while let Some(next_ch) = chars.next() {
+    for next_ch in chars {
         let err_unexpected = || {
             Err(unexpected(
                 next_ch,

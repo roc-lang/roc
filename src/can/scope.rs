@@ -28,7 +28,7 @@ impl Scope {
     }
 
     pub fn gen_unique_symbol(&mut self) -> Symbol {
-        self.next_unique_id = self.next_unique_id + 1;
+        self.next_unique_id += 1;
 
         Symbol::new(&self.symbol_prefix, &self.next_unique_id.to_string())
     }

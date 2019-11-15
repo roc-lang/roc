@@ -37,20 +37,18 @@ where
                         .alloc(loc_val.value)
                         .with_spaces_after(spaces_after, loc_val.region)
                 }
+            } else if spaces_after.is_empty() {
+                arena
+                    .alloc(loc_val.value)
+                    .with_spaces_before(spaces_before, loc_val.region)
             } else {
-                if spaces_after.is_empty() {
-                    arena
-                        .alloc(loc_val.value)
-                        .with_spaces_before(spaces_before, loc_val.region)
-                } else {
-                    let wrapped_expr = arena
-                        .alloc(loc_val.value)
-                        .with_spaces_after(spaces_after, loc_val.region);
+                let wrapped_expr = arena
+                    .alloc(loc_val.value)
+                    .with_spaces_after(spaces_after, loc_val.region);
 
-                    arena
-                        .alloc(wrapped_expr.value)
-                        .with_spaces_before(spaces_before, wrapped_expr.region)
-                }
+                arena
+                    .alloc(wrapped_expr.value)
+                    .with_spaces_before(spaces_before, wrapped_expr.region)
             }
         },
     )
@@ -79,20 +77,18 @@ where
                         .alloc(loc_expr.value)
                         .with_spaces_after(spaces_after, loc_expr.region)
                 }
+            } else if spaces_after.is_empty() {
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_before(spaces_before, loc_expr.region)
             } else {
-                if spaces_after.is_empty() {
-                    arena
-                        .alloc(loc_expr.value)
-                        .with_spaces_before(spaces_before, loc_expr.region)
-                } else {
-                    let loc_wrapped_expr = arena
-                        .alloc(loc_expr.value)
-                        .with_spaces_after(spaces_after, loc_expr.region);
+                let loc_wrapped_expr = arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_after(spaces_after, loc_expr.region);
 
-                    arena
-                        .alloc(loc_wrapped_expr.value)
-                        .with_spaces_before(spaces_before, loc_wrapped_expr.region)
-                }
+                arena
+                    .alloc(loc_wrapped_expr.value)
+                    .with_spaces_before(spaces_before, loc_wrapped_expr.region)
             }
         },
     )

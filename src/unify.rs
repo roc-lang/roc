@@ -17,7 +17,7 @@ pub fn unify_var_val(subs: &mut Subs, left_key: Variable, right: &Descriptor) ->
 }
 
 fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descriptor {
-    let answer = match left.content {
+    match left.content {
         FlexVar(ref opt_name) => unify_flex(opt_name, &right.content),
         RigidVar(ref name) => unify_rigid(name, &right.content),
         Structure(ref flat_type) => unify_structure(subs, flat_type, &right.content),
@@ -25,11 +25,7 @@ fn unify(subs: &mut Subs, left: &Descriptor, right: &Descriptor) -> Descriptor {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             from_content(Error(problem.clone()))
         }
-    };
-
-    // println!("\nUnifying:\n\n\t{:?}\n\n\t{:?}\n\n\t-----\n\n\t{:?}\n\n", left.content, right.content, answer.content);
-
-    answer
+    }
 }
 
 #[inline(always)]
@@ -84,7 +80,7 @@ fn unify_flat_type(subs: &mut Subs, left: &FlatType, right: &FlatType) -> Descri
         (Func(l_args, l_ret), Func(r_args, r_ret)) => {
             if l_args.len() == r_args.len() {
                 let args = unify_args(subs, l_args.iter(), r_args.iter());
-                let ret = union_vars(subs, l_ret.clone(), r_ret.clone());
+                let ret = union_vars(subs, *l_ret, *r_ret);
                 let flat_type = Func(args, ret);
 
                 from_content(Structure(flat_type))
@@ -95,9 +91,9 @@ fn unify_flat_type(subs: &mut Subs, left: &FlatType, right: &FlatType) -> Descri
             }
         }
         (BinOp(l_l_arg, l_r_arg, l_ret), BinOp(r_l_arg, r_r_arg, r_ret)) => {
-            let l_arg = union_vars(subs, l_l_arg.clone(), r_l_arg.clone());
-            let r_arg = union_vars(subs, l_r_arg.clone(), r_r_arg.clone());
-            let ret = union_vars(subs, l_ret.clone(), r_ret.clone());
+            let l_arg = union_vars(subs, *l_l_arg, *r_l_arg);
+            let r_arg = union_vars(subs, *l_r_arg, *r_r_arg);
+            let ret = union_vars(subs, *l_ret, *r_ret);
             let flat_type = BinOp(l_arg, r_arg, ret);
 
             from_content(Structure(flat_type))
@@ -112,36 +108,36 @@ where
 {
     left_iter
         .zip(right_iter)
-        .map(|(l_var, r_var)| {
+        .map(|(&l_var, &r_var)| {
             // Look up the descriptors we have for these variables, and unify them.
-            let descriptor = unify_vars(subs, l_var.clone(), r_var.clone());
+            let descriptor = unify_vars(subs, l_var, r_var);
 
             // set r_var to be the unioned value, then union l_var to r_var
-            subs.set(r_var.clone(), descriptor);
-            subs.union(l_var.clone(), r_var.clone());
+            subs.set(r_var, descriptor);
+            subs.union(l_var, r_var);
 
-            r_var.clone()
+            r_var
         })
         .collect()
 }
 
 fn union_vars(subs: &mut Subs, l_var: Variable, r_var: Variable) -> Variable {
     // Look up the descriptors we have for these variables, and unify them.
-    let descriptor = unify_vars(subs, l_var.clone(), r_var.clone());
+    let descriptor = unify_vars(subs, l_var, r_var);
 
     // set r_var to be the unioned value, then union l_var to r_var
-    subs.set(r_var.clone(), descriptor);
-    subs.union(l_var.clone(), r_var.clone());
+    subs.set(r_var, descriptor);
+    subs.union(l_var, r_var);
 
-    r_var.clone()
+    r_var
 }
 
 #[inline(always)]
-fn unify_rigid(name: &String, other: &Content) -> Descriptor {
+fn unify_rigid(name: &str, other: &Content) -> Descriptor {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            from_content(RigidVar(name.clone()))
+            from_content(RigidVar(name.to_string()))
         }
         RigidVar(_) | Structure(_) => {
             // Type mismatch! Rigid can only unify with flex, even if the

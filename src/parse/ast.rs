@@ -69,6 +69,10 @@ impl<'a> MaybeQualified<'a, &'a str> {
 
         answer
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<'a> MaybeQualified<'a, &'a [&'a str]> {
@@ -84,6 +88,10 @@ impl<'a> MaybeQualified<'a, &'a [&'a str]> {
         }
 
         answer
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

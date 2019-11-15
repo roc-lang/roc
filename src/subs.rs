@@ -3,7 +3,7 @@ use std::fmt;
 use types::Problem;
 use unify;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
 }
@@ -53,8 +53,8 @@ impl Subs {
 
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable) {
-        let l_root = self.utable.get_root_key(left.into());
-        let r_root = self.utable.get_root_key(right.into());
+        let l_root = self.utable.get_root_key(left);
+        let r_root = self.utable.get_root_key(right);
 
         if l_root != r_root {
             let combined = unify::unify_vars(self, l_root, r_root);
@@ -68,7 +68,7 @@ impl Subs {
     }
 
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
-        let l_key = self.utable.get_root_key(key.into());
+        let l_key = self.utable.get_root_key(key);
         let unified = unify::unify_var_val(self, l_key, &r_value);
 
         self.utable.update_value(l_key, |node| node.value = unified);
@@ -78,10 +78,10 @@ impl Subs {
         self.fresh(flex_var_descriptor())
     }
 
-    pub fn copy_var(&mut self, var: &Variable) -> Variable {
+    pub fn copy_var(&mut self, var: Variable) -> Variable {
         // TODO understand the purpose of using a "deep copy" approach here,
         // and perform it if necessary. (Seems to be about setting maxRank?)
-        var.clone()
+        var
     }
 
     //     pub fn set_rank(&mut self, key: Variable, rank: usize) {
