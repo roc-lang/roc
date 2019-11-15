@@ -234,7 +234,6 @@ pub enum AssignedField<'a, Val> {
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
-    BlockComment(&'a [&'a str]), // TODO decide whether Roc should actually have block comments
 }
 
 impl<'a> CommentOrNewline<'a> {
@@ -244,7 +243,6 @@ impl<'a> CommentOrNewline<'a> {
         match self {
             // Line comments have an implicit newline at the end
             Newline | LineComment(_) => true,
-            BlockComment(lines) => lines.len() > 1,
         }
     }
 }
@@ -519,13 +517,6 @@ pub fn format<'a>(
     match expr {
         SpaceBefore(sub_expr, spaces) => {
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-
-            // inserts `{ x: ### after ### 4 }`
-            //                            ^
-            if let Some(self::CommentOrNewline::BlockComment(_)) = spaces.iter().last() {
-                buf.push(' ');
-            }
-
             buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
         }
         SpaceAfter(sub_expr, spaces) => {
@@ -817,17 +808,6 @@ where
                 // Reset to 1 because we just printed a \n
                 consecutive_newlines = 1;
             }
-            BlockComment(lines) => {
-                buf.push_str("###");
-
-                for line in lines.iter() {
-                    buf.push_str(line);
-                }
-
-                buf.push_str("###");
-
-                consecutive_newlines = 0;
-            }
         }
     }
 
@@ -866,7 +846,6 @@ pub fn format_field<'a>(
         }
         AssignedField::SpaceBefore(sub_expr, spaces) => {
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            buf.push(' ');
             buf.push_str(&format_field(arena, sub_expr, indent, apply_needs_parens));
         }
         AssignedField::SpaceAfter(sub_expr, spaces) => {

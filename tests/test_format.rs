@@ -232,22 +232,6 @@ mod test_format {
         ));
     }
 
-    #[test]
-    fn field_with_comments() {
-        assert_formats_same("{ ### before ### x: ### after ### 4 }");
-    }
-
-    #[test]
-    fn unnamed_field_with_comments() {
-        assert_formats_same(indoc!(
-            r#"
-            foo = 4
-
-            { ### before ### foo ### after ### }
-        "#
-        ));
-    }
-
     // IF
 
     #[test]
