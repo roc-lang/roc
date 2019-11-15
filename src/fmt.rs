@@ -45,9 +45,11 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
                 || is_multiline_expr(&loc_if_false.value)
         }
 
-        Operator((loc_left, _, loc_right)) => {
+        BinOp((loc_left, _, loc_right)) => {
             is_multiline_expr(&loc_left.value) || is_multiline_expr(&loc_right.value)
         }
+
+        UnaryOp(loc_subexpr, _) => is_multiline_expr(&loc_subexpr.value),
 
         PrecedenceConflict(_, _, loc_expr) => is_multiline_expr(&loc_expr.value),
 
