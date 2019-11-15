@@ -16,9 +16,11 @@ jobs:
           toolchain: stable
           override: true
       - uses: actions-rs/cargo@v1
+        name: update cargo (needed for Inkwell)
         with:
           command: update
       - uses: actions-rs/cargo@v1
+        name: cargo test
         with:
           command: test
 
@@ -34,6 +36,11 @@ jobs:
           override: true
       - run: rustup component add rustfmt
       - uses: actions-rs/cargo@v1
+        name: update cargo (needed for Inkwell)
+        with:
+          command: update
+      - uses: actions-rs/cargo@v1
+        name: cargo fmt --check
         with:
           command: fmt
           args: --all -- --check
@@ -50,6 +57,11 @@ jobs:
           override: true
       - run: rustup component add clippy
       - uses: actions-rs/cargo@v1
+        name: update cargo (needed for Inkwell)
+        with:
+          command: update
+      - uses: actions-rs/cargo@v1
+        name: cargo clippy
         with:
           command: clippy
           args: -- -D warnings
