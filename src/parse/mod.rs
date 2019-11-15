@@ -11,6 +11,7 @@ pub mod record;
 pub mod string_literal;
 pub mod type_annotation;
 
+use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::{BinOp, CalledVia, UnaryOp};
@@ -745,7 +746,23 @@ fn int_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map(parse::string_literal::parse(), Pattern::StrLiteral)
+    then(
+        parse::string_literal::parse(),
+        move |arena, state, result| match result {
+            parse::string_literal::StringLiteral::Line(string) => {
+                Ok((Pattern::StrLiteral(string), state))
+            }
+            parse::string_literal::StringLiteral::Block(lines) => {
+                let mut buf = String::new_in(arena);
+
+                for line in lines.iter() {
+                    buf.push_str(line);
+                }
+
+                Ok((Pattern::StrLiteral(arena.alloc(buf)), state))
+            }
+        },
+    )
 }
 
 fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
@@ -1230,5 +1247,8 @@ fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
 }
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    map(parse::string_literal::parse(), Expr::Str)
+    map(parse::string_literal::parse(), |result| match result {
+        parse::string_literal::StringLiteral::Line(string) => Expr::Str(string),
+        parse::string_literal::StringLiteral::Block(lines) => Expr::BlockStr(lines),
+    })
 }
