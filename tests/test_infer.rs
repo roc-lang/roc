@@ -611,21 +611,6 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // fn if_with_int_literals() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             if 1 == 1 then
-    //                 42
-    //             else
-    //                 24
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
-
     #[test]
     fn case_with_int_literals() {
         infer_eq(
