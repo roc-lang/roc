@@ -624,5 +624,4 @@ mod test_infer {
             "Int",
         );
     }
-
 }
