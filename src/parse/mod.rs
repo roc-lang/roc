@@ -674,6 +674,12 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 // Parse the params
                 attempt(
                     Attempting::ClosureParams,
+                    // Note: because this is parse1_after, you *must* have
+                    // a space before the "->" in a closure declaration.
+                    //
+                    // We could make this significantly more complicated in
+                    // order to support e.g. (\x-> 5) with no space before
+                    // the "->" but that does not seem worthwhile.
                     one_or_more(space1_after(loc_closure_param(min_indent), min_indent)),
                 ),
                 skip_first(
