@@ -84,7 +84,7 @@ fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) {
     let generated_name = if letters_used < 26 {
         // This should generate "a", then "b", etc.
         std::char::from_u32(THE_LETTER_A + letters_used)
-            .unwrap()
+            .unwrap_or_else(|| panic!("Tried to convert {} to a char", THE_LETTER_A + letters_used))
             .to_string()
     } else {
         panic!("TODO generate aa, ab, ac, ...");
