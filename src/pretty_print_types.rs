@@ -30,55 +30,54 @@ enum Parens {
 /// FlexVar(Some(name)) where appropriate. Example: for the identity
 /// function, generate a name of "a" for both its argument and return
 /// type variables.
-pub fn name_all_type_vars(letters_used: u32, variable: Variable, subs: &mut Subs) {
+pub fn name_all_type_vars(letters_used: u32, variable: Variable, subs: &mut Subs) -> u32 {
     use subs::Content::*;
     use subs::FlatType::*;
 
     let mut letters_used = letters_used;
 
     match subs.get(variable).content {
+        FlexVar(None) => {
+            let root = subs.get_root_key(variable);
+
+            // If this var is *not* its own root, then the
+            // root var necessarily appears in multiple places.
+            // Generate a name for it!
+            if variable != root {
+                letters_used = name_root(letters_used, root, subs);
+            }
+        }
+        FlexVar(Some(name)) => {
+            let root = subs.get_root_key(variable);
+
+            // Propagate name to root if necessary.
+            if variable != root {
+                set_root_name(root, &*name, subs);
+            }
+        }
         Structure(Apply {
             module_name: _,
             name: _,
             args,
         }) => {
             for var in args {
-                let root = subs.get_root_key(var);
-
-                // If this var is *not* its own root, then the
-                // root var necessarily appears in multiple places.
-                // Generate a name for it!
-                if var != root {
-                    name_root(letters_used, root, subs);
-
-                    letters_used += 1;
-                }
+                letters_used = name_all_type_vars(letters_used, var, subs);
             }
         }
         Structure(Func(arg_vars, ret_var)) => {
             for var in arg_vars {
-                let root = subs.get_root_key(var);
-
-                if var != root {
-                    name_root(letters_used, root, subs);
-
-                    letters_used += 1;
-                }
+                letters_used = name_all_type_vars(letters_used, var, subs);
             }
 
-            let root = subs.get_root_key(ret_var);
-
-            if ret_var != root {
-                name_root(letters_used, root, subs);
-            }
+            letters_used = name_all_type_vars(letters_used, ret_var, subs);
         }
         _ => (),
     }
+
+    letters_used
 }
 
-fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) {
-    use subs::Content::*;
-
+fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) -> u32 {
     // TODO we should arena-allocate this String,
     // so all the strings in the entire pass only require ~1 allocation.
     let generated_name = if letters_used < 26 {
@@ -90,14 +89,25 @@ fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) {
         panic!("TODO generate aa, ab, ac, ...");
     };
 
+    set_root_name(root, &generated_name, subs);
+
+    letters_used + 1
+}
+
+fn set_root_name(root: Variable, name: &str, subs: &mut Subs) {
+    use subs::Content::*;
+
     let mut descriptor = subs.get(root);
 
     match descriptor.content {
         FlexVar(None) => {
-            descriptor.content = FlexVar(Some(generated_name.into()));
+            descriptor.content = FlexVar(Some(name.into()));
 
             // TODO is this necessary, or was mutating descriptor in place sufficient?
             subs.set(root, descriptor);
+        }
+        FlexVar(Some(_existing)) => {
+            panic!("TODO FIXME - make sure the generated name does not clash with any bound vars! In other words, if the user decided to name a type variable 'a', make sure we don't generate 'a' to name a different one!");
         }
         _ => (),
     }
