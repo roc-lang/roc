@@ -47,13 +47,8 @@ pub fn name_all_type_vars(letters_used: u32, variable: Variable, subs: &mut Subs
                 letters_used = name_root(letters_used, root, subs);
             }
         }
-        FlexVar(Some(name)) => {
-            let root = subs.get_root_key(variable);
-
-            // Propagate name to root if necessary.
-            if variable != root {
-                set_root_name(root, &*name, subs);
-            }
+        FlexVar(Some(_)) => {
+            // This root already has a name. Nothing to do here!
         }
         Structure(Apply {
             module_name: _,
