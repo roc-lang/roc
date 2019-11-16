@@ -652,18 +652,17 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // TODO this should pass, but instead infers the wrong type
-    // fn pass_a_function() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //                 \to_a -> to_a {}
-    //             "#
-    //         ),
-    //         "({} -> a) -> a",
-    //     );
-    // }
+    #[test]
+    fn pass_a_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f -> f {}
+                "#
+            ),
+            "({} -> a) -> a",
+        );
+    }
 
     // OPERATORS
 
