@@ -505,6 +505,31 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn pizza_desugar() {
+        infer_eq(
+            indoc!(
+                r#"
+                1 |> (\a -> a)
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn pizza_desugar_two_arguments() {
+        infer_eq(
+            indoc!(
+                r#"
+                always = \a b -> a
+
+                1 |> always "foo"
+                "#
+            ),
+            "Int",
+        );
+    }
     //     #[test]
     //     fn identity() {
     //         infer_eq(
