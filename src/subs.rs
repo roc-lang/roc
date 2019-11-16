@@ -135,8 +135,13 @@ impl From<Content> for Descriptor {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Content {
+    /// A type variable which the user did not name in an annotation,
+    ///
+    /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
+    /// change the Option in here from None to Some.
     FlexVar(Option<Box<str>> /* name - e.g. in pattern matching */),
-    RigidVar(Box<str> /* name given in a user-written annotation */),
+    /// name given in a user-written annotation
+    RigidVar(Box<str>),
     Structure(FlatType),
     Error(Problem),
 }
