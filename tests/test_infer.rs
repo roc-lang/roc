@@ -546,6 +546,33 @@ mod test_infer {
     }
 
     #[test]
+    fn identity_of_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    (\val -> val) (\val -> val)
+                "#
+            ),
+            "a -> a",
+        );
+    }
+
+    // #[test]
+    // TODO FIXME this should work, but instead causes a stack overflow!
+    // fn recursive_identity() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //                 identity = \val -> val
+
+    //                 identity identity
+    //             "#
+    //         ),
+    //         "a -> a",
+    //     );
+    // }
+
+    #[test]
     fn identity_function() {
         infer_eq(
             indoc!(
