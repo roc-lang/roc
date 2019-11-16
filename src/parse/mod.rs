@@ -375,18 +375,16 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         )),
 
         Expr::Record(loc_assigned_fields) => {
-            // Record(Loc<Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>>),
             let mut loc_patterns = Vec::with_capacity_in(loc_assigned_fields.len(), arena);
 
             for loc_assigned_field in loc_assigned_fields {
                 let region = loc_assigned_field.region;
-                let value = assigned_field_to_pattern(&loc_assigned_field.value);
+                let value = assigned_field_to_pattern(arena, &loc_assigned_field.value);
 
                 loc_patterns.push(Located { region, value });
             }
 
-            // in practice these patterns will be identifiers, possibly surrounded by comments
-            // RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
+            // in practice these patterns will be identifiers, possibly surrounded by newline/comments
             Ok(Pattern::RecordDestructure(loc_patterns))
         }
 
@@ -418,18 +416,27 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
     }
 }
 
-pub fn assigned_field_to_pattern<'a>(_assigned_field: &AssignedField<'a, Expr<'a>>) -> Pattern<'a> {
-    /*
-
-    let value = match loc_assigned_field.value {
-        AssignedField::LabeledValue(name, spaces, value) => panic!("TODO is rebinding variables allowed?")
-        AssignedField::LabelOnly(name, spaces) => Located { region = name.region, Pattern::Identifier(name.value)  }
-        AssignedField::SpaceBefore(name, spaces, value) => panic!()
-        AssignedField::SpaceAfter(name, spaces, value) => panic!()
-        AssignedField::Malformed(name, spaces, value) => panic!()
+pub fn assigned_field_to_pattern<'a>(
+    arena: &'a Bump,
+    assigned_field: &AssignedField<'a, Expr<'a>>,
+) -> Pattern<'a> {
+    match assigned_field {
+        AssignedField::LabeledValue(_name, _spaces, _value) => {
+            panic!("TODO labelled values (e.g. { x: 4 }) is not a valid pattern")
+        }
+        AssignedField::LabelOnly(name, spaces) => {
+            Pattern::SpaceAfter(arena.alloc(Pattern::Identifier(name.value)), spaces)
+        }
+        AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
+            arena.alloc(assigned_field_to_pattern(arena, nested)),
+            spaces,
+        ),
+        AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
+            arena.alloc(assigned_field_to_pattern(arena, nested)),
+            spaces,
+        ),
+        AssignedField::Malformed(string) => Pattern::Malformed(string),
     }
-    */
-    panic!();
 }
 
 /// A def beginning with a parenthetical pattern, for example:

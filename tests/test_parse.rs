@@ -1068,6 +1068,46 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn case_with_records() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let identifiers1 = bumpalo::vec![in &arena; Located::new(1, 1, 3, 4, Identifier("y")) ];
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(RecordDestructure(identifiers1)),
+            newlines.into_bump_slice(),
+        );
+        let loc_pattern1 = Located::new(1, 1, 1, 6, pattern1);
+        let expr1 = Int("2");
+        let loc_expr1 = Located::new(1, 1, 10, 11, expr1);
+        let branch1 = &*arena.alloc((loc_pattern1, loc_expr1));
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let identifiers2 = bumpalo::vec![in &arena; Located::new(2, 2, 3, 4, Identifier("z")), Located::new(2, 2, 6, 7, Identifier("w"))  ];
+        let pattern2 = Pattern::SpaceBefore(
+            arena.alloc(RecordDestructure(identifiers2)),
+            newlines.into_bump_slice(),
+        );
+        let loc_pattern2 = Located::new(2, 2, 1, 9, pattern2);
+        let expr2 = Int("4");
+        let loc_expr2 = Located::new(2, 2, 13, 14, expr2);
+        let branch2 = &*arena.alloc((loc_pattern2, loc_expr2));
+        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
+        let expected = Expr::Case(arena.alloc(loc_cond), branches);
+        let actual = parse_with(
+            &arena,
+            indoc!(
+                r#"
+                case x when
+                 { y } -> 2
+                 { z, w } -> 4
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // TODO test hex/oct/binary parsing
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
