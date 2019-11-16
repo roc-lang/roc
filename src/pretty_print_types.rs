@@ -5,6 +5,27 @@ static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static THE_LETTER_A: u32 = 'a' as u32;
 
+/// Rerquirements for parentheses.
+///
+/// If we're inside a function (that is, this is either an argument or a return
+/// value), we may need to use parens. Examples:
+///
+/// a -> (* -> a)
+/// (* -> a) -> a
+///
+/// Separately, if we're inside a type parameter, we may need to use parens:
+///
+/// List Int
+/// List (List Int)
+///
+/// Otherwise, parens are unnecessary.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Parens {
+    InFn,
+    InTypeParam,
+    Unnecessary,
+}
+
 /// Generate names for all type variables, replacing FlexVar(None) with
 /// FlexVar(Some(name)) where appropriate. Example: for the identity
 /// function, generate a name of "a" for both its argument and return
@@ -85,24 +106,24 @@ fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) {
 pub fn content_to_string(content: Content, subs: &mut Subs) -> String {
     let mut buf = String::new();
 
-    write_content(content, subs, &mut buf, false);
+    write_content(content, subs, &mut buf, Parens::Unnecessary);
 
     buf
 }
 
-fn write_content(content: Content, subs: &mut Subs, buf: &mut String, use_parens: bool) {
+fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Parens) {
     use subs::Content::*;
 
     match content {
         FlexVar(Some(name)) => buf.push_str(&name),
         FlexVar(None) => buf.push_str(WILDCARD),
         RigidVar(name) => buf.push_str(&name),
-        Structure(flat_type) => write_flat_type(flat_type, subs, buf, use_parens),
+        Structure(flat_type) => write_flat_type(flat_type, subs, buf, parens),
         Error(_) => buf.push_str("<type mismatch>"),
     }
 }
 
-fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_parens: bool) {
+fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, parens: Parens) {
     use subs::FlatType::*;
 
     match flat_type {
@@ -116,10 +137,10 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, use_p
             args,
             subs,
             buf,
-            use_parens,
+            parens,
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
-        Func(args, ret) => write_fn(args, ret, subs, buf, use_parens),
+        Func(args, ret) => write_fn(args, ret, subs, buf, parens),
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }
@@ -132,9 +153,9 @@ fn write_apply(
     args: Vec<Variable>,
     subs: &mut Subs,
     buf: &mut String,
-    use_parens: bool,
+    parens: Parens,
 ) {
-    let write_parens = use_parens && !args.is_empty();
+    let write_parens = parens == Parens::InTypeParam && !args.is_empty();
 
     // Hardcoded type aliases
     if module_name == "Str" && type_name == "Str" {
@@ -147,7 +168,7 @@ fn write_apply(
         let arg_content = subs.get(arg).content;
         let mut arg_param = String::new();
 
-        write_content(arg_content, subs, &mut arg_param, true);
+        write_content(arg_content, subs, &mut arg_param, Parens::InTypeParam);
 
         if arg_param == "Int.Integer" {
             buf.push_str("Int");
@@ -178,7 +199,7 @@ fn write_apply(
             .unwrap_or_else(|| panic!("List did not have any type parameters somehow."));
         let arg_content = subs.get(arg).content;
 
-        write_content(arg_content, subs, buf, true);
+        write_content(arg_content, subs, buf, Parens::InTypeParam);
 
         if write_parens {
             buf.push_str(")");
@@ -192,7 +213,7 @@ fn write_apply(
 
         for arg in args {
             buf.push_str(" ");
-            write_content(subs.get(arg).content, subs, buf, true);
+            write_content(subs.get(arg).content, subs, buf, Parens::InTypeParam);
         }
 
         if write_parens {
@@ -201,14 +222,9 @@ fn write_apply(
     }
 }
 
-fn write_fn(
-    args: Vec<Variable>,
-    ret: Variable,
-    subs: &mut Subs,
-    buf: &mut String,
-    use_parens: bool,
-) {
+fn write_fn(args: Vec<Variable>, ret: Variable, subs: &mut Subs, buf: &mut String, parens: Parens) {
     let mut needs_comma = false;
+    let use_parens = parens != Parens::Unnecessary;
 
     if use_parens {
         buf.push_str("(");
@@ -221,11 +237,11 @@ fn write_fn(
             needs_comma = true;
         }
 
-        write_content(subs.get(arg).content, subs, buf, false);
+        write_content(subs.get(arg).content, subs, buf, Parens::InFn);
     }
 
     buf.push_str(" -> ");
-    write_content(subs.get(ret).content, subs, buf, false);
+    write_content(subs.get(ret).content, subs, buf, Parens::InFn);
 
     if use_parens {
         buf.push_str(")");
