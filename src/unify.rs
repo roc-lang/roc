@@ -129,7 +129,7 @@ fn unify_rigid(name: &str, other: &Content) -> Descriptor {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            from_content(RigidVar(name.to_string()))
+            from_content(RigidVar(name.into()))
         }
         RigidVar(_) | Structure(_) => {
             // Type mismatch! Rigid can only unify with flex, even if the

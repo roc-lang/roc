@@ -1,4 +1,4 @@
-use collections::MutMap;
+use collections::{MutMap, MutSet};
 use subs::{Content, FlatType, Subs, Variable};
 use types;
 
@@ -51,6 +51,7 @@ fn find_names_needed(
     subs: &mut Subs,
     roots: &mut Vec<Variable>,
     root_appearances: &mut MutMap<Variable, Appearances>,
+    names_taken: &mut MutSet<String>,
 ) {
     use subs::Content::*;
     use subs::FlatType::*;
@@ -84,17 +85,24 @@ fn find_names_needed(
             args,
         }) => {
             for var in args {
-                find_names_needed(var, subs, roots, root_appearances);
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
         }
         Structure(Func(arg_vars, ret_var)) => {
             for var in arg_vars {
-                find_names_needed(var, subs, roots, root_appearances);
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
-            find_names_needed(ret_var, subs, roots, root_appearances);
+            find_names_needed(ret_var, subs, roots, root_appearances, names_taken);
         }
-        _ => (),
+        RigidVar(name) => {
+            // User-defined names are already taken.
+            // We must not accidentally generate names that collide with them!
+            names_taken.insert(name.to_string());
+        }
+        Error(_) | Structure(Erroneous(_)) | Structure(EmptyRecord) => {
+            // Errors and empty records don't need names.
+        }
     }
 }
 
@@ -102,21 +110,22 @@ pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
     let mut roots = Vec::new();
     let mut letters_used = 0;
     let mut appearances = MutMap::default();
+    let mut taken = MutSet::default();
 
     // Populate names_needed
-    find_names_needed(variable, subs, &mut roots, &mut appearances);
+    find_names_needed(variable, subs, &mut roots, &mut appearances, &mut taken);
 
     for root in roots {
         match appearances.get(&root) {
             Some(Appearances::Multiple) => {
-                letters_used = name_root(letters_used, root, subs);
+                letters_used = name_root(letters_used, root, subs, &taken);
             }
             _ => (),
         }
     }
 }
 
-fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) -> u32 {
+fn name_root(letters_used: u32, root: Variable, subs: &mut Subs, taken: &MutSet<String>) -> u32 {
     // TODO we should arena-allocate this String,
     // so all the strings in the entire pass only require ~1 allocation.
     let generated_name = if letters_used < 26 {
@@ -128,9 +137,14 @@ fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) -> u32 {
         panic!("TODO generate aa, ab, ac, ...");
     };
 
-    set_root_name(root, &generated_name, subs);
+    if taken.contains(&generated_name) {
+        // If the generated name is already taken, try again.
+        name_root(letters_used + 1, root, subs, taken)
+    } else {
+        set_root_name(root, &generated_name, subs);
 
-    letters_used + 1
+        letters_used + 1
+    }
 }
 
 fn set_root_name(root: Variable, name: &str, subs: &mut Subs) {

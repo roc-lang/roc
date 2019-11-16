@@ -136,7 +136,7 @@ impl From<Content> for Descriptor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Content {
     FlexVar(Option<Box<str>> /* name - e.g. in pattern matching */),
-    RigidVar(String /* name given in a user-written annotation */),
+    RigidVar(Box<str> /* name given in a user-written annotation */),
     Structure(FlatType),
     Error(Problem),
 }
