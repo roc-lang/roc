@@ -8,7 +8,7 @@ pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
 }
 
-#[derive(Copy, PartialEq, Eq, Clone)]
+#[derive(Copy, PartialEq, Eq, Clone, Hash)]
 pub struct Variable(u32);
 
 impl Variable {

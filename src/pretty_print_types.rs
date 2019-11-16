@@ -1,3 +1,4 @@
+use collections::MutMap;
 use subs::{Content, FlatType, Subs, Variable};
 use types;
 
@@ -26,15 +27,33 @@ enum Parens {
     Unnecessary,
 }
 
+/// How many times a root variable appeared in Subs.
+///
+/// We only care about whether it was a single time or multiple times,
+/// because single appearances get a wildcard (*) and multiple times
+/// get a generated letter ("a" etc).
+enum Appearances {
+    Single,
+    Multiple,
+}
+
 /// Generate names for all type variables, replacing FlexVar(None) with
 /// FlexVar(Some(name)) where appropriate. Example: for the identity
 /// function, generate a name of "a" for both its argument and return
 /// type variables.
-pub fn name_all_type_vars(letters_used: u32, variable: Variable, subs: &mut Subs) -> u32 {
+///
+/// It's important that we track insertion order, which is why
+/// names_needed is a Vec. We also want to count how many times a root
+/// appears, because we should only generate a name for it if it appears
+/// more than once.
+fn find_names_needed(
+    variable: Variable,
+    subs: &mut Subs,
+    roots: &mut Vec<Variable>,
+    root_appearances: &mut MutMap<Variable, Appearances>,
+) {
     use subs::Content::*;
     use subs::FlatType::*;
-
-    let mut letters_used = letters_used;
 
     match subs.get(variable).content {
         FlexVar(None) => {
@@ -42,9 +61,18 @@ pub fn name_all_type_vars(letters_used: u32, variable: Variable, subs: &mut Subs
 
             // If this var is *not* its own root, then the
             // root var necessarily appears in multiple places.
-            // Generate a name for it!
-            if variable != root {
-                letters_used = name_root(letters_used, root, subs);
+            // We need a name for it!
+            match root_appearances.get(&root) {
+                Some(Appearances::Single) => {
+                    root_appearances.insert(root, Appearances::Multiple);
+                }
+                Some(Appearances::Multiple) => {
+                    // It's already multiple, so do nothing!
+                }
+                None => {
+                    roots.push(root);
+                    root_appearances.insert(root, Appearances::Single);
+                }
             }
         }
         FlexVar(Some(_)) => {
@@ -56,20 +84,36 @@ pub fn name_all_type_vars(letters_used: u32, variable: Variable, subs: &mut Subs
             args,
         }) => {
             for var in args {
-                letters_used = name_all_type_vars(letters_used, var, subs);
+                find_names_needed(var, subs, roots, root_appearances);
             }
         }
         Structure(Func(arg_vars, ret_var)) => {
             for var in arg_vars {
-                letters_used = name_all_type_vars(letters_used, var, subs);
+                find_names_needed(var, subs, roots, root_appearances);
             }
 
-            letters_used = name_all_type_vars(letters_used, ret_var, subs);
+            find_names_needed(ret_var, subs, roots, root_appearances);
         }
         _ => (),
     }
+}
 
-    letters_used
+pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
+    let mut roots = Vec::new();
+    let mut letters_used = 0;
+    let mut appearances = MutMap::default();
+
+    // Populate names_needed
+    find_names_needed(variable, subs, &mut roots, &mut appearances);
+
+    for root in roots {
+        match appearances.get(&root) {
+            Some(Appearances::Multiple) => {
+                letters_used = name_root(letters_used, root, subs);
+            }
+            _ => (),
+        }
+    }
 }
 
 fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) -> u32 {

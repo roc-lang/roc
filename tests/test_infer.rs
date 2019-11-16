@@ -21,7 +21,7 @@ mod test_infer {
 
         let content = infer_expr(&mut subs, procedures, &output.constraint, variable);
 
-        name_all_type_vars(0, variable, &mut subs);
+        name_all_type_vars(variable, &mut subs);
 
         let actual_str = content_to_string(content, &mut subs);
 
