@@ -3,12 +3,13 @@ use types;
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
+static THE_LETTER_A: u32 = 'a' as u32;
 
 /// Generate names for all type variables, replacing FlexVar(None) with
 /// FlexVar(Some(name)) where appropriate. Example: for the identity
 /// function, generate a name of "a" for both its argument and return
 /// type variables.
-pub fn name_all_type_vars(letters_used: usize, variable: Variable, subs: &mut Subs) {
+pub fn name_all_type_vars(letters_used: u32, variable: Variable, subs: &mut Subs) {
     use subs::Content::*;
     use subs::FlatType::*;
 
@@ -54,14 +55,18 @@ pub fn name_all_type_vars(letters_used: usize, variable: Variable, subs: &mut Su
     }
 }
 
-fn name_root(letters_used: usize, root: Variable, subs: &mut Subs) {
+fn name_root(letters_used: u32, root: Variable, subs: &mut Subs) {
     use subs::Content::*;
 
-    let generated_name = if letters_used == 0 {
+    // TODO we should arena-allocate this String,
+    // so all the strings in the entire pass only require ~1 allocation.
+    let generated_name = if letters_used < 26 {
         // This should generate "a", then "b", etc.
-        "a"
+        std::char::from_u32(THE_LETTER_A + letters_used)
+            .unwrap()
+            .to_string()
     } else {
-        panic!("TODO finish type variable naming algorithm");
+        panic!("TODO generate aa, ab, ac, ...");
     };
 
     let mut descriptor = subs.get(root);
