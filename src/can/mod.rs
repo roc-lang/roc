@@ -139,6 +139,13 @@ fn canonicalize_expr(
 
             (Str((*string).into()), Output::new(constraint))
         }
+        ast::Expr::BlockStr(lines) => {
+            let constraint = Eq(constrain::str_type(), expected, region);
+
+            let joined = lines.iter().map(|s| *s).collect::<Vec<&str>>().join("\n");
+
+            (BlockStr(joined.into()), Output::new(constraint))
+        }
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 let list_var = subs.mk_flex_var();
@@ -702,8 +709,7 @@ fn canonicalize_expr(
 
             (expr, output)
         }
-        ast::Expr::BlockStr(_)
-        | ast::Expr::Field(_, _)
+        ast::Expr::Field(_, _)
         | ast::Expr::QualifiedField(_, _)
         | ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)

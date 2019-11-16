@@ -12,6 +12,7 @@ pub enum Expr {
     Int(i64),
     Float(f64),
     Str(Box<str>),
+    BlockStr(Box<str>),
     List(Variable, Vec<Located<Expr>>),
 
     // Lookups
