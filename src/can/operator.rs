@@ -354,9 +354,9 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             //
             // becomes
             //
-            //      case b of
-            //              False -> y
-            //              _ -> x
+            //      case b when
+            //          False -> y
+            //          _ -> x
             let mut branches = Vec::with_capacity_in(2, arena);
 
             // no type errors will occur here so using this region should be fine
