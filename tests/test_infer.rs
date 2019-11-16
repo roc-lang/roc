@@ -585,6 +585,61 @@ mod test_infer {
     }
 
     #[test]
+    fn use_apply() {
+        infer_eq(
+            indoc!(
+                r#"
+                    apply = \f x -> f x
+                    identity = \a -> a
+
+                    apply identity 5
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn apply_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f x -> f x
+                "#
+            ),
+            "(a -> b), a -> b",
+        );
+    }
+
+    #[test]
+    fn use_flip() {
+        infer_eq(
+            indoc!(
+                r#"
+                    flip = \f -> (\a b -> f b a)
+                    neverendingInt = \f int -> f int
+                    x = neverendingInt (\a -> a) 5
+
+                    flip neverendingInt
+                "#
+            ),
+            "(Int, (a -> a)) -> Int",
+        );
+    }
+
+    #[test]
+    fn flip_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f -> (\a b -> f b a),
+                "#
+            ),
+            "(a, b -> c) -> (b, a -> c)",
+        );
+    }
+
+    #[test]
     fn always_function() {
         infer_eq(
             indoc!(
@@ -593,6 +648,18 @@ mod test_infer {
                 "#
             ),
             "a -> (* -> a)",
+        );
+    }
+
+    #[test]
+    fn pass_a_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \to_a -> to_a {}
+                "#
+            ),
+            "({} -> a) -> a",
         );
     }
 
