@@ -37,8 +37,13 @@ pub enum UndoLog<D: SnapshotVecDelegate> {
     Other(D::Undo),
 }
 
+/// A Vec where we have Debug overridden to render the indices like
+/// a hashmap, since we really care about those when debugging one of these.
+#[derive(Clone)]
+struct BackingVec<T>(Vec<T>);
+
 pub struct SnapshotVec<D: SnapshotVecDelegate> {
-    values: Vec<D::Value>,
+    values: BackingVec<D::Value>,
     undo_log: Vec<UndoLog<D>>,
     num_open_snapshots: usize,
 }
@@ -78,10 +83,29 @@ pub trait SnapshotVecDelegate {
 impl<D: SnapshotVecDelegate> Default for SnapshotVec<D> {
     fn default() -> Self {
         SnapshotVec {
-            values: Vec::new(),
+            values: BackingVec(Vec::new()),
             undo_log: Vec::new(),
             num_open_snapshots: 0,
         }
+    }
+}
+
+impl<T> fmt::Debug for BackingVec<T>
+where
+    T: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{{{{")?;
+
+        for (index, elem) in self.0.iter().enumerate() {
+            write!(f, "\n    {} => {:?},", index, elem)?;
+        }
+
+        if !self.0.is_empty() {
+            write!(f, "\n")?;
+        }
+
+        write!(f, "}}}}")
     }
 }
 
@@ -92,7 +116,7 @@ impl<D: SnapshotVecDelegate> SnapshotVec<D> {
 
     pub fn with_capacity(c: usize) -> SnapshotVec<D> {
         SnapshotVec {
-            values: Vec::with_capacity(c),
+            values: BackingVec(Vec::with_capacity(c)),
             undo_log: Vec::new(),
             num_open_snapshots: 0,
         }
@@ -109,16 +133,16 @@ impl<D: SnapshotVecDelegate> SnapshotVec<D> {
     }
 
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.values.0.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.values.len() == 0
+        self.values.0.len() == 0
     }
 
     pub fn push(&mut self, elem: D::Value) -> usize {
-        let len = self.values.len();
-        self.values.push(elem);
+        let len = self.values.0.len();
+        self.values.0.push(elem);
 
         if self.in_snapshot() {
             self.undo_log.push(NewElem(len));
@@ -128,26 +152,26 @@ impl<D: SnapshotVecDelegate> SnapshotVec<D> {
     }
 
     pub fn get(&self, index: usize) -> &D::Value {
-        &self.values[index]
+        &self.values.0[index]
     }
 
     /// Reserve space for new values, just like an ordinary vec.
     pub fn reserve(&mut self, additional: usize) {
         // This is not affected by snapshots or anything.
-        self.values.reserve(additional);
+        self.values.0.reserve(additional);
     }
 
     /// Returns a mutable pointer into the vec; whatever changes you make here cannot be undone
     /// automatically, so you should be sure call `record()` with some sort of suitable undo
     /// action.
     pub fn get_mut(&mut self, index: usize) -> &mut D::Value {
-        &mut self.values[index]
+        &mut self.values.0[index]
     }
 
     /// Updates the element at the given index. The old value will saved (and perhaps restored) if
     /// a snapshot is active.
     pub fn set(&mut self, index: usize, new_elem: D::Value) {
-        let old_elem = mem::replace(&mut self.values[index], new_elem);
+        let old_elem = mem::replace(&mut self.values.0[index], new_elem);
         if self.in_snapshot() {
             self.undo_log.push(SetElem(index, old_elem));
         }
@@ -157,11 +181,11 @@ impl<D: SnapshotVecDelegate> SnapshotVec<D> {
     /// otherwise equivalent to -- invoking `set` for each element.
     pub fn set_all(&mut self, mut new_elems: impl FnMut(usize) -> D::Value) {
         if !self.in_snapshot() {
-            for (index, slot) in self.values.iter_mut().enumerate() {
+            for (index, slot) in self.values.0.iter_mut().enumerate() {
                 *slot = new_elems(index);
             }
         } else {
-            for i in 0..self.values.len() {
+            for i in 0..self.values.0.len() {
                 self.set(i, new_elems(i));
             }
         }
@@ -173,16 +197,16 @@ impl<D: SnapshotVecDelegate> SnapshotVec<D> {
         D::Value: Clone,
     {
         if self.in_snapshot() {
-            let old_elem = self.values[index].clone();
+            let old_elem = self.values.0[index].clone();
             self.undo_log.push(SetElem(index, old_elem));
         }
-        op(&mut self.values[index]);
+        op(&mut self.values.0[index]);
     }
 
     pub fn start_snapshot(&mut self) -> Snapshot {
         self.num_open_snapshots += 1;
         Snapshot {
-            value_count: self.values.len(),
+            value_count: self.values.0.len(),
             undo_len: self.undo_log.len(),
         }
     }
@@ -205,16 +229,16 @@ impl<D: SnapshotVecDelegate> SnapshotVec<D> {
         while self.undo_log.len() > snapshot.undo_len {
             match self.undo_log.pop().unwrap() {
                 NewElem(i) => {
-                    self.values.pop();
-                    assert!(self.values.len() == i);
+                    self.values.0.pop();
+                    assert!(self.values.0.len() == i);
                 }
 
                 SetElem(i, v) => {
-                    self.values[i] = v;
+                    self.values.0[i] = v;
                 }
 
                 Other(u) => {
-                    D::reverse(&mut self.values, u);
+                    D::reverse(&mut self.values.0, u);
                 }
             }
         }
@@ -244,13 +268,13 @@ impl<D: SnapshotVecDelegate> SnapshotVec<D> {
 impl<D: SnapshotVecDelegate> ops::Deref for SnapshotVec<D> {
     type Target = [D::Value];
     fn deref(&self) -> &[D::Value] {
-        &*self.values
+        &*self.values.0
     }
 }
 
 impl<D: SnapshotVecDelegate> ops::DerefMut for SnapshotVec<D> {
     fn deref_mut(&mut self) -> &mut [D::Value] {
-        &mut *self.values
+        &mut *self.values.0
     }
 }
 
@@ -272,9 +296,9 @@ impl<D: SnapshotVecDelegate> Extend<D::Value> for SnapshotVec<D> {
     where
         T: IntoIterator<Item = D::Value>,
     {
-        let initial_len = self.values.len();
-        self.values.extend(iterable);
-        let final_len = self.values.len();
+        let initial_len = self.values.0.len();
+        self.values.0.extend(iterable);
+        let final_len = self.values.0.len();
 
         if self.in_snapshot() {
             self.undo_log.extend((initial_len..final_len).map(NewElem));

@@ -184,9 +184,9 @@ pub enum AnnotationSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
-    AnonymousFnArg(u8 /* arg index */),
+    AnonymousFnArg { arg_index: u8 },
     NamedFnArg(String /* function name */, u8 /* arg index */),
-    AnonymousFnCall(u8 /* arity */),
+    AnonymousFnCall { arity: u8 },
     NamedFnCall(String /* function name */, u8 /* arity */),
     BinOpArg(BinOp, ArgSide),
     BinOpRet(BinOp),

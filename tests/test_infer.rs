@@ -12,7 +12,7 @@ mod helpers;
 mod test_infer {
     use helpers::can_expr;
     use roc::infer::infer_expr;
-    use roc::pretty_print_types::content_to_string;
+    use roc::pretty_print_types::{content_to_string, name_all_type_vars};
 
     // HELPERS
 
@@ -20,6 +20,9 @@ mod test_infer {
         let (_, output, _, procedures, mut subs, variable) = can_expr(src);
 
         let content = infer_expr(&mut subs, procedures, &output.constraint, variable);
+
+        name_all_type_vars(variable, &mut subs);
+
         let actual_str = content_to_string(content, &mut subs);
 
         assert_eq!(actual_str, expected.to_string());
@@ -486,7 +489,6 @@ mod test_infer {
     }
 
     // TODO type annotations
-    // TODO fix identity inference
     // TODO BoundTypeVariables
     // TODO conditionals
 
@@ -530,25 +532,137 @@ mod test_infer {
             "Int",
         );
     }
-    //     #[test]
-    //     fn identity() {
-    //         infer_eq(
-    //             indoc!(r#"
-    //                 \val -> val
-    //             "#),
-    //             "a -> a"
-    //         );
-    //     }
 
-    //     #[test]
-    //     fn always_function() {
-    //         infer_eq(
-    //             indoc!(r#"
-    //                 \val -> \_ -> val
-    //             "#),
-    //             "a -> (* -> a)"
-    //         );
-    //     }
+    #[test]
+    fn anonymous_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    (\a -> a) 3.14
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn identity_of_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    (\val -> val) (\val -> val)
+                "#
+            ),
+            "a -> a",
+        );
+    }
+
+    // #[test]
+    // TODO FIXME this should work, but instead causes a stack overflow!
+    // fn recursive_identity() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //                 identity = \val -> val
+
+    //                 identity identity
+    //             "#
+    //         ),
+    //         "a -> a",
+    //     );
+    // }
+
+    #[test]
+    fn identity_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \val -> val
+                "#
+            ),
+            "a -> a",
+        );
+    }
+
+    #[test]
+    fn use_apply() {
+        infer_eq(
+            indoc!(
+                r#"
+                    apply = \f x -> f x
+                    identity = \a -> a
+
+                    apply identity 5
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn apply_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f x -> f x
+                "#
+            ),
+            "(a -> b), a -> b",
+        );
+    }
+
+    // #[test]
+    // TODO FIXME this should pass, but instead fails to canonicalize
+    // fn use_flip() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //                 flip = \f -> (\a b -> f b a)
+    //                 neverendingInt = \f int -> f int
+    //                 x = neverendingInt (\a -> a) 5
+
+    //                 flip neverendingInt
+    //             "#
+    //         ),
+    //         "(Int, (a -> a)) -> Int",
+    //     );
+    // }
+
+    #[test]
+    fn flip_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f -> (\a b -> f b a),
+                "#
+            ),
+            "(a, b -> c) -> (b, a -> c)",
+        );
+    }
+
+    #[test]
+    fn always_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \val -> \_ -> val
+                "#
+            ),
+            "a -> (* -> a)",
+        );
+    }
+
+    #[test]
+    fn pass_a_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f -> f {}
+                "#
+            ),
+            "({} -> a) -> a",
+        );
+    }
 
     // OPERATORS
 

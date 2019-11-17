@@ -8,7 +8,7 @@ pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
 }
 
-#[derive(Copy, PartialEq, Eq, Clone)]
+#[derive(Copy, PartialEq, Eq, Clone, Hash)]
 pub struct Variable(u32);
 
 impl Variable {
@@ -65,6 +65,10 @@ impl Subs {
 
     pub fn get(&mut self, key: Variable) -> Descriptor {
         self.utable.probe_value(key)
+    }
+
+    pub fn get_root_key(&mut self, key: Variable) -> Variable {
+        self.utable.get_root_key(key)
     }
 
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
@@ -131,8 +135,13 @@ impl From<Content> for Descriptor {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Content {
+    /// A type variable which the user did not name in an annotation,
+    ///
+    /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
+    /// change the Option in here from None to Some.
     FlexVar(Option<Box<str>> /* name - e.g. in pattern matching */),
-    RigidVar(String /* name given in a user-written annotation */),
+    /// name given in a user-written annotation
+    RigidVar(Box<str>),
     Structure(FlatType),
     Error(Problem),
 }
@@ -145,7 +154,6 @@ pub enum FlatType {
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
-    BinOp(Variable, Variable, Variable),
     Erroneous(Problem),
     EmptyRecord,
 }
