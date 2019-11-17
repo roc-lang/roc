@@ -20,7 +20,8 @@ use parse::ast::{
     InterfaceHeader, MaybeQualified, Module, Pattern, Spaceable,
 };
 use parse::blankspace::{
-    space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
+    space0, space0_after, space0_around, space0_before, space1, space1_after, space1_around,
+    space1_before,
 };
 use parse::collection::collection;
 use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
@@ -673,7 +674,13 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 // Parse the params
                 attempt(
                     Attempting::ClosureParams,
-                    one_or_more(space0_around(loc_closure_param(min_indent), min_indent)),
+                    // Note: because this is parse1_after, you *must* have
+                    // a space before the "->" in a closure declaration.
+                    //
+                    // We could make this significantly more complicated in
+                    // order to support e.g. (\x-> 5) with no space before
+                    // the "->" but that does not seem worthwhile.
+                    one_or_more(space1_after(loc_closure_param(min_indent), min_indent)),
                 ),
                 skip_first(
                     // Parse the -> which separates params from body

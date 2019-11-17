@@ -790,6 +790,17 @@ mod test_parse {
     }
 
     #[test]
+    fn malformed_ident_due_to_underscore() {
+        // This is a regression test against a bug where if you included an
+        // underscore in an argument name, it would parse as three arguments
+        // (and would ignore the underscore as if it had been blank space).
+        let arena = Bump::new();
+        let actual = parse_with(&arena, "\\the_answer -> 42");
+
+        assert_eq!(Ok(MalformedClosure), actual);
+    }
+
+    #[test]
     fn two_arg_closure() {
         let arena = Bump::new();
         let arg1 = Located::new(0, 0, 1, 2, Identifier("a"));
