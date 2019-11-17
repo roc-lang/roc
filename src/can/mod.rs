@@ -1141,6 +1141,7 @@ fn add_idents_from_pattern<'a>(
         | BinaryIntLiteral(_)
         | FloatLiteral(_)
         | StrLiteral(_)
+        | BlockStrLiteral(_)
         | EmptyRecordLiteral
         | Malformed(_)
         | Underscore => (),
@@ -1179,6 +1180,7 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
         | OctalIntLiteral(_)
         | FloatLiteral(_)
         | StrLiteral(_)
+        | BlockStrLiteral(_)
         | EmptyRecordLiteral
         | Malformed(_)
         | Underscore => {}

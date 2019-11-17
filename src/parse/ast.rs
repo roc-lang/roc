@@ -277,6 +277,7 @@ pub enum Pattern<'a> {
     BinaryIntLiteral(&'a str),
     FloatLiteral(&'a str),
     StrLiteral(&'a str),
+    BlockStrLiteral(&'a [&'a str]),
     EmptyRecordLiteral,
     Underscore,
 
@@ -762,6 +763,11 @@ fn format_pattern<'a>(
         BinaryIntLiteral(string) => buf.push_str(string),
         FloatLiteral(string) => buf.push_str(string),
         StrLiteral(string) => buf.push_str(string),
+        BlockStrLiteral(lines) => {
+            for line in *lines {
+                buf.push_str(line)
+            }
+        }
         EmptyRecordLiteral => buf.push_str("{}"),
         Underscore => buf.push('_'),
 

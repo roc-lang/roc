@@ -752,7 +752,10 @@ fn int_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map(parse::string_literal::parse(), Pattern::StrLiteral)
+    map(parse::string_literal::parse(), |result| match result {
+        parse::string_literal::StringLiteral::Line(string) => Pattern::StrLiteral(string),
+        parse::string_literal::StringLiteral::Block(lines) => Pattern::BlockStrLiteral(lines),
+    })
 }
 
 fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
@@ -1237,5 +1240,8 @@ fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
 }
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    map(parse::string_literal::parse(), Expr::Str)
+    map(parse::string_literal::parse(), |result| match result {
+        parse::string_literal::StringLiteral::Line(string) => Expr::Str(string),
+        parse::string_literal::StringLiteral::Block(lines) => Expr::BlockStr(lines),
+    })
 }

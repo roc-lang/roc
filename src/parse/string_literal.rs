@@ -1,9 +1,15 @@
+use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::Attempting;
 use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use std::char;
 
-pub fn parse<'a>() -> impl Parser<'a, &'a str> {
+pub enum StringLiteral<'a> {
+    Line(&'a str),
+    Block(&'a [&'a str]),
+}
+
+pub fn parse<'a>() -> impl Parser<'a, StringLiteral<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         let mut chars = state.input.chars();
 
@@ -52,7 +58,7 @@ pub fn parse<'a>() -> impl Parser<'a, &'a str> {
 
                 let next_state = state.advance_without_indenting(parsed_chars)?;
 
-                return Ok((string, next_state));
+                return Ok((StringLiteral::Line(string), next_state));
             } else if ch == '\n' {
                 // This is a single-line string, which cannot have newlines!
                 // Treat this as an unclosed string literal, and consume
@@ -80,14 +86,57 @@ pub fn parse<'a>() -> impl Parser<'a, &'a str> {
 }
 
 fn parse_block_string<'a, I>(
-    _arena: &'a Bump,
-    _state: State<'a>,
-    _chars: &mut I,
-) -> ParseResult<'a, &'a str>
+    arena: &'a Bump,
+    state: State<'a>,
+    chars: &mut I,
+) -> ParseResult<'a, StringLiteral<'a>>
 where
     I: Iterator<Item = char>,
 {
     // So far we have consumed the `"""` and that's it.
-    let _parsed_chars = 3;
-    panic!("TODO parse block string, advance state, etc");
+    let mut parsed_chars = 3;
+    let mut prev_ch = '"';
+    let mut quotes_seen = 0;
+
+    // start at 3 to omit the opening `"`.
+    let mut line_start = 3;
+
+    let mut lines = Vec::new_in(arena);
+
+    while let Some(ch) = chars.next() {
+        parsed_chars += 1;
+
+        // Potentially end the string (unless this is an escaped `"`!)
+        if ch == '"' && prev_ch != '\\' {
+            if quotes_seen == 2 {
+                // three consecutive qoutes, end string
+
+                // Subtract 3 from parsed_chars so we omit the closing `"`.
+                let string = &state.input[line_start..(parsed_chars - 3)];
+                lines.push(string);
+
+                let next_state = state.advance_without_indenting(parsed_chars)?;
+
+                return Ok((StringLiteral::Block(arena.alloc(lines)), next_state));
+            }
+            quotes_seen += 1;
+        } else if ch == '\n' {
+            // note this includes the newline
+            let string = &state.input[line_start..parsed_chars];
+            lines.push(string);
+            quotes_seen = 0;
+            line_start = parsed_chars;
+        } else {
+            quotes_seen = 0;
+        }
+        prev_ch = ch;
+    }
+
+    // We ran out of characters before finding 3 closing quotes
+    Err(unexpected_eof(
+        parsed_chars,
+        // TODO custom BlockStringLiteral?
+        Attempting::StringLiteral,
+        state.clone(),
+    ))
 }

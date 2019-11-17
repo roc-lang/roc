@@ -332,6 +332,15 @@ fn add_constraints<'a>(
             ));
         }
 
+        BlockStrLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Str,
+                Type::string(),
+                expected,
+            ));
+        }
+
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
             add_constraints(pattern, scope, region, expected, state)
         }

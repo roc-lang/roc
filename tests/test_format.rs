@@ -50,6 +50,75 @@ mod test_format {
     }
 
     #[test]
+    fn basic_string() {
+        assert_formats_same(indoc!(
+            r#"
+            "blah"
+            "#
+        ));
+    }
+
+    #[test]
+    fn escaped_unicode_string() {
+        assert_formats_same(indoc!(
+            r#"
+            "unicode: \u{A00A}!"
+            "#
+        ));
+    }
+
+    #[test]
+    fn escaped_quote_string() {
+        assert_formats_same(indoc!(
+            r#"
+            "\""
+            "#
+        ));
+    }
+
+    #[test]
+    fn empty_block_string() {
+        assert_formats_same(indoc!(
+            r#"
+            """"""
+            "#
+        ));
+    }
+
+    #[test]
+    fn basic_block_string() {
+        assert_formats_same(indoc!(
+            r#"
+            """blah"""
+            "#
+        ));
+    }
+
+    #[test]
+    fn newlines_block_string() {
+        assert_formats_same(indoc!(
+            r#"
+            """blah
+                    spam
+            foo"""
+            "#
+        ));
+    }
+
+    #[test]
+    fn quotes_block_string() {
+        assert_formats_same(indoc!(
+            r#"
+            """
+ 
+            "" \""" ""\"
+
+            """
+            "#
+        ));
+    }
+
+    #[test]
     fn zero() {
         assert_formats_same(indoc!(
             r#"
@@ -81,24 +150,6 @@ mod test_format {
         assert_formats_same(indoc!(
             r#"
             1_23_456.7_89_10
-            "#
-        ));
-    }
-
-    #[test]
-    fn basic_string() {
-        assert_formats_same(indoc!(
-            r#"
-            "blah"
-            "#
-        ));
-    }
-
-    #[test]
-    fn escaped_unicode_string() {
-        assert_formats_same(indoc!(
-            r#"
-            "unicode: \u{A00A}!"
             "#
         ));
     }
