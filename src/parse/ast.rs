@@ -270,6 +270,7 @@ pub enum Pattern<'a> {
     /// In practice, these patterns will always be Identifier
     RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
     /// A field pattern, e.g. { x: Just 0 } -> ...
+    /// can only occur inside of a RecordDestructure
     RecordField(&'a str, &'a Loc<Pattern<'a>>),
 
     // Literal

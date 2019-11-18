@@ -379,7 +379,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
 
             for loc_assigned_field in loc_assigned_fields {
                 let region = loc_assigned_field.region;
-                let value = assigned_field_to_pattern(arena, &loc_assigned_field.value);
+                let value = assigned_field_to_pattern(arena, &loc_assigned_field.value)?;
 
                 loc_patterns.push(Located { region, value });
             }
@@ -419,24 +419,32 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
 pub fn assigned_field_to_pattern<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
-) -> Pattern<'a> {
-    match assigned_field {
-        AssignedField::LabeledValue(_name, _spaces, _value) => {
-            panic!("TODO labelled values (e.g. { x: 4 }) is not a valid pattern")
+) -> Result<Pattern<'a>, Fail> {
+    Ok(match assigned_field {
+        AssignedField::LabeledValue(name, spaces, value) => {
+            let pattern = expr_to_pattern(arena, &value.value)?;
+            let result = arena.alloc(Located {
+                region: value.region,
+                value: pattern,
+            });
+            Pattern::SpaceAfter(
+                arena.alloc(Pattern::RecordField(name.value, result)),
+                spaces,
+            )
         }
         AssignedField::LabelOnly(name, spaces) => {
             Pattern::SpaceAfter(arena.alloc(Pattern::Identifier(name.value)), spaces)
         }
         AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
-            arena.alloc(assigned_field_to_pattern(arena, nested)),
+            arena.alloc(assigned_field_to_pattern(arena, nested)?),
             spaces,
         ),
         AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
-            arena.alloc(assigned_field_to_pattern(arena, nested)),
+            arena.alloc(assigned_field_to_pattern(arena, nested)?),
             spaces,
         ),
         AssignedField::Malformed(string) => Pattern::Malformed(string),
-    }
+    })
 }
 
 /// A def beginning with a parenthetical pattern, for example:

@@ -216,9 +216,8 @@ mod test_format {
     fn record_field_destructuring() {
         assert_formats_same(indoc!(
             r#"
-            { x: 5 } = { x: 5 }
-
-            42
+            case foo of
+                { x: 5 } -> 42
             "#
         ));
     }
