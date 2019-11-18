@@ -1,4 +1,12 @@
-#![type_length_limit = "20932125"]
+// Both of these limits are needed only for parser, and only for release builds.
+// The parser functions that use #[cfg(not(debug_assertions))] are the
+// ones that need this. They make builds take a lot longer, but they are more
+// efficient than the alternative implementations we use in development.
+//
+// See https://bodil.lol/parser-combinators for more information; the parser
+// is based on her design.
+#![type_length_limit = "4343503439"]
+#![recursion_limit = "128"]
 
 pub mod can;
 pub mod collections;
