@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use operator::BinOp::Pizza;
 use operator::{BinOp, CalledVia};
 use parse::ast::Expr::{self, *};
-use parse::ast::{AssignedField, Def};
+use parse::ast::{AssignedField, Def, Pattern};
 use region::{Located, Region};
 use types;
 
@@ -347,7 +347,54 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 }),
             )
         }
-        other => panic!("TODO desugar {:?}", other),
+        If((condition, then_branch, else_branch)) => {
+            // desugar if into case, meaning that
+            //
+            //      if b then x else y
+            //
+            // becomes
+            //
+            //      case b when
+            //          False -> y
+            //          _ -> x
+            //
+            // False compiles to 0, and the number zero is special;
+            // processors often have special-cased instructions that work on 0
+            // rather than having to load a nonzero value into another register.
+            // Case in point: the jz ("jump if zero") instruction.
+            // So by making our two comparisons be "0 and else",
+            // LLVM will compile this to a jz instruction,
+            // whereas if we made it be "1 and else" it couldn't do that.
+            let mut branches = Vec::with_capacity_in(2, arena);
+
+            // no type errors will occur here so using this region should be fine
+            let pattern_region = condition.region.clone();
+
+            // TODO make False qualified
+            branches.push(&*arena.alloc((
+                Located {
+                    value: Pattern::Variant(&[], "False"),
+                    region: pattern_region,
+                },
+                else_branch.clone(),
+            )));
+
+            branches.push(&*arena.alloc((
+                Located {
+                    value: Pattern::Underscore,
+                    region: pattern_region,
+                },
+                then_branch.clone(),
+            )));
+
+            desugar(
+                arena,
+                arena.alloc(Located {
+                    value: Case(condition, branches),
+                    region: loc_expr.region,
+                }),
+            )
+        }
     }
 }
 
