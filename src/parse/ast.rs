@@ -269,6 +269,8 @@ pub enum Pattern<'a> {
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
     RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
+    /// A field pattern, e.g. { x: Just 0 } -> ...
+    RecordField(&'a str, &'a Loc<Pattern<'a>>),
 
     // Literal
     IntLiteral(&'a str),
@@ -755,6 +757,12 @@ fn format_pattern<'a>(
             }
 
             buf.push_str(" }");
+        }
+
+        RecordField(name, loc_pattern) => {
+            buf.push_str(name);
+            buf.push_str(": ");
+            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
         }
 
         IntLiteral(string) => buf.push_str(string),

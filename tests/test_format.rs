@@ -213,6 +213,17 @@ mod test_format {
     }
 
     #[test]
+    fn record_field_destructuring() {
+        assert_formats_same(indoc!(
+            r#"
+            { x: 5 } = { x: 5 }
+
+            42
+            "#
+        ));
+    }
+
+    #[test]
     fn def_closure() {
         assert_formats_same(indoc!(
             r#"
