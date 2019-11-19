@@ -529,13 +529,7 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
 }
 
 /// A single char.
-#[cfg(not(debug_assertions))]
 pub fn char<'a>(expected: char) -> impl Parser<'a, ()> {
-    char_impl(expected)
-}
-
-#[inline(always)]
-pub fn char_impl<'a>(expected: char) -> impl Parser<'a, ()> {
     move |_arena, state: State<'a>| match state.input.chars().next() {
         Some(actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
         Some(other_ch) => Err(unexpected(other_ch, 0, state, Attempting::Keyword)),
@@ -544,13 +538,7 @@ pub fn char_impl<'a>(expected: char) -> impl Parser<'a, ()> {
 }
 
 /// A hardcoded keyword string with no newlines in it.
-#[cfg(not(debug_assertions))]
 pub fn string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
-    string_impl(keyword)
-}
-
-#[inline(always)]
-pub fn string_impl<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
     // We can't have newlines because we don't attempt to advance the row
     // in the state, only the column.
     debug_assert!(!keyword.contains('\n'));
@@ -1443,16 +1431,6 @@ where
     P: 'a,
 {
     BoxedParser::new(zero_or_more_impl(parser))
-}
-
-#[cfg(debug_assertions)]
-pub fn char<'a>(expected: char) -> BoxedParser<'a, ()> {
-    BoxedParser::new(char_impl(expected))
-}
-
-#[cfg(debug_assertions)]
-pub fn string<'a>(keyword: &'static str) -> BoxedParser<'a, ()> {
-    BoxedParser::new(string_impl(keyword))
 }
 
 #[cfg(debug_assertions)]
