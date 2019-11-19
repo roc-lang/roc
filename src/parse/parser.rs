@@ -287,15 +287,6 @@ where
     }
 }
 
-#[cfg(not(debug_assertions))]
-pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(Before) -> After,
-{
-    map_impl(parser, transform)
-}
-
 #[inline(always)]
 fn map_impl<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where
@@ -307,14 +298,6 @@ where
             .parse(arena, state)
             .map(|(output, next_state)| (transform(output), next_state))
     }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
-where
-    P: Parser<'a, Val>,
-{
-    attempt_impl(attempting, parser)
 }
 
 #[inline(always)]
@@ -347,14 +330,6 @@ where
     }
 }
 
-#[cfg(not(debug_assertions))]
-pub fn loc<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
-where
-    P: Parser<'a, Val>,
-{
-    loc_impl(parser)
-}
-
 #[inline(always)]
 pub fn loc_impl<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
 where
@@ -382,14 +357,6 @@ where
     }
 }
 
-#[cfg(not(debug_assertions))]
-pub fn zero_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-{
-    zero_or_more_impl(parser)
-}
-
 #[inline(always)]
 pub fn zero_or_more_impl<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
 where
@@ -414,14 +381,6 @@ where
         }
         Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
     }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn one_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-{
-    one_or_more_impl(parser)
 }
 
 #[inline(always)]
@@ -642,15 +601,6 @@ where
     }
 }
 
-#[cfg(not(debug_assertions))]
-pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    and_impl(p1, p2)
-}
-
 #[inline(always)]
 fn and_impl<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
 where
@@ -682,15 +632,6 @@ where
             )),
         }
     }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn either<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, Either<A, B>>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    either_impl(p1, p2)
 }
 
 #[inline(always)]
@@ -1313,11 +1254,15 @@ where
     )
 }
 
-// DEBUG COMBINATORS
+// BOXED COMBINATORS
 //
 // These use dyn for runtime dynamic dispatch. It prevents combinatoric
 // explosions in types (and thus monomorphization, and thus build time),
-// but has runtime overhead, so we only use these in debug builds.
+// but has runtime overhead, so in some cases we only use these in debug builds.
+//
+// TODO: try rewriting the combinators (e.g. `map`, `loc`) as macros. In theory,
+// this should prevent the combinatoric explosion that blows up build time,
+// but without the need for BoxedParser and the corresponding allocations.
 
 pub struct BoxedParser<'a, Output> {
     parser: Box<dyn Parser<'a, Output> + 'a>,
@@ -1340,7 +1285,6 @@ impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
     }
 }
 
-#[cfg(debug_assertions)]
 pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> BoxedParser<'a, After>
 where
     P: Parser<'a, Before>,
@@ -1353,7 +1297,6 @@ where
     BoxedParser::new(map_impl(parser, transform))
 }
 
-#[cfg(debug_assertions)]
 pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> BoxedParser<'a, (A, B)>
 where
     P1: Parser<'a, A>,
@@ -1364,15 +1307,6 @@ where
     B: 'a,
 {
     BoxedParser::new(and_impl(p1, p2))
-}
-
-#[cfg(not(debug_assertions))]
-pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(&'a Bump, Before) -> After,
-{
-    map_with_arena_impl(parser, transform)
 }
 
 #[inline(always)]
@@ -1388,7 +1322,6 @@ where
     }
 }
 
-#[cfg(debug_assertions)]
 pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> BoxedParser<'a, After>
 where
     P: Parser<'a, Before>,
@@ -1401,7 +1334,6 @@ where
     BoxedParser::new(map_with_arena_impl(parser, transform))
 }
 
-#[cfg(debug_assertions)]
 pub fn loc<'a, P, Val>(parser: P) -> BoxedParser<'a, Located<Val>>
 where
     P: Parser<'a, Val>,
@@ -1411,7 +1343,6 @@ where
     BoxedParser::new(loc_impl(parser))
 }
 
-#[cfg(debug_assertions)]
 pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> BoxedParser<'a, Val>
 where
     P: Parser<'a, Val>,
@@ -1421,7 +1352,6 @@ where
     BoxedParser::new(attempt_impl(attempting, parser))
 }
 
-#[cfg(debug_assertions)]
 pub fn zero_or_more<'a, P, A>(parser: P) -> BoxedParser<'a, Vec<'a, A>>
 where
     P: Parser<'a, A>,
@@ -1430,7 +1360,6 @@ where
     BoxedParser::new(zero_or_more_impl(parser))
 }
 
-#[cfg(debug_assertions)]
 pub fn either<'a, P1, P2, A, B>(p1: P1, p2: P2) -> BoxedParser<'a, Either<A, B>>
 where
     P1: Parser<'a, A>,
@@ -1443,7 +1372,6 @@ where
     BoxedParser::new(either_impl(p1, p2))
 }
 
-#[cfg(debug_assertions)]
 pub fn one_or_more<'a, P, A>(parser: P) -> BoxedParser<'a, Vec<'a, A>>
 where
     P: Parser<'a, A>,
