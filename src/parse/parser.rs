@@ -1319,12 +1319,10 @@ where
 // explosions in types (and thus monomorphization, and thus build time),
 // but has runtime overhead, so we only use these in debug builds.
 
-#[cfg(debug_assertions)]
 pub struct BoxedParser<'a, Output> {
     parser: Box<dyn Parser<'a, Output> + 'a>,
 }
 
-#[cfg(debug_assertions)]
 impl<'a, Output> BoxedParser<'a, Output> {
     fn new<P>(parser: P) -> Self
     where
@@ -1336,7 +1334,6 @@ impl<'a, Output> BoxedParser<'a, Output> {
     }
 }
 
-#[cfg(debug_assertions)]
 impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
     fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Output> {
         self.parser.parse(arena, state)
