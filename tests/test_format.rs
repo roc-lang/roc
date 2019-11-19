@@ -301,6 +301,70 @@ mod test_format {
         ));
     }
 
+    // CASE
+
+    #[test]
+    fn integer_case() {
+        assert_formats_same(indoc!(
+            r#"
+            case b when
+                1 -> 1
+                _ -> 2
+
+        "#
+        ));
+    }
+
+    #[test]
+    fn case_with_comments() {
+        assert_formats_same(indoc!(
+            r#"
+            case b when
+                # look at cases
+                1 -> 
+                    # case 1
+                    1
+
+                # important
+                # fall through
+                _ -> 
+                    # case 2 
+                    # more comment
+                    2
+
+        "#
+        ));
+    }
+
+    #[test]
+    fn case_with_moving_comments() {
+        assert_formats_to(
+            indoc!(
+                r#"
+            case b when
+                1 -> 
+                    1 # case 1
+
+                # fall through
+                _ -> 
+                    2
+                "#
+            ),
+            indoc!(
+                r#"
+            case b when
+                1 -> 
+                    1
+
+                # case 1
+                # fall through
+                _ -> 
+                    2
+                "#
+            ),
+        );
+    }
+
     // NEWLINES
 
     #[test]

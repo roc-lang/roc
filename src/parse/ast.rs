@@ -671,6 +671,17 @@ pub fn format<'a>(
             buf.push_str(" else ");
             buf.push_str(&format(arena, &loc_else.value, indent, false));
         }
+        Case(loc_condition, branches) => { 
+            buf.push_str("case ");
+            buf.push_str(&format(arena, &loc_condition.value, indent, false));
+            buf.push_str(" when");
+
+            for (pattern, expr) in branches { 
+                buf.push_str(&format_pattern(arena, &pattern.value, indent + 4, false));
+                buf.push_str(" -> ");
+                buf.push_str(&format(arena, &expr.value, indent + 8, false));
+            };
+        }
         other => panic!("TODO implement Display for AST variant {:?}", other),
     }
 
@@ -712,6 +723,8 @@ fn format_pattern<'a>(
     use self::Pattern::*;
 
     let mut buf = String::new_in(arena);
+
+    dbg!(pattern);
 
     match pattern {
         Identifier(string) => buf.push_str(string),
@@ -806,7 +819,7 @@ fn format_pattern<'a>(
     buf
 }
 
-fn format_spaces<'a, I>(arena: &'a Bump, spaces: I, _indent: u16) -> String<'a>
+fn format_spaces<'a, I>(arena: &'a Bump, spaces: I, indent: u16) -> String<'a>
 where
     I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
@@ -814,29 +827,45 @@ where
 
     let mut buf = String::new_in(arena);
     let mut consecutive_newlines = 0;
+    let mut just_pushed_comment = false;
 
-    for space in spaces {
+    let mut it = spaces.peekable();
+
+    while let Some(space) = it.next() { 
+    // for space in spaces {
         match space {
             Newline => {
                 // Only ever print two newlines back to back.
                 // (Two newlines renders as one blank line.)
-                if consecutive_newlines < 2 {
+                if consecutive_newlines < 2 && !just_pushed_comment {
                     buf.push('\n');
 
                     // Don't bother incrementing it if we're already over the limit.
                     // There's no upside, and it might eventually overflow,
                     consecutive_newlines += 1;
                 }
+                just_pushed_comment = false;
             }
             LineComment(comment) => {
+                if buf.ends_with("\n") { } else { buf.push('\n'); }
+                for _ in 0..indent { 
+                    buf.push(' ');
+                }
+
                 buf.push('#');
                 buf.push_str(comment);
                 buf.push('\n');
 
                 // Reset to 1 because we just printed a \n
                 consecutive_newlines = 1;
+                just_pushed_comment = true;
             }
         }
+    }
+
+    // in both cases, we just pushed a \n, so need to indent
+    for _ in 0..indent { 
+        buf.push(' ');
     }
 
     buf
