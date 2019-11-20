@@ -330,4 +330,34 @@ mod test_format {
             ),
         );
     }
+
+    #[test]
+    fn def_returning_closure() {
+        assert_formats_to(
+            indoc!(
+                r#"
+                    f = \x -> x
+                    g = \x -> x
+
+                    \x ->
+                        a = f x
+                        b = f x
+
+                        x
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \x -> x
+                    g = \x -> x
+
+                    \x ->
+                        a = f x
+                        b = f x
+
+                        x
+                "#
+            ),
+        );
+    }
 }
