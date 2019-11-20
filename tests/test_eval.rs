@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
+#[macro_use]
+extern crate indoc;
 
 extern crate bumpalo;
 extern crate inkwell;
@@ -45,8 +45,14 @@ mod test_gen {
 
             builder.position_at_end(&basic_block);
 
-            let env = Env { procedures, subs };
-            let ret = compile_standalone_expr(&env, &context, &builder, module, expr);
+            let env = Env {
+                procedures,
+                subs,
+                builder: &builder,
+                context: &context,
+                module: &module,
+            };
+            let ret = compile_standalone_expr(&env, &function, &expr);
 
             builder.build_return(Some(&ret));
 
@@ -71,38 +77,38 @@ mod test_gen {
         assert_evals_to!("123", 123, i64);
     }
 
-    // #[test]
-    // fn basic_float() {
-    //     assert_evals_to!("1234.0", 1234.0, f64);
-    // }
+    #[test]
+    fn basic_float() {
+        assert_evals_to!("1234.0", 1234.0, f64);
+    }
 
-    // #[test]
-    // fn gen_case_take_first_branch() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //         case 1 when
-    //             1 -> 12
-    //             _ -> 34
-    //         "#
-    //         ),
-    //         12,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_case_take_first_branch() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            case 1 when
+                1 -> 12
+                _ -> 34
+            "#
+            ),
+            12,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn gen_case_take_second_branch() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //         case 1 when
-    //             1 -> 63
-    //             _ -> 48
-    //         "#
-    //         ),
-    //         48,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_case_take_second_branch() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            case 2 when
+                1 -> 63
+                _ -> 48
+            "#
+            ),
+            48,
+            i64
+        );
+    }
 }
