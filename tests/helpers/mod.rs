@@ -12,40 +12,10 @@ use roc::ident::Ident;
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
-use roc::parse::parser::{Fail, Parser, State};
+use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
 use roc::subs::{Subs, Variable};
 use roc::types::{Expected, Type};
-
-// TODO Figure out some way to import this macro from roc::parse::parser - it has been
-// surprisingly difficult to convince an integration test to do this.
-//
-// See https://users.rust-lang.org/t/sharing-code-and-macros-in-tests-directory/3098/4
-#[macro_export]
-macro_rules! loc {
-    ($parser:expr) => {
-        move |arena, state: State<'a>| {
-            let start_col = state.column;
-            let start_line = state.line;
-
-            match $parser.parse(arena, state) {
-                Ok((value, state)) => {
-                    let end_col = state.column;
-                    let end_line = state.line;
-                    let region = Region {
-                        start_col,
-                        start_line,
-                        end_col,
-                        end_line,
-                    };
-
-                    Ok((Located { region, value }, state))
-                }
-                Err((fail, state)) => Err((fail, state)),
-            }
-        }
-    };
-}
 
 #[allow(dead_code)]
 pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
@@ -55,7 +25,7 @@ pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, 
 #[allow(dead_code)]
 pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast::Expr<'a>>, Fail> {
     let state = State::new(&input, Attempting::Module);
-    let parser = space0_before(loc!(parse::expr(0)), 0);
+    let parser = space0_before(loc(parse::expr(0)), 0);
     let answer = parser.parse(&arena, state);
 
     answer
