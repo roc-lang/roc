@@ -1,11 +1,14 @@
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use fmt;
+use fmt::{self, is_multiline_expr};
 use operator::CalledVia;
 use operator::{BinOp, UnaryOp};
 use parse::ident::Ident;
 use region::{Loc, Region};
+
+/// The number of spaces to indent.
+const INDENT: u16 = 4;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
@@ -641,7 +644,26 @@ pub fn format<'a>(
                 buf.push(' ');
             }
 
-            buf.push_str("-> ");
+            let is_multiline = is_multiline_expr(&loc_ret.value);
+
+            // If the body is multiline, go down a line and indent.
+            let indent = if is_multiline {
+                indent + INDENT
+            } else {
+                indent
+            };
+
+            buf.push_str("->");
+
+            let newline_is_next = match &loc_ret.value {
+                SpaceBefore(_, _) => true,
+                _ => false,
+            };
+
+            if !newline_is_next {
+                // Push a space after the "->" preceding this.
+                buf.push(' ');
+            }
 
             buf.push_str(&format(arena, &loc_ret.value, indent, false));
         }
@@ -806,7 +828,7 @@ fn format_pattern<'a>(
     buf
 }
 
-fn format_spaces<'a, I>(arena: &'a Bump, spaces: I, _indent: u16) -> String<'a>
+fn format_spaces<'a, I>(arena: &'a Bump, spaces: I, indent: u16) -> String<'a>
 where
     I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
@@ -831,7 +853,8 @@ where
             LineComment(comment) => {
                 buf.push('#');
                 buf.push_str(comment);
-                buf.push('\n');
+
+                newline(&mut buf, indent);
 
                 // Reset to 1 because we just printed a \n
                 consecutive_newlines = 1;
@@ -843,7 +866,7 @@ where
 }
 
 /// Like format_spaces, but remove newlines and keep only comments.
-fn format_comments_only<'a, I>(arena: &'a Bump, spaces: I, _indent: u16) -> String<'a>
+fn format_comments_only<'a, I>(arena: &'a Bump, spaces: I, indent: u16) -> String<'a>
 where
     I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
@@ -857,7 +880,8 @@ where
             LineComment(comment) => {
                 buf.push('#');
                 buf.push_str(comment);
-                buf.push('\n');
+
+                newline(&mut buf, indent);
             }
         }
     }
@@ -879,11 +903,7 @@ pub fn format_field<'a>(
     match assigned_field {
         LabeledValue(name, spaces, value) => {
             if is_multiline {
-                buf.push('\n');
-
-                for _ in 0..indent {
-                    buf.push(' ');
-                }
+                newline(&mut buf, indent);
             }
 
             buf.push_str(name.value);
@@ -898,11 +918,7 @@ pub fn format_field<'a>(
         }
         LabelOnly(name, spaces) => {
             if is_multiline {
-                buf.push('\n');
-
-                for _ in 0..indent {
-                    buf.push(' ');
-                }
+                newline(&mut buf, indent);
             }
 
             buf.push_str(name.value);
@@ -936,4 +952,31 @@ pub fn format_field<'a>(
     }
 
     buf
+}
+
+fn newline<'a>(buf: &mut String<'a>, indent: u16) {
+    trim_trailing_spaces(buf);
+
+    buf.push('\n');
+
+    for _ in 0..indent {
+        buf.push(' ');
+    }
+}
+
+fn trim_trailing_spaces<'a>(buf: &mut String<'a>) {
+    let mut iter = buf.chars().rev();
+    let mut spaces = 0;
+
+    while let Some(ch) = iter.next() {
+        if ch == ' ' {
+            spaces += 1;
+        } else {
+            break;
+        }
+    }
+
+    if spaces > 0 {
+        buf.truncate(buf.len() - spaces);
+    }
 }
