@@ -28,9 +28,9 @@ use parse::collection::collection;
 use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    allocated, between, char, either, not, not_followed_by, one_of10, one_of17, one_of2, one_of3,
-    one_of5, one_of6, optional, skip_first, skip_second, string, then, unexpected, unexpected_eof,
-    Either, Fail, FailReason, ParseResult, Parser, State,
+    allocated, between, char, not, not_followed_by, one_of10, one_of17, one_of2, one_of3, one_of5,
+    one_of6, optional, skip_first, skip_second, string, then, unexpected, unexpected_eof, Either,
+    Fail, FailReason, ParseResult, Parser, State,
 };
 use parse::record::record;
 use region::{Located, Region};
@@ -241,7 +241,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                 ),
                 char(')'),
             ),
-            optional(either(
+            optional(either!(
                 // There may optionally be function args after the ')'
                 // e.g. ((foo bar) baz)
                 loc_function_args(min_indent),
@@ -254,10 +254,10 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                 // but we only want to look for that if there weren't any args,
                 // as if there were any args they'd have consumed it anyway
                 // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
-                either(
+                either!(
                     one_or_more!(skip_first(char('.'), unqualified_ident())),
-                    and!(space0(min_indent), equals_with_indent()),
-                ),
+                    and!(space0(min_indent), equals_with_indent())
+                )
             ))
         )),
         move |arena, state, loc_expr_with_extras| {
@@ -477,7 +477,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
             and!(
                 // A pattern followed by '=' or ':'
                 space0_after(loc_closure_param(min_indent), min_indent),
-                either(
+                either!(
                     // Constant
                     skip_first(
                         equals_for_def(),
@@ -494,7 +494,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                         // Spaces after the ':' (at a normal indentation level) and then the type.
                         // The type itself must be indented more than the pattern and ':'
                         space0_before(type_annotation::located(indented_more), indented_more),
-                    ),
+                    )
                 )
             ),
             |arena: &'a Bump, (loc_pattern, expr_or_ann)| match expr_or_ann {
@@ -523,7 +523,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                     space0_after(type_annotation::located(min_indent), min_indent),
                     char(':'),
                 ),
-                either(
+                either!(
                     // Custom type
                     skip_first(
                         // The `=` in `:=` (at this point we already consumed the `:`)
@@ -534,7 +534,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                         )),
                     ),
                     // Alias
-                    space0_before(type_annotation::located(min_indent), min_indent),
+                    space0_before(type_annotation::located(min_indent), min_indent)
                 )
             ),
             |(loc_type_name, rest)| match rest {
@@ -1010,13 +1010,13 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     then(
         and!(
             loc!(ident()),
-            optional(either(
+            optional(either!(
                 // There may optionally be function args after this ident
                 loc_function_args(min_indent),
                 // If there aren't any args, there may be a '=' or ':' after it.
                 // (It's a syntax error to write e.g. `foo bar =` - so if there
                 // were any args, there is definitely no need to parse '=' or ':'!)
-                and!(space0(min_indent), either(equals_with_indent(), char(':'))),
+                and!(space0(min_indent), either!(equals_with_indent(), char(':')))
             ))
         ),
         move |arena, state, (loc_ident, opt_extras)| {

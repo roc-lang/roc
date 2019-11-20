@@ -479,31 +479,6 @@ where
     }
 }
 
-#[inline(always)]
-pub fn either_impl<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, Either<A, B>>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            Ok((output, state)) => Ok((Either::First(output), state)),
-            Err((_, state)) => match p2.parse(arena, state) {
-                Ok((output, state)) => Ok((Either::Second(output), state)),
-                Err((fail, state)) => Err((
-                    Fail {
-                        attempting: original_attempting,
-                        ..fail
-                    },
-                    state,
-                )),
-            },
-        }
-    }
-}
-
 /// If the first one parses, ignore its output and move on to parse with the second one.
 pub fn skip_first<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, B>
 where
@@ -1099,48 +1074,10 @@ where
     )
 }
 
-// BOXED COMBINATORS
+// MACRO COMBINATORS
 //
-// These use dyn for runtime dynamic dispatch. It prevents combinatoric
-// explosions in types (and thus monomorphization, and thus build time),
-// but has runtime overhead, so in some cases we only use these in debug builds.
-//
-// TODO: try rewriting the combinators (e.g. `map`, `loc`) as macros. In theory,
-// this should prevent the combinatoric explosion that blows up build time,
-// but without the need for BoxedParser and the corresponding allocations.
-
-pub struct BoxedParser<'a, Output> {
-    parser: Box<dyn Parser<'a, Output> + 'a>,
-}
-
-impl<'a, Output> BoxedParser<'a, Output> {
-    fn new<P>(parser: P) -> Self
-    where
-        P: Parser<'a, Output> + 'a,
-    {
-        BoxedParser {
-            parser: Box::new(parser),
-        }
-    }
-}
-
-impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
-    fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Output> {
-        self.parser.parse(arena, state)
-    }
-}
-
-pub fn either<'a, P1, P2, A, B>(p1: P1, p2: P2) -> BoxedParser<'a, Either<A, B>>
-where
-    P1: Parser<'a, A>,
-    P1: 'a,
-    P2: Parser<'a, B>,
-    P2: 'a,
-    A: 'a,
-    B: 'a,
-{
-    BoxedParser::new(either_impl(p1, p2))
-}
+// Using some combinators together results in combinatorial type explosion
+// which makes things take forever to compile. Using macros instead avoids this!
 
 #[macro_export]
 macro_rules! loc {
@@ -1286,7 +1223,7 @@ macro_rules! one_or_more {
 #[macro_export]
 macro_rules! attempt {
     ($attempting:expr, $parser:expr) => {
-        move |arena, state: State<'a>| {
+        move |arena, state: $crate::parse::parser::State<'a>| {
             use crate::parse::parser::State;
 
             let original_attempting = state.attempting;
@@ -1310,6 +1247,31 @@ macro_rules! attempt {
                         },
                     )
                 })
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! either {
+    ($p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::parse::parser::State<'a>| {
+            use $crate::parse::parser::Fail;
+
+            let original_attempting = state.attempting;
+
+            match $p1.parse(arena, state) {
+                Ok((output, state)) => Ok((Either::First(output), state)),
+                Err((_, state)) => match $p2.parse(arena, state) {
+                    Ok((output, state)) => Ok((Either::Second(output), state)),
+                    Err((fail, state)) => Err((
+                        Fail {
+                            attempting: original_attempting,
+                            ..fail
+                        },
+                        state,
+                    )),
+                },
+            }
         }
     };
 }
