@@ -23,8 +23,10 @@ jobs:
       - uses: actions-rs/cargo@v1
         name: cargo test
         with:
-          command: test --release
+          command: test
+          args: --release
       - uses: actions-rs/cargo@v1
         name: cargo build
         with:
-          command: build --release
+          command: build
+          args: --release

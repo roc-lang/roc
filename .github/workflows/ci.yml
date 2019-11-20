@@ -22,7 +22,8 @@ jobs:
       - uses: actions-rs/cargo@v1
         name: cargo test
         with:
-          command: test --release
+          command: test
+          args: --release
 
   fmt:
     name: Rustfmt
