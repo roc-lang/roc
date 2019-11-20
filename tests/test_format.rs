@@ -412,9 +412,8 @@ mod test_format {
 
     #[test]
     fn def_returning_closure() {
-        assert_formats_to(
-            indoc!(
-                r#"
+        assert_formats_same(indoc!(
+            r#"
                     f = \x -> x
                     g = \x -> x
 
@@ -424,19 +423,6 @@ mod test_format {
 
                         x
                 "#
-            ),
-            indoc!(
-                r#"
-                    f = \x -> x
-                    g = \x -> x
-
-                    \x ->
-                        a = f x
-                        b = f x
-
-                        x
-                "#
-            ),
-        );
+        ));
     }
 }
