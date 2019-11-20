@@ -35,6 +35,7 @@ pub mod pattern;
 pub mod problem;
 pub mod procedure;
 pub mod scope;
+pub mod sharing;
 pub mod string;
 pub mod symbol;
 
@@ -738,7 +739,8 @@ fn canonicalize_expr(
         | ast::Expr::MalformedClosure
         | ast::Expr::PrecedenceConflict(_, _, _) => {
             panic!(
-                "TODO restore the rest of canonicalize()'s branches {:?}",
+                "TODO restore the rest of canonicalize()'s branches {:?} {:?}",
+                expr,
                 local_successors(&References::new(), &MutMap::default())
             );
         }
