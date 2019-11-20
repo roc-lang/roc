@@ -1,12 +1,9 @@
-// Both of these limits are needed only for parser, and only for release builds.
-// The parser functions that use #[cfg(not(debug_assertions))] are the
-// ones that need this. They make builds take a lot longer, but they are more
-// efficient than the alternative implementations we use in development.
+// TODO reduce this limit by replacing more parser combinator functions with
+// macros. It's the way these functions (but not the macros) interact that
 //
 // See https://bodil.lol/parser-combinators for more information; the parser
-// is based on her design.
-#![type_length_limit = "4343503439"]
-#![recursion_limit = "128"]
+// is based on her design./ causes the need for higher limits.
+#![type_length_limit = "3735510"]
 
 pub mod can;
 pub mod collections;
