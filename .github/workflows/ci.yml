@@ -4,7 +4,7 @@ name: CI
 
 jobs:
   test:
-    name: Test Suite
+    name: cargo test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
@@ -22,7 +22,7 @@ jobs:
           args: --release
 
   fmt:
-    name: Rustfmt
+    name: rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
