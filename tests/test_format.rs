@@ -308,9 +308,11 @@ mod test_format {
         assert_formats_same(indoc!(
             r#"
             case b when
-                1 -> 1
-                _ -> 2
+                1 ->
+                    1
 
+                _ ->
+                    2
         "#
         ));
     }
@@ -321,14 +323,14 @@ mod test_format {
             r#"
             case b when
                 # look at cases
-                1 -> 
+                1 ->
                     # case 1
                     1
 
                 # important
                 # fall through
-                _ -> 
-                    # case 2 
+                _ ->
+                    # case 2
                     # more comment
                     2
 
@@ -342,23 +344,23 @@ mod test_format {
             indoc!(
                 r#"
             case b when
-                1 -> 
+                1 ->
                     1 # case 1
 
                 # fall through
-                _ -> 
+                _ ->
                     2
                 "#
             ),
             indoc!(
                 r#"
             case b when
-                1 -> 
+                1 ->
                     1
 
                 # case 1
                 # fall through
-                _ -> 
+                _ ->
                     2
                 "#
             ),
