@@ -5,7 +5,7 @@ use parse::blankspace::{space0, space0_before};
 use parse::collection::collection;
 use parse::ident::unqualified_ident;
 use parse::parser::{and, char, map_with_arena, optional, skip_first, Parser, State};
-use region::{Located, Region};
+use region::Located;
 
 /// Parse a record - generally one of these two:
 ///

@@ -13,7 +13,6 @@ mod test_format {
     use roc::parse::ast::{format, Attempting, Expr};
     use roc::parse::blankspace::space0_before;
     use roc::parse::parser::{Fail, Parser, State};
-    use roc::region::{Located, Region};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
         let state = State::new(&input, Attempting::Module);

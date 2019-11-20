@@ -1348,6 +1348,8 @@ where
 macro_rules! loc {
     ($parser:expr) => {
         move |arena, state: State<'a>| {
+            use $crate::region::{Located, Region};
+
             let start_col = state.column;
             let start_line = state.line;
 

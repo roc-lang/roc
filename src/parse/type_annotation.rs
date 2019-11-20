@@ -9,7 +9,7 @@ use parse::parser::{
     unexpected_eof, zero_or_more, ParseResult, Parser, State,
 };
 use parse::record::record;
-use region::{Located, Region};
+use region::Located;
 
 pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     one_of5(
