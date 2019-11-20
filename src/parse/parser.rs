@@ -1,7 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::Attempting;
-use region::{Located, Region};
+use region::Region;
 use std::{char, u16};
 
 /// A position in a source file.
@@ -327,33 +327,6 @@ where
                     },
                 )
             })
-    }
-}
-
-#[inline(always)]
-pub fn loc_impl<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
-where
-    P: Parser<'a, Val>,
-{
-    move |arena, state: State<'a>| {
-        let start_col = state.column;
-        let start_line = state.line;
-
-        match parser.parse(arena, state) {
-            Ok((value, state)) => {
-                let end_col = state.column;
-                let end_line = state.line;
-                let region = Region {
-                    start_col,
-                    start_line,
-                    end_col,
-                    end_line,
-                };
-
-                Ok((Located { region, value }, state))
-            }
-            Err((fail, state)) => Err((fail, state)),
-        }
     }
 }
 
@@ -1334,15 +1307,6 @@ where
     BoxedParser::new(map_with_arena_impl(parser, transform))
 }
 
-pub fn loc<'a, P, Val>(parser: P) -> BoxedParser<'a, Located<Val>>
-where
-    P: Parser<'a, Val>,
-    P: 'a,
-    Val: 'a,
-{
-    BoxedParser::new(loc_impl(parser))
-}
-
 pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> BoxedParser<'a, Val>
 where
     P: Parser<'a, Val>,
@@ -1378,4 +1342,30 @@ where
     P: 'a,
 {
     BoxedParser::new(one_or_more_impl(parser))
+}
+
+#[macro_export]
+macro_rules! loc {
+    ($parser:expr) => {
+        move |arena, state: State<'a>| {
+            let start_col = state.column;
+            let start_line = state.line;
+
+            match $parser.parse(arena, state) {
+                Ok((value, state)) => {
+                    let end_col = state.column;
+                    let end_line = state.line;
+                    let region = Region {
+                        start_col,
+                        start_line,
+                        end_col,
+                        end_line,
+                    };
+
+                    Ok((Located { region, value }, state))
+                }
+                Err((fail, state)) => Err((fail, state)),
+            }
+        }
+    };
 }

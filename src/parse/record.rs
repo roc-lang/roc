@@ -4,8 +4,8 @@ use parse::ast::Spaceable;
 use parse::blankspace::{space0, space0_before};
 use parse::collection::collection;
 use parse::ident::unqualified_ident;
-use parse::parser::{and, char, loc, map_with_arena, optional, skip_first, Parser};
-use region::Located;
+use parse::parser::{and, char, map_with_arena, optional, skip_first, Parser, State};
+use region::{Located, Region};
 
 /// Parse a record - generally one of these two:
 ///
@@ -30,6 +30,15 @@ where
     )
 }
 
+/// For some reason, record() needs to use this instead of using the loc! macro directly.
+#[inline(always)]
+pub fn loc<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
+where
+    P: Parser<'a, Val>,
+{
+    loc!(parser)
+}
+
 fn record_field<'a, P, S>(val_parser: P, min_indent: u16) -> impl Parser<'a, AssignedField<'a, S>>
 where
     P: Parser<'a, Located<S>>,
@@ -42,7 +51,7 @@ where
     map_with_arena(
         and(
             // You must have a field name, e.g. "email"
-            loc(unqualified_ident()),
+            loc!(unqualified_ident()),
             and(
                 space0(min_indent),
                 // Having a value is optional; both `{ email }` and `{ email: blah }` work.
