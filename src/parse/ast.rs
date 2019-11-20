@@ -700,7 +700,7 @@ pub fn format<'a>(
 
             let mut it = branches.iter().peekable();
             while let Some((pattern, expr)) = it.next() {
-                add_spaces(&mut buf, INDENT);
+                add_spaces(&mut buf, indent + INDENT);
 
                 match pattern.value {
                     Pattern::SpaceBefore(nested, spaces) => {
@@ -719,7 +719,7 @@ pub fn format<'a>(
 
                 buf.push_str(" ->\n");
 
-                add_spaces(&mut buf, INDENT * 2);
+                add_spaces(&mut buf, indent + (INDENT * 2));
                 match expr.value {
                     Expr::SpaceBefore(nested, spaces) => {
                         buf.push_str(&format_comments_only(
