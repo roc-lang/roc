@@ -1,7 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::Attempting;
-use region::Region;
+use region::{Located, Region};
 use std::{char, u16};
 
 /// A position in a source file.
@@ -1358,4 +1358,27 @@ macro_rules! and {
             }
         }
     };
+}
+
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, B>,
+    P1: 'a,
+    P2: 'a,
+    A: 'a,
+    B: 'a,
+{
+    and!(p1, p2)
+}
+
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn loc<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
+where
+    P: Parser<'a, Val>,
+{
+    loc!(parser)
 }

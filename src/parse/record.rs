@@ -4,7 +4,7 @@ use parse::ast::Spaceable;
 use parse::blankspace::{space0, space0_before};
 use parse::collection::collection;
 use parse::ident::unqualified_ident;
-use parse::parser::{char, map_with_arena, optional, skip_first, Parser};
+use parse::parser::{and, char, loc, map_with_arena, optional, skip_first, Parser};
 use region::Located;
 
 /// Parse a record - generally one of these two:
@@ -28,29 +28,6 @@ where
         char('}'),
         min_indent,
     )
-}
-
-/// For some reason, record() needs to use this instead of using the loc! macro directly.
-#[inline(always)]
-pub fn loc<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
-where
-    P: Parser<'a, Val>,
-{
-    loc!(parser)
-}
-
-/// For some reason, record_field() needs to use this instead of using the and! macro directly.
-#[inline(always)]
-pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-    P1: 'a,
-    P2: 'a,
-    A: 'a,
-    B: 'a,
-{
-    and!(p1, p2)
 }
 
 fn record_field<'a, P, S>(val_parser: P, min_indent: u16) -> impl Parser<'a, AssignedField<'a, S>>
