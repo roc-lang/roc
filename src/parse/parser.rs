@@ -287,36 +287,6 @@ where
     }
 }
 
-#[inline(always)]
-pub fn attempt_impl<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
-where
-    P: Parser<'a, Val>,
-{
-    move |arena, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        parser
-            .parse(
-                arena,
-                State {
-                    attempting,
-                    ..state
-                },
-            )
-            .map(|(answer, state)| {
-                // If the parser suceeded, go back to what we were originally attempting.
-                // (If it failed, that's exactly where we care what we were attempting!)
-                (
-                    answer,
-                    State {
-                        attempting: original_attempting,
-                        ..state
-                    },
-                )
-            })
-    }
-}
-
 pub fn unexpected_eof(
     chars_consumed: usize,
     attempting: Attempting,
@@ -1160,15 +1130,6 @@ impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
     }
 }
 
-pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> BoxedParser<'a, Val>
-where
-    P: Parser<'a, Val>,
-    P: 'a,
-    Val: 'a,
-{
-    BoxedParser::new(attempt_impl(attempting, parser))
-}
-
 pub fn either<'a, P1, P2, A, B>(p1: P1, p2: P2) -> BoxedParser<'a, Either<A, B>>
 where
     P1: Parser<'a, A>,
@@ -1322,6 +1283,37 @@ macro_rules! one_or_more {
     };
 }
 
+#[macro_export]
+macro_rules! attempt {
+    ($attempting:expr, $parser:expr) => {
+        move |arena, state: State<'a>| {
+            use crate::parse::parser::State;
+
+            let original_attempting = state.attempting;
+
+            $parser
+                .parse(
+                    arena,
+                    State {
+                        attempting: $attempting,
+                        ..state
+                    },
+                )
+                .map(|(answer, state)| {
+                    // If the parser suceeded, go back to what we were originally attempting.
+                    // (If it failed, that's exactly where we care what we were attempting!)
+                    (
+                        answer,
+                        State {
+                            attempting: original_attempting,
+                            ..state
+                        },
+                    )
+                })
+        }
+    };
+}
+
 /// For some reason, some usages won't compile unless they use this instead of the macro version
 #[inline(always)]
 pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
@@ -1367,4 +1359,13 @@ where
     After: 'a,
 {
     map_with_arena!(parser, transform)
+}
+
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
+where
+    P: Parser<'a, Val>,
+{
+    attempt!(attempting, parser)
 }

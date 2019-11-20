@@ -28,9 +28,9 @@ use parse::collection::collection;
 use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    allocated, attempt, between, char, either, not, not_followed_by, one_of10, one_of17, one_of2,
-    one_of3, one_of5, one_of6, optional, skip_first, skip_second, string, then, unexpected,
-    unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
+    allocated, between, char, either, not, not_followed_by, one_of10, one_of17, one_of2, one_of3,
+    one_of5, one_of6, optional, skip_first, skip_second, string, then, unexpected, unexpected_eof,
+    Either, Fail, FailReason, ParseResult, Parser, State,
 };
 use parse::record::record;
 use region::{Located, Region};
@@ -570,7 +570,7 @@ fn parse_def_expr<'a>(
         let indented_more = original_indent + 1;
 
         then(
-            attempt(
+            attempt!(
                 Attempting::Def,
                 and!(
                     // Parse the body of the first def. It doesn't need any spaces
@@ -593,7 +593,7 @@ fn parse_def_expr<'a>(
                             original_indent,
                         )
                     )
-                ),
+                )
             ),
             move |arena, state, (loc_first_body, (mut defs, loc_ret))| {
                 if state.indent_col != original_indent {
@@ -672,7 +672,7 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             // It may turn out to be malformed, but it is definitely a closure.
             optional(and!(
                 // Parse the params
-                attempt(
+                attempt!(
                     Attempting::ClosureParams,
                     // Note: because this is parse1_after, you *must* have
                     // a space before the "->" in a closure declaration.
@@ -680,18 +680,18 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     // We could make this significantly more complicated in
                     // order to support e.g. (\x-> 5) with no space before
                     // the "->" but that does not seem worthwhile.
-                    one_or_more!(space1_after(loc_closure_param(min_indent), min_indent)),
+                    one_or_more!(space1_after(loc_closure_param(min_indent), min_indent))
                 ),
                 skip_first(
                     // Parse the -> which separates params from body
                     string("->"),
                     // Parse the body
-                    attempt(
+                    attempt!(
                         Attempting::ClosureBody,
                         space0_before(
                             loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                             min_indent,
-                        ),
+                        )
                     ),
                 )
             )),
@@ -787,7 +787,7 @@ pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     then(
         and!(
             case_with_indent(),
-            attempt(
+            attempt!(
                 Attempting::CaseCondition,
                 skip_second(
                     space1_around(
@@ -795,7 +795,7 @@ pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                         min_indent,
                     ),
                     string(keyword::WHEN),
-                ),
+                )
             )
         ),
         move |arena, state, (case_indent, loc_condition)| {
@@ -807,7 +807,7 @@ pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             let min_indent = case_indent;
 
             let (branches, state) =
-                attempt(Attempting::CaseBranch, case_branches(min_indent)).parse(arena, state)?;
+                attempt!(Attempting::CaseBranch, case_branches(min_indent)).parse(arena, state)?;
 
             Ok((Expr::Case(arena.alloc(loc_condition), branches), state))
         },
@@ -1161,7 +1161,7 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         min_indent,
     );
 
-    attempt(
+    parser::attempt(
         Attempting::List,
         map_with_arena!(elems, |arena, parsed_elems: Vec<'a, Located<Expr<'a>>>| {
             let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
@@ -1179,9 +1179,9 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     then(
         and!(
-            attempt(
+            attempt!(
                 Attempting::Record,
-                loc!(record(loc!(expr(min_indent)), min_indent)),
+                loc!(record(loc!(expr(min_indent)), min_indent))
             ),
             optional(and!(space0(min_indent), equals_with_indent()))
         ),
