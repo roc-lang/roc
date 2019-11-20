@@ -3,7 +3,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::CommentOrNewline::{self, *};
 use parse::ast::Spaceable;
-use parse::parser::{and, map_with_arena, unexpected, unexpected_eof, Parser, State};
+use parse::parser::{self, and, unexpected, unexpected_eof, Parser, State};
 use region::Located;
 
 /// Parses the given expression with 0 or more (spaces/comments/newlines) before and/or after it.
@@ -18,9 +18,15 @@ where
     P: Parser<'a, Located<S>>,
     P: 'a,
 {
-    map_with_arena(
+    parser::map_with_arena(
         and(space0(min_indent), and(parser, space0(min_indent))),
-        move |arena, (spaces_before, (loc_val, spaces_after))| {
+        move |arena: &'a Bump,
+              tuples: (
+            &'a [CommentOrNewline<'a>],
+            (Located<S>, &'a [CommentOrNewline<'a>]),
+        )| {
+            let (spaces_before, (loc_val, spaces_after)) = tuples;
+
             if spaces_before.is_empty() {
                 if spaces_after.is_empty() {
                     loc_val
@@ -58,7 +64,7 @@ where
     P: Parser<'a, Located<S>>,
     P: 'a,
 {
-    map_with_arena(
+    parser::map_with_arena(
         and(space1(min_indent), and(parser, space1(min_indent))),
         |arena, (spaces_before, (loc_expr, spaces_after))| {
             if spaces_before.is_empty() {
@@ -96,9 +102,9 @@ where
     P: Parser<'a, Located<S>>,
     P: 'a,
 {
-    map_with_arena(
+    parser::map_with_arena(
         and!(space0(min_indent), parser),
-        |arena, (space_list, loc_expr)| {
+        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Located<S>)| {
             if space_list.is_empty() {
                 loc_expr
             } else {
@@ -120,7 +126,7 @@ where
     P: Parser<'a, Located<S>>,
     P: 'a,
 {
-    map_with_arena(
+    parser::map_with_arena(
         and!(space1(min_indent), parser),
         |arena, (space_list, loc_expr)| {
             if space_list.is_empty() {
@@ -144,7 +150,7 @@ where
     P: Parser<'a, Located<S>>,
     P: 'a,
 {
-    map_with_arena(
+    parser::map_with_arena(
         and!(parser, space0(min_indent)),
         |arena, (loc_expr, space_list)| {
             if space_list.is_empty() {
@@ -168,7 +174,7 @@ where
     P: Parser<'a, Located<S>>,
     P: 'a,
 {
-    map_with_arena(
+    parser::map_with_arena(
         and!(parser, space1(min_indent)),
         |arena, (loc_expr, space_list)| {
             if space_list.is_empty() {

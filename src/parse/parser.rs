@@ -288,19 +288,6 @@ where
 }
 
 #[inline(always)]
-fn map_impl<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(Before) -> After,
-{
-    move |arena, state| {
-        parser
-            .parse(arena, state)
-            .map(|(output, next_state)| (transform(output), next_state))
-    }
-}
-
-#[inline(always)]
 pub fn attempt_impl<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
 where
     P: Parser<'a, Val>,
@@ -327,58 +314,6 @@ where
                     },
                 )
             })
-    }
-}
-
-#[inline(always)]
-pub fn zero_or_more_impl<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-{
-    move |arena, state| match parser.parse(arena, state) {
-        Ok((first_output, next_state)) => {
-            let mut state = next_state;
-            let mut buf = Vec::with_capacity_in(1, arena);
-
-            buf.push(first_output);
-
-            loop {
-                match parser.parse(arena, state) {
-                    Ok((next_output, next_state)) => {
-                        state = next_state;
-                        buf.push(next_output);
-                    }
-                    Err((_, old_state)) => return Ok((buf, old_state)),
-                }
-            }
-        }
-        Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
-    }
-}
-
-#[inline(always)]
-pub fn one_or_more_impl<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-{
-    move |arena, state| match parser.parse(arena, state) {
-        Ok((first_output, next_state)) => {
-            let mut state = next_state;
-            let mut buf = Vec::with_capacity_in(1, arena);
-
-            buf.push(first_output);
-
-            loop {
-                match parser.parse(arena, state) {
-                    Ok((next_output, next_state)) => {
-                        state = next_state;
-                        buf.push(next_output);
-                    }
-                    Err((_, old_state)) => return Ok((buf, old_state)),
-                }
-            }
-        }
-        Err((_, new_state)) => Err(unexpected_eof(0, new_state.attempting, new_state)),
     }
 }
 
@@ -1225,43 +1160,6 @@ impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
     }
 }
 
-pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> BoxedParser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(Before) -> After,
-    F: 'a,
-    P: 'a,
-    Before: 'a,
-    After: 'a,
-{
-    BoxedParser::new(map_impl(parser, transform))
-}
-
-#[inline(always)]
-fn map_with_arena_impl<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(&'a Bump, Before) -> After,
-{
-    move |arena, state| {
-        parser
-            .parse(arena, state)
-            .map(|(output, next_state)| (transform(arena, output), next_state))
-    }
-}
-
-pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> BoxedParser<'a, After>
-where
-    P: Parser<'a, Before>,
-    P: 'a,
-    F: Fn(&'a Bump, Before) -> After,
-    F: 'a,
-    Before: 'a,
-    After: 'a,
-{
-    BoxedParser::new(map_with_arena_impl(parser, transform))
-}
-
 pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> BoxedParser<'a, Val>
 where
     P: Parser<'a, Val>,
@@ -1269,14 +1167,6 @@ where
     Val: 'a,
 {
     BoxedParser::new(attempt_impl(attempting, parser))
-}
-
-pub fn zero_or_more<'a, P, A>(parser: P) -> BoxedParser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-    P: 'a,
-{
-    BoxedParser::new(zero_or_more_impl(parser))
 }
 
 pub fn either<'a, P1, P2, A, B>(p1: P1, p2: P2) -> BoxedParser<'a, Either<A, B>>
@@ -1289,14 +1179,6 @@ where
     B: 'a,
 {
     BoxedParser::new(either_impl(p1, p2))
-}
-
-pub fn one_or_more<'a, P, A>(parser: P) -> BoxedParser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-    P: 'a,
-{
-    BoxedParser::new(one_or_more_impl(parser))
 }
 
 #[macro_export]
@@ -1360,6 +1242,86 @@ macro_rules! and {
     };
 }
 
+#[macro_export]
+macro_rules! map {
+    ($parser:expr, $transform:expr) => {
+        move |arena, state| {
+            $parser
+                .parse(arena, state)
+                .map(|(output, next_state)| ($transform(output), next_state))
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! map_with_arena {
+    ($parser:expr, $transform:expr) => {
+        move |arena, state| {
+            $parser
+                .parse(arena, state)
+                .map(|(output, next_state)| ($transform(arena, output), next_state))
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! zero_or_more {
+    ($parser:expr) => {
+        move |arena, state| {
+            use bumpalo::collections::Vec;
+
+            match $parser.parse(arena, state) {
+                Ok((first_output, next_state)) => {
+                    let mut state = next_state;
+                    let mut buf = Vec::with_capacity_in(1, arena);
+
+                    buf.push(first_output);
+
+                    loop {
+                        match $parser.parse(arena, state) {
+                            Ok((next_output, next_state)) => {
+                                state = next_state;
+                                buf.push(next_output);
+                            }
+                            Err((_, old_state)) => return Ok((buf, old_state)),
+                        }
+                    }
+                }
+                Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! one_or_more {
+    ($parser:expr) => {
+        move |arena, state| {
+            use bumpalo::collections::Vec;
+
+            match $parser.parse(arena, state) {
+                Ok((first_output, next_state)) => {
+                    let mut state = next_state;
+                    let mut buf = Vec::with_capacity_in(1, arena);
+
+                    buf.push(first_output);
+
+                    loop {
+                        match $parser.parse(arena, state) {
+                            Ok((next_output, next_state)) => {
+                                state = next_state;
+                                buf.push(next_output);
+                            }
+                            Err((_, old_state)) => return Ok((buf, old_state)),
+                        }
+                    }
+                }
+                Err((_, new_state)) => Err(unexpected_eof(0, new_state.attempting, new_state)),
+            }
+        }
+    };
+}
+
 /// For some reason, some usages won't compile unless they use this instead of the macro version
 #[inline(always)]
 pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
@@ -1381,4 +1343,28 @@ where
     P: Parser<'a, Val>,
 {
     loc!(parser)
+}
+
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+where
+    P: Parser<'a, Before>,
+    F: Fn(Before) -> After,
+{
+    map!(parser, transform)
+}
+
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
+where
+    P: Parser<'a, Before>,
+    P: 'a,
+    F: Fn(&'a Bump, Before) -> After,
+    F: 'a,
+    Before: 'a,
+    After: 'a,
+{
+    map_with_arena!(parser, transform)
 }

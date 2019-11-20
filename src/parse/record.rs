@@ -1,10 +1,11 @@
 use bumpalo::collections::Vec;
+use bumpalo::Bump;
 use parse::ast::AssignedField;
 use parse::ast::Spaceable;
 use parse::blankspace::{space0, space0_before};
 use parse::collection::collection;
 use parse::ident::unqualified_ident;
-use parse::parser::{and, char, loc, map_with_arena, optional, skip_first, Parser};
+use parse::parser::{self, and, char, loc, optional, skip_first, Parser};
 use region::Located;
 
 /// Parse a record - generally one of these two:
@@ -39,7 +40,7 @@ where
 {
     use parse::ast::AssignedField::*;
 
-    map_with_arena(
+    parser::map_with_arena(
         and(
             // You must have a field name, e.g. "email"
             loc!(unqualified_ident()),
@@ -50,7 +51,7 @@ where
                 optional(skip_first(char(':'), space0_before(val_parser, min_indent))),
             ),
         ),
-        |arena, (loc_label, (spaces, opt_loc_val))| match opt_loc_val {
+        |arena: &'a Bump, (loc_label, (spaces, opt_loc_val))| match opt_loc_val {
             Some(loc_val) => LabeledValue(loc_label, spaces, arena.alloc(loc_val)),
             // If no value was provided, record it as a Var.
             // Canonicalize will know what to do with a Var later.
