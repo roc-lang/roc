@@ -836,14 +836,19 @@ where
 
     let mut buf = String::new_in(arena);
     let mut consecutive_newlines = 0;
+    let mut iter = spaces.peekable();
 
-    for space in spaces {
+    while let Some(space) = iter.next() {
         match space {
             Newline => {
                 // Only ever print two newlines back to back.
                 // (Two newlines renders as one blank line.)
                 if consecutive_newlines < 2 {
-                    buf.push('\n');
+                    if iter.peek() == Some(&&Newline) {
+                        buf.push('\n');
+                    } else {
+                        newline(&mut buf, indent);
+                    }
 
                     // Don't bother incrementing it if we're already over the limit.
                     // There's no upside, and it might eventually overflow,
@@ -955,28 +960,9 @@ pub fn format_field<'a>(
 }
 
 fn newline<'a>(buf: &mut String<'a>, indent: u16) {
-    trim_trailing_spaces(buf);
-
     buf.push('\n');
 
     for _ in 0..indent {
         buf.push(' ');
-    }
-}
-
-fn trim_trailing_spaces<'a>(buf: &mut String<'a>) {
-    let mut iter = buf.chars().rev();
-    let mut spaces = 0;
-
-    while let Some(ch) = iter.next() {
-        if ch == ' ' {
-            spaces += 1;
-        } else {
-            break;
-        }
-    }
-
-    if spaces > 0 {
-        buf.truncate(buf.len() - spaces);
     }
 }
