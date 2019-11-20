@@ -16,13 +16,14 @@ jobs:
           toolchain: stable
           override: true
       - uses: actions-rs/cargo@v1
-        name: update cargo (needed for Inkwell)
+        name: cargo update (needed for Inkwell)
         with:
           command: update
       - uses: actions-rs/cargo@v1
         name: cargo test
         with:
           command: test
+          args: --release
 
   fmt:
     name: Rustfmt
@@ -36,7 +37,7 @@ jobs:
           override: true
       - run: rustup component add rustfmt
       - uses: actions-rs/cargo@v1
-        name: update cargo (needed for Inkwell)
+        name: cargo update (needed for Inkwell)
         with:
           command: update
       - uses: actions-rs/cargo@v1

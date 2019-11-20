@@ -5,8 +5,8 @@ use collections::arena_join;
 use parse::ast::{Attempting, TypeAnnotation};
 use parse::blankspace::{space0_around, space1_before};
 use parse::parser::{
-    and, between, char, loc, map, map_with_arena, one_of5, optional, skip_first, string,
-    unexpected, unexpected_eof, zero_or_more, ParseResult, Parser, State,
+    between, char, one_of5, optional, skip_first, string, unexpected, unexpected_eof, ParseResult,
+    Parser, State,
 };
 use parse::record::record;
 use region::Located;
@@ -14,13 +14,13 @@ use region::Located;
 pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     one_of5(
         // The `*` type variable, e.g. in (List *) Wildcard,
-        map(loc(char('*')), |loc_val| {
+        map!(loc!(char('*')), |loc_val: Located<()>| {
             loc_val.map(|_| TypeAnnotation::Wildcard)
         }),
         loc_parenthetical_type(min_indent),
-        loc(record_type(min_indent)),
-        loc(applied_type(min_indent)),
-        loc(parse_type_variable),
+        loc!(record_type(min_indent)),
+        loc!(applied_type(min_indent)),
+        loc!(parse_type_variable),
     )
 }
 
@@ -40,8 +40,8 @@ fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAn
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     use parse::type_annotation::TypeAnnotation::*;
 
-    map_with_arena(
-        and(
+    map_with_arena!(
+        and!(
             record(
                 move |arena, state| located(min_indent).parse(arena, state),
                 min_indent,
@@ -50,27 +50,27 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
                 // This could be a record fragment, e.g. `{ name: String }...r`
                 string("..."),
                 move |arena, state| located(min_indent).parse(arena, state),
-            )),
+            ))
         ),
-        |arena, (rec, opt_bound_var)| match opt_bound_var {
+        |arena: &'a Bump, (rec, opt_bound_var)| match opt_bound_var {
             None => Record(rec),
             Some(loc_bound_var) => RecordFragment(rec, arena.alloc(loc_bound_var)),
-        },
+        }
     )
 }
 
 fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
-    map(
-        and(
+    map!(
+        and!(
             parse_concrete_type,
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
-            zero_or_more(space1_before(
+            zero_or_more!(space1_before(
                 move |arena, state| located(min_indent).parse(arena, state),
                 min_indent,
-            )),
+            ))
         ),
-        |(ctor, args)| {
+        |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Located<TypeAnnotation<'a>>>)| {
             match &ctor {
                 TypeAnnotation::Apply(ref module_name, ref name, _) => {
                     if args.is_empty() {
@@ -83,7 +83,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
                 TypeAnnotation::Malformed(_) => ctor,
                 _ => unreachable!(),
             }
-        },
+        }
     )
 }
 

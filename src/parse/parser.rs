@@ -287,169 +287,6 @@ where
     }
 }
 
-#[cfg(not(debug_assertions))]
-pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(Before) -> After,
-{
-    map_impl(parser, transform)
-}
-
-#[inline(always)]
-fn map_impl<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(Before) -> After,
-{
-    move |arena, state| {
-        parser
-            .parse(arena, state)
-            .map(|(output, next_state)| (transform(output), next_state))
-    }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
-where
-    P: Parser<'a, Val>,
-{
-    attempt_impl(attempting, parser)
-}
-
-#[inline(always)]
-pub fn attempt_impl<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
-where
-    P: Parser<'a, Val>,
-{
-    move |arena, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        parser
-            .parse(
-                arena,
-                State {
-                    attempting,
-                    ..state
-                },
-            )
-            .map(|(answer, state)| {
-                // If the parser suceeded, go back to what we were originally attempting.
-                // (If it failed, that's exactly where we care what we were attempting!)
-                (
-                    answer,
-                    State {
-                        attempting: original_attempting,
-                        ..state
-                    },
-                )
-            })
-    }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn loc<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
-where
-    P: Parser<'a, Val>,
-{
-    loc_impl(parser)
-}
-
-#[inline(always)]
-pub fn loc_impl<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
-where
-    P: Parser<'a, Val>,
-{
-    move |arena, state: State<'a>| {
-        let start_col = state.column;
-        let start_line = state.line;
-
-        match parser.parse(arena, state) {
-            Ok((value, state)) => {
-                let end_col = state.column;
-                let end_line = state.line;
-                let region = Region {
-                    start_col,
-                    start_line,
-                    end_col,
-                    end_line,
-                };
-
-                Ok((Located { region, value }, state))
-            }
-            Err((fail, state)) => Err((fail, state)),
-        }
-    }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn zero_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-{
-    zero_or_more_impl(parser)
-}
-
-#[inline(always)]
-pub fn zero_or_more_impl<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-{
-    move |arena, state| match parser.parse(arena, state) {
-        Ok((first_output, next_state)) => {
-            let mut state = next_state;
-            let mut buf = Vec::with_capacity_in(1, arena);
-
-            buf.push(first_output);
-
-            loop {
-                match parser.parse(arena, state) {
-                    Ok((next_output, next_state)) => {
-                        state = next_state;
-                        buf.push(next_output);
-                    }
-                    Err((_, old_state)) => return Ok((buf, old_state)),
-                }
-            }
-        }
-        Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
-    }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn one_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-{
-    one_or_more_impl(parser)
-}
-
-#[inline(always)]
-pub fn one_or_more_impl<'a, P, A>(parser: P) -> impl Parser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-{
-    move |arena, state| match parser.parse(arena, state) {
-        Ok((first_output, next_state)) => {
-            let mut state = next_state;
-            let mut buf = Vec::with_capacity_in(1, arena);
-
-            buf.push(first_output);
-
-            loop {
-                match parser.parse(arena, state) {
-                    Ok((next_output, next_state)) => {
-                        state = next_state;
-                        buf.push(next_output);
-                    }
-                    Err((_, old_state)) => return Ok((buf, old_state)),
-                }
-            }
-        }
-        Err((_, new_state)) => Err(unexpected_eof(0, new_state.attempting, new_state)),
-    }
-}
-
 pub fn unexpected_eof(
     chars_consumed: usize,
     attempting: Attempting,
@@ -529,13 +366,7 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
 }
 
 /// A single char.
-#[cfg(not(debug_assertions))]
 pub fn char<'a>(expected: char) -> impl Parser<'a, ()> {
-    char_impl(expected)
-}
-
-#[inline(always)]
-pub fn char_impl<'a>(expected: char) -> impl Parser<'a, ()> {
     move |_arena, state: State<'a>| match state.input.chars().next() {
         Some(actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
         Some(other_ch) => Err(unexpected(other_ch, 0, state, Attempting::Keyword)),
@@ -544,13 +375,7 @@ pub fn char_impl<'a>(expected: char) -> impl Parser<'a, ()> {
 }
 
 /// A hardcoded keyword string with no newlines in it.
-#[cfg(not(debug_assertions))]
 pub fn string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
-    string_impl(keyword)
-}
-
-#[inline(always)]
-pub fn string_impl<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
     // We can't have newlines because we don't attempt to advance the row
     // in the state, only the column.
     debug_assert!(!keyword.contains('\n'));
@@ -651,82 +476,6 @@ where
             },
             state,
         ))
-    }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    and_impl(p1, p2)
-}
-
-#[inline(always)]
-fn and_impl<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    move |arena: &'a Bump, state: State<'a>| {
-        // We have to clone this because if the first parser passes and then
-        // the second one fails, we need to revert back to the original state.
-        let original_state = state.clone();
-
-        match p1.parse(arena, state) {
-            Ok((out1, state)) => match p2.parse(arena, state) {
-                Ok((out2, state)) => Ok(((out1, out2), state)),
-                Err((fail, _)) => Err((
-                    Fail {
-                        attempting: original_state.attempting,
-                        ..fail
-                    },
-                    original_state,
-                )),
-            },
-            Err((fail, state)) => Err((
-                Fail {
-                    attempting: original_state.attempting,
-                    ..fail
-                },
-                state,
-            )),
-        }
-    }
-}
-
-#[cfg(not(debug_assertions))]
-pub fn either<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, Either<A, B>>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    either_impl(p1, p2)
-}
-
-#[inline(always)]
-pub fn either_impl<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, Either<A, B>>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            Ok((output, state)) => Ok((Either::First(output), state)),
-            Err((_, state)) => match p2.parse(arena, state) {
-                Ok((output, state)) => Ok((Either::Second(output), state)),
-                Err((fail, state)) => Err((
-                    Fail {
-                        attempting: original_attempting,
-                        ..fail
-                    },
-                    state,
-                )),
-            },
-        }
     }
 }
 
@@ -1325,154 +1074,260 @@ where
     )
 }
 
-// DEBUG COMBINATORS
+// MACRO COMBINATORS
 //
-// These use dyn for runtime dynamic dispatch. It prevents combinatoric
-// explosions in types (and thus monomorphization, and thus build time),
-// but has runtime overhead, so we only use these in debug builds.
+// Using some combinators together results in combinatorial type explosion
+// which makes things take forever to compile. Using macros instead avoids this!
 
-#[cfg(debug_assertions)]
-pub struct BoxedParser<'a, Output> {
-    parser: Box<dyn Parser<'a, Output> + 'a>,
-}
+#[macro_export]
+macro_rules! loc {
+    ($parser:expr) => {
+        move |arena, state: $crate::parse::parser::State<'a>| {
+            use $crate::region::{Located, Region};
 
-#[cfg(debug_assertions)]
-impl<'a, Output> BoxedParser<'a, Output> {
-    fn new<P>(parser: P) -> Self
-    where
-        P: Parser<'a, Output> + 'a,
-    {
-        BoxedParser {
-            parser: Box::new(parser),
+            let start_col = state.column;
+            let start_line = state.line;
+
+            match $parser.parse(arena, state) {
+                Ok((value, state)) => {
+                    let end_col = state.column;
+                    let end_line = state.line;
+                    let region = Region {
+                        start_col,
+                        start_line,
+                        end_col,
+                        end_line,
+                    };
+
+                    Ok((Located { region, value }, state))
+                }
+                Err((fail, state)) => Err((fail, state)),
+            }
         }
-    }
+    };
 }
 
-#[cfg(debug_assertions)]
-impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
-    fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Output> {
-        self.parser.parse(arena, state)
-    }
+#[macro_export]
+macro_rules! and {
+    ($p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::parse::parser::State<'a>| {
+            use $crate::parse::parser::Fail;
+
+            // We have to clone this because if the first parser passes and then
+            // the second one fails, we need to revert back to the original state.
+            let original_state = state.clone();
+
+            match $p1.parse(arena, state) {
+                Ok((out1, state)) => match $p2.parse(arena, state) {
+                    Ok((out2, state)) => Ok(((out1, out2), state)),
+                    Err((fail, _)) => Err((
+                        Fail {
+                            attempting: original_state.attempting,
+                            ..fail
+                        },
+                        original_state,
+                    )),
+                },
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_state.attempting,
+                        ..fail
+                    },
+                    state,
+                )),
+            }
+        }
+    };
 }
 
-#[cfg(debug_assertions)]
-pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> BoxedParser<'a, After>
+#[macro_export]
+macro_rules! map {
+    ($parser:expr, $transform:expr) => {
+        move |arena, state| {
+            $parser
+                .parse(arena, state)
+                .map(|(output, next_state)| ($transform(output), next_state))
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! map_with_arena {
+    ($parser:expr, $transform:expr) => {
+        move |arena, state| {
+            $parser
+                .parse(arena, state)
+                .map(|(output, next_state)| ($transform(arena, output), next_state))
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! zero_or_more {
+    ($parser:expr) => {
+        move |arena, state| {
+            use bumpalo::collections::Vec;
+
+            match $parser.parse(arena, state) {
+                Ok((first_output, next_state)) => {
+                    let mut state = next_state;
+                    let mut buf = Vec::with_capacity_in(1, arena);
+
+                    buf.push(first_output);
+
+                    loop {
+                        match $parser.parse(arena, state) {
+                            Ok((next_output, next_state)) => {
+                                state = next_state;
+                                buf.push(next_output);
+                            }
+                            Err((_, old_state)) => return Ok((buf, old_state)),
+                        }
+                    }
+                }
+                Err((_, new_state)) => Ok((Vec::new_in(arena), new_state)),
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! one_or_more {
+    ($parser:expr) => {
+        move |arena, state| {
+            use bumpalo::collections::Vec;
+
+            match $parser.parse(arena, state) {
+                Ok((first_output, next_state)) => {
+                    let mut state = next_state;
+                    let mut buf = Vec::with_capacity_in(1, arena);
+
+                    buf.push(first_output);
+
+                    loop {
+                        match $parser.parse(arena, state) {
+                            Ok((next_output, next_state)) => {
+                                state = next_state;
+                                buf.push(next_output);
+                            }
+                            Err((_, old_state)) => return Ok((buf, old_state)),
+                        }
+                    }
+                }
+                Err((_, new_state)) => Err(unexpected_eof(0, new_state.attempting, new_state)),
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! attempt {
+    ($attempting:expr, $parser:expr) => {
+        move |arena, state: $crate::parse::parser::State<'a>| {
+            use crate::parse::parser::State;
+
+            let original_attempting = state.attempting;
+
+            $parser
+                .parse(
+                    arena,
+                    State {
+                        attempting: $attempting,
+                        ..state
+                    },
+                )
+                .map(|(answer, state)| {
+                    // If the parser suceeded, go back to what we were originally attempting.
+                    // (If it failed, that's exactly where we care what we were attempting!)
+                    (
+                        answer,
+                        State {
+                            attempting: original_attempting,
+                            ..state
+                        },
+                    )
+                })
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! either {
+    ($p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::parse::parser::State<'a>| {
+            use $crate::parse::parser::Fail;
+
+            let original_attempting = state.attempting;
+
+            match $p1.parse(arena, state) {
+                Ok((output, state)) => Ok((Either::First(output), state)),
+                Err((_, state)) => match $p2.parse(arena, state) {
+                    Ok((output, state)) => Ok((Either::Second(output), state)),
+                    Err((fail, state)) => Err((
+                        Fail {
+                            attempting: original_attempting,
+                            ..fail
+                        },
+                        state,
+                    )),
+                },
+            }
+        }
+    };
+}
+
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, B>,
+    P1: 'a,
+    P2: 'a,
+    A: 'a,
+    B: 'a,
+{
+    and!(p1, p2)
+}
+
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn loc<'a, P, Val>(parser: P) -> impl Parser<'a, Located<Val>>
+where
+    P: Parser<'a, Val>,
+{
+    loc!(parser)
+}
+
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn map<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where
     P: Parser<'a, Before>,
     F: Fn(Before) -> After,
-    F: 'a,
-    P: 'a,
-    Before: 'a,
-    After: 'a,
 {
-    BoxedParser::new(map_impl(parser, transform))
+    map!(parser, transform)
 }
 
-#[cfg(debug_assertions)]
-pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> BoxedParser<'a, (A, B)>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-    P1: 'a,
-    P2: 'a,
-    A: 'a,
-    B: 'a,
-{
-    BoxedParser::new(and_impl(p1, p2))
-}
-
-#[cfg(not(debug_assertions))]
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
 pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where
     P: Parser<'a, Before>,
-    F: Fn(&'a Bump, Before) -> After,
-{
-    map_with_arena_impl(parser, transform)
-}
-
-#[inline(always)]
-fn map_with_arena_impl<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
-where
-    P: Parser<'a, Before>,
-    F: Fn(&'a Bump, Before) -> After,
-{
-    move |arena, state| {
-        parser
-            .parse(arena, state)
-            .map(|(output, next_state)| (transform(arena, output), next_state))
-    }
-}
-
-#[cfg(debug_assertions)]
-pub fn map_with_arena<'a, P, F, Before, After>(parser: P, transform: F) -> BoxedParser<'a, After>
-where
-    P: Parser<'a, Before>,
     P: 'a,
     F: Fn(&'a Bump, Before) -> After,
     F: 'a,
     Before: 'a,
     After: 'a,
 {
-    BoxedParser::new(map_with_arena_impl(parser, transform))
+    map_with_arena!(parser, transform)
 }
 
-#[cfg(debug_assertions)]
-pub fn loc<'a, P, Val>(parser: P) -> BoxedParser<'a, Located<Val>>
+/// For some reason, some usages won't compile unless they use this instead of the macro version
+#[inline(always)]
+pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> impl Parser<'a, Val>
 where
     P: Parser<'a, Val>,
-    P: 'a,
-    Val: 'a,
 {
-    BoxedParser::new(loc_impl(parser))
-}
-
-#[cfg(debug_assertions)]
-pub fn attempt<'a, P, Val>(attempting: Attempting, parser: P) -> BoxedParser<'a, Val>
-where
-    P: Parser<'a, Val>,
-    P: 'a,
-    Val: 'a,
-{
-    BoxedParser::new(attempt_impl(attempting, parser))
-}
-
-#[cfg(debug_assertions)]
-pub fn zero_or_more<'a, P, A>(parser: P) -> BoxedParser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-    P: 'a,
-{
-    BoxedParser::new(zero_or_more_impl(parser))
-}
-
-#[cfg(debug_assertions)]
-pub fn char<'a>(expected: char) -> BoxedParser<'a, ()> {
-    BoxedParser::new(char_impl(expected))
-}
-
-#[cfg(debug_assertions)]
-pub fn string<'a>(keyword: &'static str) -> BoxedParser<'a, ()> {
-    BoxedParser::new(string_impl(keyword))
-}
-
-#[cfg(debug_assertions)]
-pub fn either<'a, P1, P2, A, B>(p1: P1, p2: P2) -> BoxedParser<'a, Either<A, B>>
-where
-    P1: Parser<'a, A>,
-    P1: 'a,
-    P2: Parser<'a, B>,
-    P2: 'a,
-    A: 'a,
-    B: 'a,
-{
-    BoxedParser::new(either_impl(p1, p2))
-}
-
-#[cfg(debug_assertions)]
-pub fn one_or_more<'a, P, A>(parser: P) -> BoxedParser<'a, Vec<'a, A>>
-where
-    P: Parser<'a, A>,
-    P: 'a,
-{
-    BoxedParser::new(one_or_more_impl(parser))
+    attempt!(attempting, parser)
 }

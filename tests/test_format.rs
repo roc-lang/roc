@@ -3,6 +3,7 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 extern crate bumpalo;
+#[macro_use]
 extern crate roc;
 
 #[cfg(test)]
@@ -11,11 +12,11 @@ mod test_format {
     use roc::parse;
     use roc::parse::ast::{format, Attempting, Expr};
     use roc::parse::blankspace::space0_before;
-    use roc::parse::parser::{loc, Fail, Parser, State};
+    use roc::parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
         let state = State::new(&input, Attempting::Module);
-        let parser = space0_before(loc(parse::expr(0)), 0);
+        let parser = space0_before(loc!(parse::expr(0)), 0);
         let answer = parser.parse(&arena, state);
 
         answer

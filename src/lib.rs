@@ -1,4 +1,9 @@
-#![type_length_limit = "20932125"]
+// TODO reduce this limit by replacing more parser combinator functions with
+// macros. It's the way these functions (but not the macros) interact that
+//
+// See https://bodil.lol/parser-combinators for more information; the parser
+// is based on her design./ causes the need for higher limits.
+#![type_length_limit = "3735510"]
 
 pub mod can;
 pub mod collections;

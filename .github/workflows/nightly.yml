@@ -1,0 +1,32 @@
+on:  
+  schedule:
+    - cron:  '0 0 * * *'
+
+name: Nightly Release Build
+
+jobs:
+  build:
+    name: Test and Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: rustup component add rustfmt
+      - uses: actions-rs/cargo@v1
+        name: cargo update (needed for Inkwell)
+        with:
+          command: update
+      - uses: actions-rs/cargo@v1
+        name: cargo test
+        with:
+          command: test
+          args: --release
+      - uses: actions-rs/cargo@v1
+        name: cargo build
+        with:
+          command: build
+          args: --release
