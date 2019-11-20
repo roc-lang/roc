@@ -575,39 +575,6 @@ where
 }
 
 #[inline(always)]
-fn and_impl<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    move |arena: &'a Bump, state: State<'a>| {
-        // We have to clone this because if the first parser passes and then
-        // the second one fails, we need to revert back to the original state.
-        let original_state = state.clone();
-
-        match p1.parse(arena, state) {
-            Ok((out1, state)) => match p2.parse(arena, state) {
-                Ok((out2, state)) => Ok(((out1, out2), state)),
-                Err((fail, _)) => Err((
-                    Fail {
-                        attempting: original_state.attempting,
-                        ..fail
-                    },
-                    original_state,
-                )),
-            },
-            Err((fail, state)) => Err((
-                Fail {
-                    attempting: original_state.attempting,
-                    ..fail
-                },
-                state,
-            )),
-        }
-    }
-}
-
-#[inline(always)]
 pub fn either_impl<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, Either<A, B>>
 where
     P1: Parser<'a, A>,
@@ -1270,18 +1237,6 @@ where
     BoxedParser::new(map_impl(parser, transform))
 }
 
-pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> BoxedParser<'a, (A, B)>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-    P1: 'a,
-    P2: 'a,
-    A: 'a,
-    B: 'a,
-{
-    BoxedParser::new(and_impl(p1, p2))
-}
-
 #[inline(always)]
 fn map_with_arena_impl<'a, P, F, Before, After>(parser: P, transform: F) -> impl Parser<'a, After>
 where
@@ -1347,7 +1302,7 @@ where
 #[macro_export]
 macro_rules! loc {
     ($parser:expr) => {
-        move |arena, state: State<'a>| {
+        move |arena, state: $crate::parse::parser::State<'a>| {
             use $crate::region::{Located, Region};
 
             let start_col = state.column;
@@ -1367,6 +1322,39 @@ macro_rules! loc {
                     Ok((Located { region, value }, state))
                 }
                 Err((fail, state)) => Err((fail, state)),
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! and {
+    ($p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::parse::parser::State<'a>| {
+            use $crate::parse::parser::Fail;
+
+            // We have to clone this because if the first parser passes and then
+            // the second one fails, we need to revert back to the original state.
+            let original_state = state.clone();
+
+            match $p1.parse(arena, state) {
+                Ok((out1, state)) => match $p2.parse(arena, state) {
+                    Ok((out2, state)) => Ok(((out1, out2), state)),
+                    Err((fail, _)) => Err((
+                        Fail {
+                            attempting: original_state.attempting,
+                            ..fail
+                        },
+                        original_state,
+                    )),
+                },
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_state.attempting,
+                        ..fail
+                    },
+                    state,
+                )),
             }
         }
     };

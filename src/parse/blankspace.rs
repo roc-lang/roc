@@ -3,8 +3,22 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use parse::ast::CommentOrNewline::{self, *};
 use parse::ast::Spaceable;
-use parse::parser::{and, map_with_arena, unexpected, unexpected_eof, Parser, State};
+use parse::parser::{map_with_arena, unexpected, unexpected_eof, Parser, State};
 use region::Located;
+
+/// For some reason, some functions need to use this instead of using the and! macro directly.
+#[inline(always)]
+pub fn and<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, (A, B)>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, B>,
+    P1: 'a,
+    P2: 'a,
+    A: 'a,
+    B: 'a,
+{
+    and!(p1, p2)
+}
 
 /// Parses the given expression with 0 or more (spaces/comments/newlines) before and/or after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.
@@ -20,7 +34,7 @@ where
 {
     map_with_arena(
         and(space0(min_indent), and(parser, space0(min_indent))),
-        |arena, (spaces_before, (loc_val, spaces_after))| {
+        move |arena, (spaces_before, (loc_val, spaces_after))| {
             if spaces_before.is_empty() {
                 if spaces_after.is_empty() {
                     loc_val
@@ -97,7 +111,7 @@ where
     P: 'a,
 {
     map_with_arena(
-        and(space0(min_indent), parser),
+        and!(space0(min_indent), parser),
         |arena, (space_list, loc_expr)| {
             if space_list.is_empty() {
                 loc_expr
@@ -121,7 +135,7 @@ where
     P: 'a,
 {
     map_with_arena(
-        and(space1(min_indent), parser),
+        and!(space1(min_indent), parser),
         |arena, (space_list, loc_expr)| {
             if space_list.is_empty() {
                 loc_expr
@@ -145,7 +159,7 @@ where
     P: 'a,
 {
     map_with_arena(
-        and(parser, space0(min_indent)),
+        and!(parser, space0(min_indent)),
         |arena, (loc_expr, space_list)| {
             if space_list.is_empty() {
                 loc_expr
@@ -169,7 +183,7 @@ where
     P: 'a,
 {
     map_with_arena(
-        and(parser, space1(min_indent)),
+        and!(parser, space1(min_indent)),
         |arena, (loc_expr, space_list)| {
             if space_list.is_empty() {
                 loc_expr

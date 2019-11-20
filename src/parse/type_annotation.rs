@@ -5,7 +5,7 @@ use collections::arena_join;
 use parse::ast::{Attempting, TypeAnnotation};
 use parse::blankspace::{space0_around, space1_before};
 use parse::parser::{
-    and, between, char, map, map_with_arena, one_of5, optional, skip_first, string, unexpected,
+    between, char, map, map_with_arena, one_of5, optional, skip_first, string, unexpected,
     unexpected_eof, zero_or_more, ParseResult, Parser, State,
 };
 use parse::record::record;
@@ -41,7 +41,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     use parse::type_annotation::TypeAnnotation::*;
 
     map_with_arena(
-        and(
+        and!(
             record(
                 move |arena, state| located(min_indent).parse(arena, state),
                 min_indent,
@@ -50,7 +50,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
                 // This could be a record fragment, e.g. `{ name: String }...r`
                 string("..."),
                 move |arena, state| located(min_indent).parse(arena, state),
-            )),
+            ))
         ),
         |arena, (rec, opt_bound_var)| match opt_bound_var {
             None => Record(rec),
@@ -61,14 +61,14 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
 
 fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     map(
-        and(
+        and!(
             parse_concrete_type,
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
             zero_or_more(space1_before(
                 move |arena, state| located(min_indent).parse(arena, state),
                 min_indent,
-            )),
+            ))
         ),
         |(ctor, args)| {
             match &ctor {
