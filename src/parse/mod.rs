@@ -589,33 +589,31 @@ fn parse_def_expr<'a>(
                         // Parse the final expression that will be returned.
                         // It should be indented the same amount as the original.
                         space1_before(
-                            loc!(move |arena, state| parse_expr(original_indent, arena, state)),
+                            loc!(move |arena, state: State<'a>| {
+                                parse_expr(original_indent, arena, state)
+                            }),
                             original_indent,
                         )
                     )
                 )
             ),
             move |arena, state, (loc_first_body, (mut defs, loc_ret))| {
-                if state.indent_col != original_indent {
-                    panic!("TODO return expr was indented differently from original def",);
-                } else {
-                    let first_def: Def<'a> =
-                        // TODO if Parser were FnOnce instead of Fn, this might not need .clone()?
-                        Def::Body(loc_first_pattern.clone(), arena.alloc(loc_first_body));
+                let first_def: Def<'a> =
+                    // TODO if Parser were FnOnce instead of Fn, this might not need .clone()?
+                    Def::Body(loc_first_pattern.clone(), arena.alloc(loc_first_body));
 
-                    let loc_first_def = Located {
-                        value: first_def,
-                        region: loc_first_pattern.region,
-                    };
+                let loc_first_def = Located {
+                    value: first_def,
+                    region: loc_first_pattern.region,
+                };
 
-                    // Add the first def to the end of the defs. (It's fine that we
-                    // reorder the first one to the end, because canonicalize will
-                    // sort all these defs based on their mutual dependencies anyway. Only
-                    // their regions will ever be visible to the user.)
-                    defs.push(arena.alloc(loc_first_def));
+                // Add the first def to the end of the defs. (It's fine that we
+                // reorder the first one to the end, because canonicalize will
+                // sort all these defs based on their mutual dependencies anyway. Only
+                // their regions will ever be visible to the user.)
+                defs.push(arena.alloc(loc_first_def));
 
-                    Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
-                }
+                Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
             },
         )
         .parse(arena, state)
