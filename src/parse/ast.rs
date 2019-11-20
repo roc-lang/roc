@@ -600,7 +600,7 @@ pub fn format<'a>(
 
             let mut iter = loc_fields.iter().peekable();
             let field_indent = if is_multiline {
-                indent + 4
+                indent + INDENT
             } else {
                 if !loc_fields.is_empty() {
                     buf.push(' ');
@@ -692,6 +692,53 @@ pub fn format<'a>(
             buf.push_str(&format(arena, &loc_then.value, indent, false));
             buf.push_str(" else ");
             buf.push_str(&format(arena, &loc_else.value, indent, false));
+        }
+        Case(loc_condition, branches) => {
+            buf.push_str("case ");
+            buf.push_str(&format(arena, &loc_condition.value, indent, false));
+            buf.push_str(" when\n");
+
+            let mut it = branches.iter().peekable();
+            while let Some((pattern, expr)) = it.next() {
+                add_spaces(&mut buf, indent + INDENT);
+
+                match pattern.value {
+                    Pattern::SpaceBefore(nested, spaces) => {
+                        buf.push_str(&format_comments_only(arena, spaces.iter(), indent + INDENT));
+                        buf.push_str(&format_pattern(arena, nested, indent + INDENT, false));
+                    }
+                    _ => {
+                        buf.push_str(&format_pattern(
+                            arena,
+                            &pattern.value,
+                            indent + INDENT,
+                            false,
+                        ));
+                    }
+                }
+
+                buf.push_str(" ->\n");
+
+                add_spaces(&mut buf, indent + (INDENT * 2));
+                match expr.value {
+                    Expr::SpaceBefore(nested, spaces) => {
+                        buf.push_str(&format_comments_only(
+                            arena,
+                            spaces.iter(),
+                            indent + (INDENT * 2),
+                        ));
+                        buf.push_str(&format(arena, &nested, indent + (INDENT * 2), false));
+                    }
+                    _ => {
+                        buf.push_str(&format(arena, &expr.value, indent + (INDENT * 2), false));
+                    }
+                }
+
+                if let Some(_) = it.peek() {
+                    buf.push('\n');
+                    buf.push('\n');
+                }
+            }
         }
         other => panic!("TODO implement Display for AST variant {:?}", other),
     }
@@ -962,7 +1009,11 @@ pub fn format_field<'a>(
 fn newline<'a>(buf: &mut String<'a>, indent: u16) {
     buf.push('\n');
 
-    for _ in 0..indent {
+    add_spaces(buf, indent);
+}
+
+fn add_spaces<'a>(buf: &mut String<'a>, spaces: u16) {
+    for _ in 0..spaces {
         buf.push(' ');
     }
 }

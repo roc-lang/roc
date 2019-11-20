@@ -301,6 +301,85 @@ mod test_format {
         ));
     }
 
+    // CASE
+
+    #[test]
+    fn integer_case() {
+        assert_formats_same(indoc!(
+            r#"
+            case b when
+                1 ->
+                    1
+
+                _ ->
+                    2
+        "#
+        ));
+    }
+
+    #[test]
+    fn case_with_comments() {
+        assert_formats_same(indoc!(
+            r#"
+            case b when
+                # look at cases
+                1 ->
+                    # case 1
+                    1
+
+                # important
+                # fall through
+                _ ->
+                    # case 2
+                    # more comment
+                    2
+
+        "#
+        ));
+    }
+
+    #[test]
+    fn nested_case() {
+        assert_formats_same(indoc!(
+            r#"
+            case b when
+                _ ->
+                    case c when
+                        _ ->
+                            1
+        "#
+        ));
+    }
+
+    #[test]
+    fn case_with_moving_comments() {
+        assert_formats_to(
+            indoc!(
+                r#"
+            case b when
+                1 ->
+                    1 # case 1
+
+                # fall through
+                _ ->
+                    2
+                "#
+            ),
+            indoc!(
+                r#"
+            case b when
+                1 ->
+                    1
+
+                # case 1
+                # fall through
+                _ ->
+                    2
+                "#
+            ),
+        );
+    }
+
     // NEWLINES
 
     #[test]
@@ -333,9 +412,8 @@ mod test_format {
 
     #[test]
     fn def_returning_closure() {
-        assert_formats_to(
-            indoc!(
-                r#"
+        assert_formats_same(indoc!(
+            r#"
                     f = \x -> x
                     g = \x -> x
 
@@ -345,19 +423,6 @@ mod test_format {
 
                         x
                 "#
-            ),
-            indoc!(
-                r#"
-                    f = \x -> x
-                    g = \x -> x
-
-                    \x ->
-                        a = f x
-                        b = f x
-
-                        x
-                "#
-            ),
-        );
+        ));
     }
 }
