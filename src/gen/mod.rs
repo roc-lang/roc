@@ -97,31 +97,16 @@ pub fn num_to_basic_type<'ctx>(
     }
 }
 
-pub fn compile_standalone_expr<'ctx, 'm>(
-    env: &Env,
-    context: &'ctx Context,
-    builder: &'ctx Builder<'ctx>,
-    module: &Module<'m>,
+pub fn compile_standalone_expr<'ctx, 'env>(
+    env: &Env<'ctx, 'env>,
     parent: &FunctionValue<'ctx>,
     expr: &Expr,
 ) -> BasicValueEnum<'ctx> {
-    compile_expr(
-        env,
-        context,
-        builder,
-        module,
-        parent,
-        expr,
-        &mut ImMap::default(),
-    )
-    .into()
+    compile_expr(env, parent, expr, &mut ImMap::default()).into()
 }
 
-fn compile_expr<'ctx, 'm>(
-    env: &Env,
-    context: &'ctx Context,
-    builder: &'ctx Builder<'ctx>,
-    module: &Module<'m>,
+fn compile_expr<'ctx, 'env>(
+    env: &Env<'ctx, 'env>,
     parent: &FunctionValue<'ctx>,
     expr: &Expr,
     vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
@@ -130,8 +115,8 @@ fn compile_expr<'ctx, 'm>(
     use can::expr::Expr::*;
 
     match *expr {
-        Int(num) => IntConst(context.i64_type().const_int(num as u64, false)),
-        Float(num) => FloatConst(context.f64_type().const_float(num)),
+        Int(num) => IntConst(env.context.i64_type().const_int(num as u64, false)),
+        Float(num) => FloatConst(env.context.f64_type().const_float(num)),
         Case(_, ref loc_cond_expr, ref branches) => {
             if branches.len() < 2 {
                 panic!("TODO support case-expressions of fewer than 2 branches.");
@@ -143,9 +128,6 @@ fn compile_expr<'ctx, 'm>(
 
                 compile_case_branch(
                     env,
-                    context,
-                    builder,
-                    module,
                     parent,
                     &loc_cond_expr.value,
                     pattern.value.clone(),
@@ -163,16 +145,17 @@ fn compile_expr<'ctx, 'm>(
     }
 }
 
-pub struct Env {
+pub struct Env<'ctx, 'env> {
     pub procedures: MutMap<Symbol, Procedure>,
     pub subs: Subs,
+
+    pub context: &'ctx Context,
+    pub builder: &'env Builder<'ctx>,
+    pub module: &'env Module<'ctx>,
 }
 
-fn compile_case_branch<'ctx, 'm>(
-    env: &Env,
-    context: &'ctx Context,
-    builder: &'ctx Builder<'ctx>,
-    module: &Module<'m>,
+fn compile_case_branch<'ctx, 'env>(
+    env: &Env<'ctx, 'env>,
     parent: &FunctionValue<'ctx>,
     cond_expr: &Expr,
     pattern: Pattern,
@@ -182,7 +165,10 @@ fn compile_case_branch<'ctx, 'm>(
 ) -> TypedVal<'ctx> {
     use self::TypedVal::*;
 
-    match compile_expr(env, context, builder, module, parent, cond_expr, vars) {
+    let builder = env.builder;
+    let context = env.context;
+
+    match compile_expr(env, parent, cond_expr, vars) {
         FloatConst(float_val) => match pattern {
             FloatLiteral(target_val) => {
                 let comparison = builder.build_float_compare(
@@ -192,17 +178,8 @@ fn compile_case_branch<'ctx, 'm>(
                     "casecond",
                 );
 
-                let (then_bb, else_bb, then_val, else_val) = two_way_branch(
-                    env,
-                    context,
-                    builder,
-                    module,
-                    parent,
-                    comparison,
-                    branch_expr,
-                    else_expr,
-                    vars,
-                );
+                let (then_bb, else_bb, then_val, else_val) =
+                    two_way_branch(env, parent, comparison, branch_expr, else_expr, vars);
                 let phi = builder.build_phi(context.f64_type(), "casetmp");
 
                 phi.add_incoming(&[
@@ -225,17 +202,8 @@ fn compile_case_branch<'ctx, 'm>(
                     "casecond",
                 );
 
-                let (then_bb, else_bb, then_val, else_val) = two_way_branch(
-                    env,
-                    context,
-                    builder,
-                    module,
-                    parent,
-                    comparison,
-                    branch_expr,
-                    else_expr,
-                    vars,
-                );
+                let (then_bb, else_bb, then_val, else_val) =
+                    two_way_branch(env, parent, comparison, branch_expr, else_expr, vars);
                 let phi = builder.build_phi(context.i64_type(), "casetmp");
 
                 phi.add_incoming(&[
@@ -253,17 +221,17 @@ fn compile_case_branch<'ctx, 'm>(
     }
 }
 
-fn two_way_branch<'ctx, 'm>(
-    env: &Env,
-    context: &'ctx Context,
-    builder: &'ctx Builder<'ctx>,
-    module: &Module<'m>,
+fn two_way_branch<'ctx, 'env>(
+    env: &Env<'ctx, 'env>,
     parent: &FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
     branch_expr: &Expr,
     else_expr: &Expr,
     vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
 ) -> (BasicBlock, BasicBlock, TypedVal<'ctx>, TypedVal<'ctx>) {
+    let builder = env.builder;
+    let context = env.context;
+
     // build branch
     let then_bb = context.append_basic_block(*parent, "then");
     let else_bb = context.append_basic_block(*parent, "else");
@@ -273,14 +241,14 @@ fn two_way_branch<'ctx, 'm>(
 
     // build then block
     builder.position_at_end(&then_bb);
-    let then_val = compile_expr(env, context, builder, module, parent, branch_expr, vars);
+    let then_val = compile_expr(env, parent, branch_expr, vars);
     builder.build_unconditional_branch(&cont_bb);
 
     let then_bb = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(&else_bb);
-    let else_val = compile_expr(env, context, builder, module, parent, else_expr, vars);
+    let else_val = compile_expr(env, parent, else_expr, vars);
     builder.build_unconditional_branch(&cont_bb);
 
     let else_bb = builder.get_insert_block().unwrap();

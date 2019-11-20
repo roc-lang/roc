@@ -45,8 +45,14 @@ mod test_gen {
 
             builder.position_at_end(&basic_block);
 
-            let env = Env { procedures, subs };
-            let ret = compile_standalone_expr(&env, &context, &builder, &module, &function, &expr);
+            let env = Env {
+                procedures,
+                subs,
+                builder: &builder,
+                context: &context,
+                module: &module,
+            };
+            let ret = compile_standalone_expr(&env, &function, &expr);
 
             builder.build_return(Some(&ret));
 
