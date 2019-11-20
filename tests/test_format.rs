@@ -339,6 +339,19 @@ mod test_format {
     }
 
     #[test]
+    fn nested_case() {
+        assert_formats_same(indoc!(
+            r#"
+            case b when
+                _ ->
+                    case c when
+                        _ ->
+                            1
+        "#
+        ));
+    }
+
+    #[test]
     fn case_with_moving_comments() {
         assert_formats_to(
             indoc!(
