@@ -600,7 +600,7 @@ pub fn format<'a>(
 
             let mut iter = loc_fields.iter().peekable();
             let field_indent = if is_multiline {
-                indent + 4
+                indent + INDENT
             } else {
                 if !loc_fields.is_empty() {
                     buf.push(' ');
@@ -700,31 +700,37 @@ pub fn format<'a>(
 
             let mut it = branches.iter().peekable();
             while let Some((pattern, expr)) = it.next() {
-                for _ in 0..indent + 4 {
-                    buf.push(' ');
-                }
+                add_spaces(&mut buf, INDENT);
+
                 match pattern.value {
                     Pattern::SpaceBefore(nested, spaces) => {
-                        buf.push_str(&format_comments_only(arena, spaces.iter(), indent + 4));
-                        buf.push_str(&format_pattern(arena, nested, indent + 4, false));
+                        buf.push_str(&format_comments_only(arena, spaces.iter(), indent + INDENT));
+                        buf.push_str(&format_pattern(arena, nested, indent + INDENT, false));
                     }
                     _ => {
-                        buf.push_str(&format_pattern(arena, &pattern.value, indent + 4, false));
+                        buf.push_str(&format_pattern(
+                            arena,
+                            &pattern.value,
+                            indent + INDENT,
+                            false,
+                        ));
                     }
                 }
 
                 buf.push_str(" ->\n");
 
-                for _ in 0..indent + 8 {
-                    buf.push(' ');
-                }
+                add_spaces(&mut buf, INDENT * 2);
                 match expr.value {
                     Expr::SpaceBefore(nested, spaces) => {
-                        buf.push_str(&format_comments_only(arena, spaces.iter(), indent + 8));
-                        buf.push_str(&format(arena, &nested, indent + 8, false));
+                        buf.push_str(&format_comments_only(
+                            arena,
+                            spaces.iter(),
+                            indent + (INDENT * 2),
+                        ));
+                        buf.push_str(&format(arena, &nested, indent + (INDENT * 2), false));
                     }
                     _ => {
-                        buf.push_str(&format(arena, &expr.value, indent + 8, false));
+                        buf.push_str(&format(arena, &expr.value, indent + (INDENT * 2), false));
                     }
                 }
 
@@ -1003,7 +1009,11 @@ pub fn format_field<'a>(
 fn newline<'a>(buf: &mut String<'a>, indent: u16) {
     buf.push('\n');
 
-    for _ in 0..indent {
+    add_spaces(buf, indent);
+}
+
+fn add_spaces<'a>(buf: &mut String<'a>, spaces: u16) {
+    for _ in 0..spaces {
         buf.push(' ');
     }
 }
