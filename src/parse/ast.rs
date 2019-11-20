@@ -230,7 +230,7 @@ pub enum AssignedField<'a, Val> {
     LabeledValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-    LabelOnly(Loc<&'a str>, &'a [CommentOrNewline<'a>]),
+    LabelOnly(Loc<&'a str>),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
@@ -905,7 +905,7 @@ pub fn format_field<'a>(
             buf.push(' ');
             buf.push_str(&format(arena, &value.value, indent, apply_needs_parens));
         }
-        LabelOnly(name, spaces) => {
+        LabelOnly(name) => {
             if is_multiline {
                 buf.push('\n');
 
@@ -915,11 +915,6 @@ pub fn format_field<'a>(
             }
 
             buf.push_str(name.value);
-
-            if !spaces.is_empty() {
-                buf.push(' ');
-                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            }
         }
         AssignedField::SpaceBefore(sub_expr, spaces) => {
             buf.push_str(&format_comments_only(arena, spaces.iter(), indent));

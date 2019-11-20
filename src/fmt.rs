@@ -71,7 +71,8 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
     use self::AssignedField::*;
 
     match field {
-        LabeledValue(_, spaces, _) | LabelOnly(_, spaces) => !spaces.is_empty(),
+        LabeledValue(_, spaces, _) => !spaces.is_empty(),
+        LabelOnly(_) => false,
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
         Malformed(text) => text.chars().any(|c| c == '\n'),
     }

@@ -437,13 +437,7 @@ pub fn assigned_field_to_pattern<'a>(
                 )
             }
         }
-        AssignedField::LabelOnly(name, spaces) => {
-            if spaces.is_empty() {
-                Pattern::Identifier(name.value)
-            } else {
-                Pattern::SpaceAfter(arena.alloc(Pattern::Identifier(name.value)), spaces)
-            }
-        }
+        AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
         AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
             arena.alloc(assigned_field_to_pattern(arena, nested)?),
             spaces,
