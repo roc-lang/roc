@@ -450,16 +450,16 @@ mod test_infer {
             indoc!(
                 r#"
                 f = \z -> z
+                g = \z -> z
 
-                (\p ->
-                    x = 0
+                (\x ->
                     a = f x
-                    b = f x
+                    b = g x
                     x
                 )
             "#
             ),
-            "Int",
+            "a -> a",
         );
     }
 
