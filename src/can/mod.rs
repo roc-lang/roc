@@ -27,6 +27,7 @@ use types::Expected::{self, *};
 use types::Type::{self, *};
 use types::{LetConstraint, PExpected, PReason, Reason};
 
+pub mod boolean_unification;
 pub mod env;
 pub mod expr;
 pub mod num;
