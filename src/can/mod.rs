@@ -19,6 +19,7 @@ use graph::{strongly_connected_component, topological_sort};
 use ident::Ident;
 use parse::ast::{self, Def};
 use region::{Located, Region};
+use std::fmt::Debug;
 use subs::{Subs, Variable};
 use types::AnnotationSource::*;
 use types::Constraint::{self, *};
@@ -950,7 +951,10 @@ fn references_from_local<'a, T>(
     visited: &'a mut MutSet<Symbol>,
     refs_by_assignment: &'a MutMap<Symbol, (T, References)>,
     procedures: &'a MutMap<Symbol, Procedure>,
-) -> References {
+) -> References
+where
+    T: Debug,
+{
     match refs_by_assignment.get(&assigned_symbol) {
         Some((_, refs)) => {
             let mut answer: References = References::new();
@@ -988,7 +992,10 @@ fn references_from_local<'a, T>(
         None => {
             // This should never happen! If the local was not recognized, it should not have been
             // added to the local references.
-            unreachable!();
+            panic!(
+                "Unrecognized symbol: {:?} - refs_by_assignment were: {:?}",
+                assigned_symbol, refs_by_assignment
+            );
         }
     }
 }
@@ -1004,6 +1011,7 @@ pub fn sort_cyclic_idents<'a, I>(
 ) -> Vec<Located<Ident>>
 where
     I: Iterator<Item = &'a Ident>,
+    I: Debug,
 {
     // Find the first ident in ordered_idents that also appears in loc_idents.
     let first_ident = ordered_idents
@@ -1012,7 +1020,12 @@ where
                 .iter()
                 .any(|loc_ident| &&loc_ident.value == ident)
         })
-        .unwrap();
+        .unwrap_or_else(|| {
+            panic!(
+                "Could not find any idents that appear in both loc_idents {:?} and ordered_idents {:?}",
+                loc_idents, ordered_idents
+            )
+        });
 
     let mut answer = Vec::with_capacity(loc_idents.len());
     let mut end = Vec::with_capacity(loc_idents.len());
@@ -1041,7 +1054,10 @@ fn references_from_call<'a, T>(
     visited: &'a mut MutSet<Symbol>,
     refs_by_assignment: &'a MutMap<Symbol, (T, References)>,
     procedures: &'a MutMap<Symbol, Procedure>,
-) -> References {
+) -> References
+where
+    T: Debug,
+{
     match procedures.get(&call_symbol) {
         Some(procedure) => {
             let mut answer = procedure.references.clone();
@@ -1484,7 +1500,8 @@ fn can_defs<'a>(
                 ) => {
                     // Since everywhere in the code it'll be referred to by its assigned name,
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
-                    let mut procedure = env.procedures.remove(&symbol).unwrap();
+                    let mut procedure = env.procedures.remove(&symbol).unwrap_or_else(||
+                        panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.procedures));
                     let proc_var = procedure.var;
 
                     // The original ident name will be used for debugging and stack traces.
@@ -1685,7 +1702,14 @@ fn can_defs<'a>(
                 // Topological sort gives us the reverse of the sorting we want!
                 .rev()
             {
-                can_assignments.push(can_assignments_by_symbol.get(&symbol).unwrap().clone());
+                let can_def = can_assignments_by_symbol.get(&symbol).unwrap_or_else(|| {
+                    panic!(
+                        "Symbol not found in can_assignments_by_symbol: {:?} - can_assignments_by_symbol was: {:?}",
+                        symbol, can_assignments_by_symbol
+                    )
+                });
+
+                can_assignments.push(can_def.clone());
             }
 
             (
@@ -1703,7 +1727,14 @@ fn can_defs<'a>(
                 // Strongly connected component gives us the reverse of the sorting we want!
                 .rev()
             {
-                loc_idents_in_cycle.push(refs_by_assignment.get(&symbol).unwrap().0.clone());
+                let refs = refs_by_assignment.get(&symbol).unwrap_or_else(|| {
+                    panic!(
+                        "Symbol not found in refs_by_assignment: {:?} - refs_by_assignment was: {:?}",
+                        symbol, refs_by_assignment
+                    )
+                });
+
+                loc_idents_in_cycle.push(refs.0.clone());
             }
 
             // Sort them to make the report more helpful.
