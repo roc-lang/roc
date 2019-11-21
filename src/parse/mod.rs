@@ -384,7 +384,6 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
                 loc_patterns.push(Located { region, value });
             }
 
-            // in practice these patterns will be identifiers, possibly surrounded by newline/comments
             Ok(Pattern::RecordDestructure(loc_patterns))
         }
 
