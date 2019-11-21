@@ -10,8 +10,8 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
     Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
         flex_vars,
-        assignment_types: ImMap::default(),
-        assignments_constraint: constraint,
+        def_types: ImMap::default(),
+        defs_constraint: constraint,
         ret_constraint: Constraint::True,
     }))
 }

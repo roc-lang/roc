@@ -444,6 +444,25 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn def_returning_closure() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \z -> z
+                g = \z -> z
+
+                (\x ->
+                    a = f x
+                    b = g x
+                    x
+                )
+            "#
+            ),
+            "a -> a",
+        );
+    }
+
     // CALLING FUNCTIONS
 
     #[test]
