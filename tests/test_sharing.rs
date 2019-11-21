@@ -66,14 +66,34 @@ mod test_infer {
     }
 
     #[test]
-    fn sharing_dup() {
+    fn sharing_case_unique() {
         sharing_eq(
             indoc!(
                 r#"
-                \x -> if 1 == 1 then x else x
+                (\x ->
+                case 1 when
+                 1 -> x
+                 3 -> x
+                 )
             "#
             ),
-            ("1", Unique),
+            ("x", Unique),
+        );
+    }
+
+    #[test]
+    fn sharing_case_shared() {
+        sharing_eq(
+            indoc!(
+                r#"
+                (\x ->
+                case x when
+                 1 -> x
+                 3 -> x
+                 )
+            "#
+            ),
+            ("x", Shared),
         );
     }
 }

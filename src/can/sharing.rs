@@ -72,11 +72,14 @@ pub fn sharing_analysis_help(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceC
         Case(_, boxed_loc_expr, branches) => {
             sharing_analysis_help(&boxed_loc_expr.value, usage);
 
-            for (_pattern, branch) in branches {
-                let mut local = usage.clone();
+            // sharing state before this case
+            let before = usage.clone();
 
+            for (_pattern, branch) in branches {
+                let mut local = before.clone();
                 sharing_analysis_help(&branch.value, &mut local);
 
+                // merge/join sharing into the `usage` map
                 for (key, value) in local {
                     match usage.get(&key) {
                         None => {
