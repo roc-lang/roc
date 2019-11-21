@@ -1698,14 +1698,10 @@ fn can_defs<'a>(
                 // Topological sort gives us the reverse of the sorting we want!
                 .rev()
             {
-                let can_def = can_defs_by_symbol.get(&symbol).unwrap_or_else(|| {
-                    panic!(
-                        "Symbol not found in can_defs_by_symbol: {:?} - can_defs_by_symbol was: {:?}",
-                        symbol, can_defs_by_symbol
-                    )
-                });
-
-                can_defs.push(can_def.clone());
+                match can_defs_by_symbol.get(&symbol) {
+                    Some(can_def) => can_defs.push(can_def.clone()),
+                    None => (),
+                }
             }
 
             (
