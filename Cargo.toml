@@ -16,15 +16,8 @@ bumpalo = "2.6.0"
 #
 # https://github.com/TheDan64/inkwell/tree/llvm8-0
 #
-# NOTE 1: Breaking API changes get pushed directly to that branch, so do not
+# Breaking API changes get pushed directly to that branch, so do not
 # depend on it directly! Otherwise, `cargo update` can potentially break our build.
-#
-# NOTE 2: For some reason, on GitHub Actions, including "rev =" here is not
-# sufficient to convince cargo to download the Inkwell sources. So when you
-# update, you have to first push a commit that *omits* the "rev =" part here,
-# so that GH Actions will download the repo properly, and then after that runs
-# in CI (and caches the downloaded repo), re-commit the proper rev and leave it
-# that way until the next Inkwell upgrade.
 inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "fa2631a39647726e4230bc4130a14bd451e038bc" }
 
 [dev-dependencies]
