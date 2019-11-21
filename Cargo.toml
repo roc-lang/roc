@@ -17,7 +17,7 @@ bumpalo = "2.6.0"
 # it directly! Otherwise, `cargo update` can potentially break our build.
 #
 # https://github.com/TheDan64/inkwell/tree/llvm8-0
-inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "fa2631a39647726e4230bc4130a14bd451e038bc" }
+inkwell = { git = "https://github.com/TheDan64/inkwell" }
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
