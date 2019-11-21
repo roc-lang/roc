@@ -18,7 +18,7 @@ bumpalo = "2.6.0"
 #
 # Breaking API changes get pushed directly to that branch, so do not
 # depend on it directly! Otherwise, `cargo update` can potentially break our build.
-inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "fa2631a39647726e4230bc4130a14bd451e038bc" }
+inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "llvm8-0" }
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
