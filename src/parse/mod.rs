@@ -375,17 +375,13 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         )),
 
         Expr::Record(loc_assigned_fields) => {
-            // Record(Loc<Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>>),
-            let /*mut*/ loc_patterns = Vec::with_capacity_in(loc_assigned_fields.len(), arena);
+            let mut loc_patterns = Vec::with_capacity_in(loc_assigned_fields.len(), arena);
 
-            for _loc_assigned_field in loc_assigned_fields {
-                panic!("TODO finish converting record literal to pattern.");
-                // match loc_assigned_field.value {
-                // let region = loc_assigned_field.region;
-                // let value = expr_to_pattern(arena, &loc_assigned_field.value)?;
+            for loc_assigned_field in loc_assigned_fields {
+                let region = loc_assigned_field.region;
+                let value = assigned_field_to_pattern(arena, &loc_assigned_field.value)?;
 
-                // loc_patterns.push(Located { region, value });
-                // }
+                loc_patterns.push(Located { region, value });
             }
 
             Ok(Pattern::RecordDestructure(loc_patterns))
@@ -417,6 +413,40 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             reason: FailReason::InvalidPattern,
         }),
     }
+}
+
+pub fn assigned_field_to_pattern<'a>(
+    arena: &'a Bump,
+    assigned_field: &AssignedField<'a, Expr<'a>>,
+) -> Result<Pattern<'a>, Fail> {
+    // the assigned fields always store spaces, but this slice is often empty
+    Ok(match assigned_field {
+        AssignedField::LabeledValue(name, spaces, value) => {
+            let pattern = expr_to_pattern(arena, &value.value)?;
+            let result = arena.alloc(Located {
+                region: value.region,
+                value: pattern,
+            });
+            if spaces.is_empty() {
+                Pattern::RecordField(name.value, result)
+            } else {
+                Pattern::SpaceAfter(
+                    arena.alloc(Pattern::RecordField(name.value, result)),
+                    spaces,
+                )
+            }
+        }
+        AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
+        AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
+            arena.alloc(assigned_field_to_pattern(arena, nested)?),
+            spaces,
+        ),
+        AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
+            arena.alloc(assigned_field_to_pattern(arena, nested)?),
+            spaces,
+        ),
+        AssignedField::Malformed(string) => Pattern::Malformed(string),
+    })
 }
 
 /// A def beginning with a parenthetical pattern, for example:
@@ -1196,14 +1226,11 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
                 for loc_assigned_field in assigned_fields {
                     let region = loc_assigned_field.region;
-                    let value = match loc_assigned_field.value {
-                        AssignedField::LabelOnly(label, _) => Pattern::Identifier(label.value),
-                        _ => {
-                            panic!("TODO handle malformed record destructure.");
-                        }
-                    };
-
-                    loc_patterns.push(Located { region, value });
+                    match assigned_field_to_pattern(arena, &loc_assigned_field.value) {
+                        Ok(value) => loc_patterns.push(Located { region, value }),
+                        // an Expr became a pattern that should not be.
+                        Err(e) => return Err((e, state)),
+                    }
                 }
 
                 let pattern = Pattern::RecordDestructure(loc_patterns);

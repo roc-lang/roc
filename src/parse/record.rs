@@ -55,7 +55,13 @@ where
             Some(loc_val) => LabeledValue(loc_label, spaces, arena.alloc(loc_val)),
             // If no value was provided, record it as a Var.
             // Canonicalize will know what to do with a Var later.
-            None => LabelOnly(loc_label, spaces),
+            None => {
+                if !spaces.is_empty() {
+                    SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                } else {
+                    LabelOnly(loc_label)
+                }
+            }
         },
     )
 }

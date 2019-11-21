@@ -431,7 +431,7 @@ fn desugar_field<'a>(
         LabeledValue(ref loc_str, spaces, loc_expr) => {
             AssignedField::LabeledValue(loc_str.clone(), spaces, desugar(arena, loc_expr))
         }
-        LabelOnly(ref loc_str, spaces) => LabelOnly(loc_str.clone(), spaces),
+        LabelOnly(ref loc_str) => LabelOnly(loc_str.clone()),
         SpaceBefore(ref field, spaces) => {
             SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces)
         }

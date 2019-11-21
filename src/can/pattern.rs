@@ -345,7 +345,11 @@ fn add_constraints<'a>(
             add_constraints(pattern, scope, region, expected, state)
         }
 
-        Variant(_, _) | Apply(_, _) | RecordDestructure(_) | EmptyRecordLiteral => {
+        Variant(_, _)
+        | Apply(_, _)
+        | RecordDestructure(_)
+        | RecordField(_, _)
+        | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
     }

@@ -206,11 +206,22 @@ mod test_format {
         assert_formats_same(indoc!(
             r#"
             { x, y } = 5
+            { x: 5 } = { x: 5 }
 
             42
             "#
         ));
     }
+
+    // #[test]
+    // fn record_field_destructuring() {
+    //     assert_formats_same(indoc!(
+    //         r#"
+    //         case foo of
+    //             { x: 5 } -> 42
+    //         "#
+    //     ));
+    // }
 
     #[test]
     fn def_closure() {

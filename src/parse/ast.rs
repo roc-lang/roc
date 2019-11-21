@@ -233,7 +233,7 @@ pub enum AssignedField<'a, Val> {
     LabeledValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-    LabelOnly(Loc<&'a str>, &'a [CommentOrNewline<'a>]),
+    LabelOnly(Loc<&'a str>),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
@@ -272,6 +272,9 @@ pub enum Pattern<'a> {
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
     RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
+    /// A field pattern, e.g. { x: Just 0 } -> ...
+    /// can only occur inside of a RecordDestructure
+    RecordField(&'a str, &'a Loc<Pattern<'a>>),
 
     // Literal
     IntLiteral(&'a str),
@@ -826,6 +829,12 @@ fn format_pattern<'a>(
             buf.push_str(" }");
         }
 
+        RecordField(name, loc_pattern) => {
+            buf.push_str(name);
+            buf.push_str(": ");
+            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
+        }
+
         IntLiteral(string) => buf.push_str(string),
         HexIntLiteral(string) => buf.push_str(string),
         OctalIntLiteral(string) => buf.push_str(string),
@@ -968,17 +977,12 @@ pub fn format_field<'a>(
             buf.push(' ');
             buf.push_str(&format(arena, &value.value, indent, apply_needs_parens));
         }
-        LabelOnly(name, spaces) => {
+        LabelOnly(name) => {
             if is_multiline {
                 newline(&mut buf, indent);
             }
 
             buf.push_str(name.value);
-
-            if !spaces.is_empty() {
-                buf.push(' ');
-                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            }
         }
         AssignedField::SpaceBefore(sub_expr, spaces) => {
             buf.push_str(&format_comments_only(arena, spaces.iter(), indent));
