@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
+#[macro_use]
+extern crate indoc;
 
 extern crate bumpalo;
 extern crate roc;
@@ -14,61 +14,66 @@ mod test_canonicalize {
     use helpers::can_expr_with;
     use roc::can::expr::Expr::{self, *};
     use roc::can::problem::RuntimeError;
-    use roc::collections::ImMap;
+    use roc::can::procedure::References;
+    use roc::can::symbol::Symbol;
+    use roc::can::Output;
+    use roc::collections::{ImMap, ImSet};
+    use roc::types::Constraint;
     use std::{f64, i64};
 
-    // fn sym(name: &str) -> Symbol {
-    //     Symbol::new("Test$blah$", name)
-    // }
+    fn sym(name: &str) -> Symbol {
+        Symbol::new("Test.Blah$", name)
+    }
 
-    // fn unqualified(string: &str) -> Ident {
-    //     Ident::Unqualified(string.to_string())
-    // }
+    //     fn unqualified(string: &str) -> Ident {
+    //         Ident::Unqualified(string.to_string())
+    //     }
 
-    // fn unqualifieds(strings: Vec<&str>) -> Vec<Ident> {
-    //     strings.into_iter().map(unqualified).collect()
-    // }
+    //     fn unqualifieds(strings: Vec<&str>) -> Vec<Ident> {
+    //         strings.into_iter().map(unqualified).collect()
+    //     }
 
-    // fn loc_unqualifieds(strings: Vec<&str>) -> Vec<Located<Ident>> {
-    //     strings
-    //         .into_iter()
-    //         .map(|string| loc(unqualified(string)))
-    //         .collect()
-    // }
+    //     fn loc_unqualifieds(strings: Vec<&str>) -> Vec<Located<Ident>> {
+    //         strings
+    //             .into_iter()
+    //             .map(|string| loc(unqualified(string)))
+    //             .collect()
+    //     }
 
     // fn unused(string: &str) -> Problem {
     //     Problem::UnusedAssignment(loc(unqualified(string)))
     // }
 
-    // struct Out<'a> {
-    //     locals: Vec<&'a str>,
-    //     globals: Vec<&'a str>,
-    //     variants: Vec<&'a str>,
-    //     calls: Vec<&'a str>,
-    //     tail_call: Option<&'a str>,
-    // }
+    struct Out<'a> {
+        locals: Vec<&'a str>,
+        globals: Vec<&'a str>,
+        variants: Vec<&'a str>,
+        calls: Vec<&'a str>,
+        tail_call: Option<&'a str>,
+    }
 
-    // impl<'a> Into<Output> for Out<'a> {
-    //     fn into(self) -> Output {
-    //         let references = References {
-    //             locals: vec_to_set(self.locals),
-    //             globals: vec_to_set(self.globals),
-    //             variants: vec_to_set(self.variants),
-    //             calls: vec_to_set(self.calls),
-    //         };
+    impl<'a> Into<Output> for Out<'a> {
+        fn into(self) -> Output {
+            let references = References {
+                locals: vec_to_set(self.locals),
+                globals: vec_to_set(self.globals),
+                variants: vec_to_set(self.variants),
+                calls: vec_to_set(self.calls),
+            };
 
-    //         let tail_call = self.tail_call.map(sym);
+            let tail_call = self.tail_call.map(sym);
 
-    //         Output {
-    //             references,
-    //             tail_call,
-    //         }
-    //     }
-    // }
+            Output {
+                references,
+                tail_call,
+                constraint: Constraint::True,
+            }
+        }
+    }
 
-    // fn vec_to_set<'a>(vec: Vec<&'a str>) -> ImSet<Symbol> {
-    //     ImSet::from(vec.into_iter().map(sym).collect::<Vec<_>>())
-    // }
+    fn vec_to_set<'a>(vec: Vec<&'a str>) -> ImSet<Symbol> {
+        ImSet::from(vec.into_iter().map(sym).collect::<Vec<_>>())
+    }
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
@@ -122,56 +127,62 @@ mod test_canonicalize {
 
     // LOCALS
 
-    //#[test]
-    //fn closure_args_are_not_locals() {
-    //    // "arg" shouldn't make it into output.locals, because
-    //    // it only exists in the closure's arguments.
-    //    let (_, output, problems, procedures) = can_expr(indoc!(
-    //        r#"
-    //        func = \arg -> arg + 1
+    #[test]
+    fn closure_args_are_not_locals() {
+        // "arg" shouldn't make it into output.locals, because
+        // it only exists in the closure's arguments.
+        let arena = Bump::new();
+        let src = indoc!(
+            r#"
+            func = \arg -> arg
 
-    //        3 + func 2
-    //    "#
-    //    ));
+            func 2
+        "#
+        );
+        let (_actual, mut output, problems, _procedures, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
-    //    assert_eq!(problems, vec![]);
+        assert_eq!(problems, vec![]);
 
-    //    assert_eq!(
-    //        output,
-    //        Out {
-    //            locals: vec!["func"],
-    //            globals: vec![],
-    //            variants: vec![],
-    //            calls: vec!["func"],
-    //            tail_call: None
-    //        }
-    //        .into()
-    //    );
+        // We don't care about constraint for this test.
+        output.constraint = Constraint::True;
 
-    //    assert_eq!(
-    //        procedures,
-    //        mut_map_from_pairs(vec![(
-    //            sym("func"),
-    //            Procedure {
-    //                name: Some("func".to_string()),
-    //                is_self_tail_recursive: false,
-    //                definition: Region::zero(),
-    //                args: vec![loc(Pattern::Identifier(sym("arg")))],
-    //                body: loc(Expr::BinOp(
-    //                    loc_box(Expr::Var(sym("arg"))),
-    //                    loc(BinOp::Plus),
-    //                    loc_box(Expr::Int(1))
-    //                )),
-    //                references: References {
-    //                    locals: vec_to_set(vec![]),
-    //                    globals: vec_to_set(vec![]),
-    //                    variants: vec_to_set(vec![]),
-    //                    calls: vec_to_set(vec![]),
-    //                }
-    //            }
-    //        )])
-    //    );
-    //}
+        assert_eq!(
+            output,
+            Out {
+                locals: vec!["func"],
+                globals: vec![],
+                variants: vec![],
+                calls: vec!["func"],
+                tail_call: None
+            }
+            .into()
+        );
+
+        // assert_eq!(
+        //     procedures,
+        //     mut_map_from_pairs(vec![(
+        //         sym("func"),
+        //         Procedure {
+        //             name: Some("func".to_string()),
+        //             is_self_tail_recursive: false,
+        //             definition: Region::zero(),
+        //             args: vec![loc(Pattern::Identifier(sym("arg")))],
+        //             body: loc(Expr::BinOp(
+        //                 loc_box(Expr::Var(sym("arg"))),
+        //                 loc(BinOp::Plus),
+        //                 loc_box(Expr::Int(1))
+        //             )),
+        //             references: References {
+        //                 locals: vec_to_set(vec![]),
+        //                 globals: vec_to_set(vec![]),
+        //                 variants: vec_to_set(vec![]),
+        //                 calls: vec_to_set(vec![]),
+        //             }
+        //         }
+        //     )])
+        // );
+    }
 
     //#[test]
     //fn closing_over_locals() {
