@@ -1611,6 +1611,7 @@ fn can_defs<'a>(
     // Determine the full set of references by traversing the graph.
     let mut visited_symbols = MutSet::default();
 
+    let returned_locals = output.references.locals.clone();
     // Start with the return expression's referenced locals. They are the only ones that count!
     //
     // If I have two defs which reference each other, but neither of them
@@ -1622,7 +1623,7 @@ fn can_defs<'a>(
     // def as a whole references both `a` *and* `b`, even though it doesn't
     // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
     // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
-    for symbol in output.references.locals.clone().into_iter() {
+    for symbol in returned_locals.into_iter() {
         // Traverse the graph and look up *all* the references for this local symbol.
         let refs =
             references_from_local(symbol, &mut visited_symbols, &refs_by_def, &env.procedures);
