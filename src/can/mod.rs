@@ -1677,14 +1677,22 @@ fn can_defs<'a>(
     // As a bonus, the topological sort also reveals any cycles between the assignments, allowing
     // us to give a CircularAssignment error.
     let successors = |symbol: &Symbol| -> ImSet<Symbol> {
-        let (_, references) = refs_by_assignment.get(symbol).unwrap_or_else(|| {
-            panic!(
-                "Could not find symbol {:?} in refs_by_assignment, which had: {:?}",
-                symbol, refs_by_assignment
-            )
-        });
-
-        local_successors(&references, &env.procedures)
+        // This may not be in refs_by_assignment. For example, the `f` in `f x` here:
+        //
+        // f = \z -> z
+        //
+        // (\x ->
+        //     a = f x
+        //     x
+        // )
+        //
+        // It's not part of the current defs (the one with `a = f x`); rather,
+        // it's in the enclosing scope. It's still referenced though, so successors
+        // will receive it as an argument!
+        match refs_by_assignment.get(symbol) {
+            Some((_, references)) => local_successors(&references, &env.procedures),
+            None => ImSet::default(),
+        }
     };
 
     let mut assigned_symbols: Vec<Symbol> = Vec::new();
