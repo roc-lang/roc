@@ -4,21 +4,18 @@ name: CI
 
 jobs:
   test:
-    name: Test Suite
+    name: cargo test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
       - name: Install LLVM
         run: sudo ./ci/install-llvm.sh 8
       - uses: actions-rs/toolchain@v1
+        name: Install Rust Toolchain
         with:
           profile: minimal
           toolchain: stable
           override: true
-      - uses: actions-rs/cargo@v1
-        name: cargo update (needed for Inkwell)
-        with:
-          command: update
       - uses: actions-rs/cargo@v1
         name: cargo test
         with:
@@ -26,20 +23,17 @@ jobs:
           args: --release
 
   fmt:
-    name: Rustfmt
+    name: rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
       - uses: actions-rs/toolchain@v1
+        name: Install Rust Toolchain
         with:
           profile: minimal
           toolchain: stable
           override: true
       - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
-        name: cargo update (needed for Inkwell)
-        with:
-          command: update
       - uses: actions-rs/cargo@v1
         name: cargo fmt --check
         with:
@@ -59,10 +53,6 @@ jobs:
   #         toolchain: stable
   #         override: true
   #     - run: rustup component add clippy
-  #     - uses: actions-rs/cargo@v1
-  #       name: update cargo (needed for Inkwell)
-  #       with:
-  #         command: update
   #     - uses: actions-rs/cargo@v1
   #       name: cargo clippy
   #       with:
