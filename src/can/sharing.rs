@@ -1,6 +1,6 @@
 use can::expr::Expr;
 use can::expr::Expr::*;
-use can::procedure::{Procedure, References};
+use can::procedure::{Procedure};
 use can::symbol::Symbol;
 use collections::MutMap;
 use std::collections::HashMap;
