@@ -1,6 +1,6 @@
 use can::expr::Expr;
 use can::expr::Expr::*;
-use can::procedure::{Procedure};
+use can::procedure::Procedure;
 use can::symbol::Symbol;
 use collections::MutMap;
 use std::collections::HashMap;
@@ -24,7 +24,7 @@ impl ReferenceCount {
     }
 }
 
-fn register(symbol: &Symbol, usage: &mut HashMap<Symbol, ReferenceCount>) -> () {
+fn register(symbol: &Symbol, usage: &mut HashMap<Symbol, ReferenceCount>) {
     use self::ReferenceCount::*;
     let value = match usage.get(symbol) {
         None => Unique,
@@ -57,7 +57,7 @@ pub fn sharing_analysis(
 // but also, at the same time, you can now retroactively mark that other Variable as Shared because you know what it is - you got it right there out of the map
 // and if there is no entry for that Symbol in the map, then cool - you insert your current Variable and move on assuming uniqueness until someone else later decides (or not) that you were actually Shared
 
-pub fn sharing_analysis_help(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceCount>) -> () {
+pub fn sharing_analysis_help(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceCount>) {
     match expr {
         Var(_, symbol) | FunctionPointer(_, symbol) => {
             register(symbol, usage);
