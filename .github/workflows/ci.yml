@@ -35,6 +35,10 @@ jobs:
           override: true
       - run: rustup component add rustfmt
       - uses: actions-rs/cargo@v1
+        name: cargo clean
+        with:
+          command: clean
+      - uses: actions-rs/cargo@v1
         name: cargo fmt --check
         with:
           command: fmt
