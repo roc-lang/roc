@@ -1,6 +1,8 @@
 use can::expr::Expr;
 use can::expr::Expr::*;
+use can::procedure::{Procedure, References};
 use can::symbol::Symbol;
+use collections::MutMap;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +34,21 @@ fn register(symbol: &Symbol, usage: &mut HashMap<Symbol, ReferenceCount>) -> () 
     usage.insert(symbol.clone(), value);
 }
 
+pub fn sharing_analysis(
+    expr: &Expr,
+    procedures: &MutMap<Symbol, Procedure>,
+) -> HashMap<Symbol, ReferenceCount> {
+    let mut usage = HashMap::new();
+
+    sharing_analysis_help(expr, &mut usage);
+
+    for (_, proc) in procedures {
+        sharing_analysis_help(&proc.body.value, &mut usage);
+    }
+
+    usage
+}
+
 // NOTE (20 nov 2019) this could potentially be optimized:
 //
 // actually, I think it would also work to do it as HashMap<Symbol, Variable>
@@ -40,7 +57,7 @@ fn register(symbol: &Symbol, usage: &mut HashMap<Symbol, ReferenceCount>) -> () 
 // but also, at the same time, you can now retroactively mark that other Variable as Shared because you know what it is - you got it right there out of the map
 // and if there is no entry for that Symbol in the map, then cool - you insert your current Variable and move on assuming uniqueness until someone else later decides (or not) that you were actually Shared
 
-pub fn sharing_analysis(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceCount>) -> () {
+pub fn sharing_analysis_help(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceCount>) -> () {
     match expr {
         Var(_, symbol) | FunctionPointer(_, symbol) => {
             register(symbol, usage);
@@ -48,17 +65,17 @@ pub fn sharing_analysis(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceCount>
 
         List(_, elements) => {
             for element in elements {
-                sharing_analysis(&element.value, usage);
+                sharing_analysis_help(&element.value, usage);
             }
         }
 
         Case(_, boxed_loc_expr, branches) => {
-            sharing_analysis(&boxed_loc_expr.value, usage);
+            sharing_analysis_help(&boxed_loc_expr.value, usage);
 
             for (_pattern, branch) in branches {
                 let mut local = usage.clone();
 
-                sharing_analysis(&branch.value, &mut local);
+                sharing_analysis_help(&branch.value, &mut local);
 
                 for (key, value) in local {
                     match usage.get(&key) {
@@ -76,36 +93,36 @@ pub fn sharing_analysis(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceCount>
 
         Defs(_, assignments, body) => {
             for (_pattern, value) in assignments {
-                sharing_analysis(&value.value, usage);
+                sharing_analysis_help(&value.value, usage);
             }
 
-            sharing_analysis(&body.value, usage);
+            sharing_analysis_help(&body.value, usage);
         }
 
         CallByName(symbol, arguments, _) => {
             register(symbol, usage);
 
             for argument in arguments {
-                sharing_analysis(&argument.value, usage);
+                sharing_analysis_help(&argument.value, usage);
             }
         }
 
         CallPointer(function, arguments, _) => {
-            sharing_analysis(function, usage);
+            sharing_analysis_help(function, usage);
 
             for argument in arguments {
-                sharing_analysis(&argument.value, usage);
+                sharing_analysis_help(&argument.value, usage);
             }
         }
 
         Record(_, fields) => {
             for field in fields {
-                sharing_analysis(&field.value.1.value, usage);
+                sharing_analysis_help(&field.value.1.value, usage);
             }
         }
 
         Field(record, _) => {
-            sharing_analysis(&record.value, usage);
+            sharing_analysis_help(&record.value, usage);
         }
         Int(_) | Float(_) | Str(_) | BlockStr(_) | EmptyRecord | RuntimeError(_) => {}
     }

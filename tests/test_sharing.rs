@@ -14,19 +14,16 @@ mod test_infer {
     use roc::can::sharing;
     use roc::can::sharing::ReferenceCount::{self, *};
     use roc::can::symbol;
-    //use roc::infer::infer_expr;
-    //use roc::pretty_print_types::content_to_string;
-    use std::collections::HashMap;
 
     // HELPERS
 
     fn sharing_eq(src: &str, expected: (&str, ReferenceCount)) {
-        let (expr, _output, _, _procedures, _subs, _variable) = can_expr(src);
+        let (expr, _output, _, procedures, _subs, _variable) = can_expr(src);
 
-        let mut usage = HashMap::new();
-        sharing::sharing_analysis(&expr, &mut usage);
+        let usage = sharing::sharing_analysis(&expr, &procedures);
 
         dbg!(expr);
+        dbg!(procedures);
         dbg!(usage.clone());
 
         let (varname, value) = expected;
@@ -45,7 +42,7 @@ mod test_infer {
                 ""
             "#
             ),
-            ("1", Unique),
+            ("x", Unique),
         );
     }
 
@@ -64,7 +61,7 @@ mod test_infer {
                 )
             "#
             ),
-            ("1", Shared),
+            ("x", Shared),
         );
     }
 
@@ -73,7 +70,7 @@ mod test_infer {
         sharing_eq(
             indoc!(
                 r#"
-                \x -> if True then x else x
+                \x -> if 1 == 1 then x else x
             "#
             ),
             ("1", Unique),
