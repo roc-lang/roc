@@ -26,14 +26,14 @@ fn register(symbol: &Symbol, usage: &mut HashMap<Symbol, ReferenceCount>) -> () 
     use self::ReferenceCount::*;
     let value = match usage.get(symbol) {
         None => Unique,
-        Some(_) => Shared,
+        Some(current) => ReferenceCount::add(current, &Unique),
     };
 
     usage.insert(symbol.clone(), value);
-
-    dbg!(symbol.clone(), usage);
 }
 
+// NOTE (20 nov 2019) this could potentially be optimized:
+//
 // actually, I think it would also work to do it as HashMap<Symbol, Variable>
 //
 // you get the same "if there's already an entry in the map, then this must be shared"
@@ -55,7 +55,23 @@ pub fn sharing_analysis(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceCount>
         Case(_, boxed_loc_expr, branches) => {
             sharing_analysis(&boxed_loc_expr.value, usage);
 
-            for (pattern, branch) in branches {}
+            for (_pattern, branch) in branches {
+                let mut local = usage.clone();
+
+                sharing_analysis(&branch.value, &mut local);
+
+                for (key, value) in local {
+                    match usage.get(&key) {
+                        None => {
+                            usage.insert(key, value);
+                        }
+                        Some(current) => {
+                            let result = ReferenceCount::or(current, &value);
+                            usage.insert(key, result);
+                        }
+                    }
+                }
+            }
         }
 
         Defs(_, assignments, body) => {
@@ -94,48 +110,3 @@ pub fn sharing_analysis(expr: &Expr, usage: &mut HashMap<Symbol, ReferenceCount>
         Int(_) | Float(_) | Str(_) | BlockStr(_) | EmptyRecord | RuntimeError(_) => {}
     }
 }
-
-/*
- *
-    // Literals
-    Int(i64),
-    Float(f64),
-    Str(Box<str>),
-    BlockStr(Box<str>),
-    List(Variable, Vec<Located<Expr>>),
-
-    // Lookups
-    Var(Variable, Symbol),
-    /// Works the same as Var, but has an important marking purpose.
-    /// See 13623e3f5f65ea2d703cf155f16650c1e8246502 for the bug this fixed.
-    FunctionPointer(Variable, Symbol),
-
-    /// Look up exactly one field on a record, e.g. (expr).foo.
-    /// Canonicalization will convert chains to single-access, e.g. foo.bar.baz to (foo.bar).baz.
-    Field(Box<Located<Expr>>, Box<str>),
-
-    // Pattern Matching
-    /// Case is guaranteed to be exhaustive at this point. (If it wasn't, then
-    /// a _ branch was added at the end that will throw a runtime error.)
-    /// Also, `If` is desugared into `Case` matching on `False` and `_` at this point.
-    Case(
-        Variable,
-        Box<Located<Expr>>,
-        Vec<(Located<Pattern>, Located<Expr>)>,
-    ),
-    Defs(
-        Variable,
-        Vec<(Located<Pattern>, Located<Expr>)>,
-        Box<Located<Expr>>,
-    ),
-
-    CallByName(Symbol, Vec<Located<Expr>>, CalledVia),
-    CallPointer(Box<Expr>, Vec<Located<Expr>>, CalledVia),
-
-    // Product Types
-    Record(Variable, Vec<Located<(Box<str>, Located<Expr>)>>),
-    EmptyRecord,
-
-    // Compiles, but will crash if reached
-    RuntimeError(RuntimeError),
-*/
