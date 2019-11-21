@@ -37,6 +37,8 @@ impl Env {
         self.problems.push(problem)
     }
 
+    // TODO trim down these arguments
+    #[allow(clippy::too_many_arguments)]
     pub fn register_closure(
         &mut self,
         symbol: Symbol,

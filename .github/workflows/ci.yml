@@ -1,4 +1,4 @@
-on: [push, pull_request]
+on: [pull_request]
 
 name: CI
 
@@ -35,34 +35,26 @@ jobs:
           override: true
       - run: rustup component add rustfmt
       - uses: actions-rs/cargo@v1
-        name: cargo clean
-        with:
-          command: clean
-      - uses: actions-rs/cargo@v1
-        name: cargo update
-        with:
-          command: update
-      - uses: actions-rs/cargo@v1
         name: cargo fmt --check
         with:
           command: fmt
           args: --all -- --check
 
-  # clippy:
-  #   name: Clippy
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v1
-  #     - name: Install LLVM
-  #       run: sudo ./ci/install-llvm.sh 8
-  #     - uses: actions-rs/toolchain@v1
-  #       with:
-  #         profile: minimal
-  #         toolchain: stable
-  #         override: true
-  #     - run: rustup component add clippy
-  #     - uses: actions-rs/cargo@v1
-  #       name: cargo clippy
-  #       with:
-  #         command: clippy
-  #         args: -- -D warnings
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: Install LLVM
+        run: sudo ./ci/install-llvm.sh 8
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: rustup component add clippy
+      - uses: actions-rs/cargo@v1
+        name: cargo clippy
+        with:
+          command: clippy
+          args: -- -D warnings

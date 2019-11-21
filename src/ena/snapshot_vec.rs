@@ -102,7 +102,7 @@ where
         }
 
         if !self.0.is_empty() {
-            write!(f, "\n")?;
+            writeln!(f)?;
         }
 
         write!(f, "}}}}")

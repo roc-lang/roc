@@ -43,6 +43,8 @@ pub mod symbol;
 /// map so that expressions within that annotation can share these vars.
 type Rigids = ImMap<Box<str>, Type>;
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_declaration<'a>(
     arena: &Bump,
     subs: &mut Subs,
@@ -143,8 +145,7 @@ fn canonicalize_expr(
         }
         ast::Expr::BlockStr(lines) => {
             let constraint = Eq(constrain::str_type(), expected, region);
-
-            let joined = lines.iter().map(|s| *s).collect::<Vec<&str>>().join("\n");
+            let joined = lines.iter().copied().collect::<Vec<&str>>().join("\n");
 
             (BlockStr(joined.into()), Output::new(constraint))
         }
@@ -801,6 +802,8 @@ fn canonicalize_expr(
     )
 }
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn canonicalize_case_branch<'a>(
     env: &mut Env,
@@ -1698,9 +1701,8 @@ fn can_defs<'a>(
                 // Topological sort gives us the reverse of the sorting we want!
                 .rev()
             {
-                match can_defs_by_symbol.get(&symbol) {
-                    Some(can_def) => can_defs.push(can_def.clone()),
-                    None => (),
+                if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
+                    can_defs.push(can_def.clone());
                 }
             }
 
