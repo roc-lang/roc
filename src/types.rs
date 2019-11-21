@@ -224,8 +224,8 @@ pub enum PatternCategory {
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
-    pub assignment_types: ImMap<Symbol, Located<Type>>,
-    pub assignments_constraint: Constraint,
+    pub def_types: ImMap<Symbol, Located<Type>>,
+    pub defs_constraint: Constraint,
     pub ret_constraint: Constraint,
 }
 

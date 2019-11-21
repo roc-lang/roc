@@ -43,16 +43,16 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
                 True => {
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
-                    solve(env, subs, &let_con.assignments_constraint)
+                    solve(env, subs, &let_con.defs_constraint)
                 }
                 ret_con => {
                     // Solve the assignments' constraints first.
-                    solve(env, subs, &let_con.assignments_constraint);
+                    solve(env, subs, &let_con.defs_constraint);
 
                     // Add a variable for each assignment to the env.
                     let mut new_env = env.clone();
 
-                    for (symbol, loc_type) in let_con.assignment_types.iter() {
+                    for (symbol, loc_type) in let_con.def_types.iter() {
                         // We must not overwrite existing symbols! If we do,
                         // we will overwrite procedure entries, which were
                         // inserted earlier in solving. (If we allowed

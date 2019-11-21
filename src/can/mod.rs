@@ -532,7 +532,7 @@ fn canonicalize_expr(
                 body_type,
             );
 
-            let assignments_constraint = And(state.constraints);
+            let defs_constraint = And(state.constraints);
             let ret_constraint = output.constraint;
 
             // panic!("TODO occurs check");
@@ -548,8 +548,8 @@ fn canonicalize_expr(
                     Let(Box::new(LetConstraint {
                         rigid_vars: Vec::new(),
                         flex_vars: state.vars,
-                        assignment_types: state.headers,
-                        assignments_constraint,
+                        def_types: state.headers,
+                        defs_constraint: defs_constraint,
                         ret_constraint,
                     })),
                     // "the closure's type is equal to the var we've stored for later use in the proc"
@@ -785,11 +785,11 @@ fn canonicalize_expr(
         }
     };
 
-    // At the end, diff used_idents and assigned_idents to see which were unused.
+    // At the end, diff used_idents and defined_idents to see which were unused.
     // Add warnings for those!
 
     // In a later phase, unused top level declarations won't get monomorphized or code-genned.
-    // We aren't going to bother with DCE at the level of local assignments. It's going to be
+    // We aren't going to bother with DCE at the level of local defs. It's going to be
     // a rounding error anyway (especially given that they'll be surfaced as warnings), LLVM will
     // DCE them in optimized builds, and it's not worth the bookkeeping for dev builds.
     (
@@ -826,12 +826,12 @@ fn canonicalize_case_branch<'a>(
     remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
     // Patterns introduce new idents to the scope!
-    // Add the assigned identifiers to scope. If there's a collision, it means there
+    // Add the defined identifiers to scope. If there's a collision, it means there
     // was shadowing, which will be handled later.
-    let assigned_idents: Vec<(Ident, (Symbol, Region))> =
+    let defined_idents: Vec<(Ident, (Symbol, Region))> =
         idents_from_patterns(std::iter::once(loc_pattern), &scope);
 
-    scope.idents = union_pairs(scope.idents, assigned_idents.iter());
+    scope.idents = union_pairs(scope.idents, defined_idents.iter());
 
     let (can_expr, branch_output) = canonicalize_expr(
         rigids,
@@ -856,7 +856,7 @@ fn canonicalize_case_branch<'a>(
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
-    for (ident, (symbol, region)) in assigned_idents {
+    for (ident, (symbol, region)) in defined_idents {
         if !output.references.has_local(&symbol) {
             let loc_ident = Located {
                 region,
@@ -888,8 +888,8 @@ fn canonicalize_case_branch<'a>(
     let constraint = Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
         flex_vars: state.vars,
-        assignment_types: state.headers,
-        assignments_constraint: Constraint::And(state.constraints),
+        def_types: state.headers,
+        defs_constraint: Constraint::And(state.constraints),
         ret_constraint: branch_output.constraint,
     }));
 
@@ -947,28 +947,24 @@ fn call_successors<'a>(
 }
 
 fn references_from_local<'a, T>(
-    assigned_symbol: Symbol,
+    defined_symbol: Symbol,
     visited: &'a mut MutSet<Symbol>,
-    refs_by_assignment: &'a MutMap<Symbol, (T, References)>,
+    refs_by_def: &'a MutMap<Symbol, (T, References)>,
     procedures: &'a MutMap<Symbol, Procedure>,
 ) -> References
 where
     T: Debug,
 {
-    match refs_by_assignment.get(&assigned_symbol) {
+    match refs_by_def.get(&defined_symbol) {
         Some((_, refs)) => {
             let mut answer: References = References::new();
 
-            visited.insert(assigned_symbol);
+            visited.insert(defined_symbol);
 
             for local in refs.locals.iter() {
                 if !visited.contains(&local) {
-                    let other_refs: References = references_from_local(
-                        local.clone(),
-                        visited,
-                        refs_by_assignment,
-                        procedures,
-                    );
+                    let other_refs: References =
+                        references_from_local(local.clone(), visited, refs_by_def, procedures);
 
                     answer = answer.union(other_refs);
                 }
@@ -979,7 +975,7 @@ where
             for call in refs.calls.iter() {
                 if !visited.contains(&call) {
                     let other_refs =
-                        references_from_call(call.clone(), visited, refs_by_assignment, procedures);
+                        references_from_call(call.clone(), visited, refs_by_def, procedures);
 
                     answer = answer.union(other_refs);
                 }
@@ -993,8 +989,8 @@ where
             // This should never happen! If the local was not recognized, it should not have been
             // added to the local references.
             panic!(
-                "Unrecognized symbol: {:?} - refs_by_assignment were: {:?}",
-                assigned_symbol, refs_by_assignment
+                "Unrecognized symbol: {:?} - refs_by_def were: {:?}",
+                defined_symbol, refs_by_def
             );
         }
     }
@@ -1052,7 +1048,7 @@ where
 fn references_from_call<'a, T>(
     call_symbol: Symbol,
     visited: &'a mut MutSet<Symbol>,
-    refs_by_assignment: &'a MutMap<Symbol, (T, References)>,
+    refs_by_def: &'a MutMap<Symbol, (T, References)>,
     procedures: &'a MutMap<Symbol, Procedure>,
 ) -> References
 where
@@ -1069,7 +1065,7 @@ where
                     let other_refs = references_from_local(
                         closed_over_local.clone(),
                         visited,
-                        refs_by_assignment,
+                        refs_by_def,
                         procedures,
                     );
 
@@ -1082,7 +1078,7 @@ where
             for call in procedure.references.calls.iter() {
                 if !visited.contains(&call) {
                     let other_refs =
-                        references_from_call(call.clone(), visited, refs_by_assignment, procedures);
+                        references_from_call(call.clone(), visited, refs_by_def, procedures);
 
                     answer = answer.union(other_refs);
                 }
@@ -1278,7 +1274,7 @@ fn resolve_ident<'a>(
 struct Info {
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
-    pub assignment_types: ImMap<Symbol, Located<Type>>,
+    pub def_types: ImMap<Symbol, Located<Type>>,
 }
 
 impl Info {
@@ -1286,7 +1282,7 @@ impl Info {
         Info {
             vars: Vec::with_capacity(capacity),
             constraints: Vec::with_capacity(capacity),
-            assignment_types: ImMap::default(),
+            def_types: ImMap::default(),
         }
     }
 }
@@ -1347,20 +1343,20 @@ fn can_defs<'a>(
 ) -> (Expr, Output) {
     let mut scope = scope;
 
-    // Add the assigned identifiers to scope. If there's a collision, it means there
+    // Add the defined identifiers to scope. If there's a collision, it means there
     // was shadowing, which will be handled later.
-    let assigned_idents: Vec<(Ident, (Symbol, Region))> = idents_from_patterns(
+    let defined_idents: Vec<(Ident, (Symbol, Region))> = idents_from_patterns(
         // TODO can we get rid of this clone? It's recursively cloning expressions...
         defs.iter()
             .flat_map(|loc_def| pattern_from_def(&loc_def.value)),
         &scope,
     );
 
-    scope.idents = union_pairs(scope.idents, assigned_idents.iter());
+    scope.idents = union_pairs(scope.idents, defined_idents.iter());
 
     // Used in canonicalization
-    let mut refs_by_assignment: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
-    let mut can_assignments_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
+    let mut refs_by_def: MutMap<Symbol, (Located<Ident>, References)> = MutMap::default();
+    let mut can_defs_by_symbol: MutMap<Symbol, (Located<Pattern>, Located<Expr>)> =
         MutMap::default();
 
     // Used in constraint generation
@@ -1373,8 +1369,8 @@ fn can_defs<'a>(
         let expr_var = subs.mk_flex_var();
         let expr_type = Type::Variable(expr_var);
 
-        // Each assignment gets to have all the idents in scope that are assigned in this
-        // block. Order of assignments doesn't matter, thanks to referential transparency!
+        // Each def gets to have all the idents in scope that are defined in this
+        // block. Order of defs doesn't matter, thanks to referential transparency!
         let (opt_loc_pattern, (loc_can_expr, can_output)) = match loc_def.value {
             Def::Annotation(ref _loc_pattern, ref loc_annotation) => {
                 // TODO implement this:
@@ -1462,24 +1458,24 @@ fn can_defs<'a>(
 
             // Any time there's a lookup on this symbol in the outer Let,
             // it should result in this expression's type. After all, this
-            // is the type to which this symbol is assigned!
+            // is the type to which this symbol is defined!
             add_pattern_to_lookup_types(
                 &scope,
                 // TODO can we we avoid this clone?
                 loc_pattern.clone(),
-                &mut flex_info.assignment_types,
+                &mut flex_info.def_types,
                 expr_type.clone(),
             );
 
             flex_info.constraints.push(Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: state.vars,
-                assignment_types: state.headers,
-                assignments_constraint: And(state.constraints),
+                def_types: state.headers,
+                defs_constraint: And(state.constraints),
                 ret_constraint: can_output.constraint.clone(),
             })));
 
-            let mut renamed_closure_assignment: Option<&Symbol> = None;
+            let mut renamed_closure_def: Option<&Symbol> = None;
 
             // Give closures names (and tail-recursive status) where appropriate.
             let can_expr = match (
@@ -1492,13 +1488,13 @@ fn can_defs<'a>(
                 // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
                 // which also implies it's not a self tail call!
                 //
-                // Only assignments of the form (foo = ...) can be closure declarations or self tail calls.
+                // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
                 (
                     &ast::Pattern::Identifier(ref name),
-                    &Pattern::Identifier(_, ref assigned_symbol),
+                    &Pattern::Identifier(_, ref defined_symbol),
                     &FunctionPointer(_, ref symbol),
                 ) => {
-                    // Since everywhere in the code it'll be referred to by its assigned name,
+                    // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
                     let mut procedure = env.procedures.remove(&symbol).unwrap_or_else(||
                         panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.procedures));
@@ -1507,51 +1503,51 @@ fn can_defs<'a>(
                     // The original ident name will be used for debugging and stack traces.
                     procedure.name = Some((*name).into());
 
-                    // The closure is self tail recursive iff it tail calls itself (by assigned name).
+                    // The closure is self tail recursive iff it tail calls itself (by defined name).
                     procedure.is_self_tail_recursive = match can_output.tail_call {
                         None => false,
-                        Some(ref symbol) => symbol == assigned_symbol,
+                        Some(ref symbol) => symbol == defined_symbol,
                     };
 
-                    // Re-insert the procedure into the map, under its assigned name. This way,
-                    // when code elsewhere calls it by assigned name, it'll resolve properly.
-                    env.procedures.insert(assigned_symbol.clone(), procedure);
+                    // Re-insert the procedure into the map, under its defined name. This way,
+                    // when code elsewhere calls it by defined name, it'll resolve properly.
+                    env.procedures.insert(defined_symbol.clone(), procedure);
 
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
-                    // would result in circular assignment errors!)
-                    refs_by_assignment
-                        .entry(assigned_symbol.clone())
+                    // would result in circular def errors!)
+                    refs_by_def
+                        .entry(defined_symbol.clone())
                         .and_modify(|(_, refs)| {
-                            refs.locals = refs.locals.without(assigned_symbol);
+                            refs.locals = refs.locals.without(defined_symbol);
                         });
 
-                    renamed_closure_assignment = Some(&assigned_symbol);
+                    renamed_closure_def = Some(&defined_symbol);
 
-                    // Return a reference to the assigned symbol, since the auto-generated one no
+                    // Return a reference to the defined symbol, since the auto-generated one no
                     // longer references any entry in the procedure map!
-                    Var(proc_var, assigned_symbol.clone())
+                    Var(proc_var, defined_symbol.clone())
                 }
                 _ => loc_can_expr.value,
             };
 
-            let mut assigned_symbols = Vec::new();
+            let mut defined_symbols = Vec::new();
 
-            // Store the referenced locals in the refs_by_assignment map, so we can later figure out
-            // which assigned names reference each other.
+            // Store the referenced locals in the refs_by_def map, so we can later figure out
+            // which defined names reference each other.
             for (ident, (symbol, region)) in
                 idents_from_patterns(std::iter::once(loc_pattern), &scope)
             {
                 let refs =
-                            // Functions' references don't count in assignments.
-                            // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-                            // parent commit for the bug this fixed!
-                            if renamed_closure_assignment == Some(&symbol) {
-                                References::new()
-                            } else {
-                                can_output.references.clone()
-                            };
+                    // Functions' references don't count in defs.
+                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                    // parent commit for the bug this fixed!
+                    if renamed_closure_def == Some(&symbol) {
+                        References::new()
+                    } else {
+                        can_output.references.clone()
+                    };
 
-                refs_by_assignment.insert(
+                refs_by_def.insert(
                     symbol.clone(),
                     (
                         Located {
@@ -1562,11 +1558,11 @@ fn can_defs<'a>(
                     ),
                 );
 
-                assigned_symbols.push(symbol.clone());
+                defined_symbols.push(symbol.clone());
             }
 
-            for symbol in assigned_symbols {
-                can_assignments_by_symbol.insert(
+            for symbol in defined_symbols {
+                can_defs_by_symbol.insert(
                     symbol,
                     (
                         loc_can_pattern.clone(),
@@ -1580,7 +1576,7 @@ fn can_defs<'a>(
         }
     }
 
-    // The assignment as a whole is a tail call iff its return expression is a tail call.
+    // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
     let (ret_expr, mut output) = canonicalize_expr(
         rigids,
@@ -1598,20 +1594,20 @@ fn can_defs<'a>(
     output.constraint = Let(Box::new(LetConstraint {
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
-        assignment_types: rigid_info.assignment_types,
-        assignments_constraint:
+        def_types: rigid_info.def_types,
+        defs_constraint:
             // Flex constraint
             Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: flex_info.vars,
-                assignment_types: flex_info.assignment_types.clone(),
-                assignments_constraint:
+                def_types: flex_info.def_types.clone(),
+                defs_constraint:
                     // Final flex constraints
                     Let(Box::new(LetConstraint {
                         rigid_vars: Vec::new(),
                         flex_vars: Vec::new(),
-                        assignment_types: flex_info.assignment_types,
-                        assignments_constraint: True,
+                        def_types: flex_info.def_types,
+                        defs_constraint: True,
                         ret_constraint: And(flex_info.constraints)
                     })),
                 ret_constraint: And(vec![And(rigid_info.constraints), ret_con])
@@ -1624,23 +1620,19 @@ fn can_defs<'a>(
 
     // Start with the return expression's referenced locals. They are the only ones that count!
     //
-    // If I have two assignments which reference each other, but neither of them
+    // If I have two defs which reference each other, but neither of them
     // is referenced in the return expression, I don't want either of them (or their references)
     // to end up in the final output.references. They were unused, and so were their references!
     //
     // The reason we need a graph here is so we don't overlook transitive dependencies.
-    // For example, if I have `a = b + 1` and the assignment returns `a + 1`, then the
-    // assignment as a whole references both `a` *and* `b`, even though it doesn't
+    // For example, if I have `a = b + 1` and the def returns `a + 1`, then the
+    // def as a whole references both `a` *and* `b`, even though it doesn't
     // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
     // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
     for symbol in output.references.locals.clone().into_iter() {
         // Traverse the graph and look up *all* the references for this local symbol.
-        let refs = references_from_local(
-            symbol,
-            &mut visited_symbols,
-            &refs_by_assignment,
-            &env.procedures,
-        );
+        let refs =
+            references_from_local(symbol, &mut visited_symbols, &refs_by_def, &env.procedures);
 
         output.references = output.references.union(refs);
     }
@@ -1649,19 +1641,15 @@ fn can_defs<'a>(
         // Traverse the graph and look up *all* the references for this call.
         // Reuse the same visited_symbols as before; if we already visited it, we
         // won't learn anything new from visiting it again!
-        let refs = references_from_call(
-            symbol,
-            &mut visited_symbols,
-            &refs_by_assignment,
-            &env.procedures,
-        );
+        let refs =
+            references_from_call(symbol, &mut visited_symbols, &refs_by_def, &env.procedures);
 
         output.references = output.references.union(refs);
     }
 
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
-    for (ident, (symbol, region)) in assigned_idents.clone() {
+    for (ident, (symbol, region)) in defined_idents.clone() {
         if !output.references.has_local(&symbol) {
             let loc_ident = Located {
                 region,
@@ -1672,12 +1660,12 @@ fn can_defs<'a>(
         }
     }
 
-    // Use topological sort to reorder the assignments based on their dependencies to one another.
-    // This way, during code gen, no assignment will refer to a value that hasn't been initialized yet.
-    // As a bonus, the topological sort also reveals any cycles between the assignments, allowing
+    // Use topological sort to reorder the defs based on their dependencies to one another.
+    // This way, during code gen, no def will refer to a value that hasn't been initialized yet.
+    // As a bonus, the topological sort also reveals any cycles between the defs, allowing
     // us to give a CircularAssignment error.
     let successors = |symbol: &Symbol| -> ImSet<Symbol> {
-        // This may not be in refs_by_assignment. For example, the `f` in `f x` here:
+        // This may not be in refs_by_def. For example, the `f` in `f x` here:
         //
         // f = \z -> z
         //
@@ -1689,39 +1677,39 @@ fn can_defs<'a>(
         // It's not part of the current defs (the one with `a = f x`); rather,
         // it's in the enclosing scope. It's still referenced though, so successors
         // will receive it as an argument!
-        match refs_by_assignment.get(symbol) {
+        match refs_by_def.get(symbol) {
             Some((_, references)) => local_successors(&references, &env.procedures),
             None => ImSet::default(),
         }
     };
 
-    let mut assigned_symbols: Vec<Symbol> = Vec::new();
+    let mut defined_symbols: Vec<Symbol> = Vec::new();
 
-    for symbol in can_assignments_by_symbol.keys().into_iter() {
-        assigned_symbols.push(symbol.clone())
+    for symbol in can_defs_by_symbol.keys().into_iter() {
+        defined_symbols.push(symbol.clone())
     }
 
-    match topological_sort(assigned_symbols.as_slice(), successors) {
+    match topological_sort(defined_symbols.as_slice(), successors) {
         Ok(sorted_symbols) => {
-            let mut can_assignments = Vec::new();
+            let mut can_defs = Vec::new();
 
             for symbol in sorted_symbols
                 .into_iter()
                 // Topological sort gives us the reverse of the sorting we want!
                 .rev()
             {
-                let can_def = can_assignments_by_symbol.get(&symbol).unwrap_or_else(|| {
+                let can_def = can_defs_by_symbol.get(&symbol).unwrap_or_else(|| {
                     panic!(
-                        "Symbol not found in can_assignments_by_symbol: {:?} - can_assignments_by_symbol was: {:?}",
-                        symbol, can_assignments_by_symbol
+                        "Symbol not found in can_defs_by_symbol: {:?} - can_defs_by_symbol was: {:?}",
+                        symbol, can_defs_by_symbol
                     )
                 });
 
-                can_assignments.push(can_def.clone());
+                can_defs.push(can_def.clone());
             }
 
             (
-                Defs(subs.mk_flex_var(), can_assignments, Box::new(ret_expr)),
+                Defs(subs.mk_flex_var(), can_defs, Box::new(ret_expr)),
                 output,
             )
         }
@@ -1735,10 +1723,10 @@ fn can_defs<'a>(
                 // Strongly connected component gives us the reverse of the sorting we want!
                 .rev()
             {
-                let refs = refs_by_assignment.get(&symbol).unwrap_or_else(|| {
+                let refs = refs_by_def.get(&symbol).unwrap_or_else(|| {
                     panic!(
-                        "Symbol not found in refs_by_assignment: {:?} - refs_by_assignment was: {:?}",
-                        symbol, refs_by_assignment
+                        "Symbol not found in refs_by_def: {:?} - refs_by_def was: {:?}",
+                        symbol, refs_by_def
                     )
                 });
 
@@ -1748,14 +1736,14 @@ fn can_defs<'a>(
             // Sort them to make the report more helpful.
             loc_idents_in_cycle = sort_cyclic_idents(
                 loc_idents_in_cycle,
-                &mut assigned_idents.iter().map(|(ident, _)| ident),
+                &mut defined_idents.iter().map(|(ident, _)| ident),
             );
 
             env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
 
-            let mut regions = Vec::with_capacity(can_assignments_by_symbol.len());
+            let mut regions = Vec::with_capacity(can_defs_by_symbol.len());
 
-            for (loc_pattern, loc_expr) in can_assignments_by_symbol.values() {
+            for (loc_pattern, loc_expr) in can_defs_by_symbol.values() {
                 regions.push((loc_pattern.region, loc_expr.region));
             }
 
