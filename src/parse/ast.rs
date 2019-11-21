@@ -618,7 +618,7 @@ pub fn format<'a>(
                     apply_needs_parens,
                 ));
 
-                if let Some(_) = iter.peek() {
+                if iter.peek().is_some() {
                     buf.push(',');
 
                     if !is_multiline {
@@ -734,7 +734,7 @@ pub fn format<'a>(
                     }
                 }
 
-                if let Some(_) = it.peek() {
+                if it.peek().is_some() {
                     buf.push('\n');
                     buf.push('\n');
                 }

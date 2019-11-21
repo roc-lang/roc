@@ -103,7 +103,7 @@ where
 
     let mut lines = Vec::new_in(arena);
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         parsed_chars += 1;
 
         // Potentially end the string (unless this is an escaped `"`!)

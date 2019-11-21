@@ -79,11 +79,7 @@ fn find_names_needed(
         FlexVar(Some(_)) => {
             // This root already has a name. Nothing to do here!
         }
-        Structure(Apply {
-            module_name: _,
-            name: _,
-            args,
-        }) => {
+        Structure(Apply { args, .. }) => {
             for var in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
@@ -116,11 +112,8 @@ pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
     find_names_needed(variable, subs, &mut roots, &mut appearances, &mut taken);
 
     for root in roots {
-        match appearances.get(&root) {
-            Some(Appearances::Multiple) => {
-                letters_used = name_root(letters_used, root, subs, &taken);
-            }
-            _ => (),
+        if let Some(Appearances::Multiple) = appearances.get(&root) {
+            letters_used = name_root(letters_used, root, subs, &taken);
         }
     }
 }

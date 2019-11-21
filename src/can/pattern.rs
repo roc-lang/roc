@@ -45,6 +45,8 @@ pub enum PatternType {
     CaseBranch,
 }
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_pattern<'a>(
     env: &'a mut Env,
     state: &'a mut PatternState,

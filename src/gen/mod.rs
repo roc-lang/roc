@@ -63,10 +63,7 @@ pub fn content_to_basic_type<'ctx>(
     }
 }
 
-pub fn num_to_basic_type<'ctx>(
-    content: Content,
-    context: &'ctx Context,
-) -> Result<BasicTypeEnum<'ctx>, String> {
+pub fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTypeEnum<'_>, String> {
     match content {
         Content::Structure(flat_type) => match flat_type {
             Apply {
@@ -179,7 +176,7 @@ fn compile_case_branch<'ctx, 'env>(
                 );
 
                 let (then_bb, else_bb, then_val, else_val) =
-                    two_way_branch(env, parent, comparison, branch_expr, else_expr, vars);
+                    two_way_branch(env, *parent, comparison, branch_expr, else_expr, vars);
                 let phi = builder.build_phi(context.f64_type(), "casetmp");
 
                 phi.add_incoming(&[
@@ -203,7 +200,7 @@ fn compile_case_branch<'ctx, 'env>(
                 );
 
                 let (then_bb, else_bb, then_val, else_val) =
-                    two_way_branch(env, parent, comparison, branch_expr, else_expr, vars);
+                    two_way_branch(env, *parent, comparison, branch_expr, else_expr, vars);
                 let phi = builder.build_phi(context.i64_type(), "casetmp");
 
                 phi.add_incoming(&[
@@ -223,7 +220,7 @@ fn compile_case_branch<'ctx, 'env>(
 
 fn two_way_branch<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
-    parent: &FunctionValue<'ctx>,
+    parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
     branch_expr: &Expr,
     else_expr: &Expr,
@@ -233,22 +230,22 @@ fn two_way_branch<'ctx, 'env>(
     let context = env.context;
 
     // build branch
-    let then_bb = context.append_basic_block(*parent, "then");
-    let else_bb = context.append_basic_block(*parent, "else");
-    let cont_bb = context.append_basic_block(*parent, "casecont");
+    let then_bb = context.append_basic_block(parent, "then");
+    let else_bb = context.append_basic_block(parent, "else");
+    let cont_bb = context.append_basic_block(parent, "casecont");
 
     builder.build_conditional_branch(comparison, &then_bb, &else_bb);
 
     // build then block
     builder.position_at_end(&then_bb);
-    let then_val = compile_expr(env, parent, branch_expr, vars);
+    let then_val = compile_expr(env, &parent, branch_expr, vars);
     builder.build_unconditional_branch(&cont_bb);
 
     let then_bb = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(&else_bb);
-    let else_val = compile_expr(env, parent, else_expr, vars);
+    let else_val = compile_expr(env, &parent, else_expr, vars);
     builder.build_unconditional_branch(&cont_bb);
 
     let else_bb = builder.get_insert_block().unwrap();
