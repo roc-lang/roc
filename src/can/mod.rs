@@ -955,10 +955,10 @@ fn references_from_local<'a, T>(
 where
     T: Debug,
 {
+    let mut answer: References = References::new();
+
     match refs_by_def.get(&defined_symbol) {
         Some((_, refs)) => {
-            let mut answer: References = References::new();
-
             visited.insert(defined_symbol);
 
             for local in refs.locals.iter() {
@@ -985,14 +985,7 @@ where
 
             answer
         }
-        None => {
-            // This should never happen! If the local was not recognized, it should not have been
-            // added to the local references.
-            panic!(
-                "Unrecognized symbol: {:?} - refs_by_def were: {:?}",
-                defined_symbol, refs_by_def
-            );
-        }
+        None => answer,
     }
 }
 
