@@ -39,6 +39,10 @@ jobs:
         with:
           command: clean
       - uses: actions-rs/cargo@v1
+        name: cargo update
+        with:
+          command: update
+      - uses: actions-rs/cargo@v1
         name: cargo fmt --check
         with:
           command: fmt
