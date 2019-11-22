@@ -5,6 +5,7 @@ pub mod ident;
 pub mod operator;
 pub mod parse;
 pub mod region;
+pub mod uniqueness;
 
 pub mod string;
 
