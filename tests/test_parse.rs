@@ -446,7 +446,7 @@ mod test_parse {
     fn parenthetical_var() {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
-        let expected = Var(module_parts, "whee");
+        let expected = ParensAround(arena.alloc(Var(module_parts, "whee")));
         let actual = parse_with(&arena, "(whee)");
 
         assert_eq!(Ok(expected), actual);
@@ -523,10 +523,8 @@ mod test_parse {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
         let fields = bumpalo::vec![in &arena; "field"];
-        let expected = Field(
-            arena.alloc(Located::new(0, 0, 1, 4, Var(module_parts, "rec"))),
-            fields,
-        );
+        let paren_var = ParensAround(arena.alloc(Var(module_parts, "rec")));
+        let expected = Field(arena.alloc(Located::new(0, 0, 1, 4, paren_var)), fields);
         let actual = parse_with(&arena, "(rec).field");
 
         assert_eq!(Ok(expected), actual);
@@ -537,10 +535,8 @@ mod test_parse {
         let arena = Bump::new();
         let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
         let fields = bumpalo::vec![in &arena; "field"];
-        let expected = Field(
-            arena.alloc(Located::new(0, 0, 1, 12, Var(module_parts, "rec"))),
-            fields,
-        );
+        let paren_var = ParensAround(arena.alloc(Var(module_parts, "rec")));
+        let expected = Field(arena.alloc(Located::new(0, 0, 1, 12, paren_var)), fields);
         let actual = parse_with(&arena, "(One.Two.rec).field");
 
         assert_eq!(Ok(expected), actual);
@@ -627,8 +623,9 @@ mod test_parse {
         let module_parts = Vec::new_in(&arena).into_bump_slice();
         let arg = arena.alloc(Located::new(0, 0, 7, 8, Int("1")));
         let args = bumpalo::vec![in &arena; &*arg];
+        let parens_var = Expr::ParensAround(arena.alloc(Var(module_parts, "whee")));
         let expected = Expr::Apply(
-            arena.alloc(Located::new(0, 0, 1, 5, Var(module_parts, "whee"))),
+            arena.alloc(Located::new(0, 0, 1, 5, parens_var)),
             args,
             CalledVia::Space,
         );
@@ -709,11 +706,11 @@ mod test_parse {
         let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
         let arg2 = arena.alloc(Located::new(0, 0, 11, 14, Var(module_parts, "foo")));
         let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
+        let apply_expr = Expr::ParensAround(arena.alloc(Expr::Apply(
             arena.alloc(Located::new(0, 0, 2, 6, Var(module_parts, "whee"))),
             args,
             CalledVia::Space,
-        );
+        )));
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
         let actual = parse_with(&arena, "-(whee  12 foo)");
 
@@ -728,11 +725,11 @@ mod test_parse {
         let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
         let arg2 = arena.alloc(Located::new(0, 0, 11, 14, Var(module_parts, "foo")));
         let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
+        let apply_expr = Expr::ParensAround(arena.alloc(Expr::Apply(
             arena.alloc(Located::new(0, 0, 2, 6, Var(module_parts, "whee"))),
             args,
             CalledVia::Space,
-        );
+        )));
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
         let actual = parse_with(&arena, "!(whee  12 foo)");
 

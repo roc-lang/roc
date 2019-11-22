@@ -49,9 +49,11 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
             is_multiline_expr(&loc_left.value) || is_multiline_expr(&loc_right.value)
         }
 
-        UnaryOp(loc_subexpr, _) => is_multiline_expr(&loc_subexpr.value),
+        UnaryOp(loc_subexpr, _) | PrecedenceConflict(_, _, loc_subexpr) => {
+            is_multiline_expr(&loc_subexpr.value)
+        }
 
-        PrecedenceConflict(_, _, loc_expr) => is_multiline_expr(&loc_expr.value),
+        ParensAround(subexpr) => is_multiline_expr(&subexpr),
 
         Closure(loc_patterns, loc_body) => {
             // check the body first because it's more likely to be multiline
