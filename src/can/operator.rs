@@ -192,8 +192,8 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             }
 
             for loc_op in op_stack.into_iter().rev() {
-                let right = arg_stack.pop().unwrap();
-                let left = arg_stack.pop().unwrap();
+                let right = desugar(arena, arg_stack.pop().unwrap());
+                let left = desugar(arena, arg_stack.pop().unwrap());
 
                 let region = Region::span_across(&left.region, &right.region);
                 let value = match loc_op.value {
