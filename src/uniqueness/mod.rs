@@ -1,83 +1,70 @@
 pub mod scope;
-use bumpalo::Bump;
+use can;
 use can::env::Env;
-use can::expr::Expr::{self, *};
-use can::num::{
-    finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
-    finish_parsing_oct, float_expr_from_result, int_expr_from_result,
-};
-use can::pattern::PatternState;
-use can::pattern::PatternType::*;
-use can::pattern::{canonicalize_pattern, Pattern};
+use can::expr::Expr::{self};
+use can::pattern::Pattern;
 use can::problem::Problem;
-use can::problem::RuntimeError::*;
 use can::procedure::{Procedure, References};
-use can::scope::Scope;
 use can::symbol::Symbol;
-use collections::{ImMap, ImSet, MutMap, MutSet};
+use collections::{ImMap, MutMap};
 use constrain::{self, exists};
 use ident::Ident;
 use region::{Located, Region};
 use std::fmt::Debug;
 use subs::{Subs, Variable};
-use types::AnnotationSource::*;
 use types::Constraint::{self, *};
 use types::Expected::{self, *};
+use types::LetConstraint;
+use types::PExpected::{self, *};
+use types::PatternCategory;
+use types::Reason;
 use types::Type::{self, *};
-use types::{LetConstraint, PExpected, PReason, Reason};
 
-/*
-pub mod env;
-pub mod expr;
-pub mod num;
-pub mod operator;
-pub mod pattern;
-pub mod problem;
-pub mod procedure;
-pub mod scope;
-pub mod string;
-pub mod symbol;
+pub use can::expr::Expr::*;
 
-/// Whenever we encounter a user-defined type variable (a "rigid" var for short),
-/// for example `a` in the annotation `identity : a -> a`, we add it to this
-/// map so that expressions within that annotation can share these vars.
-type Rigids = ImMap<Box<str>, Type>;
-
-// TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
-pub fn canonicalize_declaration<'a>(
-    arena: &Bump,
+pub fn canonicalize_declaration(
     subs: &mut Subs,
     home: Box<str>,
     name: Box<str>,
     region: Region,
-    loc_expr: Located<ast::Expr<'a>>,
+    loc_expr: Located<Expr>,
+    procedures: &ImMap<Symbol, Procedure>,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
     declared_variants: &ImMap<Symbol, Located<Box<str>>>,
     expected: Expected<Type>,
-) -> (
-    Located<Expr>,
-    Output,
-    Vec<Problem>,
-    MutMap<Symbol, Procedure>,
-) {
-    // Desugar operators (convert them to Apply calls, taking into account
-    // operator precedence and associativity rules), before doing other canonicalization.
-    //
-    // If we did this *during* canonicalization, then each time we
-    // visited a BinOp node we'd recursively try to apply this to each of its nested
-    // operators, and then again on *their* nested operators, ultimately applying the
-    // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar(arena, &loc_expr);
-
+) -> (Output, Vec<Problem>, MutMap<Symbol, Procedure>) {
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
     let scope_prefix = format!("{}.{}$", home, name).into();
-    let mut scope = Scope::new(scope_prefix, declared_idents.clone());
+    let mut scope = can::scope::Scope::new(scope_prefix, declared_idents.clone());
     let mut env = Env::new(home, declared_variants.clone());
-    let (loc_expr, output) = canonicalize_expr(
-        &ImMap::default(),
+    let rigids = ImMap::default();
+
+    // typecheck procedures
+    let mut procedure_variables = ImMap::default();
+    let mut procedure_constraints = Vec::new();
+    for (symbol, proc) in procedures.clone() {
+        let proc_var = subs.mk_flex_var();
+        let proc_type = Variable(proc_var.clone());
+        let proc_expected = Expected::NoExpectation(proc_type.clone());
+
+        procedure_constraints.push(canonicalize_procedure(
+            &rigids,
+            &mut env,
+            &mut scope,
+            subs,
+            &proc,
+            proc_expected,
+        ));
+
+        procedure_variables.insert(symbol, proc_var);
+    }
+
+    let mut output = canonicalize_expr(
+        &rigids,
         &mut env,
+        &procedure_variables,
         subs,
         &mut scope,
         region,
@@ -85,7 +72,108 @@ pub fn canonicalize_declaration<'a>(
         expected,
     );
 
-    (loc_expr, output, env.problems, env.procedures)
+    let mut vars = Vec::new();
+
+    for var in procedure_variables.values() {
+        vars.push(var.clone());
+    }
+
+    output.constraint = exists(
+        vars,
+        And(vec![Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            // flex_vars: state.vars,
+            flex_vars: vec![],
+            //def_types: state.headers,
+            def_types: ImMap::default(),
+            defs_constraint: And(procedure_constraints),
+            ret_constraint: output.constraint,
+        }))]),
+    );
+
+    (output, env.problems, env.procedures)
+}
+
+fn canonicalize_procedure(
+    rigids: &Rigids,
+    env: &mut Env,
+    scope: &mut can::scope::Scope,
+    subs: &mut Subs,
+    procedure: &Procedure,
+    expected: Expected<Type>,
+) -> Constraint {
+    let region = procedure.definition.clone();
+    let mut arg_cons = Vec::new();
+    let mut arg_types = Vec::new();
+    let mut arg_vars = Vec::new();
+
+    for pattern in &procedure.args {
+        let arg_var = subs.mk_flex_var();
+        let arg_typ = Variable(arg_var);
+        arg_cons.push(canonicalize_pattern(
+            subs,
+            &pattern,
+            PExpected::NoExpectation(arg_typ.clone()),
+        ));
+        arg_types.push(arg_typ);
+        arg_vars.push(arg_var);
+    }
+
+    let ret_var = subs.mk_flex_var();
+    let ret_typ = Variable(ret_var);
+    let procedures = ImMap::default();
+
+    let ret_constraint = canonicalize_expr(
+        rigids,
+        env,
+        &procedures,
+        subs,
+        scope,
+        region,
+        &procedure.body.value,
+        Expected::NoExpectation(ret_typ.clone()),
+    );
+
+    arg_vars.push(ret_var);
+
+    let fn_con = Eq(
+        Function(arg_types, Box::new(ret_typ.clone())),
+        expected,
+        region,
+    );
+
+    And(vec![fn_con, ret_constraint.constraint, And(arg_cons)])
+}
+
+fn canonicalize_pattern(
+    subs: &mut Subs,
+    pattern: &Located<Pattern>,
+    expected: PExpected<Type>,
+) -> Constraint {
+    use can::pattern::Pattern::*;
+    match pattern.value {
+        Underscore(_) => {
+            let var = subs.mk_flex_var();
+
+            let typ = Variable(var);
+            /*
+            let var = subs.mk_flex_var();
+            let typ = Variable(var);
+
+            )
+            */
+
+            // underscore adds no constraints?
+            let expectation = match expected {
+                PExpected::NoExpectation(t) => Expected::NoExpectation(t),
+                PExpected::ForReason(_, t, _region) => Expected::NoExpectation(t),
+            };
+
+            Eq(typ, expectation, pattern.region.clone())
+        }
+
+        _ => panic!("TODO implement patterns"),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,58 +193,49 @@ impl Output {
     }
 }
 
-fn canonicalize_expr(
+/// Whenever we encounter a user-defined type variable (a "rigid" var for short),
+/// for example `a` in the annotation `identity : a -> a`, we add it to this
+/// map so that expressions within that annotation can share these vars.
+type Rigids = ImMap<Box<str>, Type>;
+
+type Scope = ImMap<Symbol, Type>;
+
+pub fn canonicalize_expr(
     rigids: &Rigids,
     env: &mut Env,
+    procedures: &ImMap<Symbol, Variable>,
     subs: &mut Subs,
-    scope: &mut Scope,
+    scope: &mut can::scope::Scope,
     region: Region,
-    expr: &ast::Expr,
+    expr: &Expr,
     expected: Expected<Type>,
-) -> (Located<Expr>, Output) {
-    use self::Expr::*;
+) -> Output {
+    pub use can::expr::Expr::*;
 
-    let (expr, output) = match expr {
-        ast::Expr::Int(string) => {
-            let (constraint, answer) =
-                int_expr_from_result(subs, finish_parsing_int(string), env, expected, region);
-
-            (answer, Output::new(constraint))
+    match expr {
+        Int(_) => {
+            let constraint = constrain::int_literal(subs, expected, region);
+            (Output::new(constraint))
         }
-        ast::Expr::Float(string) => {
-            let (constraint, answer) =
-                float_expr_from_result(subs, finish_parsing_float(string), env, expected, region);
-
-            (answer, Output::new(constraint))
+        Float(_) => {
+            let constraint = constrain::float_literal(subs, expected, region);
+            (Output::new(constraint))
         }
-        ast::Expr::Record(fields) => {
-            if fields.is_empty() {
-                let constraint = Eq(EmptyRec, expected, region);
-
-                (EmptyRecord, Output::new(constraint))
-            } else {
-                panic!("TODO canonicalize nonempty record");
-            }
-        }
-        ast::Expr::Str(string) => {
+        BlockStr(_) | Str(_) => {
             let constraint = Eq(constrain::str_type(), expected, region);
-
-            (Str((*string).into()), Output::new(constraint))
+            (Output::new(constraint))
         }
-        ast::Expr::BlockStr(lines) => {
-            let constraint = Eq(constrain::str_type(), expected, region);
-            let joined = lines.iter().copied().collect::<Vec<&str>>().join("\n");
-
-            (BlockStr(joined.into()), Output::new(constraint))
+        EmptyRecord => {
+            let constraint = Eq(EmptyRec, expected, region);
+            (Output::new(constraint))
         }
-        ast::Expr::List(loc_elems) => {
+        Record(_, _) => panic!("TODO implement records"),
+        List(_variable, loc_elems) => {
             if loc_elems.is_empty() {
                 let list_var = subs.mk_flex_var();
                 let constraint = Eq(constrain::empty_list_type(list_var), expected, region);
-
-                (List(list_var, Vec::new()), Output::new(constraint))
+                (Output::new(constraint))
             } else {
-                let mut can_elems = Vec::with_capacity(loc_elems.len());
                 let list_var = subs.mk_flex_var(); // `v` in the type (List v)
                 let list_type = Type::Variable(list_var);
                 let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
@@ -165,15 +244,16 @@ fn canonicalize_expr(
                 for loc_elem in loc_elems.iter() {
                     let elem_var = subs.mk_flex_var();
                     let elem_type = Variable(elem_var);
-                    let elem_expected = NoExpectation(elem_type.clone());
+                    let elem_expected = Expected::NoExpectation(elem_type.clone());
                     let list_elem_constraint = Eq(
                         list_type.clone(),
-                        ForReason(Reason::ElemInList, elem_type, region),
+                        Expected::ForReason(Reason::ElemInList, elem_type, region),
                         region,
                     );
-                    let (can_expr, elem_out) = canonicalize_expr(
+                    let elem_out = canonicalize_expr(
                         rigids,
                         env,
+                        procedures,
                         subs,
                         scope,
                         loc_elem.region,
@@ -185,10 +265,7 @@ fn canonicalize_expr(
                     constraints.push(elem_out.constraint);
 
                     references = references.union(elem_out.references);
-
-                    can_elems.push(can_expr);
                 }
-
                 constraints.push(Eq(constrain::list_type(list_type), expected, region));
 
                 let mut output = Output::new(And(constraints));
@@ -198,38 +275,211 @@ fn canonicalize_expr(
                 // A list literal is never a tail call!
                 output.tail_call = None;
 
-                (List(list_var, can_elems), output)
+                output
             }
         }
+        Var(_variable, symbol) => Output::new(Lookup(symbol.clone(), expected, region)),
+        // FunctionPointer(_variable, symbol) => Output::new(Lookup(symbol.clone(), expected, region)),
+        FunctionPointer(_variable, symbol) => Output::new(Eq(
+            Variable(*procedures.get(symbol).unwrap()),
+            expected,
+            Region::zero(),
+        )),
 
-        //ast::Expr::If(loc_cond, loc_true, loc_false) => {
-        //    panic!("TODO Emit a case-expression with False first for the else branch, then _");
-        //    // Canonicalize the nested expressions
-        //    let (cond_expr, cond_out) = canonicalize(env, scope, *loc_cond);
-        //    let (true_expr, true_out) = canonicalize(env, scope, *loc_true);
-        //    let (false_expr, false_out) = canonicalize(env, scope, *loc_false);
+        CallByName(symbol, loc_args, _) => {
+            let mut output = Output::new(True);
 
-        //    // Incorporate all three expressions into a combined Output value.
-        //    let expr = If(
-        //        Box::new(cond_expr),
-        //        Box::new(true_expr),
-        //        Box::new(false_expr),
-        //    );
-        //    let mut output = cond_out;
+            let procedure = env.procedures.get(symbol).unwrap();
 
-        //    // If both branches are tail calling the same symbol, then so is the conditional as a whole.
-        //    // Also, if both branches are not tail calls (tail_call == None), then so is the conditional.
-        //    // If the branches are different, we leave the default of None as-is.
-        //    if true_out.tail_call == false_out.tail_call {
-        //        output.tail_call = true_out.tail_call;
-        //    }
+            let fn_type = Variable(procedure.var);
+            let ret_type = Variable(procedure.ret_var);
+            let fn_region = procedure.definition;
 
-        //    // To evaluate the whole if-expression, we depend on all the values that both branches depend on.
-        //    output.references = output.references.union(true_out.references);
-        //    output.references = output.references.union(false_out.references);
+            let mut vars = Vec::with_capacity(2 + loc_args.len());
 
-        //    (expr, output)
-        //}
+            // TODO should these be added here?
+            vars.push(procedure.var);
+            vars.push(procedure.ret_var);
+
+            // TODO look up the name and use NamedFnArg if possible.
+            let fn_reason = Reason::AnonymousFnCall {
+                arity: loc_args.len() as u8,
+            };
+
+            let mut arg_types = Vec::with_capacity(loc_args.len());
+            let mut arg_cons = Vec::with_capacity(loc_args.len());
+
+            let mut outputs = Vec::new();
+
+            // for arg_out in outputs { output.references = output.references.union(arg_out.references); }
+            for (index, loc_arg) in loc_args.iter().enumerate() {
+                let region = loc_arg.region;
+                let arg_var = subs.mk_flex_var();
+                let arg_type = Variable(arg_var);
+                // TODO look up the name and use NamedFnArg if possible.
+                let reason = Reason::AnonymousFnArg {
+                    arg_index: index as u8,
+                };
+                let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
+                let arg_out = canonicalize_expr(
+                    rigids,
+                    env,
+                    procedures,
+                    subs,
+                    scope,
+                    loc_arg.region,
+                    &loc_arg.value,
+                    expected_arg,
+                );
+
+                let arg_con = arg_out.constraint.clone();
+
+                vars.push(arg_var);
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+
+                outputs.push(arg_out);
+            }
+
+            let fn_con = output.constraint;
+            let expected_fn_type = Expected::ForReason(
+                fn_reason,
+                Function(arg_types, Box::new(ret_type.clone())),
+                region,
+            );
+
+            output.constraint = exists(
+                vars,
+                And(vec![
+                    fn_con,
+                    Eq(fn_type, expected_fn_type, fn_region),
+                    And(arg_cons),
+                    Eq(ret_type, expected, region),
+                ]),
+            );
+
+            output
+        }
+        // CallPointer(Box<Expr>, Vec<Located<Expr>>, CalledVia),
+        CallPointer(fn_expr, loc_args, _) => {
+            let fn_var = subs.mk_flex_var();
+            let fn_type = Variable(fn_var);
+            let ret_var = subs.mk_flex_var();
+            let ret_type = Variable(ret_var);
+            let fn_expected = Expected::NoExpectation(fn_type.clone());
+            let fn_region = Region::zero();
+
+            let mut vars = Vec::with_capacity(2 + loc_args.len());
+
+            vars.push(fn_var);
+            vars.push(ret_var);
+
+            // Canonicalize the function expression and its arguments
+            let mut output = canonicalize_expr(
+                rigids,
+                env,
+                procedures,
+                subs,
+                scope,
+                fn_region,
+                &fn_expr,
+                fn_expected,
+            );
+
+            // TODO look up the name and use NamedFnArg if possible.
+            let fn_reason = Reason::AnonymousFnCall {
+                arity: loc_args.len() as u8,
+            };
+
+            let mut arg_types = Vec::with_capacity(loc_args.len());
+            let mut arg_cons = Vec::with_capacity(loc_args.len());
+
+            let mut outputs = Vec::new();
+
+            // for arg_out in outputs { output.references = output.references.union(arg_out.references); }
+            for (index, loc_arg) in loc_args.iter().enumerate() {
+                let region = loc_arg.region;
+                let arg_var = subs.mk_flex_var();
+                let arg_type = Variable(arg_var);
+                // TODO look up the name and use NamedFnArg if possible.
+                let reason = Reason::AnonymousFnArg {
+                    arg_index: index as u8,
+                };
+                let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
+                let arg_out = canonicalize_expr(
+                    rigids,
+                    env,
+                    procedures,
+                    subs,
+                    scope,
+                    loc_arg.region,
+                    &loc_arg.value,
+                    expected_arg,
+                );
+
+                let arg_con = arg_out.constraint.clone();
+
+                vars.push(arg_var);
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+
+                outputs.push(arg_out);
+            }
+
+            let fn_con = output.constraint;
+            let expected_fn_type = Expected::ForReason(
+                fn_reason,
+                Function(arg_types, Box::new(ret_type.clone())),
+                region,
+            );
+
+            output.constraint = exists(
+                vars,
+                And(vec![
+                    fn_con,
+                    Eq(fn_type, expected_fn_type, fn_region),
+                    And(arg_cons),
+                    Eq(ret_type, expected, region),
+                ]),
+            );
+
+            output
+        }
+
+        Defs(_, defs, loc_ret) => {
+            // The body expression gets a new scope for canonicalization,
+            // so clone it.
+            Output::new(can_defs(
+                rigids,
+                env,
+                procedures,
+                subs,
+                &mut scope.clone(),
+                defs,
+                expected,
+                loc_ret,
+            ))
+        }
+
+        _ => panic!("{:?}", expr),
+    }
+}
+
+fn can_defs(
+    rigids: &Rigids,
+    env: &mut Env,
+    procedures: &ImMap<Symbol, Variable>,
+    subs: &mut Subs,
+    scope: &mut can::scope::Scope,
+    defs: &Vec<(Located<Pattern>, Located<Expr>)>,
+    expected: Expected<Type>,
+    body: &Located<Expr>,
+) -> Constraint {
+    panic!()
+}
+
+/*
+
         ast::Expr::Apply(loc_fn, loc_args, application_style) => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
@@ -369,87 +619,6 @@ fn canonicalize_expr(
             (can_expr, output)
         }
 
-        //ast::Expr::InterpolatedStr(pairs, suffix) => {
-        //    let mut output = Output::new();
-        //    let can_pairs: Vec<(String, Located<Expr>)> = pairs
-        //        .into_iter()
-        //        .map(|(string, loc_ident)| {
-        //            // From a language design perspective, we only permit idents in interpolation.
-        //            // However, in a canonical Expr we store it as a full Expr, not a Symbol.
-        //            // This is so that we can resolve it to either Var or Unrecognized; if we
-        //            // stored it as a Symbol, we couldn't record runtime errors here.
-        //            let can_expr = match resolve_ident(
-        //                &env,
-        //                &scope,
-        //                loc_ident.value,
-        //                &mut output.references,
-        //            ) {
-        //                Ok(symbol) => Var(symbol),
-        //                Err(ident) => {
-        //                    let loc_ident = Located {
-        //                        region: loc_ident.region,
-        //                        value: ident,
-        //                    };
-
-        //                    env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
-
-        //                    RuntimeError(UnrecognizedConstant(loc_ident))
-        //                }
-        //            };
-
-        //            (
-        //                string,
-        //                Located {
-        //                    region: loc_ident.region,
-        //                    value: can_expr,
-        //                },
-        //            )
-        //        })
-        //        .collect();
-
-        //    (InterpolatedStr(can_pairs, suffix), output)
-        //}
-
-        //ast::Expr::ApplyVariant(variant_name, opt_args) => {
-        //    // Canonicalize the arguments and union their references into our output.
-        //    // We'll do this even if the variant name isn't recognized, since we still
-        //    // want to report canonicalization problems with the variant's arguments,
-        //    // and their references still matter for purposes of detecting unused things.
-        //    let mut output = Output::new();
-
-        //    let opt_can_args = match opt_args {
-        //        Some(args) => {
-        //            let mut can_args = Vec::with_capacity(args.len());
-
-        //            for arg in args {
-        //                let (loc_expr, arg_output) = canonicalize(env, scope, arg);
-
-        //                output.references = output.references.union(arg_output.references);
-
-        //                can_args.push(loc_expr);
-        //            }
-
-        //            Some(can_args)
-        //        }
-        //        None => None,
-        //    };
-
-        //    let can_expr = match resolve_variant_name(&env, variant_name, &mut output.references) {
-        //        Ok(symbol) => ApplyVariant(symbol, opt_can_args),
-        //        Err(variant_name) => {
-        //            let loc_variant = Located {
-        //                region: loc_expr.region,
-        //                value: variant_name,
-        //            };
-
-        //            env.problem(Problem::UnrecognizedVariant(loc_variant.clone()));
-
-        //            RuntimeError(UnrecognizedVariant(loc_variant))
-        //        }
-        //    };
-
-        //    (can_expr, output)
-        //}
         ast::Expr::Defs(defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             // so clone it.

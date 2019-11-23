@@ -7,7 +7,7 @@ use self::num::{
 };
 use self::pattern::PatternState;
 use self::pattern::PatternType::*;
-use self::pattern::{canonicalize_pattern, Pattern};
+use self::pattern::{canonicalize_pattern, Pattern, PatternType};
 use self::problem::Problem;
 use self::problem::RuntimeError::*;
 use self::procedure::References;

@@ -4,7 +4,7 @@ use crate::unify;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
 }

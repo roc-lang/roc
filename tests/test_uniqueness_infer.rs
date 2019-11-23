@@ -11,6 +11,7 @@ mod helpers;
 #[cfg(test)]
 mod test_infer {
     use helpers::can_expr;
+    use helpers::uniq_expr;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::uniqueness;
@@ -18,22 +19,42 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, output, _, procedures, mut subs, variable) = can_expr(src);
+        let (
+            output2,
+            output1,
+            _,
+            procedures1,
+            mut subs1,
+            variable1,
+            procedures2,
+            mut subs2,
+            variable2,
+        ) = uniq_expr(src);
 
-        let content = infer_expr(&mut subs, procedures, &output.constraint, variable);
+        dbg!(subs1.clone());
+        let content1 = infer_expr(
+            &mut subs1,
+            procedures1.clone(),
+            &output1.constraint,
+            variable1,
+        );
+        dbg!(subs2.clone());
+        let content2 = infer_expr(&mut subs2, procedures2, &output2.constraint, variable2);
 
-        name_all_type_vars(variable, &mut subs);
+        name_all_type_vars(variable1, &mut subs1);
+        name_all_type_vars(variable2, &mut subs2);
 
-        let actual_str = content_to_string(content, &mut subs);
+        let actual_str = content_to_string(content1, &mut subs1);
+        let uniq_actual_str = content_to_string(content2, &mut subs2);
 
         assert_eq!(actual_str, expected.to_string());
+        assert_eq!(actual_str, uniq_actual_str);
     }
 
     #[test]
-    fn uniqueness() {
+    fn empty_record() {
         infer_eq("{}", "{}");
     }
-    /*
 
     #[test]
     fn int_literal() {
@@ -340,6 +361,7 @@ mod test_infer {
         );
     }
 
+    /*
     #[test]
     fn def_string() {
         infer_eq(
