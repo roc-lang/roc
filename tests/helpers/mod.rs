@@ -56,7 +56,7 @@ pub fn uniq_expr(
     MutMap<Symbol, Procedure>,
     Subs,
     Variable,
-    MutMap<Symbol, Procedure>,
+    roc::uniqueness::Env,
     Subs,
     Variable,
 ) {
@@ -83,7 +83,7 @@ pub fn uniq_expr_with(
     MutMap<Symbol, Procedure>,
     Subs,
     Variable,
-    MutMap<Symbol, Procedure>,
+    roc::uniqueness::Env,
     Subs,
     Variable,
 ) {
@@ -113,6 +113,10 @@ pub fn uniq_expr_with(
         expected,
     );
 
+    for k in procedures.keys() {
+        println!("procedure {:?}", k.clone());
+    }
+
     dbg!(output.constraint.clone());
 
     let mut extracted_procedures = ImMap::default();
@@ -126,7 +130,7 @@ pub fn uniq_expr_with(
 
     let variable2 = subs2.mk_flex_var();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
-    let (mut output2, _, procedures2) = roc::uniqueness::canonicalize_declaration(
+    let (mut output2, env) = roc::uniqueness::canonicalize_declaration(
         &mut subs2,
         home.into(),
         name.into(),
@@ -140,15 +144,7 @@ pub fn uniq_expr_with(
 
     dbg!(output2.constraint.clone());
     (
-        output2,
-        output,
-        problems,
-        procedures,
-        subs,
-        variable,
-        procedures2,
-        subs2,
-        variable2,
+        output2, output, problems, procedures, subs, variable, env, subs2, variable2,
     )
 }
 

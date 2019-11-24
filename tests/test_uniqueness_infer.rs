@@ -13,33 +13,25 @@ mod test_infer {
     use helpers::can_expr;
     use helpers::uniq_expr;
     use roc::infer::infer_expr;
+    use roc::infer::infer_uniq;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::uniqueness;
 
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (
-            output2,
-            output1,
-            _,
-            procedures1,
-            mut subs1,
-            variable1,
-            procedures2,
-            mut subs2,
-            variable2,
-        ) = uniq_expr(src);
+        let (output2, output1, _, procedures1, mut subs1, variable1, env, mut subs2, variable2) =
+            uniq_expr(src);
 
-        dbg!(subs1.clone());
+        //dbg!(subs1.clone());
         let content1 = infer_expr(
             &mut subs1,
             procedures1.clone(),
             &output1.constraint,
             variable1,
         );
-        dbg!(subs2.clone());
-        let content2 = infer_expr(&mut subs2, procedures2, &output2.constraint, variable2);
+        // dbg!(subs2.clone());
+        let content2 = infer_uniq(&mut subs2, &env, &output2.constraint, variable2);
 
         name_all_type_vars(variable1, &mut subs1);
         name_all_type_vars(variable2, &mut subs2);
@@ -361,7 +353,6 @@ mod test_infer {
         );
     }
 
-    /*
     #[test]
     fn def_string() {
         infer_eq(
@@ -556,6 +547,18 @@ mod test_infer {
             indoc!(
                 r#"
                 1 |> (\a -> a)
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn pizza_desugared() {
+        infer_eq(
+            indoc!(
+                r#"
+                (\a -> a) 1
                 "#
             ),
             "Int",
@@ -834,5 +837,6 @@ mod test_infer {
             "Int",
         );
     }
-    */
+    /*
+     */
 }
