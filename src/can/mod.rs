@@ -760,6 +760,12 @@ fn canonicalize_expr(
         }
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
+        ast::Expr::ParensAround(sub_expr) => {
+            panic!(
+                "A ParensAround did not get removed during operator desugaring somehow: {:?}",
+                sub_expr
+            );
+        }
         ast::Expr::SpaceBefore(sub_expr, _spaces) => {
             panic!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:?}",

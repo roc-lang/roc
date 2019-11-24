@@ -164,6 +164,7 @@ pub enum Expr<'a> {
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
+    ParensAround(&'a Expr<'a>),
 
     // Problems
     MalformedIdent(&'a str),
@@ -539,6 +540,11 @@ pub fn format<'a>(
         SpaceAfter(sub_expr, spaces) => {
             buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
             buf.push_str(&format_spaces(arena, spaces.iter(), indent));
+        }
+        ParensAround(sub_expr) => {
+            buf.push('(');
+            buf.push_str(&format(arena, sub_expr, indent, false));
+            buf.push(')');
         }
         Str(string) => {
             buf.push('"');

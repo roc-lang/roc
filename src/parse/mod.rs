@@ -235,9 +235,17 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
         loc!(and!(
             between(
                 char('('),
-                space0_around(
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                    min_indent,
+                map_with_arena!(
+                    space0_around(
+                        loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                        min_indent,
+                    ),
+                    |arena: &'a Bump, loc_expr: Located<Expr<'a>>| {
+                        Located {
+                            region: loc_expr.region,
+                            value: Expr::ParensAround(arena.alloc(loc_expr.value)),
+                        }
+                    }
                 ),
                 char(')'),
             ),
@@ -373,6 +381,8 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             arena.alloc(expr_to_pattern(arena, sub_expr)?),
             spaces,
         )),
+
+        Expr::ParensAround(sub_expr) => expr_to_pattern(arena, sub_expr),
 
         Expr::Record(loc_assigned_fields) => {
             let mut loc_patterns = Vec::with_capacity_in(loc_assigned_fields.len(), arena);

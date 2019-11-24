@@ -192,8 +192,8 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             }
 
             for loc_op in op_stack.into_iter().rev() {
-                let right = arg_stack.pop().unwrap();
-                let left = arg_stack.pop().unwrap();
+                let right = desugar(arena, arg_stack.pop().unwrap());
+                let left = desugar(arena, arg_stack.pop().unwrap());
 
                 let region = Region::span_across(&left.region, &right.region);
                 let value = match loc_op.value {
@@ -317,9 +317,9 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _) => {
-            // Since we've already begun canonicalization, spaces are no longer needed
-            // and should be dropped.
+        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+            // Since we've already begun canonicalization, spaces and parens
+            // are no longer needed and should be dropped.
             desugar(
                 arena,
                 arena.alloc(Located {
@@ -330,18 +330,6 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                     // * If this function takes an &'a Expr, then Infixes hits a problem.
                     // * If SpaceBefore holds a Loc<&'a Expr>, then Spaceable hits a problem.
                     // * If all the existing &'a Loc<Expr> values become Loc<&'a Expr>...who knows?
-                    value: (*expr).clone(),
-                    region: loc_expr.region,
-                }),
-            )
-        }
-        SpaceAfter(expr, _) => {
-            // Since we've already begun canonicalization, spaces are no longer needed
-            // and should be dropped.
-            desugar(
-                arena,
-                arena.alloc(Located {
-                    // TODO FIXME performance disaster!!! Must remove this clone! (Not easy.)
                     value: (*expr).clone(),
                     region: loc_expr.region,
                 }),
