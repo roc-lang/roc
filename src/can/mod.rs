@@ -1477,10 +1477,12 @@ fn can_defs<'a>(
                 ret_constraint: can_output.constraint.clone(),
             })));
 
+            // This only comes up if the expr we're naming turns out to be a closure.
+            // If it does, we're going to rename its corresponding Procedure!
             let mut renamed_closure_def: Option<&Symbol> = None;
 
             // Give closures names (and tail-recursive status) where appropriate.
-            let can_expr = match (
+            let opt_can_expr = match (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
                 &loc_can_expr.value,
@@ -1500,7 +1502,6 @@ fn can_defs<'a>(
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
                     let mut procedure = env.procedures.remove(&symbol).unwrap_or_else(||
                         panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.procedures));
-                    let proc_var = procedure.var;
 
                     // The original ident name will be used for debugging and stack traces.
                     procedure.name = Some((*name).into());
@@ -1525,11 +1526,11 @@ fn can_defs<'a>(
 
                     renamed_closure_def = Some(&defined_symbol);
 
-                    // Return a reference to the defined symbol, since the auto-generated one no
-                    // longer references any entry in the procedure map!
-                    Var(proc_var, defined_symbol.clone())
+                    // Now that we have a top-level Procedure, we no longer want
+                    // the local Def anymore. It would be redundant!
+                    None
                 }
-                _ => loc_can_expr.value,
+                _ => Some(loc_can_expr.value),
             };
 
             let mut defined_symbols = Vec::new();
@@ -1563,17 +1564,19 @@ fn can_defs<'a>(
                 defined_symbols.push(symbol.clone());
             }
 
-            for symbol in defined_symbols {
-                can_defs_by_symbol.insert(
-                    symbol,
-                    (
-                        loc_can_pattern.clone(),
-                        Located {
-                            region: loc_can_expr.region,
-                            value: can_expr.clone(),
-                        },
-                    ),
-                );
+            if let Some(can_expr) = opt_can_expr {
+                for symbol in defined_symbols {
+                    can_defs_by_symbol.insert(
+                        symbol,
+                        (
+                            loc_can_pattern.clone(),
+                            Located {
+                                region: loc_can_expr.region,
+                                value: can_expr.clone(),
+                            },
+                        ),
+                    );
+                }
             }
         }
     }
