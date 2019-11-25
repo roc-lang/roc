@@ -63,7 +63,7 @@ pub fn canonicalize_pattern<'a>(
 
     let can_pattern = match &pattern {
         &Identifier(ref name) => {
-            let unqualified_ident = Ident::Unqualified(name.to_string());
+            let lowercase_ident = Ident::Unqualified(name.to_string());
 
             // We use shadowable_idents for this, and not scope, because for assignments
             // they are different. When canonicalizing a particular assignment, that new
@@ -72,11 +72,11 @@ pub fn canonicalize_pattern<'a>(
             // For example, when canonicalizing (fibonacci = ...), `fibonacci` should be in scope
             // so that it can refer to itself without getting a naming problem, but it should not
             // be in the collection of shadowable idents because you can't shadow yourself!
-            match shadowable_idents.get(&unqualified_ident) {
+            match shadowable_idents.get(&lowercase_ident) {
                 Some((_, region)) => {
                     let loc_shadowed_ident = Located {
                         region: *region,
-                        value: unqualified_ident,
+                        value: lowercase_ident,
                     };
 
                     // This is already in scope, meaning it's about to be shadowed.
@@ -90,7 +90,7 @@ pub fn canonicalize_pattern<'a>(
                 None => {
                     // Make sure we aren't shadowing something in the home module's scope.
                     let qualified_ident =
-                        Ident::Qualified(env.home.to_string(), unqualified_ident.name());
+                        Ident::Qualified(env.home.to_string(), lowercase_ident.name());
 
                     match scope.idents.get(&qualified_ident) {
                         Some((_, region)) => {

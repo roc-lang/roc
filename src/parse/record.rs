@@ -4,7 +4,7 @@ use parse::ast::AssignedField;
 use parse::ast::Spaceable;
 use parse::blankspace::{space0, space0_before};
 use parse::collection::collection;
-use parse::ident::unqualified_ident;
+use parse::ident::lowercase_ident;
 use parse::parser::{self, and, char, loc, optional, skip_first, Parser};
 use region::Located;
 
@@ -43,7 +43,7 @@ where
     parser::map_with_arena(
         and(
             // You must have a field name, e.g. "email"
-            loc!(unqualified_ident()),
+            loc!(lowercase_ident()),
             and(
                 space0(min_indent),
                 // Having a value is optional; both `{ email }` and `{ email: blah }` work.

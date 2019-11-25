@@ -344,7 +344,7 @@ where
 ///
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
     variant_or_ident(|first_char| first_char.is_lowercase())
 }
 

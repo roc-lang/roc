@@ -25,7 +25,7 @@ use parse::blankspace::{
     space1_before,
 };
 use parse::collection::collection;
-use parse::ident::{ident, unqualified_ident, variant_or_ident, Ident};
+use parse::ident::{ident, lowercase_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
     allocated, between, char, not, not_followed_by, one_of10, one_of17, one_of2, one_of3, one_of5,
@@ -263,7 +263,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                 // as if there were any args they'd have consumed it anyway
                 // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
                 either!(
-                    one_or_more!(skip_first(char('.'), unqualified_ident())),
+                    one_or_more!(skip_first(char('.'), lowercase_ident())),
                     and!(space0(min_indent), equals_with_indent())
                 )
             ))
@@ -818,7 +818,7 @@ fn variant_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map!(unqualified_ident(), Pattern::Identifier)
+    map!(lowercase_ident(), Pattern::Identifier)
 }
 
 pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
