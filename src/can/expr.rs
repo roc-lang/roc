@@ -40,8 +40,7 @@ pub enum Expr {
         Box<Located<Expr>>,
     ),
 
-    CallByName(Symbol, Vec<Located<Expr>>, CalledVia),
-    CallPointer(Box<Expr>, Vec<Located<Expr>>, CalledVia),
+    Call(Box<Expr>, Vec<Located<Expr>>, CalledVia),
 
     // Product Types
     Record(Variable, Vec<Located<(Box<str>, Located<Expr>)>>),
