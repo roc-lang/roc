@@ -5,10 +5,8 @@ use collections::arena_join;
 use parse::ast::{Attempting, TypeAnnotation};
 use parse::blankspace::{space0_around, space1_before};
 use parse::parser::{
-    between, char, optional, skip_first, string, unexpected, unexpected_eof, ParseResult, Parser,
-    State,
+    char, optional, string, unexpected, unexpected_eof, ParseResult, Parser, State,
 };
-use parse::record::record;
 use region::Located;
 
 pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
@@ -26,13 +24,13 @@ pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a
 
 #[inline(always)]
 fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    between(
+    between!(
         char('('),
         space0_around(
             move |arena, state| located(min_indent).parse(arena, state),
             min_indent,
         ),
-        char(')'),
+        char(')')
     )
 }
 
@@ -42,14 +40,14 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
 
     map_with_arena!(
         and!(
-            record(
+            record!(
                 move |arena, state| located(min_indent).parse(arena, state),
-                min_indent,
+                min_indent
             ),
-            optional(skip_first(
+            optional(skip_first!(
                 // This could be a record fragment, e.g. `{ name: String }...r`
                 string("..."),
-                move |arena, state| located(min_indent).parse(arena, state),
+                move |arena, state| located(min_indent).parse(arena, state)
             ))
         ),
         |arena: &'a Bump, (rec, opt_bound_var)| match opt_bound_var {

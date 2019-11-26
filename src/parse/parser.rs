@@ -394,21 +394,6 @@ pub fn string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
     }
 }
 
-/// Parse everything between two braces (e.g. parentheses), skipping both braces
-/// and keeping only whatever was parsed in between them.
-pub fn between<'a, P, OpeningBrace, ClosingBrace, Val>(
-    opening_brace: OpeningBrace,
-    parser: P,
-    closing_brace: ClosingBrace,
-) -> impl Parser<'a, Val>
-where
-    OpeningBrace: Parser<'a, ()>,
-    P: Parser<'a, Val>,
-    ClosingBrace: Parser<'a, ()>,
-{
-    skip_first(opening_brace, skip_second(parser, closing_brace))
-}
-
 /// Parse zero or more values separated by a delimiter (e.g. a comma) whose
 /// values are discarded
 pub fn sep_by0<'a, P, D, Val>(delimiter: D, parser: P) -> impl Parser<'a, Vec<'a, Val>>
@@ -479,69 +464,6 @@ where
     }
 }
 
-/// If the first one parses, ignore its output and move on to parse with the second one.
-pub fn skip_first<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, B>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            Ok((_, state)) => match p2.parse(arena, state) {
-                Ok((out2, state)) => Ok((out2, state)),
-                Err((fail, state)) => Err((
-                    Fail {
-                        attempting: original_attempting,
-                        ..fail
-                    },
-                    state,
-                )),
-            },
-            Err((fail, state)) => Err((
-                Fail {
-                    attempting: original_attempting,
-                    ..fail
-                },
-                state,
-            )),
-        }
-    }
-}
-
-/// If the first one parses, parse the second one; if it also parses, use the
-/// output from the first one.
-pub fn skip_second<'a, P1, P2, A, B>(p1: P1, p2: P2) -> impl Parser<'a, A>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, B>,
-{
-    move |arena: &'a Bump, state: State<'a>| {
-        let original_attempting = state.attempting;
-
-        match p1.parse(arena, state) {
-            Ok((out1, state)) => match p2.parse(arena, state) {
-                Ok((_, state)) => Ok((out1, state)),
-                Err((fail, state)) => Err((
-                    Fail {
-                        attempting: original_attempting,
-                        ..fail
-                    },
-                    state,
-                )),
-            },
-            Err((fail, state)) => Err((
-                Fail {
-                    attempting: original_attempting,
-                    ..fail
-                },
-                state,
-            )),
-        }
-    }
-}
-
 pub fn optional<'a, P, T>(parser: P) -> impl Parser<'a, Option<T>>
 where
     P: Parser<'a, T>,
@@ -582,6 +504,93 @@ macro_rules! loc {
                 Err((fail, state)) => Err((fail, state)),
             }
         }
+    };
+}
+
+/// If the first one parses, ignore its output and move on to parse with the second one.
+#[macro_export]
+macro_rules! skip_first {
+    ($p1:expr, $p2:expr) => {
+        move |arena, state: $crate::parse::parser::State<'a>| {
+            use $crate::parse::parser::Fail;
+
+            let original_attempting = state.attempting;
+
+            match $p1.parse(arena, state) {
+                Ok((_, state)) => match $p2.parse(arena, state) {
+                    Ok((out2, state)) => Ok((out2, state)),
+                    Err((fail, state)) => Err((
+                        Fail {
+                            attempting: original_attempting,
+                            ..fail
+                        },
+                        state,
+                    )),
+                },
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_attempting,
+                        ..fail
+                    },
+                    state,
+                )),
+            }
+        }
+    };
+}
+
+/// If the first one parses, parse the second one; if it also parses, use the
+/// output from the first one.
+#[macro_export]
+macro_rules! skip_second {
+    ($p1:expr, $p2:expr) => {
+        move |arena, state: $crate::parse::parser::State<'a>| {
+            use $crate::parse::parser::Fail;
+
+            let original_attempting = state.attempting;
+
+            match $p1.parse(arena, state) {
+                Ok((out1, state)) => match $p2.parse(arena, state) {
+                    Ok((_, state)) => Ok((out1, state)),
+                    Err((fail, state)) => Err((
+                        Fail {
+                            attempting: original_attempting,
+                            ..fail
+                        },
+                        state,
+                    )),
+                },
+                Err((fail, state)) => Err((
+                    Fail {
+                        attempting: original_attempting,
+                        ..fail
+                    },
+                    state,
+                )),
+            }
+        }
+    };
+}
+
+/// Parse zero or more elements between two braces (e.g. square braces).
+/// Elements can be optionally surrounded by spaces, and are separated by a
+/// delimiter (e.g comma-separated). Braces and delimiters get discarded.
+#[macro_export]
+macro_rules! collection {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr) => {
+        // TODO allow trailing commas before the closing delimiter, *but* without
+        // losing any comments or newlines! This will require parsing them and then,
+        // if they are present, merging them into the final Spaceable.
+        skip_first!(
+            $opening_brace,
+            skip_second!(
+                $crate::parse::parser::sep_by0(
+                    $delimiter,
+                    $crate::parse::blankspace::space0_around($elem, $min_indent)
+                ),
+                $closing_brace
+            )
+        )
     };
 }
 
@@ -777,6 +786,70 @@ macro_rules! either {
                 },
             }
         }
+    };
+}
+
+/// Parse everything between two braces (e.g. parentheses), skipping both braces
+/// and keeping only whatever was parsed in between them.
+#[macro_export]
+macro_rules! between {
+    ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
+        skip_first!($opening_brace, skip_second!($parser, $closing_brace))
+    };
+}
+
+#[macro_export]
+macro_rules! record_field {
+    ($val_parser:expr, $min_indent:expr) => {
+        move |arena: &'a bumpalo::Bump,
+              state: $crate::parse::parser::State<'a>|
+              -> $crate::parse::parser::ParseResult<
+            'a,
+            $crate::parse::ast::AssignedField<'a, _>,
+        > {
+            use $crate::parse::ast::AssignedField::*;
+            use $crate::parse::blankspace::{space0, space0_before};
+            use $crate::parse::ident::lowercase_ident;
+
+            // You must have a field name, e.g. "email"
+            let (loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
+            let (spaces, state) = space0($min_indent).parse(arena, state)?;
+            // Having a value is optional; both `{ email }` and `{ email: blah }` work.
+            // (This is true in both literals and types.)
+            let (opt_loc_val, state) = $crate::parse::parser::optional(skip_first!(
+                char(':'),
+                space0_before($val_parser, $min_indent)
+            ))
+            .parse(arena, state)?;
+
+            let answer = match opt_loc_val {
+                Some(loc_val) => LabeledValue(loc_label, spaces, arena.alloc(loc_val)),
+                // If no value was provided, record it as a Var.
+                // Canonicalize will know what to do with a Var later.
+                None => {
+                    if !spaces.is_empty() {
+                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                    } else {
+                        LabelOnly(loc_label)
+                    }
+                }
+            };
+
+            Ok((answer, state))
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! record {
+    ($val_parser:expr, $min_indent:expr) => {
+        collection!(
+            char('{'),
+            loc!(record_field!($val_parser, $min_indent)),
+            char(','),
+            char('}'),
+            $min_indent
+        )
     };
 }
 

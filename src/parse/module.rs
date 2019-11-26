@@ -5,13 +5,9 @@ use parse::ast::{
     Module,
 };
 use parse::blankspace::{space1, space1_around};
-use parse::collection::collection;
 use parse::ident::unqualified_ident;
 use parse::parse;
-use parse::parser::{
-    self, char, loc, optional, skip_first, skip_second, string, unexpected, unexpected_eof, Parser,
-    State,
-};
+use parse::parser::{self, char, loc, optional, string, unexpected, unexpected_eof, Parser, State};
 use region::Located;
 
 pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
@@ -36,7 +32,7 @@ pub fn app_module<'a>() -> impl Parser<'a, Module<'a>> {
 pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
     parser::map(
         and!(
-            skip_first(string("interface"), and!(space1(1), loc!(module_name()))),
+            skip_first!(string("interface"), and!(space1(1), loc!(module_name()))),
             and!(exposes(), imports())
         ),
         |(
@@ -151,8 +147,8 @@ fn exposes<'a>() -> impl Parser<
     ),
 > {
     and!(
-        and!(skip_second(space1(1), string("exposes")), space1(1)),
-        collection(char('['), loc!(exposes_entry()), char(','), char(']'), 1)
+        and!(skip_second!(space1(1), string("exposes")), space1(1)),
+        collection!(char('['), loc!(exposes_entry()), char(','), char(']'), 1)
     )
 }
 
@@ -165,8 +161,8 @@ fn imports<'a>() -> impl Parser<
     ),
 > {
     and!(
-        and!(skip_second(space1(1), string("imports")), space1(1)),
-        collection(char('['), loc!(imports_entry()), char(','), char(']'), 1)
+        and!(skip_second!(space1(1), string("imports")), space1(1)),
+        collection!(char('['), loc!(imports_entry()), char(','), char(']'), 1)
     )
 }
 
@@ -182,9 +178,9 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
             // e.g. `Task`
             module_name(),
             // e.g. `.{ Task, after}`
-            optional(skip_first(
+            optional(skip_first!(
                 char('.'),
-                collection(char('{'), loc!(exposes_entry()), char(','), char('}'), 1)
+                collection!(char('{'), loc!(exposes_entry()), char(','), char('}'), 1)
             ))
         ),
         |arena,
