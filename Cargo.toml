@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 
 [dependencies]
-dogged = { version = "0.2.0", optional = true }
 log = "0.4.8"
 petgraph = { version = "0.4.5", optional = true }
 im-rc = "14.0.0"

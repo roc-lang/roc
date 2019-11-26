@@ -1,6 +1,6 @@
-#[cfg(feature = "persistent")]
-use dogged::DVec;
 use ena::snapshot_vec as sv;
+#[cfg(feature = "persistent")]
+use im::Vector;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{self, Range};
@@ -144,7 +144,7 @@ impl<K: UnifyKey> sv::SnapshotVecDelegate for Delegate<K> {
 #[cfg(feature = "persistent")]
 #[derive(Clone, Debug)]
 pub struct Persistent<K: UnifyKey> {
-    values: DVec<VarValue<K>>,
+    values: Vector<VarValue<K>>,
 }
 
 // HACK(eddyb) manual impl avoids `Default` bound on `K`.
@@ -152,7 +152,7 @@ pub struct Persistent<K: UnifyKey> {
 impl<K: UnifyKey> Default for Persistent<K> {
     fn default() -> Self {
         Persistent {
-            values: DVec::new(),
+            values: Vector::new(),
         }
     }
 }
@@ -185,7 +185,7 @@ impl<K: UnifyKey> UnificationStore for Persistent<K> {
     fn reset_unifications(&mut self, mut value: impl FnMut(u32) -> VarValue<Self::Key>) {
         // Without extending dogged, there isn't obviously a more
         // efficient way to do this. But it's pretty dumb. Maybe
-        // dogged needs a `map`.
+        // dogged needs a `map`. [NOTE: revisit in light of replacing dogged with im_rc!]
         for i in 0..self.values.len() {
             self.values[i] = value(i as u32);
         }
@@ -202,7 +202,7 @@ impl<K: UnifyKey> UnificationStore for Persistent<K> {
 
     #[inline]
     fn reserve(&mut self, _num_new_values: usize) {
-        // not obviously relevant to DVec.
+        // not obviously relevant to Vector.
     }
 
     #[inline]
