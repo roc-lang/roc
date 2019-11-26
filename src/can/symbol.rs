@@ -1,4 +1,5 @@
-use ident::VariantName;
+use ident::{UnqualifiedIdent, VariantName};
+use module::ModuleName;
 
 /// A globally unique identifier, used for both vars and variants.
 /// It will be used directly in code gen.
@@ -24,6 +25,13 @@ impl Symbol {
 
             VariantName::Qualified(path, name) => Symbol::new(path, name),
         }
+    }
+
+    pub fn from_module<'a>(
+        module_name: &'a ModuleName<'a>,
+        ident: &'a UnqualifiedIdent<'a>,
+    ) -> Symbol {
+        Symbol(format!("{}.{}", module_name.as_str(), ident.as_str()).into())
     }
 
     pub fn into_boxed_str(self) -> Box<str> {

@@ -2,6 +2,7 @@ use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use collections::arena_join;
+use ident::UnqualifiedIdent;
 use parse::ast::{Attempting, MaybeQualified};
 use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 
@@ -344,8 +345,15 @@ where
 ///
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
-pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
     variant_or_ident(|first_char| first_char.is_lowercase())
+}
+
+pub fn unqualified_ident<'a>() -> impl Parser<'a, UnqualifiedIdent<'a>> {
+    map!(
+        variant_or_ident(|first_char| first_char.is_alphabetic()),
+        UnqualifiedIdent::new
+    )
 }
 
 // TESTS
