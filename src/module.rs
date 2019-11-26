@@ -24,7 +24,7 @@ impl<'a> ModuleName<'a> {
 
     pub fn add_to_path(&'a self, filename: &'a mut PathBuf) {
         // Convert dots in module name to directories
-        for part in self.0.split(".") {
+        for part in self.0.split('.') {
             filename.push(part);
         }
 
