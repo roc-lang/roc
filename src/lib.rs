@@ -18,14 +18,14 @@ pub mod string;
 pub mod constrain;
 pub mod ena;
 pub mod fmt;
+pub mod gen;
 pub mod infer;
+pub mod module;
 pub mod pretty_print_types;
 pub mod solve;
 pub mod subs;
 pub mod types;
 pub mod unify;
-
-pub mod gen;
 
 extern crate bumpalo;
 extern crate fraction;

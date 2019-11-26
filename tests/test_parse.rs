@@ -17,14 +17,16 @@ mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
     use helpers::parse_with;
+    use roc::module::ModuleName;
     use roc::operator::BinOp::*;
     use roc::operator::CalledVia;
     use roc::operator::UnaryOp;
     use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
     use roc::parse::ast::Pattern::{self, *};
-    use roc::parse::ast::{Attempting, Def, Spaceable};
-    use roc::parse::parser::{Fail, FailReason};
+    use roc::parse::ast::{Attempting, Def, InterfaceHeader, Spaceable};
+    use roc::parse::module::interface_header;
+    use roc::parse::parser::{Fail, FailReason, Parser, State};
     use roc::region::{Located, Region};
     use std::{f64, i64};
 
@@ -1101,6 +1103,37 @@ mod test_parse {
                 "#
             ),
         );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // MODULE
+
+    #[test]
+    fn empty_module() {
+        let arena = Bump::new();
+        let exposes = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let module_name = ModuleName::new("Foo");
+        let expected = InterfaceHeader {
+            name: Located::new(0, 0, 10, 13, module_name),
+            exposes,
+            imports,
+
+            after_interface: &[],
+            before_exposes: &[],
+            after_exposes: &[],
+            before_imports: &[],
+            after_imports: &[],
+        };
+        let src = indoc!(
+            r#"
+                interface Foo exposes [] imports []
+            "#
+        );
+        let actual = interface_header()
+            .parse(&arena, State::new(&src, Attempting::Module))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }

@@ -16,10 +16,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use operator::{BinOp, CalledVia, UnaryOp};
 use parse;
-use parse::ast::{
-    AppHeader, AssignedField, Attempting, CommentOrNewline, Def, Expr, HeaderEntry,
-    InterfaceHeader, MaybeQualified, Module, Pattern, Spaceable,
-};
+use parse::ast::{AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable};
 use parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_after, space1_around,
     space1_before,
@@ -34,107 +31,6 @@ use parse::parser::{
 };
 use parse::record::record;
 use region::{Located, Region};
-
-pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
-    one_of2(interface_module(), app_module())
-}
-
-#[inline(always)]
-fn interface_module<'a>() -> impl Parser<'a, Module<'a>> {
-    map!(and!(interface_header(), module_defs()), |(header, defs)| {
-        Module::Interface { header, defs }
-    })
-}
-
-#[inline(always)]
-fn app_module<'a>() -> impl Parser<'a, Module<'a>> {
-    map!(and!(app_header(), module_defs()), |(header, defs)| {
-        Module::App { header, defs }
-    })
-}
-
-#[inline(always)]
-fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
-    parser::map(
-        and!(
-            skip_first(string("interface"), and!(space1(1), loc!(ident()))),
-            and!(mod_header_list("exposes"), mod_header_list("imports"))
-        ),
-        |(
-            (after_interface, loc_name_ident),
-            (
-                ((before_exposes, after_exposes), exposes),
-                ((before_imports, after_imports), imports),
-            ),
-        )| {
-            match loc_name_ident.value {
-                Ident::Variant(info) => {
-                    let name = Located {
-                        value: (info.module_parts, info.value),
-                        region: loc_name_ident.region,
-                    };
-
-                    InterfaceHeader {
-                        name,
-                        exposes,
-                        imports,
-                        after_interface,
-                        before_exposes,
-                        after_exposes,
-                        before_imports,
-                        after_imports,
-                    }
-                }
-                _ => panic!("TODO handle malformed module header"),
-            }
-        },
-    )
-}
-
-#[inline(always)]
-fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
-    move |_, _| {
-        panic!("TODO parse app header");
-    }
-}
-
-#[inline(always)]
-fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Def<'a>>> {
-    move |_, _| {
-        panic!("TODO parse defs");
-    }
-}
-
-/// Either "imports" or "exposes" - they both work the same way.
-#[inline(always)]
-fn mod_header_list<'a>(
-    kw: &'static str,
-) -> impl Parser<
-    'a,
-    (
-        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<HeaderEntry<'a>>>,
-    ),
-> {
-    and!(
-        and!(skip_second(space1(1), string(kw)), space1(1)),
-        collection(char('['), loc!(mod_header_entry()), char(','), char(']'), 1)
-    )
-}
-
-#[inline(always)]
-fn mod_header_entry<'a>() -> impl Parser<'a, HeaderEntry<'a>> {
-    one_of2(
-        map!(unqualified_ident(), |ident| HeaderEntry::Val(ident)),
-        map!(
-            and!(unqualified_variant(), optional(string("..."))),
-            |(ident, opt_ellipsis)| match opt_ellipsis {
-                None => HeaderEntry::TypeOnly(ident),
-                Some(()) => HeaderEntry::TypeAndVariants(ident),
-            }
-        ),
-    )
-}
 
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),

@@ -1,5 +1,34 @@
 use std::fmt::{self, Display, Formatter};
 
+/// An identifier, possibly fully-qualified with a module name
+/// e.g. (Http.Request from http)
+/// Parameterized on a phantom marker for whether it has been canonicalized
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct UnqualifiedIdent<'a>(&'a str);
+
+impl<'a> Into<&'a str> for UnqualifiedIdent<'a> {
+    fn into(self) -> &'a str {
+        self.0
+    }
+}
+
+impl<'a> UnqualifiedIdent<'a> {
+    pub fn new(name: &'a str) -> Self {
+        // Unqualified idents must always start with a lowercase character.
+        debug_assert!(name
+            .chars()
+            .next()
+            .expect("UnqualifiedIdent was empty")
+            .is_alphabetic());
+
+        UnqualifiedIdent(name)
+    }
+
+    pub fn as_str(&'a self) -> &'a str {
+        self.0
+    }
+}
+
 /// A variant name, possibly fully-qualified with a module name
 /// e.g. (Result.Ok)
 /// Parameterized on a phantom marker for whether it has been canonicalized

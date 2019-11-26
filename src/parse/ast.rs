@@ -1,32 +1,30 @@
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use fmt::{self, is_multiline_expr};
+use ident::UnqualifiedIdent;
+use module::ModuleName;
 use operator::CalledVia;
 use operator::{BinOp, UnaryOp};
 use parse::ident::Ident;
 use region::{Loc, Region};
 
-/// The number of spaces to indent.
-const INDENT: u16 = 4;
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
     Interface {
         header: InterfaceHeader<'a>,
-        defs: Vec<'a, Def<'a>>,
+        defs: Vec<'a, Loc<Def<'a>>>,
     },
     App {
         header: AppHeader<'a>,
-        defs: Vec<'a, Def<'a>>,
+        defs: Vec<'a, Loc<Def<'a>>>,
     },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct InterfaceHeader<'a> {
-    pub name: Loc<(&'a [&'a str], &'a str)>,
-    pub exposes: Vec<'a, Loc<HeaderEntry<'a>>>,
-    pub imports: Vec<'a, Loc<HeaderEntry<'a>>>,
+    pub name: Loc<ModuleName<'a>>,
+    pub exposes: Vec<'a, Loc<ExposesEntry<'a>>>,
+    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub after_interface: &'a [CommentOrNewline<'a>],
@@ -38,21 +36,31 @@ pub struct InterfaceHeader<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
-    pub imports: Vec<'a, Loc<HeaderEntry<'a>>>,
+    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
-    pub after_app: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum HeaderEntry<'a> {
-    Val(&'a str),
-    TypeOnly(&'a str),
-    TypeAndVariants(&'a str),
-    SpaceBefore(&'a HeaderEntry<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HeaderEntry<'a>, &'a [CommentOrNewline<'a>]),
+pub enum ExposesEntry<'a> {
+    /// e.g. `Task`
+    Ident(UnqualifiedIdent<'a>),
+
+    // Spaces
+    SpaceBefore(&'a ExposesEntry<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ExposesEntry<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImportsEntry<'a> {
+    /// e.g. `Task` or `Task.{ Task, after }`
+    Module(ModuleName<'a>, Vec<'a, Loc<ExposesEntry<'a>>>),
+
+    // Spaces
+    SpaceBefore(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 /// An optional qualifier (the `Foo.Bar` in `Foo.Bar.baz`).
@@ -392,12 +400,21 @@ impl<'a> Spaceable<'a> for TypeAnnotation<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for HeaderEntry<'a> {
+impl<'a> Spaceable<'a> for ExposesEntry<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HeaderEntry::SpaceBefore(self, spaces)
+        ExposesEntry::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HeaderEntry::SpaceAfter(self, spaces)
+        ExposesEntry::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for ImportsEntry<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        ImportsEntry::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        ImportsEntry::SpaceAfter(self, spaces)
     }
 }
 
@@ -519,511 +536,5 @@ impl<'a> Expr<'a> {
             region,
             value: self,
         }
-    }
-}
-
-pub fn format<'a>(
-    arena: &'a Bump,
-    expr: &'a Expr<'a>,
-    indent: u16,
-    apply_needs_parens: bool,
-) -> String<'a> {
-    use self::Expr::*;
-
-    let mut buf = String::new_in(arena);
-
-    match expr {
-        SpaceBefore(sub_expr, spaces) => {
-            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
-        }
-        SpaceAfter(sub_expr, spaces) => {
-            buf.push_str(&format(arena, sub_expr, indent, apply_needs_parens));
-            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-        }
-        ParensAround(sub_expr) => {
-            buf.push('(');
-            buf.push_str(&format(arena, sub_expr, indent, false));
-            buf.push(')');
-        }
-        Str(string) => {
-            buf.push('"');
-            buf.push_str(string);
-            buf.push('"');
-        }
-        Var(module_parts, name) => {
-            for part in module_parts.iter() {
-                buf.push_str(part);
-                buf.push('.');
-            }
-
-            buf.push_str(name);
-        }
-        Apply(loc_expr, loc_args, _) => {
-            if apply_needs_parens {
-                buf.push('(');
-            }
-
-            buf.push_str(&format(arena, &loc_expr.value, indent, true));
-
-            for loc_arg in loc_args {
-                buf.push(' ');
-
-                buf.push_str(&format(arena, &loc_arg.value, indent, true));
-            }
-
-            if apply_needs_parens {
-                buf.push(')');
-            }
-        }
-        BlockStr(lines) => {
-            buf.push_str("\"\"\"");
-            for line in lines.iter() {
-                buf.push_str(line);
-            }
-            buf.push_str("\"\"\"");
-        }
-        Int(string) => buf.push_str(string),
-        Float(string) => buf.push_str(string),
-        HexInt(string) => {
-            buf.push('0');
-            buf.push('x');
-            buf.push_str(string);
-        }
-        BinaryInt(string) => {
-            buf.push('0');
-            buf.push('b');
-            buf.push_str(string);
-        }
-        OctalInt(string) => {
-            buf.push('0');
-            buf.push('o');
-            buf.push_str(string);
-        }
-        Record(loc_fields) => {
-            buf.push('{');
-
-            let is_multiline = loc_fields
-                .iter()
-                .any(|loc_field| fmt::is_multiline_field(&loc_field.value));
-
-            let mut iter = loc_fields.iter().peekable();
-            let field_indent = if is_multiline {
-                indent + INDENT
-            } else {
-                if !loc_fields.is_empty() {
-                    buf.push(' ');
-                }
-
-                indent
-            };
-
-            while let Some(field) = iter.next() {
-                buf.push_str(&format_field(
-                    arena,
-                    &field.value,
-                    is_multiline,
-                    field_indent,
-                    apply_needs_parens,
-                ));
-
-                if iter.peek().is_some() {
-                    buf.push(',');
-
-                    if !is_multiline {
-                        buf.push(' ');
-                    }
-                }
-            }
-
-            if is_multiline {
-                buf.push('\n');
-            } else if !loc_fields.is_empty() {
-                buf.push(' ');
-            }
-
-            buf.push('}');
-        }
-        Closure(loc_patterns, loc_ret) => {
-            buf.push('\\');
-
-            for loc_pattern in loc_patterns.iter() {
-                buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
-
-                buf.push(' ');
-            }
-
-            let is_multiline = is_multiline_expr(&loc_ret.value);
-
-            // If the body is multiline, go down a line and indent.
-            let indent = if is_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            buf.push_str("->");
-
-            let newline_is_next = match &loc_ret.value {
-                SpaceBefore(_, _) => true,
-                _ => false,
-            };
-
-            if !newline_is_next {
-                // Push a space after the "->" preceding this.
-                buf.push(' ');
-            }
-
-            buf.push_str(&format(arena, &loc_ret.value, indent, false));
-        }
-        Defs(defs, ret) => {
-            // The first def is actually at the end of the list, because
-            // it gets added there with .push() for efficiency. (The order of parsed defs doesn't
-            // matter because canonicalization sorts them anyway.) The other
-            // defs in the list are in their usual order.
-            let loc_first_def = defs.last().unwrap_or_else(|| {
-                panic!("Tried to format Defs which somehow had an empty list of defs!")
-            });
-            let other_spaced_defs = &defs[0..defs.len() - 1];
-
-            buf.push_str(&format_def(arena, &loc_first_def.value, indent));
-
-            for loc_def in other_spaced_defs.iter() {
-                buf.push_str(&format_def(arena, &loc_def.value, indent));
-            }
-
-            buf.push_str(&format(arena, &ret.value, indent, false));
-        }
-        If((loc_condition, loc_then, loc_else)) => {
-            buf.push_str("if ");
-            buf.push_str(&format(arena, &loc_condition.value, indent, false));
-            buf.push_str(" then ");
-            buf.push_str(&format(arena, &loc_then.value, indent, false));
-            buf.push_str(" else ");
-            buf.push_str(&format(arena, &loc_else.value, indent, false));
-        }
-        Case(loc_condition, branches) => {
-            buf.push_str("case ");
-            buf.push_str(&format(arena, &loc_condition.value, indent, false));
-            buf.push_str(" when\n");
-
-            let mut it = branches.iter().peekable();
-            while let Some((pattern, expr)) = it.next() {
-                add_spaces(&mut buf, indent + INDENT);
-
-                match pattern.value {
-                    Pattern::SpaceBefore(nested, spaces) => {
-                        buf.push_str(&format_comments_only(arena, spaces.iter(), indent + INDENT));
-                        buf.push_str(&format_pattern(arena, nested, indent + INDENT, false));
-                    }
-                    _ => {
-                        buf.push_str(&format_pattern(
-                            arena,
-                            &pattern.value,
-                            indent + INDENT,
-                            false,
-                        ));
-                    }
-                }
-
-                buf.push_str(" ->\n");
-
-                add_spaces(&mut buf, indent + (INDENT * 2));
-                match expr.value {
-                    Expr::SpaceBefore(nested, spaces) => {
-                        buf.push_str(&format_comments_only(
-                            arena,
-                            spaces.iter(),
-                            indent + (INDENT * 2),
-                        ));
-                        buf.push_str(&format(arena, &nested, indent + (INDENT * 2), false));
-                    }
-                    _ => {
-                        buf.push_str(&format(arena, &expr.value, indent + (INDENT * 2), false));
-                    }
-                }
-
-                if it.peek().is_some() {
-                    buf.push('\n');
-                    buf.push('\n');
-                }
-            }
-        }
-        other => panic!("TODO implement Display for AST variant {:?}", other),
-    }
-
-    buf
-}
-
-pub fn format_def<'a>(arena: &'a Bump, def: &'a Def<'a>, indent: u16) -> String<'a> {
-    let mut buf = String::new_in(arena);
-
-    match def {
-        Def::Annotation(_, _) => panic!("TODO have format_def support Annotation"),
-        Def::Body(loc_pattern, loc_expr) => {
-            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
-            buf.push_str(" = ");
-            buf.push_str(&format(arena, &loc_expr.value, indent, false));
-        }
-        Def::CustomType(_, _) => panic!("TODO have format_def support CustomType"),
-        Def::TypeAlias(_, _) => panic!("TODO have format_def support TypeAlias"),
-        Def::SpaceBefore(sub_def, spaces) => {
-            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            buf.push_str(&format_def(arena, sub_def, indent));
-        }
-        Def::SpaceAfter(sub_def, spaces) => {
-            buf.push_str(&format_def(arena, sub_def, indent));
-
-            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-        }
-    }
-
-    buf
-}
-
-fn format_pattern<'a>(
-    arena: &'a Bump,
-    pattern: &'a Pattern<'a>,
-    indent: u16,
-    apply_needs_parens: bool,
-) -> String<'a> {
-    use self::Pattern::*;
-
-    let mut buf = String::new_in(arena);
-
-    match pattern {
-        Identifier(string) => buf.push_str(string),
-        Variant(module_parts, name) => {
-            for part in module_parts.iter() {
-                buf.push_str(part);
-                buf.push('.');
-            }
-
-            buf.push_str(name);
-        }
-        Apply(loc_pattern, loc_arg_patterns) => {
-            if apply_needs_parens {
-                buf.push('(');
-            }
-
-            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
-
-            for loc_arg in loc_arg_patterns.iter() {
-                buf.push(' ');
-                buf.push_str(&format_pattern(arena, &loc_arg.value, indent, true));
-            }
-
-            if apply_needs_parens {
-                buf.push(')');
-            }
-        }
-        RecordDestructure(loc_patterns) => {
-            buf.push_str("{ ");
-
-            let mut is_first = true;
-
-            for loc_pattern in loc_patterns {
-                if is_first {
-                    is_first = false;
-                } else {
-                    buf.push_str(", ");
-                }
-
-                buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
-            }
-
-            buf.push_str(" }");
-        }
-
-        RecordField(name, loc_pattern) => {
-            buf.push_str(name);
-            buf.push_str(": ");
-            buf.push_str(&format_pattern(arena, &loc_pattern.value, indent, true));
-        }
-
-        IntLiteral(string) => buf.push_str(string),
-        HexIntLiteral(string) => buf.push_str(string),
-        OctalIntLiteral(string) => buf.push_str(string),
-        BinaryIntLiteral(string) => buf.push_str(string),
-        FloatLiteral(string) => buf.push_str(string),
-        StrLiteral(string) => buf.push_str(string),
-        BlockStrLiteral(lines) => {
-            for line in *lines {
-                buf.push_str(line)
-            }
-        }
-        EmptyRecordLiteral => buf.push_str("{}"),
-        Underscore => buf.push('_'),
-
-        // Space
-        SpaceBefore(sub_pattern, spaces) => {
-            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            buf.push_str(&format_pattern(
-                arena,
-                sub_pattern,
-                indent,
-                apply_needs_parens,
-            ));
-        }
-        SpaceAfter(sub_pattern, spaces) => {
-            buf.push_str(&format_pattern(
-                arena,
-                sub_pattern,
-                indent,
-                apply_needs_parens,
-            ));
-            buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-        }
-
-        // Malformed
-        Malformed(string) => buf.push_str(string),
-        QualifiedIdentifier(maybe_qualified) => {
-            for part in maybe_qualified.module_parts.iter() {
-                buf.push_str(part);
-                buf.push('.');
-            }
-
-            buf.push_str(maybe_qualified.value);
-        }
-    }
-
-    buf
-}
-
-fn format_spaces<'a, I>(arena: &'a Bump, spaces: I, indent: u16) -> String<'a>
-where
-    I: Iterator<Item = &'a CommentOrNewline<'a>>,
-{
-    use self::CommentOrNewline::*;
-
-    let mut buf = String::new_in(arena);
-    let mut consecutive_newlines = 0;
-    let mut iter = spaces.peekable();
-
-    while let Some(space) = iter.next() {
-        match space {
-            Newline => {
-                // Only ever print two newlines back to back.
-                // (Two newlines renders as one blank line.)
-                if consecutive_newlines < 2 {
-                    if iter.peek() == Some(&&Newline) {
-                        buf.push('\n');
-                    } else {
-                        newline(&mut buf, indent);
-                    }
-
-                    // Don't bother incrementing it if we're already over the limit.
-                    // There's no upside, and it might eventually overflow,
-                    consecutive_newlines += 1;
-                }
-            }
-            LineComment(comment) => {
-                buf.push('#');
-                buf.push_str(comment);
-
-                newline(&mut buf, indent);
-
-                // Reset to 1 because we just printed a \n
-                consecutive_newlines = 1;
-            }
-        }
-    }
-
-    buf
-}
-
-/// Like format_spaces, but remove newlines and keep only comments.
-fn format_comments_only<'a, I>(arena: &'a Bump, spaces: I, indent: u16) -> String<'a>
-where
-    I: Iterator<Item = &'a CommentOrNewline<'a>>,
-{
-    use self::CommentOrNewline::*;
-
-    let mut buf = String::new_in(arena);
-
-    for space in spaces {
-        match space {
-            Newline => {}
-            LineComment(comment) => {
-                buf.push('#');
-                buf.push_str(comment);
-
-                newline(&mut buf, indent);
-            }
-        }
-    }
-
-    buf
-}
-
-pub fn format_field<'a>(
-    arena: &'a Bump,
-    assigned_field: &'a AssignedField<'a, Expr<'a>>,
-    is_multiline: bool,
-    indent: u16,
-    apply_needs_parens: bool,
-) -> String<'a> {
-    use self::AssignedField::*;
-
-    let mut buf = String::new_in(arena);
-
-    match assigned_field {
-        LabeledValue(name, spaces, value) => {
-            if is_multiline {
-                newline(&mut buf, indent);
-            }
-
-            buf.push_str(name.value);
-
-            if !spaces.is_empty() {
-                buf.push_str(&format_spaces(arena, spaces.iter(), indent));
-            }
-
-            buf.push(':');
-            buf.push(' ');
-            buf.push_str(&format(arena, &value.value, indent, apply_needs_parens));
-        }
-        LabelOnly(name) => {
-            if is_multiline {
-                newline(&mut buf, indent);
-            }
-
-            buf.push_str(name.value);
-        }
-        AssignedField::SpaceBefore(sub_expr, spaces) => {
-            buf.push_str(&format_comments_only(arena, spaces.iter(), indent));
-            buf.push_str(&format_field(
-                arena,
-                sub_expr,
-                is_multiline,
-                indent,
-                apply_needs_parens,
-            ));
-        }
-        AssignedField::SpaceAfter(sub_expr, spaces) => {
-            buf.push_str(&format_field(
-                arena,
-                sub_expr,
-                is_multiline,
-                indent,
-                apply_needs_parens,
-            ));
-            buf.push_str(&format_comments_only(arena, spaces.iter(), indent));
-        }
-        Malformed(string) => buf.push_str(string),
-    }
-
-    buf
-}
-
-fn newline<'a>(buf: &mut String<'a>, indent: u16) {
-    buf.push('\n');
-
-    add_spaces(buf, indent);
-}
-
-fn add_spaces<'a>(buf: &mut String<'a>, spaces: u16) {
-    for _ in 0..spaces {
-        buf.push(' ');
     }
 }
