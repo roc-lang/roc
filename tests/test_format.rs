@@ -500,4 +500,15 @@ mod test_format {
             "#
         ));
     }
+
+    #[test]
+    fn interface_importing() {
+        module_formats_same(indoc!(
+            r#"
+                interface Foo
+                    exposes [ Bar, Baz, a, b ]
+                    imports [ Blah, Thing.{ foo, bar }, Stuff ]
+            "#
+        ));
+    }
 }

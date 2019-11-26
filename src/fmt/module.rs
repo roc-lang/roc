@@ -68,7 +68,7 @@ pub fn fmt_interface_header<'a>(buf: &mut String<'a>, header: &'a InterfaceHeade
         fmt_spaces(buf, header.after_imports.iter(), indent);
     }
 
-    fmt_imports(buf, &header.imports);
+    fmt_imports(buf, &header.imports, indent);
 }
 
 pub fn fmt_app_header<'a>(buf: &mut String<'a>, header: &'a AppHeader<'a>) {
@@ -78,19 +78,27 @@ pub fn fmt_app_header<'a>(buf: &mut String<'a>, header: &'a AppHeader<'a>) {
 
     // imports
     fmt_spaces(buf, header.before_imports.iter(), indent);
-    fmt_imports(buf, &header.imports);
+    fmt_imports(buf, &header.imports, indent);
     fmt_spaces(buf, header.after_imports.iter(), indent);
 }
 
-fn fmt_imports<'a>(buf: &mut String<'a>, loc_entries: &'a Vec<'a, Located<ImportsEntry<'a>>>) {
+fn fmt_imports<'a>(
+    buf: &mut String<'a>,
+    loc_entries: &'a Vec<'a, Located<ImportsEntry<'a>>>,
+    indent: u16,
+) {
     buf.push('[');
 
     if !loc_entries.is_empty() {
         buf.push(' ');
     }
 
-    for loc_entry in loc_entries {
-        fmt_imports_entry(buf, &loc_entry.value);
+    for (index, loc_entry) in loc_entries.iter().enumerate() {
+        if index > 0 {
+            buf.push_str(", ");
+        }
+
+        fmt_imports_entry(buf, &loc_entry.value, indent);
     }
 
     if !loc_entries.is_empty() {
@@ -98,10 +106,6 @@ fn fmt_imports<'a>(buf: &mut String<'a>, loc_entries: &'a Vec<'a, Located<Import
     }
 
     buf.push(']');
-}
-
-fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>) {
-    panic!("TODO fmt import entry");
 }
 
 fn fmt_exposes<'a>(
@@ -142,6 +146,48 @@ fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a>, inde
         }
         SpaceAfter(sub_entry, spaces) => {
             fmt_exposes_entry(buf, sub_entry, indent);
+            fmt_spaces(buf, spaces.iter(), indent);
+        }
+    }
+}
+
+fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>, indent: u16) {
+    use parse::ast::ImportsEntry::*;
+
+    match entry {
+        Module(module, loc_exposes_entries) => {
+            buf.push_str(module.as_str());
+
+            if !loc_exposes_entries.is_empty() {
+                buf.push('.');
+                buf.push('{');
+
+                if !loc_exposes_entries.is_empty() {
+                    buf.push(' ');
+                }
+
+                for (index, loc_entry) in loc_exposes_entries.iter().enumerate() {
+                    if index > 0 {
+                        buf.push_str(", ");
+                    }
+
+                    fmt_exposes_entry(buf, &loc_entry.value, indent);
+                }
+
+                if !loc_exposes_entries.is_empty() {
+                    buf.push(' ');
+                }
+
+                buf.push('}');
+            }
+        }
+
+        SpaceBefore(sub_entry, spaces) => {
+            fmt_spaces(buf, spaces.iter(), indent);
+            fmt_imports_entry(buf, sub_entry, indent);
+        }
+        SpaceAfter(sub_entry, spaces) => {
+            fmt_imports_entry(buf, sub_entry, indent);
             fmt_spaces(buf, spaces.iter(), indent);
         }
     }
