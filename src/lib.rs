@@ -22,10 +22,10 @@ pub mod unify;
 
 extern crate bumpalo;
 extern crate fraction;
-extern crate fxhash;
 extern crate im_rc;
 extern crate inkwell;
 extern crate num;
+extern crate wyhash;
 
 #[macro_use]
 extern crate log;

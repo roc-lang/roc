@@ -9,7 +9,7 @@ petgraph = { version = "0.4.5", optional = true }
 im-rc = "14.0.0"
 fraction = "0.6.2"
 num = "0.2.0"
-fxhash = "0.2.1"
+wyhash = "0.3.0"
 bumpalo = "2.6.0"
 # NOTE: Breaking API changes get pushed directly to this Inkwell branch, so be
 # very careful when running `cargo update` to get a new revision into Cargo.lock.
