@@ -159,12 +159,7 @@ fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>, inde
             buf.push_str(module.as_str());
 
             if !loc_exposes_entries.is_empty() {
-                buf.push('.');
-                buf.push('{');
-
-                if !loc_exposes_entries.is_empty() {
-                    buf.push(' ');
-                }
+                buf.push_str(".{ ");
 
                 for (index, loc_entry) in loc_exposes_entries.iter().enumerate() {
                     if index > 0 {
@@ -174,11 +169,7 @@ fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>, inde
                     fmt_exposes_entry(buf, &loc_entry.value, indent);
                 }
 
-                if !loc_exposes_entries.is_empty() {
-                    buf.push(' ');
-                }
-
-                buf.push('}');
+                buf.push_str(" }");
             }
         }
 
