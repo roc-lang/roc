@@ -7,8 +7,6 @@ authors = ["Richard Feldman <oss@rtfeldman.com>"]
 log = "0.4.8"
 petgraph = { version = "0.4.5", optional = true }
 im-rc = "14.0.0"
-fraction = "0.6.2"
-num = "0.2.0"
 wyhash = "0.3.0"
 bumpalo = "2.6.0"
 # NOTE: Breaking API changes get pushed directly to this Inkwell branch, so be
