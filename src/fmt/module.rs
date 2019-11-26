@@ -23,13 +23,15 @@ pub fn fmt_module<'a>(buf: &mut String<'a>, module: &'a Module<'a>) {
 }
 
 pub fn fmt_interface_header<'a>(buf: &mut String<'a>, header: &'a InterfaceHeader<'a>) {
+    let indent = INDENT;
+
     buf.push_str("interface");
 
     // module name
     if header.after_interface.is_empty() {
         buf.push(' ');
     } else {
-        fmt_spaces(buf, header.after_interface.iter(), INDENT);
+        fmt_spaces(buf, header.after_interface.iter(), indent);
     }
 
     buf.push_str(header.name.value.as_str());
@@ -38,7 +40,7 @@ pub fn fmt_interface_header<'a>(buf: &mut String<'a>, header: &'a InterfaceHeade
     if header.before_exposes.is_empty() {
         buf.push(' ');
     } else {
-        fmt_spaces(buf, header.before_exposes.iter(), INDENT);
+        fmt_spaces(buf, header.before_exposes.iter(), indent);
     }
 
     buf.push_str("exposes");
@@ -46,16 +48,16 @@ pub fn fmt_interface_header<'a>(buf: &mut String<'a>, header: &'a InterfaceHeade
     if header.after_exposes.is_empty() {
         buf.push(' ');
     } else {
-        fmt_spaces(buf, header.after_exposes.iter(), INDENT);
+        fmt_spaces(buf, header.after_exposes.iter(), indent);
     }
 
-    fmt_exposes(buf, &header.exposes);
+    fmt_exposes(buf, &header.exposes, indent);
 
     // imports
     if header.before_imports.is_empty() {
         buf.push(' ');
     } else {
-        fmt_spaces(buf, header.before_imports.iter(), INDENT);
+        fmt_spaces(buf, header.before_imports.iter(), indent);
     }
 
     buf.push_str("imports");
@@ -63,19 +65,21 @@ pub fn fmt_interface_header<'a>(buf: &mut String<'a>, header: &'a InterfaceHeade
     if header.after_imports.is_empty() {
         buf.push(' ');
     } else {
-        fmt_spaces(buf, header.after_imports.iter(), INDENT);
+        fmt_spaces(buf, header.after_imports.iter(), indent);
     }
 
     fmt_imports(buf, &header.imports);
 }
 
 pub fn fmt_app_header<'a>(buf: &mut String<'a>, header: &'a AppHeader<'a>) {
+    let indent = INDENT;
+
     buf.push_str("app");
 
     // imports
-    fmt_spaces(buf, header.before_imports.iter(), INDENT);
+    fmt_spaces(buf, header.before_imports.iter(), indent);
     fmt_imports(buf, &header.imports);
-    fmt_spaces(buf, header.after_imports.iter(), INDENT);
+    fmt_spaces(buf, header.after_imports.iter(), indent);
 }
 
 fn fmt_imports<'a>(buf: &mut String<'a>, loc_entries: &'a Vec<'a, Located<ImportsEntry<'a>>>) {
@@ -100,15 +104,23 @@ fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>) {
     panic!("TODO fmt import entry");
 }
 
-fn fmt_exposes<'a>(buf: &mut String<'a>, loc_entries: &'a Vec<'a, Located<ExposesEntry<'a>>>) {
+fn fmt_exposes<'a>(
+    buf: &mut String<'a>,
+    loc_entries: &'a Vec<'a, Located<ExposesEntry<'a>>>,
+    indent: u16,
+) {
     buf.push('[');
 
     if !loc_entries.is_empty() {
         buf.push(' ');
     }
 
-    for loc_entry in loc_entries {
-        fmt_exposes_entry(buf, &loc_entry.value);
+    for (index, loc_entry) in loc_entries.iter().enumerate() {
+        if index > 0 {
+            buf.push_str(", ");
+        }
+
+        fmt_exposes_entry(buf, &loc_entry.value, indent);
     }
 
     if !loc_entries.is_empty() {
@@ -118,6 +130,19 @@ fn fmt_exposes<'a>(buf: &mut String<'a>, loc_entries: &'a Vec<'a, Located<Expose
     buf.push(']');
 }
 
-fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a>) {
-    panic!("TODO fmt import entry");
+fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a>, indent: u16) {
+    use parse::ast::ExposesEntry::*;
+
+    match entry {
+        Ident(ident) => buf.push_str(ident.as_str()),
+
+        SpaceBefore(sub_entry, spaces) => {
+            fmt_spaces(buf, spaces.iter(), indent);
+            fmt_exposes_entry(buf, sub_entry, indent);
+        }
+        SpaceAfter(sub_entry, spaces) => {
+            fmt_exposes_entry(buf, sub_entry, indent);
+            fmt_spaces(buf, spaces.iter(), indent);
+        }
+    }
 }

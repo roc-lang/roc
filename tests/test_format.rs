@@ -471,10 +471,21 @@ mod test_format {
     // MODULES
 
     #[test]
-    fn empty_interface() {
+    fn single_line_interface() {
         module_formats_same(indoc!(
             r#"
                 interface Foo exposes [] imports []
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_interface() {
+        module_formats_same(indoc!(
+            r#"
+                interface Foo
+                    exposes []
+                    imports []
             "#
         ));
     }
@@ -484,7 +495,7 @@ mod test_format {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes []
+                    exposes [ Bar, Baz, a, b ]
                     imports []
             "#
         ));
