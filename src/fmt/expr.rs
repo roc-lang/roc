@@ -1,9 +1,9 @@
+use bumpalo::collections::{String, Vec};
 use fmt::def::fmt_def;
 use fmt::pattern::fmt_pattern;
 use fmt::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, INDENT};
-
-use bumpalo::collections::String;
 use parse::ast::{AssignedField, Expr, Pattern};
+use region::Located;
 
 pub fn fmt_expr<'a>(
     buf: &mut String<'a>,
@@ -82,48 +82,7 @@ pub fn fmt_expr<'a>(
             buf.push_str(string);
         }
         Record(loc_fields) => {
-            buf.push('{');
-
-            let is_multiline = loc_fields
-                .iter()
-                .any(|loc_field| is_multiline_field(&loc_field.value));
-
-            let mut iter = loc_fields.iter().peekable();
-            let field_indent = if is_multiline {
-                indent + INDENT
-            } else {
-                if !loc_fields.is_empty() {
-                    buf.push(' ');
-                }
-
-                indent
-            };
-
-            while let Some(field) = iter.next() {
-                fmt_field(
-                    buf,
-                    &field.value,
-                    is_multiline,
-                    field_indent,
-                    apply_needs_parens,
-                );
-
-                if iter.peek().is_some() {
-                    buf.push(',');
-
-                    if !is_multiline {
-                        buf.push(' ');
-                    }
-                }
-            }
-
-            if is_multiline {
-                buf.push('\n');
-            } else if !loc_fields.is_empty() {
-                buf.push(' ');
-            }
-
-            buf.push('}');
+            fmt_record(buf, loc_fields, indent, apply_needs_parens);
         }
         Closure(loc_patterns, loc_ret) => {
             buf.push('\\');
@@ -356,4 +315,54 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
 
 pub fn is_multiline_pattern<'a>(_pattern: &'a Pattern<'a>) -> bool {
     panic!("TODO return iff there are any newlines")
+}
+
+pub fn fmt_record<'a>(
+    buf: &mut String<'a>,
+    loc_fields: &'a Vec<'a, Located<AssignedField<'a, Expr<'a>>>>,
+    indent: u16,
+    apply_needs_parens: bool,
+) {
+    buf.push('{');
+
+    let is_multiline = loc_fields
+        .iter()
+        .any(|loc_field| is_multiline_field(&loc_field.value));
+
+    let mut iter = loc_fields.iter().peekable();
+    let field_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        if !loc_fields.is_empty() {
+            buf.push(' ');
+        }
+
+        indent
+    };
+
+    while let Some(field) = iter.next() {
+        fmt_field(
+            buf,
+            &field.value,
+            is_multiline,
+            field_indent,
+            apply_needs_parens,
+        );
+
+        if iter.peek().is_some() {
+            buf.push(',');
+
+            if !is_multiline {
+                buf.push(' ');
+            }
+        }
+    }
+
+    if is_multiline {
+        buf.push('\n');
+    } else if !loc_fields.is_empty() {
+        buf.push(' ');
+    }
+
+    buf.push('}');
 }
