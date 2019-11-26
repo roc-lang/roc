@@ -9,13 +9,13 @@ use parse::collection::collection;
 use parse::ident::unqualified_ident;
 use parse::parse;
 use parse::parser::{
-    self, char, loc, one_of2, optional, skip_first, skip_second, string, unexpected,
-    unexpected_eof, Parser, State,
+    self, char, loc, optional, skip_first, skip_second, string, unexpected, unexpected_eof, Parser,
+    State,
 };
 use region::Located;
 
 pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
-    one_of2(interface_module(), app_module())
+    one_of!(interface_module(), app_module())
 }
 
 #[inline(always)]

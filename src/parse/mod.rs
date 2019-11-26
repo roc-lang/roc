@@ -25,9 +25,8 @@ use parse::collection::collection;
 use parse::ident::{ident, lowercase_ident, variant_or_ident, Ident};
 use parse::number_literal::number_literal;
 use parse::parser::{
-    allocated, between, char, not, not_followed_by, one_of10, one_of17, one_of2, one_of3, one_of5,
-    one_of6, optional, skip_first, skip_second, string, then, unexpected, unexpected_eof, Either,
-    Fail, FailReason, ParseResult, Parser, State,
+    allocated, between, char, not, not_followed_by, optional, skip_first, skip_second, string,
+    then, unexpected, unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
 };
 use parse::record::record;
 use region::{Located, Region};
@@ -44,7 +43,7 @@ fn loc_parse_expr_body_without_operators<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
-    one_of10(
+    one_of!(
         loc_parenthetical_expr(min_indent),
         loc!(string_literal()),
         loc!(number_literal()),
@@ -54,7 +53,7 @@ fn loc_parse_expr_body_without_operators<'a>(
         loc!(unary_op(min_indent)),
         loc!(case_expr(min_indent)),
         loc!(if_expr(min_indent)),
-        loc!(ident_etc(min_indent)),
+        loc!(ident_etc(min_indent))
     )
     .parse(arena, state)
 }
@@ -63,7 +62,7 @@ fn loc_parse_expr_body_without_operators<'a>(
 ///
 /// e.g. `!x` or `-x`
 pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    one_of2(
+    one_of!(
         map_with_arena!(
             and!(
                 loc!(char('!')),
@@ -81,7 +80,7 @@ pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Negate))
             }
-        ),
+        )
     )
 }
 
@@ -393,7 +392,7 @@ pub fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
 /// The '=' used in a def can't be followed by another '=' (or else it's actually
 /// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
 fn equals_for_def<'a>() -> impl Parser<'a, ()> {
-    not_followed_by(char('='), one_of2(char('='), char('>')))
+    not_followed_by(char('='), one_of!(char('='), char('>')))
 }
 
 /// A definition, consisting of one of these:
@@ -407,7 +406,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     // Indented more beyond the original indent.
     let indented_more = min_indent + 1;
 
-    one_of2(
+    one_of!(
         // Constant or annotation
         map_with_arena!(
             and!(
@@ -477,7 +476,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                 Either::First(loc_ann) => Def::CustomType(loc_type_name, loc_ann),
                 Either::Second(anns) => Def::TypeAlias(loc_type_name, anns),
             }
-        ),
+        )
     )
 }
 
@@ -572,7 +571,7 @@ fn loc_parse_function_arg<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
-    one_of10(
+    one_of!(
         loc_parenthetical_expr(min_indent),
         loc!(string_literal()),
         loc!(number_literal()),
@@ -582,18 +581,18 @@ fn loc_parse_function_arg<'a>(
         loc!(unary_op(min_indent)),
         loc!(case_expr(min_indent)),
         loc!(if_expr(min_indent)),
-        loc!(ident_without_apply()),
+        loc!(ident_without_apply())
     )
     .parse(arena, state)
 }
 
 fn reserved_keyword<'a>() -> impl Parser<'a, ()> {
-    one_of5(
+    one_of!(
         string(keyword::IF),
         string(keyword::THEN),
         string(keyword::ELSE),
         string(keyword::CASE),
-        string(keyword::WHEN),
+        string(keyword::WHEN)
     )
 }
 
@@ -646,7 +645,7 @@ fn parse_closure_param<'a>(
     state: State<'a>,
     min_indent: u16,
 ) -> ParseResult<'a, Located<Pattern<'a>>> {
-    one_of5(
+    one_of!(
         // An ident is the most common param, e.g. \foo -> ...
         loc!(ident_pattern()),
         // Underscore is also common, e.g. \_ -> ...
@@ -663,19 +662,19 @@ fn parse_closure_param<'a>(
         // The least common, but still allowed, e.g. \Foo -> ...
         loc!(map!(unqualified_variant(), |name| {
             Pattern::Variant(&[], name)
-        })),
+        }))
     )
     .parse(arena, state)
 }
 
 fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
-    one_of6(
+    one_of!(
         underscore_pattern(),
         variant_pattern(),
         ident_pattern(),
         record_destructure(min_indent),
         string_pattern(),
-        int_pattern(),
+        int_pattern()
     )
 }
 
@@ -880,7 +879,7 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
         // Spaces, then '-', then *not* more spaces.
         not_followed_by(
             and!(space1(min_indent), loc!(char('-'))),
-            one_of3(char(' '), char('#'), char('\n')),
+            one_of!(char(' '), char('#'), char('\n')),
         ),
         move |arena, state, (spaces, loc_minus_char)| {
             let region = loc_minus_char.region;
@@ -927,9 +926,9 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
 }
 
 fn loc_function_args<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>> {
-    one_or_more!(one_of2(
+    one_or_more!(one_of!(
         unary_negate_function_arg(min_indent),
-        space1_before(loc_function_arg(min_indent), min_indent),
+        space1_before(loc_function_arg(min_indent), min_indent)
     ))
 }
 
@@ -1059,7 +1058,7 @@ fn ident_to_expr(src: Ident<'_>) -> Expr<'_> {
 }
 
 fn binop<'a>() -> impl Parser<'a, BinOp> {
-    one_of17(
+    one_of!(
         // Sorted from highest to lowest predicted usage in practice,
         // so that successful matches shorrt-circuit as early as possible.
         // The only exception to this is that operators which begin
@@ -1082,7 +1081,7 @@ fn binop<'a>() -> impl Parser<'a, BinOp> {
         map!(char('>'), |_| BinOp::GreaterThan),
         map!(char('^'), |_| BinOp::Caret),
         map!(string("%%"), |_| BinOp::DoublePercent),
-        map!(char('%'), |_| BinOp::Percent),
+        map!(char('%'), |_| BinOp::Percent)
     )
 }
 

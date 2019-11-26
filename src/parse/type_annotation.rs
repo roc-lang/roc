@@ -5,14 +5,14 @@ use collections::arena_join;
 use parse::ast::{Attempting, TypeAnnotation};
 use parse::blankspace::{space0_around, space1_before};
 use parse::parser::{
-    between, char, one_of5, optional, skip_first, string, unexpected, unexpected_eof, ParseResult,
-    Parser, State,
+    between, char, optional, skip_first, string, unexpected, unexpected_eof, ParseResult, Parser,
+    State,
 };
 use parse::record::record;
 use region::Located;
 
 pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    one_of5(
+    one_of!(
         // The `*` type variable, e.g. in (List *) Wildcard,
         map!(loc!(char('*')), |loc_val: Located<()>| {
             loc_val.map(|_| TypeAnnotation::Wildcard)
@@ -20,7 +20,7 @@ pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a
         loc_parenthetical_type(min_indent),
         loc!(record_type(min_indent)),
         loc!(applied_type(min_indent)),
-        loc!(parse_type_variable),
+        loc!(parse_type_variable)
     )
 }
 
