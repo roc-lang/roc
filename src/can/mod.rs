@@ -301,22 +301,21 @@ fn canonicalize_expr(
             // We're not tail-calling a symbol (by name), we're tail-calling a function value.
             output.tail_call = None;
 
-            let expr = match &fn_expr.value {
-                &Var(_, ref sym) | &FunctionPointer(_, ref sym) => {
+            let expr = match fn_expr.value {
+                Var(_, ref sym) | FunctionPointer(_, ref sym) => {
                     // In the FunctionPointer case, we're calling an inline closure;
-                    // something like ((\a b -> a + b) 1 2)
+                    // something like ((\a b -> a + b) 1 2).
                     output.references.calls.insert(sym.clone());
 
-                    CallByName(sym.clone(), args, *application_style)
+                    Call(Box::new(fn_expr.value), args, *application_style)
                 }
-                &RuntimeError(_) => {
+                RuntimeError(_) => {
                     // We can't call a runtime error; bail out by propagating it!
                     return (fn_expr, output);
                 }
                 not_var => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
-                    // Use CallPointer here.
-                    panic!("TODO support function calls that aren't by name, via CallPointer, in this case: {:?}", not_var);
+                    Call(Box::new(not_var), args, *application_style)
                 }
             };
 

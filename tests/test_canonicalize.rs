@@ -250,6 +250,43 @@ mod test_canonicalize {
         // );
     }
 
+    #[test]
+    fn call_by_pointer_for_fn_args() {
+        // This function will get passed in as a pointer.
+        let src = indoc!(
+            r#"
+            apply = \f x -> f x
+
+            identity = \a -> a
+
+            apply identity 5
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, mut output, problems, procedures, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        assert_eq!(problems, vec![]);
+
+        // We don't care about constraint for this test.
+        output.constraint = Constraint::True;
+
+        assert_eq!(
+            output,
+            Out {
+                locals: vec!["identity", "apply"],
+                globals: vec![],
+                variants: vec![],
+                calls: vec!["f", "apply"],
+                tail_call: None
+            }
+            .into()
+        );
+
+        // Only apply and identity should be in procedures. `f` should not be!
+        assert_eq!(procedures.len(), 2);
+    }
+
     //#[test]
     //fn closing_over_locals() {
     //    // "local" should be used, because the closure used it.
