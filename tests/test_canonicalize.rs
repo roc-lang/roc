@@ -263,7 +263,7 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, mut output, problems, procedures, _subs, _vars) =
+        let (_actual, mut output, problems, procedures, _subs, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         assert_eq!(problems, vec![]);
