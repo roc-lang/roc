@@ -455,15 +455,6 @@ fn canonicalize_expr(
             can_defs(rigids, env, subs, scope.clone(), defs, expected, loc_ret)
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
-            // The globally unique symbol that will refer to this closure once it gets converted
-            // into a top-level procedure for code gen.
-            //
-            // The symbol includes the module name, the top-level declaration name, and the
-            // index (0-based) of the closure within that declaration.
-            //
-            // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
-            let symbol = scope.gen_unique_symbol();
-
             // The body expression gets a new scope for canonicalization.
             // Shadow `scope` to make sure we don't accidentally use the original one for the
             // rest of this block.
@@ -537,11 +528,6 @@ fn canonicalize_expr(
 
             // panic!("TODO occurs check");
 
-            // We need a var to record in the procedure for later.
-            // We'll set it equal to the overall `expected` we've been passed.
-            let var = subs.mk_flex_var();
-            let typ = Variable(var);
-
             output.constraint = exists(
                 state.vars.clone(),
                 And(vec![
@@ -552,10 +538,8 @@ fn canonicalize_expr(
                         defs_constraint: defs_constraint,
                         ret_constraint,
                     })),
-                    // "the closure's type is equal to the var we've stored for later use in the proc"
-                    Eq(fn_typ, NoExpectation(typ.clone()), region),
-                    // "the var we've stored for later is equal to the overall expected type"
-                    Eq(typ, expected, region),
+                    // "the closure's type is equal to expected  type"
+                    Eq(fn_typ, expected, region),
                 ]),
             );
 
@@ -576,23 +560,6 @@ fn canonicalize_expr(
                 output.references.locals.remove(&arg_symbol);
             }
 
-            /*
-            // We've finished analyzing the closure. Its references.locals are now the values it closes over,
-            // since we removed the only locals it shouldn't close over (its arguments).
-            // Register it as a top-level procedure in the Env!
-            env.register_closure(
-                symbol.clone(),
-                can_args,
-                loc_body_expr,
-                region,
-                output.references.clone(),
-                var,
-                ret_var,
-            );
-            */
-
-            // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
-            // (FunctionPointer(var, symbol), output)
             (Closure(can_args, Box::new(loc_body_expr)), output)
         }
 
