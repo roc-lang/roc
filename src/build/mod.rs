@@ -12,45 +12,50 @@ use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
 
-struct Env<'a> {
+struct Env<'a, 'p> {
     pub arena: &'a Bump,
-    pub src_dir: &'a Path,
-    pub problems: &'a mut Vec<'a, BuildProblem<'a>>,
-    pub loaded_headers: &'a mut MutMap<ModuleName<'a>, LoadedHeader<'a>>,
+    pub src_dir: &'p Path,
+    pub problems: Vec<'a, BuildProblem<'a>>,
+    pub loaded_headers: MutMap<ModuleName<'a>, LoadedHeader<'a>>,
     pub queue: Queue<'a>,
 }
 
 type Queue<'a> = MutMap<ModuleName<'a>, State<'a>>;
 
+#[derive(Debug)]
 pub enum BuildProblem<'a> {
     FileNotFound(&'a Path),
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum LoadedHeader<'a> {
     Valid {
         scope: ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
     },
-    FileProblem(io::Error),
+    FileProblem(io::ErrorKind),
     ParsingFailed(Fail),
 }
 
 pub fn build<'a>(
     arena: &'a Bump,
-    src_dir: &'a Path,
-    filename: &'a Path,
-    problems: &'a mut Vec<'a, BuildProblem<'a>>,
-    loaded_headers: &'a mut MutMap<ModuleName<'a>, LoadedHeader<'a>>,
-    loaded_defs: &'a mut MutMap<ModuleName<'a>, Result<Vec<'a, Located<Def<'a>>>, Fail>>,
-) -> LoadedHeader<'a> {
+    src_dir: &Path,
+    filename: &Path,
+) -> (
+    LoadedHeader<'a>,
+    Vec<'a, BuildProblem<'a>>,
+    MutMap<ModuleName<'a>, Result<Vec<'a, Located<Def<'a>>>, Fail>>,
+    MutMap<ModuleName<'a>, LoadedHeader<'a>>,
+) {
     let mut env = Env {
         arena,
         src_dir,
-        problems,
-        loaded_headers,
+        problems: Vec::new_in(&arena),
+        loaded_headers: MutMap::default(),
         queue: MutMap::default(),
     };
 
     let answer = load_filename(&mut env, filename);
+    let mut loaded_defs = MutMap::default();
 
     for (module_name, state) in env.queue {
         let defs = match module::module_defs().parse(arena, state) {
@@ -61,7 +66,7 @@ pub fn build<'a>(
         loaded_defs.insert(module_name, defs);
     }
 
-    answer
+    (answer, env.problems, loaded_defs, env.loaded_headers)
 }
 
 /// The long-term plan is for the loading process to work like this, starting from main.roc:
@@ -75,29 +80,41 @@ pub fn build<'a>(
 /// 7. Add everything we were able to import unqualified to the module's default scope.
 /// 8. Once all imports have been processed for this module, canonicalize it.
 ///
-/// This would need to be done using a work-stealing scheduler like tokio_threadpool.
-/// However, a prerequisite of this is that we are able to canonicalize in parallel.
-/// Otherwise, there isn't much benefit to doing things in parallel.
+/// This would ideally be done using a parallel work-stealing scheduler like tokio_threadpool.
+/// However, a prerequisite of this is that we are able to canonicalize in parallel!
 ///
 /// To canonicalize in parallel, we want to be able to generate Variables in parallel,
-/// which currently would require a Mutex on Subs. We can avoid that Mutex if we can
-/// give each thread in a thread pool a "starting id" - distributed into (usize::MAX / n)
-/// ranges. For example, if there are 2 threads, the first thread gets to start at id 0,
-/// and the second thread starts at id (usize::MAX / 2). That way both of them can increment
-/// in parallel without colliding. (If we have 1024 threads running at once, on a 64-bit
-/// system, we still have over 1 quadrillion Variables per thread. Seems like enough.)
+/// which currently would require a Mutex on Subs. We can avoid that Mutex in one of two ways.
 ///
-/// However, to support *that*, we need to change Subs to be backed by an actual HashMap
-/// instead of a flat Vec where the Variables are direct indices. Once that's done,
-/// we can canonicalize in parallel without needing mutexes for Subs.
+/// One way would be to give each thread in a thread pool a "starting id" -
+/// distributed into (usize::MAX / n) ranges.  For example, if there are 2 threads,
+/// the first thread gets to start at id 0, and the second thread starts at
+/// id (usize::MAX / 2). That way both of them can increment in parallel without colliding.
+/// (If we have 1024 threads running at once, on a 64-bit system, we still have
+/// over 1 quadrillion Variables per thread. Seems like enough.)
+/// However, to support that, we need to change Subs to be able to look up arbitrary IDs,
+/// instead of being backed by a flat Vec where each Variable is a direct array index.
 ///
-/// Anyway, for now, we'll do this in a synchronous, blocking way.
+/// A strategy I like better, which should be slightly slower for canonicalization
+/// (which is likely I/O bound anyway since it'll be happening concurrently with file reads),
+/// but *much* faster for unification, is to give each thread a shared AtomicUsize which
+/// they each call .fetch_add(1) on to get a fresh ID. Atomic increment is a bit slower than
+/// regular increment, but it means afterwards unification (which I'm not yet sure how to
+/// parallelize) no longer needs to use a hashing function to get the contents of each ID;
+/// the IDs will already correspond directly to array indices like they do in the status quo.
+///
+/// Separately, if we use that strategy, there's probably another optimization opportunity:
+/// instead of instantiating fresh structs with mk_fresh_var(), ensure that the default of
+/// each struct will be all 0s in memory. That way, after we've distributed all the IDs,
+/// we can do one single Vec resize (to zeroed memory) and they're all instantly ready to go.
+///
+/// Anyway, that'll all take awhile; for now, we'll do this in a synchronous, blocking way.
 
 /// Resolve a module's list of imports, creating a Scope map for use in the
 /// module's canonicalization.
 ///
 /// If a given import has not been loaded yet, load it too.
-fn load_module<'a>(env: &mut Env<'a>, module_name: &ModuleName<'a>) -> LoadedHeader<'a> {
+fn load_module<'a, 'p>(env: &mut Env<'a, 'p>, module_name: &ModuleName<'a>) -> LoadedHeader<'a> {
     // 1. Convert module_name to filename, using src_dir.
     // 2. Open that file for reading. (If there's a problem, record it and bail.)
     // 3. Read the whole file into a string. (In the future, we can read just the header.)
@@ -116,12 +133,12 @@ fn load_module<'a>(env: &mut Env<'a>, module_name: &ModuleName<'a>) -> LoadedHea
     }
 
     // End with .roc
-    filename.push(".roc");
+    filename.set_extension("roc");
 
     load_filename(env, &filename)
 }
 
-fn load_filename<'a>(env: &mut Env<'a>, filename: &Path) -> LoadedHeader<'a> {
+fn load_filename<'a, 'p>(env: &mut Env<'a, 'p>, filename: &Path) -> LoadedHeader<'a> {
     match read_to_string(filename) {
         Ok(src) => {
             // TODO instead of env.arena.alloc(src), we should create a new buffer
@@ -161,12 +178,12 @@ fn load_filename<'a>(env: &mut Env<'a>, filename: &Path) -> LoadedHeader<'a> {
                 Err((fail, _)) => LoadedHeader::ParsingFailed(fail),
             }
         }
-        Err(err) => LoadedHeader::FileProblem(err),
+        Err(err) => LoadedHeader::FileProblem(err.kind()),
     }
 }
 
-fn load_import<'a>(
-    env: &mut Env<'a>,
+fn load_import<'a, 'p>(
+    env: &mut Env<'a, 'p>,
     region: Region,
     entry: &ImportsEntry<'a>,
     scope: &mut ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
