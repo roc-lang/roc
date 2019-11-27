@@ -95,6 +95,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                     Some(next) => {
                         if next.is_uppercase() {
                             // If we hit another uppercase letter, keep going!
+                            buf.push('.');
                             buf.push(next);
                         } else {
                             // We have finished parsing the module name.
