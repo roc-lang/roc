@@ -9,7 +9,7 @@ use self::pattern::PatternType::*;
 use self::pattern::{canonicalize_pattern, Pattern};
 use self::problem::Problem;
 use self::problem::RuntimeError::*;
-use self::procedure::{Procedure, References};
+use self::procedure::References;
 use self::scope::Scope;
 use self::symbol::Symbol;
 use bumpalo::Bump;
@@ -889,7 +889,7 @@ where
     map
 }
 
-fn local_successors<'a>(references: &'a References) -> ImSet<Symbol> {
+fn local_successors(references: &'_ References) -> ImSet<Symbol> {
     let mut answer = references.locals.clone();
 
     for call_symbol in references.calls.iter() {
@@ -899,7 +899,7 @@ fn local_successors<'a>(references: &'a References) -> ImSet<Symbol> {
     answer
 }
 
-fn call_successors<'a>(call_symbol: &'a Symbol) -> ImSet<Symbol> {
+fn call_successors(_call_symbol: &'_ Symbol) -> ImSet<Symbol> {
     // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 procedures reference each other; may need to track visited procedures!
     /*
     match procedures.get(call_symbol) {
@@ -1008,9 +1008,9 @@ where
 }
 
 fn references_from_call<'a, T>(
-    call_symbol: Symbol,
-    visited: &'a mut MutSet<Symbol>,
-    refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    _call_symbol: Symbol,
+    _visited: &'a mut MutSet<Symbol>,
+    _refs_by_def: &'a MutMap<Symbol, (T, References)>,
 ) -> References
 where
     T: Debug,
@@ -1447,7 +1447,7 @@ fn can_defs<'a>(
 
             // This only comes up if the expr we're naming turns out to be a closure.
             // If it does, we're going to rename its corresponding Procedure!
-            let mut renamed_closure_def: Option<&Symbol> = None;
+            // let mut _renamed_closure_def: Option<&Symbol> = None;
 
             // TODO give closure (tail-) recursive status where appropriate.
 
@@ -1462,11 +1462,14 @@ fn can_defs<'a>(
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
                     // parent commit for the bug this fixed!
+                    /*
                     if renamed_closure_def == Some(&symbol) {
                         References::new()
                     } else {
                         can_output.references.clone()
                     };
+                    */
+                        can_output.references.clone();
 
                 refs_by_def.insert(
                     symbol.clone(),

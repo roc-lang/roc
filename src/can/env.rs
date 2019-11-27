@@ -1,11 +1,7 @@
-use can::expr::Expr;
-use can::pattern::Pattern;
 use can::problem::Problem;
-use can::procedure::{Procedure, References};
 use can::symbol::Symbol;
-use collections::{ImMap, MutMap};
-use region::{Located, Region};
-use subs::Variable;
+use collections::ImMap;
+use region::Located;
 
 /// The canonicalization environment for a particular module.
 pub struct Env {
