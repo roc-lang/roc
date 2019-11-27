@@ -1,5 +1,6 @@
 use self::env::Env;
 use self::expr::Expr::{self, *};
+use self::expr::Recursive;
 use self::num::{
     finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
     finish_parsing_oct, float_expr_from_result, int_expr_from_result,
@@ -566,7 +567,15 @@ fn canonicalize_expr(
 
             env.register_closure(symbol.clone(), output.references.clone());
 
-            (Closure(symbol, can_args, Box::new(loc_body_expr)), output)
+            (
+                Closure(
+                    symbol,
+                    Recursive::NotRecursive,
+                    can_args,
+                    Box::new(loc_body_expr),
+                ),
+                output,
+            )
         }
 
         ast::Expr::Case(loc_cond, branches) => {
@@ -1314,6 +1323,13 @@ fn pattern_from_def<'a>(def: &'a Def<'a>) -> Option<&'a Located<ast::Pattern<'a>
     }
 }
 
+fn closure_recursivity(
+    references: &References,
+    closures: &MutMap<Symbol, References>,
+) -> Recursive {
+    Recursive::NotRecursive
+}
+
 #[inline(always)]
 fn can_defs<'a>(
     rigids: &Rigids,
@@ -1354,7 +1370,7 @@ fn can_defs<'a>(
 
         // Each def gets to have all the idents in scope that are defined in this
         // block. Order of defs doesn't matter, thanks to referential transparency!
-        let (opt_loc_pattern, (loc_can_expr, can_output)) = match loc_def.value {
+        let (opt_loc_pattern, (mut loc_can_expr, can_output)) = match loc_def.value {
             Def::Annotation(ref _loc_pattern, ref loc_annotation) => {
                 // TODO implement this:
                 //
@@ -1465,7 +1481,7 @@ fn can_defs<'a>(
             match (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
-                &loc_can_expr.value,
+                &loc_can_expr.value.clone(),
             ) {
                 // First, make sure we are actually assigning an identifier instead of (for example) a variant.
                 //
@@ -1474,22 +1490,25 @@ fn can_defs<'a>(
                 //
                 // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
                 (
-                    &ast::Pattern::Identifier(ref name),
+                    &ast::Pattern::Identifier(ref _name),
                     &Pattern::Identifier(_, ref defined_symbol),
-                    &Closure(ref symbol, _, _),
+                    &Closure(ref symbol, _, ref arguments, ref body),
                 ) => {
                     // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
                     let references = env.closures.remove(&symbol).unwrap_or_else(||
                         panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.closures));
 
-                    /*
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
-                    procedure.is_self_tail_recursive = match can_output.tail_call {
-                        None => false,
-                        Some(ref symbol) => symbol == defined_symbol,
+                    let is_recursive = if let Some(ref symbol) = can_output.tail_call {
+                        if symbol == defined_symbol {
+                            Recursive::TailRecursive
+                        } else {
+                            closure_recursivity(&references, &env.closures)
+                        }
+                    } else {
+                        closure_recursivity(&references, &env.closures)
                     };
-                    */
 
                     // Re-insert the procedure into the map, under its defined name. This way,
                     // when code elsewhere calls it by defined name, it'll resolve properly.
@@ -1504,6 +1523,12 @@ fn can_defs<'a>(
                         });
 
                     // renamed_closure_def = Some(&defined_symbol);
+                    loc_can_expr.value = Closure(
+                        symbol.clone(),
+                        is_recursive,
+                        arguments.clone(),
+                        body.clone(),
+                    );
                 }
                 _ => {}
             }
