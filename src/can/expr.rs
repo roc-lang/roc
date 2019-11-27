@@ -42,6 +42,8 @@ pub enum Expr {
 
     Call(Box<Expr>, Vec<Located<Expr>>, CalledVia),
 
+    Closure(Vec<Located<Pattern>>, Box<Located<Expr>>),
+
     // Product Types
     Record(Variable, Vec<Located<(Box<str>, Located<Expr>)>>),
     EmptyRecord,

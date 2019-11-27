@@ -576,6 +576,7 @@ fn canonicalize_expr(
                 output.references.locals.remove(&arg_symbol);
             }
 
+            /*
             // We've finished analyzing the closure. Its references.locals are now the values it closes over,
             // since we removed the only locals it shouldn't close over (its arguments).
             // Register it as a top-level procedure in the Env!
@@ -588,9 +589,11 @@ fn canonicalize_expr(
                 var,
                 ret_var,
             );
+            */
 
             // Always return a function pointer, in case that's how the closure is being used (e.g. with Apply).
-            (FunctionPointer(var, symbol), output)
+            // (FunctionPointer(var, symbol), output)
+            (Closure(can_args, Box::new(loc_body_expr)), output)
         }
 
         ast::Expr::Case(loc_cond, branches) => {
