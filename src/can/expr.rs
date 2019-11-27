@@ -41,6 +41,7 @@ pub enum Expr {
     ),
 
     Call(Box<Expr>, Vec<Located<Expr>>, CalledVia),
+    Closure(Vec<Located<Pattern>>, Box<Located<Expr>>),
 
     Closure(Symbol, Recursive, Vec<Located<Pattern>>, Box<Located<Expr>>),
 
