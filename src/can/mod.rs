@@ -450,6 +450,15 @@ fn canonicalize_expr(
             can_defs(rigids, env, subs, scope.clone(), defs, expected, loc_ret)
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
+            // The globally unique symbol that will refer to this closure once it gets converted
+            // into a top-level procedure for code gen.
+            //
+            // The symbol includes the module name, the top-level declaration name, and the
+            // index (0-based) of the closure within that declaration.
+            //
+            // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
+            let symbol = scope.gen_unique_symbol();
+
             // The body expression gets a new scope for canonicalization.
             // Shadow `scope` to make sure we don't accidentally use the original one for the
             // rest of this block.
@@ -555,7 +564,9 @@ fn canonicalize_expr(
                 output.references.locals.remove(&arg_symbol);
             }
 
-            (Closure(can_args, Box::new(loc_body_expr)), output)
+            env.register_closure(symbol.clone(), output.references.clone());
+
+            (Closure(symbol, can_args, Box::new(loc_body_expr)), output)
         }
 
         ast::Expr::Case(loc_cond, branches) => {
@@ -704,7 +715,7 @@ fn canonicalize_expr(
         | ast::Expr::PrecedenceConflict(_, _, _) => {
             panic!(
                 "TODO restore the rest of canonicalize()'s branches {:?}",
-                local_successors(&References::new())
+                local_successors(&References::new(), &env.closures)
             );
         }
         ast::Expr::BinaryInt(string) => {
@@ -889,22 +900,27 @@ where
     map
 }
 
-fn local_successors(references: &'_ References) -> ImSet<Symbol> {
+fn local_successors<'a>(
+    references: &'a References,
+    closures: &'a MutMap<Symbol, References>,
+) -> ImSet<Symbol> {
     let mut answer = references.locals.clone();
 
     for call_symbol in references.calls.iter() {
-        answer = answer.union(call_successors(call_symbol));
+        answer = answer.union(call_successors(call_symbol, closures));
     }
 
     answer
 }
 
-fn call_successors(_call_symbol: &'_ Symbol) -> ImSet<Symbol> {
+fn call_successors<'a>(
+    call_symbol: &'a Symbol,
+    closures: &'a MutMap<Symbol, References>,
+) -> ImSet<Symbol> {
     // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 procedures reference each other; may need to track visited procedures!
-    /*
-    match procedures.get(call_symbol) {
-        Some(procedure) => {
-            let mut answer = local_successors(&procedure.references);
+    match closures.get(call_symbol) {
+        Some(references) => {
+            let mut answer = local_successors(&references, closures);
 
             answer.insert(call_symbol.clone());
 
@@ -912,15 +928,13 @@ fn call_successors(_call_symbol: &'_ Symbol) -> ImSet<Symbol> {
         }
         None => ImSet::default(),
     }
-    */
-
-    ImSet::default()
 }
 
 fn references_from_local<'a, T>(
     defined_symbol: Symbol,
     visited: &'a mut MutSet<Symbol>,
     refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    closures: &'a MutMap<Symbol, References>,
 ) -> References
 where
     T: Debug,
@@ -934,7 +948,7 @@ where
             for local in refs.locals.iter() {
                 if !visited.contains(&local) {
                     let other_refs: References =
-                        references_from_local(local.clone(), visited, refs_by_def);
+                        references_from_local(local.clone(), visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
@@ -944,7 +958,8 @@ where
 
             for call in refs.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs = references_from_call(call.clone(), visited, refs_by_def);
+                    let other_refs =
+                        references_from_call(call.clone(), visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
@@ -1008,27 +1023,27 @@ where
 }
 
 fn references_from_call<'a, T>(
-    _call_symbol: Symbol,
-    _visited: &'a mut MutSet<Symbol>,
-    _refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    call_symbol: Symbol,
+    visited: &'a mut MutSet<Symbol>,
+    refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    closures: &'a MutMap<Symbol, References>,
 ) -> References
 where
     T: Debug,
 {
-    /*
-    match procedures.get(&call_symbol) {
-        Some(procedure) => {
-            let mut answer = procedure.references.clone();
+    match closures.get(&call_symbol) {
+        Some(references) => {
+            let mut answer = references.clone();
 
             visited.insert(call_symbol);
 
-            for closed_over_local in procedure.references.locals.iter() {
+            for closed_over_local in references.locals.iter() {
                 if !visited.contains(&closed_over_local) {
                     let other_refs = references_from_local(
                         closed_over_local.clone(),
                         visited,
                         refs_by_def,
-                        procedures,
+                        closures,
                     );
 
                     answer = answer.union(other_refs);
@@ -1037,10 +1052,10 @@ where
                 answer.locals.insert(closed_over_local.clone());
             }
 
-            for call in procedure.references.calls.iter() {
+            for call in references.calls.iter() {
                 if !visited.contains(&call) {
                     let other_refs =
-                        references_from_call(call.clone(), visited, refs_by_def, procedures);
+                        references_from_call(call.clone(), visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
@@ -1056,8 +1071,6 @@ where
             References::new()
         }
     }
-    */
-    References::new()
 }
 
 fn idents_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Ident, (Symbol, Region))>
@@ -1449,7 +1462,51 @@ fn can_defs<'a>(
             // If it does, we're going to rename its corresponding Procedure!
             // let mut _renamed_closure_def: Option<&Symbol> = None;
 
-            // TODO give closure (tail-) recursive status where appropriate.
+            match (
+                &loc_pattern.value,
+                &loc_can_pattern.value,
+                &loc_can_expr.value,
+            ) {
+                // First, make sure we are actually assigning an identifier instead of (for example) a variant.
+                //
+                // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
+                // which also implies it's not a self tail call!
+                //
+                // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
+                (
+                    &ast::Pattern::Identifier(ref name),
+                    &Pattern::Identifier(_, ref defined_symbol),
+                    &Closure(ref symbol, _, _),
+                ) => {
+                    // Since everywhere in the code it'll be referred to by its defined name,
+                    // remove its generated name from the procedure map. (We'll re-insert it later.)
+                    let references = env.closures.remove(&symbol).unwrap_or_else(||
+                        panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.closures));
+
+                    /*
+                    // The closure is self tail recursive iff it tail calls itself (by defined name).
+                    procedure.is_self_tail_recursive = match can_output.tail_call {
+                        None => false,
+                        Some(ref symbol) => symbol == defined_symbol,
+                    };
+                    */
+
+                    // Re-insert the procedure into the map, under its defined name. This way,
+                    // when code elsewhere calls it by defined name, it'll resolve properly.
+                    env.closures.insert(defined_symbol.clone(), references);
+
+                    // Recursion doesn't count as referencing. (If it did, all recursive functions
+                    // would result in circular def errors!)
+                    refs_by_def
+                        .entry(defined_symbol.clone())
+                        .and_modify(|(_, refs)| {
+                            refs.locals = refs.locals.without(defined_symbol);
+                        });
+
+                    // renamed_closure_def = Some(&defined_symbol);
+                }
+                _ => {}
+            }
 
             let mut defined_symbols = Vec::new();
 
@@ -1556,7 +1613,7 @@ fn can_defs<'a>(
     // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
     for symbol in returned_locals.into_iter() {
         // Traverse the graph and look up *all* the references for this local symbol.
-        let refs = references_from_local(symbol, &mut visited_symbols, &refs_by_def);
+        let refs = references_from_local(symbol, &mut visited_symbols, &refs_by_def, &env.closures);
 
         output.references = output.references.union(refs);
     }
@@ -1565,7 +1622,7 @@ fn can_defs<'a>(
         // Traverse the graph and look up *all* the references for this call.
         // Reuse the same visited_symbols as before; if we already visited it, we
         // won't learn anything new from visiting it again!
-        let refs = references_from_call(symbol, &mut visited_symbols, &refs_by_def);
+        let refs = references_from_call(symbol, &mut visited_symbols, &refs_by_def, &env.closures);
 
         output.references = output.references.union(refs);
     }
@@ -1601,7 +1658,7 @@ fn can_defs<'a>(
         // it's in the enclosing scope. It's still referenced though, so successors
         // will receive it as an argument!
         match refs_by_def.get(symbol) {
-            Some((_, references)) => local_successors(&references),
+            Some((_, references)) => local_successors(&references, &env.closures),
             None => ImSet::default(),
         }
     };
