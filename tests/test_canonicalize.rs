@@ -223,19 +223,22 @@ mod test_canonicalize {
         // This function will get passed in as a pointer.
         let src = indoc!(
             r#"
-            f = \x ->
-                case x when
-                    0 -> 0
-                    _ -> f (x - 1)
+            f = \x -> f x
 
-            f 3
+            g = \x -> x
+
+            f (g 3)
         "#
         );
         let arena = Bump::new();
-        let (_actual, mut output, problems, _subs, _vars) =
+        let (actual, mut output, problems, _subs, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         assert_eq!(problems, vec![]);
+
+        dbg!(actual);
+
+        assert_eq!(0, 1);
 
         // We don't care about constraint for this test.
         output.constraint = Constraint::True;

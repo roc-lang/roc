@@ -294,7 +294,7 @@ fn canonicalize_expr(
                 outputs.push(arg_out);
             }
 
-            // We're not tail-calling a symbol (by name), we're tail-calling a function value.
+            // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
             output.tail_call = None;
 
             let expr = match fn_expr.value {
@@ -302,6 +302,9 @@ fn canonicalize_expr(
                     // In the FunctionPointer case, we're calling an inline closure;
                     // something like ((\a b -> a + b) 1 2).
                     output.references.calls.insert(sym.clone());
+
+                    // we're tail-calling a symbol by name
+                    output.tail_call = Some(sym.clone());
 
                     Call(Box::new(fn_expr.value), args, *application_style)
                 }
@@ -1328,7 +1331,6 @@ fn closure_recursivity(
     references: &References,
     closures: &MutMap<Symbol, References>,
 ) -> Recursive {
-    /*
     let mut visited = MutSet::default();
 
     let mut stack = Vec::new();
@@ -1356,7 +1358,6 @@ fn closure_recursivity(
             visited.insert(nested_symbol);
         }
     }
-    */
 
     Recursive::NotRecursive
 }
@@ -1531,6 +1532,7 @@ fn can_defs<'a>(
                     let references = env.closures.remove(&symbol).unwrap_or_else(||
                         panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.closures));
 
+                    dbg!(loc_can_expr.clone(), can_output.tail_call.clone(), defined_symbol.clone());
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
                     let is_recursive = if let Some(ref symbol) = can_output.tail_call {
                         if symbol == defined_symbol {
