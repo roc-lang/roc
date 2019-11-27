@@ -1,23 +1,15 @@
 use bumpalo::collections::{String, Vec};
-use fmt::def::fmt_def;
 use fmt::spaces::{fmt_spaces, INDENT};
 use parse::ast::{AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, Module};
 use region::Located;
 
 pub fn fmt_module<'a>(buf: &mut String<'a>, module: &'a Module<'a>) {
     match module {
-        Module::Interface { header, defs } => {
+        Module::Interface { header } => {
             fmt_interface_header(buf, header);
-
-            for loc_def in defs {
-                fmt_def(buf, &loc_def.value, 0);
-            }
         }
-        Module::App { header, defs } => {
+        Module::App { header } => {
             fmt_app_header(buf, header);
-            for loc_def in defs {
-                fmt_def(buf, &loc_def.value, 0);
-            }
         }
     }
 }

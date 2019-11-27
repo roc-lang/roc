@@ -16,16 +16,14 @@ pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
 
 #[inline(always)]
 pub fn interface_module<'a>() -> impl Parser<'a, Module<'a>> {
-    map!(and!(interface_header(), module_defs()), |(header, defs)| {
-        Module::Interface { header, defs }
+    map!(interface_header(), |header| {
+        Module::Interface { header }
     })
 }
 
 #[inline(always)]
 pub fn app_module<'a>() -> impl Parser<'a, Module<'a>> {
-    map!(and!(app_header(), module_defs()), |(header, defs)| {
-        Module::App { header, defs }
-    })
+    map!(app_header(), |header| { Module::App { header } })
 }
 
 #[inline(always)]
@@ -134,7 +132,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
 }
 
 #[inline(always)]
-fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
+pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
     zero_or_more!(space1_around(loc(parse::def(0)), 0))
 }
 

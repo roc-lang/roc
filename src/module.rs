@@ -1,8 +1,7 @@
 use bumpalo::collections::Vec;
 use ident::UnqualifiedIdent;
-use parse::ast::{CommentOrNewline, Def};
+use parse::ast::CommentOrNewline;
 use region::Loc;
-use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);
@@ -21,33 +20,6 @@ impl<'a> ModuleName<'a> {
     pub fn as_str(&'a self) -> &'a str {
         self.0
     }
-
-    pub fn add_to_path(&'a self, filename: &'a mut PathBuf) {
-        // Convert dots in module name to directories
-        for part in self.0.split('.') {
-            filename.push(part);
-        }
-
-        // End with .roc
-        filename.push(".roc");
-    }
-}
-
-pub enum Exposing {
-    Ident,
-    TypeAndVariants,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Module<'a> {
-    Interface {
-        header: InterfaceHeader<'a>,
-        defs: Vec<'a, Def<'a>>,
-    },
-    App {
-        header: AppHeader<'a>,
-        defs: Vec<'a, Def<'a>>,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

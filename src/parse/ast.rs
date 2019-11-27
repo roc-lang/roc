@@ -10,14 +10,8 @@ use region::{Loc, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
-    Interface {
-        header: InterfaceHeader<'a>,
-        defs: Vec<'a, Loc<Def<'a>>>,
-    },
-    App {
-        header: AppHeader<'a>,
-        defs: Vec<'a, Loc<Def<'a>>>,
-    },
+    Interface { header: InterfaceHeader<'a> },
+    App { header: AppHeader<'a> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
