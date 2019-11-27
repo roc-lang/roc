@@ -125,72 +125,6 @@ mod test_canonicalize {
         );
     }
 
-    // CLOSURES
-
-    #[test]
-    fn closure_is_inlined() {
-        /// when an identifier is assigned to a closure, and the closure is
-        /// extracted, the assignement should be removed.
-        ///
-        /// This removes an indirection (call -> var lookup -> procedure lookup),
-        /// but also guarantees that a Symbol is unique, and doesn't stand for
-        /// a local variable and a (global) procedure.
-        use roc::can::expr::Expr::*;
-        use roc::can::symbol::Symbol;
-        use roc::region::Located;
-        use roc::region::Region;
-        use roc::subs::Variable;
-
-        let region = |a, b, c, d| Region {
-            start_line: a,
-            end_line: b,
-            start_col: c,
-            end_col: d,
-        };
-
-        let symbol = |name| Symbol::new("", name);
-
-        assert_can(
-            indoc!(
-                r#"
-                fn = \_ -> {}
-
-                fn
-            "#
-            ),
-            /*  current output
-            Defs(
-                Variable::new_for_testing_only(9),
-                vec![(
-                    Located {
-                        region: region(0, 0, 0, 2),
-                        value: Identifier(
-                            Variable::new_for_testing_only(7),
-                            symbol("Test.Blah$fn"),
-                        ),
-                    },
-                    Located {
-                        region: region(0, 0, 5, 13),
-                        value: Var(Variable::new_for_testing_only(5), symbol("Test.Blah$fn")),
-                    },
-                )],
-                Box::new(Located {
-                    region: region(2, 2, 0, 2),
-                    value: Var(Variable::new_for_testing_only(8), symbol("Test.Blah$fn")),
-                }),
-            ),
-            */
-            Defs(
-                Variable::new_for_testing_only(9),
-                vec![],
-                Box::new(Located {
-                    region: region(2, 2, 0, 2),
-                    value: Var(Variable::new_for_testing_only(8), symbol("Test.Blah$fn")),
-                }),
-            ),
-        );
-    }
-
     // LOCALS
 
     #[test]
@@ -282,9 +216,6 @@ mod test_canonicalize {
             }
             .into()
         );
-
-        // Only apply and identity should be in procedures. `f` should not be!
-        assert_eq!(procedures.len(), 2);
     }
 
     //#[test]
