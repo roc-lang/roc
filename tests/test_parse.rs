@@ -1138,6 +1138,35 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn nested_module() {
+        let arena = Bump::new();
+        let exposes = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let module_name = ModuleName::new("Foo.Bar.Baz");
+        let expected = InterfaceHeader {
+            name: Located::new(0, 0, 10, 21, module_name),
+            exposes,
+            imports,
+
+            after_interface: &[],
+            before_exposes: &[],
+            after_exposes: &[],
+            before_imports: &[],
+            after_imports: &[],
+        };
+        let src = indoc!(
+            r#"
+                interface Foo.Bar.Baz exposes [] imports []
+            "#
+        );
+        let actual = interface_header()
+            .parse(&arena, State::new(&src, Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // TODO test hex/oct/binary parsing
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
