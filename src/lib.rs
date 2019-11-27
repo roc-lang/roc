@@ -8,6 +8,7 @@ pub mod region;
 
 pub mod string;
 
+pub mod build;
 pub mod constrain;
 pub mod ena;
 pub mod fmt;
