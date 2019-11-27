@@ -16,19 +16,15 @@ mod test_gen {
     use inkwell::execution_engine::JitFunction;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
+    use roc::collections::MutMap;
     use roc::gen::{compile_standalone_expr, content_to_basic_type, Env};
     use roc::infer::infer_expr;
 
     macro_rules! assert_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
-            let (expr, output, _problems, procedures, mut subs, variable) = can_expr($src);
+            let (expr, output, _problems, mut subs, variable) = can_expr($src);
 
-            let content = infer_expr(
-                &mut subs,
-                procedures.clone(), /* TODO shouldn't have to clone this... */
-                &output.constraint,
-                variable,
-            );
+            let content = infer_expr(&mut subs, &output.constraint, variable);
 
             let context = Context::create();
             let builder = context.create_builder();
@@ -44,6 +40,8 @@ mod test_gen {
             let basic_block = context.append_basic_block(function, "entry");
 
             builder.position_at_end(&basic_block);
+
+            let procedures = MutMap::default();
 
             let env = Env {
                 procedures,

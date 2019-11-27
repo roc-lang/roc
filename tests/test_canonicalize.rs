@@ -77,7 +77,7 @@ mod test_canonicalize {
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _, _, _) =
+        let (actual, _, _, _, _) =
             can_expr_with(&arena, "Blah", input, &ImMap::default(), &ImMap::default());
 
         assert_eq!(expected, actual);
@@ -139,7 +139,7 @@ mod test_canonicalize {
             func 2
         "#
         );
-        let (_actual, mut output, problems, _procedures, _subs, _vars) =
+        let (_actual, mut output, problems, _subs, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         assert_eq!(problems, vec![]);
@@ -197,7 +197,7 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (_actual, mut output, problems, procedures, _subs, _vars) =
+        let (_actual, mut output, problems, _subs, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         assert_eq!(problems, vec![]);

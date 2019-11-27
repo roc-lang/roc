@@ -4,10 +4,9 @@ use self::bumpalo::Bump;
 use roc::can;
 use roc::can::expr::Expr;
 use roc::can::problem::Problem;
-use roc::can::procedure::Procedure;
 use roc::can::symbol::Symbol;
 use roc::can::Output;
-use roc::collections::{ImMap, MutMap};
+use roc::collections::ImMap;
 use roc::ident::Ident;
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
@@ -34,16 +33,7 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 }
 
 #[allow(dead_code)]
-pub fn can_expr(
-    expr_str: &str,
-) -> (
-    Expr,
-    Output,
-    Vec<Problem>,
-    MutMap<Symbol, Procedure>,
-    Subs,
-    Variable,
-) {
+pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, Subs, Variable) {
     can_expr_with(
         &Bump::new(),
         "blah",
@@ -60,14 +50,7 @@ pub fn can_expr_with(
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
     declared_variants: &ImMap<Symbol, Located<Box<str>>>,
-) -> (
-    Expr,
-    Output,
-    Vec<Problem>,
-    MutMap<Symbol, Procedure>,
-    Subs,
-    Variable,
-) {
+) -> (Expr, Output, Vec<Problem>, Subs, Variable) {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?}",
@@ -79,7 +62,7 @@ pub fn can_expr_with(
     let variable = subs.mk_flex_var();
     let expected = Expected::NoExpectation(Type::Variable(variable));
     let home = "Test";
-    let (loc_expr, output, problems, procedures) = can::canonicalize_declaration(
+    let (loc_expr, output, problems) = can::canonicalize_declaration(
         arena,
         &mut subs,
         home.into(),
@@ -91,7 +74,7 @@ pub fn can_expr_with(
         expected,
     );
 
-    (loc_expr.value, output, problems, procedures, subs, variable)
+    (loc_expr.value, output, problems, subs, variable)
 }
 
 // pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>
