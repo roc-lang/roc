@@ -1505,9 +1505,8 @@ fn can_defs<'a>(
                 ret_constraint: can_output.constraint.clone(),
             })));
 
-            // This only comes up if the expr we're naming turns out to be a closure.
-            // If it does, we're going to rename its corresponding Procedure!
-            // let mut _renamed_closure_def: Option<&Symbol> = None;
+            // see below: a closure needs a fresh References! 
+            let mut is_closure = false;
 
             match (
                 &loc_pattern.value,
@@ -1525,6 +1524,8 @@ fn can_defs<'a>(
                     &Pattern::Identifier(_, ref defined_symbol),
                     &Closure(ref symbol, _, ref arguments, ref body),
                 ) => {
+                    is_closure = true;
+
                     // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
                     let references = env.closures.remove(&symbol).unwrap_or_else(||
@@ -1575,14 +1576,12 @@ fn can_defs<'a>(
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
                     // parent commit for the bug this fixed!
-                    /*
-                    if renamed_closure_def == Some(&symbol) {
+                      
+                    if is_closure {
                         References::new()
                     } else {
                         can_output.references.clone()
                     };
-                    */
-                        can_output.references.clone();
 
                 refs_by_def.insert(
                     symbol.clone(),

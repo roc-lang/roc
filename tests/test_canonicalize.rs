@@ -243,10 +243,10 @@ mod test_canonicalize {
         assert_eq!(
             output,
             Out {
-                locals: vec!["identity", "apply"],
+                locals: vec!["f"],
                 globals: vec![],
                 variants: vec![],
-                calls: vec!["f", "apply"],
+                calls: vec!["f", "x"],
                 tail_call: None
             }
             .into()
