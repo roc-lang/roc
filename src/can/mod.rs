@@ -1324,9 +1324,40 @@ fn pattern_from_def<'a>(def: &'a Def<'a>) -> Option<&'a Located<ast::Pattern<'a>
 }
 
 fn closure_recursivity(
+    symbol: Symbol,
     references: &References,
     closures: &MutMap<Symbol, References>,
 ) -> Recursive {
+    /*
+    let mut visited = MutSet::default();
+
+    let mut stack = Vec::new();
+
+    for v in &references.calls {
+        stack.push(v.clone());
+    }
+
+    // while there are symbols left to visit
+    while let Some(nested_symbol) = stack.pop() {
+        if nested_symbol.clone() == symbol {
+            return Recursive::Recursive;
+        }
+
+        // if the called symbol not yet in the graph
+        if !visited.contains(&nested_symbol) {
+            // add it to the visited set
+            // if it calls any functions
+            if let Some(nested_references) = closures.get(&nested_symbol) {
+                // add its called to the stack
+                for v in &nested_references.calls {
+                    stack.push(v.clone());
+                }
+            }
+            visited.insert(nested_symbol);
+        }
+    }
+    */
+
     Recursive::NotRecursive
 }
 
@@ -1504,10 +1535,10 @@ fn can_defs<'a>(
                         if symbol == defined_symbol {
                             Recursive::TailRecursive
                         } else {
-                            closure_recursivity(&references, &env.closures)
+                            closure_recursivity(defined_symbol.clone(), &references, &env.closures)
                         }
                     } else {
-                        closure_recursivity(&references, &env.closures)
+                        closure_recursivity(defined_symbol.clone(), &references, &env.closures)
                     };
 
                     // Re-insert the procedure into the map, under its defined name. This way,
