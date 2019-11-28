@@ -6,7 +6,7 @@ use roc::can::expr::Expr;
 use roc::can::problem::Problem;
 use roc::can::symbol::Symbol;
 use roc::can::Output;
-use roc::collections::ImMap;
+use roc::collections::{ImMap, MutMap};
 use roc::ident::Ident;
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
