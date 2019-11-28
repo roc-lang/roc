@@ -1,6 +1,6 @@
-use subs::Content::{self, *};
-use subs::{Descriptor, FlatType, Subs, Variable};
-use types::Problem;
+use crate::subs::Content::{self, *};
+use crate::subs::{Descriptor, FlatType, Subs, Variable};
+use crate::types::Problem;
 
 #[inline(always)]
 pub fn unify_vars(subs: &mut Subs, left_key: Variable, right_key: Variable) -> Descriptor {
@@ -52,7 +52,7 @@ fn unify_structure(subs: &mut Subs, flat_type: &FlatType, other: &Content) -> De
 
 #[inline(always)]
 fn unify_flat_type(subs: &mut Subs, left: &FlatType, right: &FlatType) -> Descriptor {
-    use subs::FlatType::*;
+    use crate::subs::FlatType::*;
 
     match (left, right) {
         (EmptyRecord, EmptyRecord) => from_content(Structure(left.clone())),

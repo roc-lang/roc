@@ -11,8 +11,8 @@ mod helpers;
 
 #[cfg(test)]
 mod test_load {
+    use crate::helpers::{fixtures_dir, im_map_from_pairs, mut_map_from_pairs};
     use bumpalo::Bump;
-    use helpers::{fixtures_dir, im_map_from_pairs, mut_map_from_pairs};
     use roc::can::symbol::Symbol;
     use roc::ident::UnqualifiedIdent;
     use roc::load::LoadedHeader::*;

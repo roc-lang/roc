@@ -1,12 +1,12 @@
+use crate::ident::UnqualifiedIdent;
+use crate::module::ModuleName;
+use crate::operator::CalledVia;
+use crate::operator::{BinOp, UnaryOp};
+use crate::parse::ident::Ident;
+use crate::region::{Loc, Region};
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use ident::UnqualifiedIdent;
-use module::ModuleName;
-use operator::CalledVia;
-use operator::{BinOp, UnaryOp};
-use parse::ident::Ident;
-use region::{Loc, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {

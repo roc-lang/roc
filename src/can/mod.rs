@@ -12,20 +12,20 @@ use self::problem::RuntimeError::*;
 use self::procedure::{Procedure, References};
 use self::scope::Scope;
 use self::symbol::Symbol;
+use crate::collections::{ImMap, ImSet, MutMap, MutSet};
+use crate::constrain::{self, exists};
+use crate::graph::{strongly_connected_component, topological_sort};
+use crate::ident::Ident;
+use crate::parse::ast::{self, Def};
+use crate::region::{Located, Region};
+use crate::subs::{Subs, Variable};
+use crate::types::AnnotationSource::*;
+use crate::types::Constraint::{self, *};
+use crate::types::Expected::{self, *};
+use crate::types::Type::{self, *};
+use crate::types::{LetConstraint, PExpected, PReason, Reason};
 use bumpalo::Bump;
-use collections::{ImMap, ImSet, MutMap, MutSet};
-use constrain::{self, exists};
-use graph::{strongly_connected_component, topological_sort};
-use ident::Ident;
-use parse::ast::{self, Def};
-use region::{Located, Region};
 use std::fmt::Debug;
-use subs::{Subs, Variable};
-use types::AnnotationSource::*;
-use types::Constraint::{self, *};
-use types::Expected::{self, *};
-use types::Type::{self, *};
-use types::{LetConstraint, PExpected, PReason, Reason};
 
 pub mod env;
 pub mod expr;
@@ -1117,7 +1117,7 @@ fn add_idents_from_pattern<'a>(
     scope: &'a Scope,
     answer: &'a mut Vec<(Ident, (Symbol, Region))>,
 ) {
-    use parse::ast::Pattern::*;
+    use crate::parse::ast::Pattern::*;
 
     match pattern {
         Identifier(name) => {
@@ -1165,7 +1165,7 @@ fn add_idents_from_pattern<'a>(
 }
 
 fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Region)>) {
-    use parse::ast::Pattern::*;
+    use crate::parse::ast::Pattern::*;
 
     match &pattern {
         Identifier(name) => {

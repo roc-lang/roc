@@ -1,10 +1,10 @@
-use can::pattern::Pattern;
-use can::problem::RuntimeError;
-use can::symbol::Symbol;
-use operator::CalledVia;
-use region::Located;
+use crate::can::pattern::Pattern;
+use crate::can::problem::RuntimeError;
+use crate::can::symbol::Symbol;
+use crate::operator::CalledVia;
+use crate::region::Located;
+use crate::subs::Variable;
 use std::i64;
-use subs::Variable;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {

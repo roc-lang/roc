@@ -1,4 +1,4 @@
-use region::Loc;
+use crate::region::Loc;
 
 pub type Problems = Vec<Loc<Problem>>;
 

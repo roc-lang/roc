@@ -21,10 +21,5 @@ pub mod subs;
 pub mod types;
 pub mod unify;
 
-extern crate bumpalo;
-extern crate im_rc;
-extern crate inkwell;
-extern crate wyhash;
-
 #[macro_use]
 extern crate log;

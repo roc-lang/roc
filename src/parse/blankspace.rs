@@ -1,10 +1,10 @@
+use crate::parse::ast::CommentOrNewline::{self, *};
+use crate::parse::ast::Spaceable;
+use crate::parse::parser::{self, and, unexpected, unexpected_eof, Parser, State};
+use crate::region::Located;
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use parse::ast::CommentOrNewline::{self, *};
-use parse::ast::Spaceable;
-use parse::parser::{self, and, unexpected, unexpected_eof, Parser, State};
-use region::Located;
 
 /// Parses the given expression with 0 or more (spaces/comments/newlines) before and/or after it.
 /// Returns a Located<Expr> where the location is around the Expr, ignoring the spaces.

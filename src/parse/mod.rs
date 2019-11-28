@@ -10,22 +10,21 @@ pub mod problems;
 pub mod string_literal;
 pub mod type_annotation;
 
-use bumpalo::collections::Vec;
-use bumpalo::Bump;
-use operator::{BinOp, CalledVia, UnaryOp};
-use parse;
-use parse::ast::{AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable};
-use parse::blankspace::{
+use crate::operator::{BinOp, CalledVia, UnaryOp};
+use crate::parse::ast::{AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable};
+use crate::parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_after, space1_around,
     space1_before,
 };
-use parse::ident::{ident, lowercase_ident, variant_or_ident, Ident};
-use parse::number_literal::number_literal;
-use parse::parser::{
+use crate::parse::ident::{ident, lowercase_ident, variant_or_ident, Ident};
+use crate::parse::number_literal::number_literal;
+use crate::parse::parser::{
     allocated, char, not, not_followed_by, optional, string, then, unexpected, unexpected_eof,
     Either, Fail, FailReason, ParseResult, Parser, State,
 };
-use region::{Located, Region};
+use crate::region::{Located, Region};
+use bumpalo::collections::Vec;
+use bumpalo::Bump;
 
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
@@ -81,7 +80,7 @@ pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 }
 
 fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Expr<'a>> {
-    let expr_parser = parse::parser::map_with_arena(
+    let expr_parser = crate::parse::parser::map_with_arena(
         and!(
             // First parse the body without operators, then try to parse possible operators after.
             move |arena, state| loc_parse_expr_body_without_operators(min_indent, arena, state),
@@ -681,10 +680,15 @@ fn int_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map!(parse::string_literal::parse(), |result| match result {
-        parse::string_literal::StringLiteral::Line(string) => Pattern::StrLiteral(string),
-        parse::string_literal::StringLiteral::Block(lines) => Pattern::BlockStrLiteral(lines),
-    })
+    map!(
+        crate::parse::string_literal::parse(),
+        |result| match result {
+            crate::parse::string_literal::StringLiteral::Line(string) =>
+                Pattern::StrLiteral(string),
+            crate::parse::string_literal::StringLiteral::Block(lines) =>
+                Pattern::BlockStrLiteral(lines),
+        }
+    )
 }
 
 fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
@@ -1166,8 +1170,11 @@ fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
 }
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    map!(parse::string_literal::parse(), |result| match result {
-        parse::string_literal::StringLiteral::Line(string) => Expr::Str(string),
-        parse::string_literal::StringLiteral::Block(lines) => Expr::BlockStr(lines),
-    })
+    map!(
+        crate::parse::string_literal::parse(),
+        |result| match result {
+            crate::parse::string_literal::StringLiteral::Line(string) => Expr::Str(string),
+            crate::parse::string_literal::StringLiteral::Block(lines) => Expr::BlockStr(lines),
+        }
+    )
 }

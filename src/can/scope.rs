@@ -1,7 +1,7 @@
-use can::symbol::Symbol;
-use collections::ImMap;
-use ident::Ident;
-use region::Region;
+use crate::can::symbol::Symbol;
+use crate::collections::ImMap;
+use crate::ident::Ident;
+use crate::region::Region;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {

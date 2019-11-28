@@ -1,9 +1,8 @@
-use fmt::expr::fmt_expr;
-use fmt::pattern::fmt_pattern;
-use fmt::spaces::fmt_spaces;
-
+use crate::fmt::expr::fmt_expr;
+use crate::fmt::pattern::fmt_pattern;
+use crate::fmt::spaces::fmt_spaces;
+use crate::parse::ast::Def;
 use bumpalo::collections::String;
-use parse::ast::Def;
 
 pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
     match def {

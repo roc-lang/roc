@@ -1,7 +1,7 @@
+use crate::parse::ast::Attempting;
+use crate::region::{Located, Region};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use parse::ast::Attempting;
-use region::{Located, Region};
 use std::{char, u16};
 
 /// A position in a source file.

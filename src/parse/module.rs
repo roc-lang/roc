@@ -1,14 +1,16 @@
-use bumpalo::collections::{String, Vec};
-use module::ModuleName;
-use parse::ast::{
+use crate::module::ModuleName;
+use crate::parse;
+use crate::parse::ast::{
     AppHeader, Attempting, CommentOrNewline, Def, ExposesEntry, ImportsEntry, InterfaceHeader,
     Module,
 };
-use parse::blankspace::{space0_around, space1};
-use parse::ident::unqualified_ident;
-use parse::parse;
-use parse::parser::{self, char, loc, optional, string, unexpected, unexpected_eof, Parser, State};
-use region::Located;
+use crate::parse::blankspace::{space0_around, space1};
+use crate::parse::ident::unqualified_ident;
+use crate::parse::parser::{
+    self, char, loc, optional, string, unexpected, unexpected_eof, Parser, State,
+};
+use crate::region::Located;
+use bumpalo::collections::{String, Vec};
 
 pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
     one_of!(interface_module(), app_module())

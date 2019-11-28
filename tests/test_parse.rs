@@ -14,9 +14,9 @@ mod helpers;
 
 #[cfg(test)]
 mod test_parse {
+    use crate::helpers::parse_with;
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
-    use helpers::parse_with;
     use roc::module::ModuleName;
     use roc::operator::BinOp::*;
     use roc::operator::CalledVia;
