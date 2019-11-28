@@ -8,22 +8,21 @@ use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use std::fs::read_to_string;
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use tokio::fs::read_to_string;
 
 pub struct Loaded<'a> {
     pub requested_header: LoadedHeader<'a>,
-    pub dependent_headers: MutMap<ModuleName<'a>, LoadedHeader<'a>>,
+    pub dependent_headers: ImMap<ModuleName<'a>, LoadedHeader<'a>>,
     pub defs: MutMap<ModuleName<'a>, Result<Vec<'a, Located<Def<'a>>>, Fail>>,
-    pub problems: Vec<'a, BuildProblem<'a>>,
 }
 
-struct Env<'a, 'p> {
+struct Env<'a> {
     pub arena: &'a Bump,
-    pub src_dir: &'p Path,
-    pub problems: Vec<'a, BuildProblem<'a>>,
-    pub loaded_headers: MutMap<ModuleName<'a>, LoadedHeader<'a>>,
+    pub src_dir: &'a Path,
     pub queue: Queue<'a>,
 }
 
@@ -34,7 +33,7 @@ pub enum BuildProblem<'a> {
     FileNotFound(&'a Path),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum LoadedHeader<'a> {
     Valid {
         scope: ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
@@ -43,32 +42,38 @@ pub enum LoadedHeader<'a> {
     ParsingFailed(Fail),
 }
 
-pub fn load<'a>(arena: &'a Bump, src_dir: &Path, filename: &Path) -> Loaded<'a> {
-    let mut env = Env {
+pub async fn load<'a>(arena: &'a Bump, src_dir: &'a Path, filename: &Path) -> Loaded<'a> {
+    let env = Env {
         arena,
         src_dir,
-        problems: Vec::new_in(&arena),
-        loaded_headers: MutMap::default(),
         queue: MutMap::default(),
     };
 
-    let requested_header = load_filename(&mut env, filename);
+
+    /// TODO proof of concept:
+    ///
+    /// set up a job queue, and load *all* modules using that.
+    /// after each one loads, maintain a cache of "we've already started loading this"
+    /// so subsequent ones don't need to enqueue redundantly - 
+    /// but also check again before running a fresh load!
+    /// Also, use a similar (maybe even the same?) queue for parsing defs in parallel
+
+    let (requested_header, dependent_headers) = load_filename(&env, filename).await;
     let mut defs = MutMap::default();
 
-    for (module_name, state) in env.queue {
-        let loaded_defs = match module::module_defs().parse(arena, state) {
-            Ok((defs, _)) => Ok(defs),
-            Err((fail, _)) => Err(fail),
-        };
+    // for (module_name, state) in env.queue {
+    //     let loaded_defs = match module::module_defs().parse(arena, state) {
+    //         Ok((defs, _)) => Ok(defs),
+    //         Err((fail, _)) => Err(fail),
+    //     };
 
-        defs.insert(module_name, loaded_defs);
-    }
+    //     defs.insert(module_name, loaded_defs);
+    // }
 
     Loaded {
         requested_header,
-        dependent_headers: env.loaded_headers,
+        dependent_headers,
         defs,
-        problems: env.problems,
     }
 }
 
@@ -117,7 +122,9 @@ pub fn load<'a>(arena: &'a Bump, src_dir: &Path, filename: &Path) -> Loaded<'a> 
 /// module's canonicalization.
 ///
 /// If a given import has not been loaded yet, load it too.
-fn load_module<'a, 'p>(env: &mut Env<'a, 'p>, module_name: &ModuleName<'a>) -> LoadedHeader<'a> {
+async fn load_module<'a>(env: &'a Env<'a>, 
+    loaded_headers: ImMap<ModuleName<'a>, LoadedHeader<'a>>,
+                         module_name: &ModuleName<'a>) -> (LoadedHeader<'a>, ImMap<ModuleName<'a>, LoadedHeader<'a>>)  {
     // 1. Convert module_name to filename, using src_dir.
     // 2. Open that file for reading. (If there's a problem, record it and bail.)
     // 3. Read the whole file into a string. (In the future, we can read just the header.)
@@ -138,11 +145,14 @@ fn load_module<'a, 'p>(env: &mut Env<'a, 'p>, module_name: &ModuleName<'a>) -> L
     // End with .roc
     filename.set_extension("roc");
 
-    load_filename(env, &filename)
+    load_filename(env, loaded_headers,&filename).await
 }
 
-fn load_filename<'a, 'p>(env: &mut Env<'a, 'p>, filename: &Path) -> LoadedHeader<'a> {
-    match read_to_string(filename) {
+async fn load_filename<'a, 'p>(env: &'a Env<'a>, 
+                               
+    loaded_headers: ImMap<ModuleName<'a>, LoadedHeader<'a>>,
+                               filename: &Path) -> (LoadedHeader<'a>, ImMap<ModuleName<'a>, LoadedHeader<'a>>) {
+    let imports = match read_to_string(filename).await {
         Ok(src) => {
             // TODO instead of env.arena.alloc(src), we should create a new buffer
             // in the arena as a Vec<'a, u8> and call .as_mut_slice() on it to
@@ -154,64 +164,80 @@ fn load_filename<'a, 'p>(env: &mut Env<'a, 'p>, filename: &Path) -> LoadedHeader
 
             match module::module().parse(env.arena, state) {
                 Ok((Module::Interface { header }, state)) => {
-                    let mut scope = ImMap::default();
-
                     // Enqueue the defs parsing job for background processing.
-                    env.queue.insert(header.name.value, state);
-
-                    for loc_entry in header.imports {
-                        load_import(env, loc_entry.region, &loc_entry.value, &mut scope);
-                    }
-
-                    LoadedHeader::Valid { scope }
+                    // env.queue.insert(header.name.value, state);
+                   
+                    header.imports
                 }
                 Ok((Module::App { header }, state)) => {
-                    let mut scope = ImMap::default();
-
                     // Enqueue the defs parsing job for background processing.
                     // The app module has a module name of ""
-                    env.queue.insert(ModuleName::new(""), state);
-
-                    for loc_entry in header.imports {
-                        load_import(env, loc_entry.region, &loc_entry.value, &mut scope);
-                    }
-
-                    LoadedHeader::Valid { scope }
+                    // env.queue.insert(ModuleName::new(""), state);
+                    
+                    header.imports
                 }
-                Err((fail, _)) => LoadedHeader::ParsingFailed(fail),
+                Err((fail, _)) => {
+                    return LoadedHeader::ParsingFailed(fail);
+                }
             }
         }
-        Err(err) => LoadedHeader::FileProblem(err.kind()),
-    }
-}
+        Err(err) => return LoadedHeader::FileProblem(err.kind()),
+    };
 
-fn load_import<'a, 'p>(
-    env: &mut Env<'a, 'p>,
+    let mut scope = ImMap::default();
+    let mut headers = ImMap::default();
+
+    for loc_entry in imports {
+        let (new_scope, opt_header) = 
+            load_import(env, loc_entry.region, loaded_headers, env.arena.alloc(loc_entry.value)).await;
+
+        scope = scope.union(new_scope);
+
+        if let Some((module_name, loaded_header)) = opt_header {
+            headers.insert(module_name, loaded_header);
+        }
+    }
+
+    (LoadedHeader::Valid { scope }, headers)
+} 
+
+type Scope<'a>= ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>;
+
+fn load_import<'a>(
+    env: &'a Env<'a>,
     region: Region,
-    entry: &ImportsEntry<'a>,
-    scope: &mut ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
-) {
-    use crate::parse::ast::ImportsEntry::*;
+    loaded_headers: ImMap<ModuleName<'a>, LoadedHeader<'a>>,
+    entry: &'a ImportsEntry<'a>,
+) -> Pin<Box<dyn Future<Output = (Scope<'a>, Option<(ModuleName<'a>, LoadedHeader<'a>)>)> + 'a>> {
+    Box::pin(async move {
+        use crate::parse::ast::ImportsEntry::*;
 
-    match entry {
-        Module(module_name, exposes) => {
-            // If we haven't already loaded the module, load it!
-            if !env.loaded_headers.contains_key(&module_name) {
-                let loaded = load_module(env, module_name);
+        match entry {
+            Module(module_name, exposes) => {
+                // If we haven't already loaded the module, load it!
+                let new_header = if !loaded_headers.contains_key(&module_name) {
+                    let loaded = load_module(env, loaded_headers, module_name).await;
 
-                env.loaded_headers.insert(*module_name, loaded);
+                    Some((*module_name, loaded))
+                } else {
+                    None
+                };
+
+                let mut scope = ImMap::default();
+
+                for loc_entry in exposes {
+                    expose(*module_name, &loc_entry.value, loc_entry.region, &mut scope)
+                }
+
+                (scope, new_header)
             }
 
-            for loc_entry in exposes {
-                expose(*module_name, &loc_entry.value, loc_entry.region, scope)
+            SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => {
+                // Ignore spaces.
+                load_import(env, region, *sub_entry).await
             }
         }
-
-        SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => {
-            // Ignore spaces.
-            load_import(env, region, *sub_entry, scope)
-        }
-    }
+    })
 }
 
 fn expose<'a>(
