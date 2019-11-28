@@ -25,9 +25,9 @@ mod test_load {
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
         let arena = Bump::new();
-        let (app_header, problems, loaded_defs, loaded_headers) = load(&arena, &src_dir, &filename);
+        let loaded = load(&arena, &src_dir, &filename);
 
-        assert!(problems.is_empty());
+        assert!(loaded.problems.is_empty());
 
         let dep1_scope = im_map_from_pairs(vec![(
             UnqualifiedIdent::new("foo"),
@@ -46,7 +46,7 @@ mod test_load {
         let dep3_scope = im_map_from_pairs(vec![]);
 
         assert_eq!(
-            loaded_headers,
+            loaded.dependent_headers,
             mut_map_from_pairs(vec![
                 (ModuleName::new("Dep1"), Valid { scope: dep1_scope }),
                 (ModuleName::new("Dep3.Blah"), Valid { scope: dep3_scope }),
@@ -54,9 +54,10 @@ mod test_load {
             ])
         );
 
-        assert_eq!(loaded_defs.len(), 4);
+        assert_eq!(loaded.defs.len(), 4);
 
-        let defs = loaded_defs
+        let defs = loaded
+            .defs
             .get(&ModuleName::new("Primary"))
             .expect("No defs found for `Primary` module")
             .clone()
@@ -68,7 +69,7 @@ mod test_load {
             6
         );
 
-        match app_header {
+        match loaded.requested_header {
             LoadedHeader::Valid { scope } => assert_eq!(
                 scope,
                 im_map_from_pairs(vec![

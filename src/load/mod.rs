@@ -12,6 +12,13 @@ use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub struct Loaded<'a> {
+    pub requested_header: LoadedHeader<'a>,
+    pub dependent_headers: MutMap<ModuleName<'a>, LoadedHeader<'a>>,
+    pub defs: MutMap<ModuleName<'a>, Result<Vec<'a, Located<Def<'a>>>, Fail>>,
+    pub problems: Vec<'a, BuildProblem<'a>>,
+}
+
 struct Env<'a, 'p> {
     pub arena: &'a Bump,
     pub src_dir: &'p Path,
@@ -36,16 +43,7 @@ pub enum LoadedHeader<'a> {
     ParsingFailed(Fail),
 }
 
-pub fn load<'a>(
-    arena: &'a Bump,
-    src_dir: &Path,
-    filename: &Path,
-) -> (
-    LoadedHeader<'a>,
-    Vec<'a, BuildProblem<'a>>,
-    MutMap<ModuleName<'a>, Result<Vec<'a, Located<Def<'a>>>, Fail>>,
-    MutMap<ModuleName<'a>, LoadedHeader<'a>>,
-) {
+pub fn load<'a>(arena: &'a Bump, src_dir: &Path, filename: &Path) -> Loaded<'a> {
     let mut env = Env {
         arena,
         src_dir,
@@ -54,19 +52,24 @@ pub fn load<'a>(
         queue: MutMap::default(),
     };
 
-    let answer = load_filename(&mut env, filename);
-    let mut loaded_defs = MutMap::default();
+    let requested_header = load_filename(&mut env, filename);
+    let mut defs = MutMap::default();
 
     for (module_name, state) in env.queue {
-        let defs = match module::module_defs().parse(arena, state) {
+        let loaded_defs = match module::module_defs().parse(arena, state) {
             Ok((defs, _)) => Ok(defs),
             Err((fail, _)) => Err(fail),
         };
 
-        loaded_defs.insert(module_name, defs);
+        defs.insert(module_name, loaded_defs);
     }
 
-    (answer, env.problems, loaded_defs, env.loaded_headers)
+    Loaded {
+        requested_header,
+        dependent_headers: env.loaded_headers,
+        defs,
+        problems: env.problems,
+    }
 }
 
 /// The long-term plan is for the loading process to work like this, starting from main.roc:
