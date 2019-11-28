@@ -4,7 +4,7 @@ use parse::ast::{
     AppHeader, Attempting, CommentOrNewline, Def, ExposesEntry, ImportsEntry, InterfaceHeader,
     Module,
 };
-use parse::blankspace::{space1, space1_around};
+use parse::blankspace::{space0_around, space1};
 use parse::ident::unqualified_ident;
 use parse::parse;
 use parse::parser::{self, char, loc, optional, string, unexpected, unexpected_eof, Parser, State};
@@ -134,7 +134,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
-    zero_or_more!(space1_around(loc(parse::def(0)), 0))
+    zero_or_more!(space0_around(loc(parse::def(0)), 0))
 }
 
 #[inline(always)]
