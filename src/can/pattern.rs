@@ -1,18 +1,18 @@
-use can::env::Env;
-use can::num::{
+use crate::can::env::Env;
+use crate::can::num::{
     finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
     finish_parsing_oct,
 };
-use can::problem::Problem;
-use can::scope::Scope;
-use can::symbol::Symbol;
-use collections::ImMap;
-use ident::{Ident, VariantName};
-use parse::ast;
-use region::{Located, Region};
-use subs::Subs;
-use subs::Variable;
-use types::{Constraint, PExpected, PatternCategory, Type};
+use crate::can::problem::Problem;
+use crate::can::scope::Scope;
+use crate::can::symbol::Symbol;
+use crate::collections::ImMap;
+use crate::ident::{Ident, VariantName};
+use crate::parse::ast;
+use crate::region::{Located, Region};
+use crate::subs::Subs;
+use crate::subs::Variable;
+use crate::types::{Constraint, PExpected, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -59,7 +59,7 @@ pub fn canonicalize_pattern<'a>(
     expected: PExpected<Type>,
 ) -> Located<Pattern> {
     use self::PatternType::*;
-    use can::ast::Pattern::*;
+    use crate::can::ast::Pattern::*;
 
     let can_pattern = match &pattern {
         &Identifier(ref name) => {
@@ -292,7 +292,7 @@ fn add_constraints<'a>(
     expected: PExpected<Type>,
     state: &'a mut PatternState,
 ) {
-    use parse::ast::Pattern::*;
+    use crate::parse::ast::Pattern::*;
 
     match pattern {
         Underscore | Malformed(_) | QualifiedIdentifier(_) => {

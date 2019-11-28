@@ -1,10 +1,10 @@
+use crate::collections::arena_join;
+use crate::ident::UnqualifiedIdent;
+use crate::parse::ast::{Attempting, MaybeQualified};
+use crate::parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use collections::arena_join;
-use ident::UnqualifiedIdent;
-use parse::ast::{Attempting, MaybeQualified};
-use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 
 /// The parser accepts all of these in any position where any one of them could
 /// appear. This way, canonicalization can give more helpful error messages like

@@ -1,12 +1,12 @@
+use crate::ident::UnqualifiedIdent;
+use crate::module::ModuleName;
+use crate::operator::CalledVia;
+use crate::operator::{BinOp, UnaryOp};
+use crate::parse::ident::Ident;
+use crate::region::{Loc, Region};
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use ident::UnqualifiedIdent;
-use module::ModuleName;
-use operator::CalledVia;
-use operator::{BinOp, UnaryOp};
-use parse::ident::Ident;
-use region::{Loc, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
@@ -343,8 +343,8 @@ impl<'a> Pattern<'a> {
 }
 
 pub trait Spaceable<'a> {
-    fn before(&'a self, &'a [CommentOrNewline<'a>]) -> Self;
-    fn after(&'a self, &'a [CommentOrNewline<'a>]) -> Self;
+    fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
+    fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
 
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where

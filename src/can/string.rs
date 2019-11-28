@@ -1,13 +1,13 @@
 // use bumpalo::collections::string::String;
 // use bumpalo::collections::vec::Vec;
+use crate::parse::ast::Expr;
 use bumpalo::Bump;
-use parse::ast::Expr;
-// use parse::ast::{Attempting, Expr};
-// use parse::ident;
-// use parse::parser::{unexpected, unexpected_eof, Fail, Parser, State};
-// use parse::problems::{Problem, Problems};
-// use region::{Loc, Region};
-use region::Region;
+// use crate::parse::ast::{Attempting, Expr};
+// use crate::parse::ident;
+// use crate::parse::parser::{unexpected, unexpected_eof, Fail, Parser, State};
+// use crate::parse::problems::{Problem, Problems};
+// use crate::region::{Loc, Region};
+use crate::region::Region;
 // use std::char;
 // use std::iter::Peekable;
 

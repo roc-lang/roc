@@ -1,7 +1,6 @@
-use fmt::spaces::fmt_spaces;
-
+use crate::fmt::spaces::fmt_spaces;
+use crate::parse::ast::Pattern;
 use bumpalo::collections::String;
-use parse::ast::Pattern;
 
 pub fn fmt_pattern<'a>(
     buf: &mut String<'a>,

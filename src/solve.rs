@@ -1,8 +1,8 @@
-use can::symbol::Symbol;
-use collections::ImMap;
-use subs::{Content, Descriptor, FlatType, Subs, Variable};
-use types::Constraint::{self, *};
-use types::Type::{self, *};
+use crate::can::symbol::Symbol;
+use crate::collections::ImMap;
+use crate::subs::{Content, Descriptor, FlatType, Subs, Variable};
+use crate::types::Constraint::{self, *};
+use crate::types::Type::{self, *};
 
 type Env = ImMap<Symbol, Variable>;
 

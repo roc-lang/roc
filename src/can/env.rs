@@ -1,11 +1,11 @@
-use can::expr::Expr;
-use can::pattern::Pattern;
-use can::problem::Problem;
-use can::procedure::{Procedure, References};
-use can::symbol::Symbol;
-use collections::{ImMap, MutMap};
-use region::{Located, Region};
-use subs::Variable;
+use crate::can::expr::Expr;
+use crate::can::pattern::Pattern;
+use crate::can::problem::Problem;
+use crate::can::procedure::{Procedure, References};
+use crate::can::symbol::Symbol;
+use crate::collections::{ImMap, MutMap};
+use crate::region::{Located, Region};
+use crate::subs::Variable;
 
 /// The canonicalization environment for a particular module.
 pub struct Env {

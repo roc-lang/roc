@@ -1,7 +1,7 @@
+use crate::parse::ast::Attempting;
+use crate::region::{Located, Region};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use parse::ast::Attempting;
-use region::{Located, Region};
 use std::{char, u16};
 
 /// A position in a source file.
@@ -181,7 +181,7 @@ pub struct Fail {
 }
 
 pub trait Parser<'a, Output> {
-    fn parse(&self, &'a Bump, State<'a>) -> ParseResult<'a, Output>;
+    fn parse(&self, _: &'a Bump, _: State<'a>) -> ParseResult<'a, Output>;
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F

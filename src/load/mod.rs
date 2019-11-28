@@ -1,13 +1,13 @@
+use crate::can::symbol::Symbol;
+use crate::collections::{ImMap, MutMap};
+use crate::ident::UnqualifiedIdent;
+use crate::module::ModuleName;
+use crate::parse::ast::{Attempting, Def, ExposesEntry, ImportsEntry, Module};
+use crate::parse::module;
+use crate::parse::parser::{Fail, Parser, State};
+use crate::region::{Located, Region};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use can::symbol::Symbol;
-use collections::{ImMap, MutMap};
-use ident::UnqualifiedIdent;
-use module::ModuleName;
-use parse::ast::{Attempting, Def, ExposesEntry, ImportsEntry, Module};
-use parse::module;
-use parse::parser::{Fail, Parser, State};
-use region::{Located, Region};
 use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -191,7 +191,7 @@ fn load_import<'a, 'p>(
     entry: &ImportsEntry<'a>,
     scope: &mut ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
 ) {
-    use parse::ast::ImportsEntry::*;
+    use crate::parse::ast::ImportsEntry::*;
 
     match entry {
         Module(module_name, exposes) => {
@@ -220,7 +220,7 @@ fn expose<'a>(
     region: Region,
     scope: &mut ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
 ) {
-    use parse::ast::ExposesEntry::*;
+    use crate::parse::ast::ExposesEntry::*;
 
     match entry {
         Ident(ident) => {

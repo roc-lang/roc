@@ -1,7 +1,7 @@
+use crate::ident::UnqualifiedIdent;
+use crate::parse::ast::CommentOrNewline;
+use crate::region::Loc;
 use bumpalo::collections::Vec;
-use ident::UnqualifiedIdent;
-use parse::ast::CommentOrNewline;
-use region::Loc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);

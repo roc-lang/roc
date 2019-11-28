@@ -1,5 +1,5 @@
-use ident::{UnqualifiedIdent, VariantName};
-use module::ModuleName;
+use crate::ident::{UnqualifiedIdent, VariantName};
+use crate::module::ModuleName;
 use std::fmt;
 
 /// A globally unique identifier, used for both vars and variants.

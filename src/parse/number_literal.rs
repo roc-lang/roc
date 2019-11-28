@@ -1,5 +1,5 @@
-use parse::ast::{Attempting, Expr};
-use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
+use crate::parse::ast::{Attempting, Expr};
+use crate::parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use std::char;
 
 pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>> {
