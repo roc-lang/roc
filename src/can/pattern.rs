@@ -1,18 +1,18 @@
-use can::env::Env;
-use can::num::{
+use crate::can::env::Env;
+use crate::can::num::{
     finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
     finish_parsing_oct,
 };
-use can::problem::Problem;
-use can::scope::Scope;
-use can::symbol::Symbol;
-use collections::ImMap;
-use ident::{Ident, VariantName};
-use parse::ast;
-use region::{Located, Region};
-use subs::Subs;
-use subs::Variable;
-use types::{Constraint, PExpected, PatternCategory, Type};
+use crate::can::problem::Problem;
+use crate::can::scope::Scope;
+use crate::can::symbol::Symbol;
+use crate::collections::ImMap;
+use crate::ident::{Ident, VariantName};
+use crate::parse::ast;
+use crate::region::{Located, Region};
+use crate::subs::Subs;
+use crate::subs::Variable;
+use crate::types::{Constraint, PExpected, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -45,6 +45,8 @@ pub enum PatternType {
     CaseBranch,
 }
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_pattern<'a>(
     env: &'a mut Env,
     state: &'a mut PatternState,
@@ -57,11 +59,11 @@ pub fn canonicalize_pattern<'a>(
     expected: PExpected<Type>,
 ) -> Located<Pattern> {
     use self::PatternType::*;
-    use can::ast::Pattern::*;
+    use crate::can::ast::Pattern::*;
 
     let can_pattern = match &pattern {
         &Identifier(ref name) => {
-            let unqualified_ident = Ident::Unqualified(name.to_string());
+            let lowercase_ident = Ident::Unqualified(name.to_string());
 
             // We use shadowable_idents for this, and not scope, because for assignments
             // they are different. When canonicalizing a particular assignment, that new
@@ -70,11 +72,11 @@ pub fn canonicalize_pattern<'a>(
             // For example, when canonicalizing (fibonacci = ...), `fibonacci` should be in scope
             // so that it can refer to itself without getting a naming problem, but it should not
             // be in the collection of shadowable idents because you can't shadow yourself!
-            match shadowable_idents.get(&unqualified_ident) {
+            match shadowable_idents.get(&lowercase_ident) {
                 Some((_, region)) => {
                     let loc_shadowed_ident = Located {
                         region: *region,
-                        value: unqualified_ident,
+                        value: lowercase_ident,
                     };
 
                     // This is already in scope, meaning it's about to be shadowed.
@@ -88,7 +90,7 @@ pub fn canonicalize_pattern<'a>(
                 None => {
                     // Make sure we aren't shadowing something in the home module's scope.
                     let qualified_ident =
-                        Ident::Qualified(env.home.to_string(), unqualified_ident.name());
+                        Ident::Qualified(env.home.to_string(), lowercase_ident.name());
 
                     match scope.idents.get(&qualified_ident) {
                         Some((_, region)) => {
@@ -290,7 +292,7 @@ fn add_constraints<'a>(
     expected: PExpected<Type>,
     state: &'a mut PatternState,
 ) {
-    use parse::ast::Pattern::*;
+    use crate::parse::ast::Pattern::*;
 
     match pattern {
         Underscore | Malformed(_) | QualifiedIdentifier(_) => {
@@ -345,7 +347,11 @@ fn add_constraints<'a>(
             add_constraints(pattern, scope, region, expected, state)
         }
 
-        Variant(_, _) | Apply(_, _) | RecordDestructure(_) | EmptyRecordLiteral => {
+        Variant(_, _)
+        | Apply(_, _)
+        | RecordDestructure(_)
+        | RecordField(_, _)
+        | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
     }

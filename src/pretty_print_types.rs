@@ -1,6 +1,6 @@
-use collections::{MutMap, MutSet};
-use subs::{Content, FlatType, Subs, Variable};
-use types;
+use crate::collections::{MutMap, MutSet};
+use crate::subs::{Content, FlatType, Subs, Variable};
+use crate::types;
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -53,8 +53,8 @@ fn find_names_needed(
     root_appearances: &mut MutMap<Variable, Appearances>,
     names_taken: &mut MutSet<String>,
 ) {
-    use subs::Content::*;
-    use subs::FlatType::*;
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
 
     match subs.get(variable).content {
         FlexVar(None) => {
@@ -79,11 +79,7 @@ fn find_names_needed(
         FlexVar(Some(_)) => {
             // This root already has a name. Nothing to do here!
         }
-        Structure(Apply {
-            module_name: _,
-            name: _,
-            args,
-        }) => {
+        Structure(Apply { args, .. }) => {
             for var in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
@@ -116,11 +112,8 @@ pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
     find_names_needed(variable, subs, &mut roots, &mut appearances, &mut taken);
 
     for root in roots {
-        match appearances.get(&root) {
-            Some(Appearances::Multiple) => {
-                letters_used = name_root(letters_used, root, subs, &taken);
-            }
-            _ => (),
+        if let Some(Appearances::Multiple) = appearances.get(&root) {
+            letters_used = name_root(letters_used, root, subs, &taken);
         }
     }
 }
@@ -148,7 +141,7 @@ fn name_root(letters_used: u32, root: Variable, subs: &mut Subs, taken: &MutSet<
 }
 
 fn set_root_name(root: Variable, name: &str, subs: &mut Subs) {
-    use subs::Content::*;
+    use crate::subs::Content::*;
 
     let mut descriptor = subs.get(root);
 
@@ -175,7 +168,7 @@ pub fn content_to_string(content: Content, subs: &mut Subs) -> String {
 }
 
 fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    use subs::Content::*;
+    use crate::subs::Content::*;
 
     match content {
         FlexVar(Some(name)) => buf.push_str(&name),
@@ -187,7 +180,7 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
 }
 
 fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    use subs::FlatType::*;
+    use crate::subs::FlatType::*;
 
     match flat_type {
         Apply {

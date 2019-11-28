@@ -12,20 +12,20 @@ use self::problem::RuntimeError::*;
 use self::procedure::{Procedure, References};
 use self::scope::Scope;
 use self::symbol::Symbol;
+use crate::collections::{ImMap, ImSet, MutMap, MutSet};
+use crate::constrain::{self, exists};
+use crate::graph::{strongly_connected_component, topological_sort};
+use crate::ident::Ident;
+use crate::parse::ast::{self, Def};
+use crate::region::{Located, Region};
+use crate::subs::{Subs, Variable};
+use crate::types::AnnotationSource::*;
+use crate::types::Constraint::{self, *};
+use crate::types::Expected::{self, *};
+use crate::types::Type::{self, *};
+use crate::types::{LetConstraint, PExpected, PReason, Reason};
 use bumpalo::Bump;
-use collections::{ImMap, ImSet, MutMap, MutSet};
-use constrain::{self, exists};
-use graph::{strongly_connected_component, topological_sort};
-use ident::Ident;
-use parse::ast::{self, Def};
-use region::{Located, Region};
 use std::fmt::Debug;
-use subs::{Subs, Variable};
-use types::AnnotationSource::*;
-use types::Constraint::{self, *};
-use types::Expected::{self, *};
-use types::Type::{self, *};
-use types::{LetConstraint, PExpected, PReason, Reason};
 
 pub mod env;
 pub mod expr;
@@ -44,6 +44,8 @@ pub mod symbol;
 /// map so that expressions within that annotation can share these vars.
 type Rigids = ImMap<Box<str>, Type>;
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_declaration<'a>(
     arena: &Bump,
     subs: &mut Subs,
@@ -144,8 +146,7 @@ fn canonicalize_expr(
         }
         ast::Expr::BlockStr(lines) => {
             let constraint = Eq(constrain::str_type(), expected, region);
-
-            let joined = lines.iter().map(|s| *s).collect::<Vec<&str>>().join("\n");
+            let joined = lines.iter().copied().collect::<Vec<&str>>().join("\n");
 
             (BlockStr(joined.into()), Output::new(constraint))
         }
@@ -301,22 +302,21 @@ fn canonicalize_expr(
             // We're not tail-calling a symbol (by name), we're tail-calling a function value.
             output.tail_call = None;
 
-            let expr = match &fn_expr.value {
-                &Var(_, ref sym) | &FunctionPointer(_, ref sym) => {
+            let expr = match fn_expr.value {
+                Var(_, ref sym) | FunctionPointer(_, ref sym) => {
                     // In the FunctionPointer case, we're calling an inline closure;
-                    // something like ((\a b -> a + b) 1 2)
+                    // something like ((\a b -> a + b) 1 2).
                     output.references.calls.insert(sym.clone());
 
-                    CallByName(sym.clone(), args, *application_style)
+                    Call(Box::new(fn_expr.value), args, *application_style)
                 }
-                &RuntimeError(_) => {
+                RuntimeError(_) => {
                     // We can't call a runtime error; bail out by propagating it!
                     return (fn_expr, output);
                 }
                 not_var => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
-                    // Use CallPointer here.
-                    panic!("TODO support function calls that aren't by name, via CallPointer, in this case: {:?}", not_var);
+                    Call(Box::new(not_var), args, *application_style)
                 }
             };
 
@@ -761,6 +761,12 @@ fn canonicalize_expr(
         }
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
+        ast::Expr::ParensAround(sub_expr) => {
+            panic!(
+                "A ParensAround did not get removed during operator desugaring somehow: {:?}",
+                sub_expr
+            );
+        }
         ast::Expr::SpaceBefore(sub_expr, _spaces) => {
             panic!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:?}",
@@ -803,6 +809,8 @@ fn canonicalize_expr(
     )
 }
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn canonicalize_case_branch<'a>(
     env: &mut Env,
@@ -1111,7 +1119,7 @@ fn add_idents_from_pattern<'a>(
     scope: &'a Scope,
     answer: &'a mut Vec<(Ident, (Symbol, Region))>,
 ) {
-    use parse::ast::Pattern::*;
+    use crate::parse::ast::Pattern::*;
 
     match pattern {
         Identifier(name) => {
@@ -1137,6 +1145,9 @@ fn add_idents_from_pattern<'a>(
         RecordDestructure(_) => {
             panic!("TODO implement RecordDestructure pattern in add_idents_from_pattern.");
         }
+        RecordField(_, _) => {
+            panic!("TODO implement RecordField pattern in add_idents_from_pattern.");
+        }
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             add_idents_from_pattern(region, pattern, scope, answer)
@@ -1156,7 +1167,7 @@ fn add_idents_from_pattern<'a>(
 }
 
 fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Region)>) {
-    use parse::ast::Pattern::*;
+    use crate::parse::ast::Pattern::*;
 
     match &pattern {
         Identifier(name) => {
@@ -1175,6 +1186,9 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
         }
         RecordDestructure(_) => {
             panic!("TODO implement RecordDestructure pattern in remove_idents.");
+        }
+        RecordField(_, _) => {
+            panic!("TODO implement RecordField pattern in remove_idents.");
         }
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
@@ -1470,10 +1484,12 @@ fn can_defs<'a>(
                 ret_constraint: can_output.constraint.clone(),
             })));
 
+            // This only comes up if the expr we're naming turns out to be a closure.
+            // If it does, we're going to rename its corresponding Procedure!
             let mut renamed_closure_def: Option<&Symbol> = None;
 
             // Give closures names (and tail-recursive status) where appropriate.
-            let can_expr = match (
+            let opt_can_expr = match (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
                 &loc_can_expr.value,
@@ -1493,7 +1509,6 @@ fn can_defs<'a>(
                     // remove its generated name from the procedure map. (We'll re-insert it later.)
                     let mut procedure = env.procedures.remove(&symbol).unwrap_or_else(||
                         panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.procedures));
-                    let proc_var = procedure.var;
 
                     // The original ident name will be used for debugging and stack traces.
                     procedure.name = Some((*name).into());
@@ -1518,11 +1533,11 @@ fn can_defs<'a>(
 
                     renamed_closure_def = Some(&defined_symbol);
 
-                    // Return a reference to the defined symbol, since the auto-generated one no
-                    // longer references any entry in the procedure map!
-                    Var(proc_var, defined_symbol.clone())
+                    // Now that we have a top-level Procedure, we no longer want
+                    // the local Def anymore. It would be redundant!
+                    None
                 }
-                _ => loc_can_expr.value,
+                _ => Some(loc_can_expr.value),
             };
 
             let mut defined_symbols = Vec::new();
@@ -1556,17 +1571,19 @@ fn can_defs<'a>(
                 defined_symbols.push(symbol.clone());
             }
 
-            for symbol in defined_symbols {
-                can_defs_by_symbol.insert(
-                    symbol,
-                    (
-                        loc_can_pattern.clone(),
-                        Located {
-                            region: loc_can_expr.region,
-                            value: can_expr.clone(),
-                        },
-                    ),
-                );
+            if let Some(can_expr) = opt_can_expr {
+                for symbol in defined_symbols {
+                    can_defs_by_symbol.insert(
+                        symbol,
+                        (
+                            loc_can_pattern.clone(),
+                            Located {
+                                region: loc_can_expr.region,
+                                value: can_expr.clone(),
+                            },
+                        ),
+                    );
+                }
             }
         }
     }
@@ -1694,9 +1711,8 @@ fn can_defs<'a>(
                 // Topological sort gives us the reverse of the sorting we want!
                 .rev()
             {
-                match can_defs_by_symbol.get(&symbol) {
-                    Some(can_def) => can_defs.push(can_def.clone()),
-                    None => (),
+                if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
+                    can_defs.push(can_def.clone());
                 }
             }
 

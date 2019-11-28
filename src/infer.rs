@@ -1,9 +1,9 @@
-use can::procedure::Procedure;
-use can::symbol::Symbol;
-use collections::{ImMap, MutMap};
-use solve::solve;
-use subs::{Content, Subs, Variable};
-use types::Constraint;
+use crate::can::procedure::Procedure;
+use crate::can::symbol::Symbol;
+use crate::collections::{ImMap, MutMap};
+use crate::solve::solve;
+use crate::subs::{Content, Subs, Variable};
+use crate::types::Constraint;
 
 pub fn infer_expr(
     subs: &mut Subs,

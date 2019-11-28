@@ -8,10 +8,15 @@ extern crate roc;
 
 #[cfg(test)]
 mod test_format {
+    use bumpalo::collections::String;
     use bumpalo::Bump;
+    use roc::fmt::def::fmt_def;
+    use roc::fmt::expr::fmt_expr;
+    use roc::fmt::module::fmt_module;
     use roc::parse;
-    use roc::parse::ast::{format, Attempting, Expr};
+    use roc::parse::ast::{Attempting, Expr};
     use roc::parse::blankspace::space0_before;
+    use roc::parse::module::{module, module_defs};
     use roc::parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
@@ -24,26 +29,62 @@ mod test_format {
             .map_err(|(fail, _)| fail)
     }
 
-    fn assert_formats_to(input: &str, expected: &str) {
+    fn expr_formats_to(input: &str, expected: &str) {
         let arena = Bump::new();
         let input = input.trim_end();
         let expected = expected.trim_end();
 
         match parse_with(&arena, input) {
-            Ok(actual) => assert_eq!(format(&arena, &actual, 0, false), expected),
+            Ok(actual) => {
+                let mut buf = String::new_in(&arena);
+
+                fmt_expr(&mut buf, &actual, 0, false);
+
+                assert_eq!(buf, expected)
+            },
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", input, error)
         }
     }
 
-    fn assert_formats_same(input: &str) {
-        assert_formats_to(input, input);
+    fn expr_formats_same(input: &str) {
+        expr_formats_to(input, input);
+    }
+
+    fn module_formats_to(src: &str, expected: &str) {
+        let arena = Bump::new();
+        let src = src.trim_end();
+        let expected = expected.trim_end();
+
+        match module().parse(&arena, State::new(&src, Attempting::Module)) {
+            Ok((actual, state)) => {
+                let mut buf = String::new_in(&arena);
+
+                fmt_module(&mut buf, &actual);
+
+                match module_defs().parse(&arena, state) {
+                    Ok((loc_defs, _)) => {
+                        for loc_def in loc_defs {
+                            fmt_def(&mut buf, arena.alloc(loc_def.value), 0);
+                        }
+                    }
+                    Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+                }
+
+                assert_eq!(buf, expected)
+            },
+            Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+        };
+    }
+
+    fn module_formats_same(input: &str) {
+        module_formats_to(input, input);
     }
 
     // STRING LITERALS
 
     #[test]
     fn empty_string() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             ""
             "#
@@ -52,7 +93,7 @@ mod test_format {
 
     #[test]
     fn basic_string() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             "blah"
             "#
@@ -61,7 +102,7 @@ mod test_format {
 
     #[test]
     fn escaped_unicode_string() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             "unicode: \u{A00A}!"
             "#
@@ -70,7 +111,7 @@ mod test_format {
 
     #[test]
     fn escaped_quote_string() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             "\""
             "#
@@ -79,7 +120,7 @@ mod test_format {
 
     #[test]
     fn empty_block_string() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             """"""
             "#
@@ -88,7 +129,7 @@ mod test_format {
 
     #[test]
     fn basic_block_string() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             """blah"""
             "#
@@ -97,7 +138,7 @@ mod test_format {
 
     #[test]
     fn newlines_block_string() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             """blah
                     spam
@@ -108,7 +149,7 @@ mod test_format {
 
     #[test]
     fn quotes_block_string() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             """
  
@@ -121,7 +162,7 @@ mod test_format {
 
     #[test]
     fn zero() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             0
             "#
@@ -130,7 +171,7 @@ mod test_format {
 
     #[test]
     fn zero_point_zero() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             0.0
             "#
@@ -139,7 +180,7 @@ mod test_format {
 
     #[test]
     fn int_with_underscores() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             1_23_456
             "#
@@ -148,7 +189,7 @@ mod test_format {
 
     #[test]
     fn float_with_underscores() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             1_23_456.7_89_10
             "#
@@ -157,7 +198,7 @@ mod test_format {
 
     #[test]
     fn multi_arg_closure() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             \a b c -> a b c
             "#
@@ -168,7 +209,7 @@ mod test_format {
 
     #[test]
     fn single_def() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             x = 5
 
@@ -179,7 +220,7 @@ mod test_format {
 
     #[test]
     fn two_defs() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             x = 5
             y = 10
@@ -191,7 +232,7 @@ mod test_format {
 
     #[test]
     fn parenthetical_def() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             (UserId userId) = 5
             y = 10
@@ -203,18 +244,29 @@ mod test_format {
 
     #[test]
     fn record_destructuring() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             { x, y } = 5
+            { x: 5 } = { x: 5 }
 
             42
             "#
         ));
     }
 
+    // #[test]
+    // fn record_field_destructuring() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         case foo of
+    //             { x: 5 } -> 42
+    //         "#
+    //     ));
+    // }
+
     #[test]
     fn def_closure() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             identity = \a -> a
 
@@ -227,22 +279,22 @@ mod test_format {
 
     #[test]
     fn empty_record() {
-        assert_formats_same("{}");
+        expr_formats_same("{}");
     }
 
     #[test]
     fn one_field() {
-        assert_formats_same("{ x: 4 }");
+        expr_formats_same("{ x: 4 }");
     }
 
     #[test]
     fn two_fields() {
-        assert_formats_same("{ x: 4, y: 42 }");
+        expr_formats_same("{ x: 4, y: 42 }");
     }
 
     #[test]
     fn two_fields_newline() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             {
                 x: 4,
@@ -254,7 +306,7 @@ mod test_format {
 
     #[test]
     fn two_fields_center_newline() {
-        assert_formats_to(
+        expr_formats_to(
             indoc!(
                 r#"
             { x: 4,
@@ -275,7 +327,7 @@ mod test_format {
 
     #[test]
     fn one_unnamed_field() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             foo = 4
 
@@ -288,13 +340,13 @@ mod test_format {
 
     #[test]
     fn single_line_if() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             if foo bar then a b c else d e f
         "#
         ));
 
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             if foo (a b c) then a b c else d e f
         "#
@@ -305,7 +357,7 @@ mod test_format {
 
     #[test]
     fn integer_case() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             case b when
                 1 ->
@@ -319,7 +371,7 @@ mod test_format {
 
     #[test]
     fn case_with_comments() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             case b when
                 # look at cases
@@ -340,7 +392,7 @@ mod test_format {
 
     #[test]
     fn nested_case() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
             case b when
                 _ ->
@@ -353,7 +405,7 @@ mod test_format {
 
     #[test]
     fn case_with_moving_comments() {
-        assert_formats_to(
+        expr_formats_to(
             indoc!(
                 r#"
             case b when
@@ -384,7 +436,7 @@ mod test_format {
 
     #[test]
     fn multiple_blank_lines_collapse_to_one() {
-        assert_formats_to(
+        expr_formats_to(
             indoc!(
                 r#"
                 x = 5
@@ -412,7 +464,7 @@ mod test_format {
 
     #[test]
     fn def_returning_closure() {
-        assert_formats_same(indoc!(
+        expr_formats_same(indoc!(
             r#"
                     f = \x -> x
                     g = \x -> x
@@ -423,6 +475,50 @@ mod test_format {
 
                         x
                 "#
+        ));
+    }
+
+    // MODULES
+
+    #[test]
+    fn single_line_interface() {
+        module_formats_same(indoc!(
+            r#"
+                interface Foo exposes [] imports []
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_interface() {
+        module_formats_same(indoc!(
+            r#"
+                interface Foo
+                    exposes []
+                    imports []
+            "#
+        ));
+    }
+
+    #[test]
+    fn interface_exposing() {
+        module_formats_same(indoc!(
+            r#"
+                interface Foo
+                    exposes [ Bar, Baz, a, b ]
+                    imports []
+            "#
+        ));
+    }
+
+    #[test]
+    fn interface_importing() {
+        module_formats_same(indoc!(
+            r#"
+                interface Foo
+                    exposes [ Bar, Baz, a, b ]
+                    imports [ Blah, Thing.{ foo, bar }, Stuff ]
+            "#
         ));
     }
 }

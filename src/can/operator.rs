@@ -1,11 +1,11 @@
+use crate::operator::BinOp::Pizza;
+use crate::operator::{BinOp, CalledVia};
+use crate::parse::ast::Expr::{self, *};
+use crate::parse::ast::{AssignedField, Def, Pattern};
+use crate::region::{Located, Region};
+use crate::types;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use operator::BinOp::Pizza;
-use operator::{BinOp, CalledVia};
-use parse::ast::Expr::{self, *};
-use parse::ast::{AssignedField, Def, Pattern};
-use region::{Located, Region};
-use types;
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
 // https://github.com/gluon-lang/gluon
@@ -34,7 +34,7 @@ fn new_op_expr<'a>(
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
 pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Located<Expr<'a>> {
-    use operator::Associativity::*;
+    use crate::operator::Associativity::*;
     use std::cmp::Ordering;
 
     match &loc_expr.value {
@@ -192,8 +192,8 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             }
 
             for loc_op in op_stack.into_iter().rev() {
-                let right = arg_stack.pop().unwrap();
-                let left = arg_stack.pop().unwrap();
+                let right = desugar(arena, arg_stack.pop().unwrap());
+                let left = desugar(arena, arg_stack.pop().unwrap());
 
                 let region = Region::span_across(&left.region, &right.region);
                 let value = match loc_op.value {
@@ -295,7 +295,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             })
         }
         UnaryOp(loc_arg, loc_op) => {
-            use operator::UnaryOp::*;
+            use crate::operator::UnaryOp::*;
 
             let region = loc_op.region;
             let op = loc_op.value;
@@ -317,9 +317,9 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _) => {
-            // Since we've already begun canonicalization, spaces are no longer needed
-            // and should be dropped.
+        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+            // Since we've already begun canonicalization, spaces and parens
+            // are no longer needed and should be dropped.
             desugar(
                 arena,
                 arena.alloc(Located {
@@ -330,18 +330,6 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                     // * If this function takes an &'a Expr, then Infixes hits a problem.
                     // * If SpaceBefore holds a Loc<&'a Expr>, then Spaceable hits a problem.
                     // * If all the existing &'a Loc<Expr> values become Loc<&'a Expr>...who knows?
-                    value: (*expr).clone(),
-                    region: loc_expr.region,
-                }),
-            )
-        }
-        SpaceAfter(expr, _) => {
-            // Since we've already begun canonicalization, spaces are no longer needed
-            // and should be dropped.
-            desugar(
-                arena,
-                arena.alloc(Located {
-                    // TODO FIXME performance disaster!!! Must remove this clone! (Not easy.)
                     value: (*expr).clone(),
                     region: loc_expr.region,
                 }),
@@ -368,7 +356,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             let mut branches = Vec::with_capacity_in(2, arena);
 
             // no type errors will occur here so using this region should be fine
-            let pattern_region = condition.region.clone();
+            let pattern_region = condition.region;
 
             // TODO make False qualified
             branches.push(&*arena.alloc((
@@ -426,12 +414,13 @@ fn desugar_field<'a>(
     arena: &'a Bump,
     field: &'a AssignedField<'a, Expr<'a>>,
 ) -> AssignedField<'a, Expr<'a>> {
-    use parse::ast::AssignedField::*;
+    use crate::parse::ast::AssignedField::*;
+
     match field {
         LabeledValue(ref loc_str, spaces, loc_expr) => {
             AssignedField::LabeledValue(loc_str.clone(), spaces, desugar(arena, loc_expr))
         }
-        LabelOnly(ref loc_str, spaces) => LabelOnly(loc_str.clone(), spaces),
+        LabelOnly(ref loc_str) => LabelOnly(loc_str.clone()),
         SpaceBefore(ref field, spaces) => {
             SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces)
         }

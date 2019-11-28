@@ -1,7 +1,7 @@
-use can::pattern::PatternType;
-use ident::{Ident, VariantName};
-use operator::BinOp;
-use region::{Located, Region};
+use crate::can::pattern::PatternType;
+use crate::ident::{Ident, VariantName};
+use crate::operator::BinOp;
+use crate::region::{Located, Region};
 
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]

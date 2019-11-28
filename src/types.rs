@@ -1,10 +1,10 @@
-use can::symbol::Symbol;
-use collections::ImMap;
-use operator::{ArgSide, BinOp};
-use region::Located;
-use region::Region;
+use crate::can::symbol::Symbol;
+use crate::collections::ImMap;
+use crate::operator::{ArgSide, BinOp};
+use crate::region::Located;
+use crate::region::Region;
+use crate::subs::Variable;
 use std::fmt;
-use subs::Variable;
 
 // The standard modules
 pub const MOD_FLOAT: &str = "Float";
@@ -198,6 +198,7 @@ pub enum Reason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
     Lookup(Symbol, Expected<Type>, Region),

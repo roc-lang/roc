@@ -1,7 +1,7 @@
-use ena::unify::{InPlace, UnificationTable, UnifyKey};
+use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
+use crate::types::Problem;
+use crate::unify;
 use std::fmt;
-use types::Problem;
-use unify;
 
 #[derive(Debug, Default)]
 pub struct Subs {

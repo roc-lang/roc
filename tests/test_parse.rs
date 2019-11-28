@@ -14,17 +14,19 @@ mod helpers;
 
 #[cfg(test)]
 mod test_parse {
+    use crate::helpers::parse_with;
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
-    use helpers::parse_with;
+    use roc::module::ModuleName;
     use roc::operator::BinOp::*;
     use roc::operator::CalledVia;
     use roc::operator::UnaryOp;
     use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
     use roc::parse::ast::Pattern::{self, *};
-    use roc::parse::ast::{Attempting, Def, Spaceable};
-    use roc::parse::parser::{Fail, FailReason};
+    use roc::parse::ast::{Attempting, Def, InterfaceHeader, Spaceable};
+    use roc::parse::module::{interface_header, module_defs};
+    use roc::parse::parser::{Fail, FailReason, Parser, State};
     use roc::region::{Located, Region};
     use std::{f64, i64};
 
@@ -446,7 +448,7 @@ mod test_parse {
     fn parenthetical_var() {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
-        let expected = Var(module_parts, "whee");
+        let expected = ParensAround(arena.alloc(Var(module_parts, "whee")));
         let actual = parse_with(&arena, "(whee)");
 
         assert_eq!(Ok(expected), actual);
@@ -523,10 +525,8 @@ mod test_parse {
         let arena = Bump::new();
         let module_parts = Vec::new_in(&arena).into_bump_slice();
         let fields = bumpalo::vec![in &arena; "field"];
-        let expected = Field(
-            arena.alloc(Located::new(0, 0, 1, 4, Var(module_parts, "rec"))),
-            fields,
-        );
+        let paren_var = ParensAround(arena.alloc(Var(module_parts, "rec")));
+        let expected = Field(arena.alloc(Located::new(0, 0, 1, 4, paren_var)), fields);
         let actual = parse_with(&arena, "(rec).field");
 
         assert_eq!(Ok(expected), actual);
@@ -537,10 +537,8 @@ mod test_parse {
         let arena = Bump::new();
         let module_parts = bumpalo::vec![in &arena; "One", "Two"].into_bump_slice();
         let fields = bumpalo::vec![in &arena; "field"];
-        let expected = Field(
-            arena.alloc(Located::new(0, 0, 1, 12, Var(module_parts, "rec"))),
-            fields,
-        );
+        let paren_var = ParensAround(arena.alloc(Var(module_parts, "rec")));
+        let expected = Field(arena.alloc(Located::new(0, 0, 1, 12, paren_var)), fields);
         let actual = parse_with(&arena, "(One.Two.rec).field");
 
         assert_eq!(Ok(expected), actual);
@@ -627,8 +625,9 @@ mod test_parse {
         let module_parts = Vec::new_in(&arena).into_bump_slice();
         let arg = arena.alloc(Located::new(0, 0, 7, 8, Int("1")));
         let args = bumpalo::vec![in &arena; &*arg];
+        let parens_var = Expr::ParensAround(arena.alloc(Var(module_parts, "whee")));
         let expected = Expr::Apply(
-            arena.alloc(Located::new(0, 0, 1, 5, Var(module_parts, "whee"))),
+            arena.alloc(Located::new(0, 0, 1, 5, parens_var)),
             args,
             CalledVia::Space,
         );
@@ -709,11 +708,11 @@ mod test_parse {
         let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
         let arg2 = arena.alloc(Located::new(0, 0, 11, 14, Var(module_parts, "foo")));
         let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
+        let apply_expr = Expr::ParensAround(arena.alloc(Expr::Apply(
             arena.alloc(Located::new(0, 0, 2, 6, Var(module_parts, "whee"))),
             args,
             CalledVia::Space,
-        );
+        )));
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
         let actual = parse_with(&arena, "-(whee  12 foo)");
 
@@ -728,11 +727,11 @@ mod test_parse {
         let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
         let arg2 = arena.alloc(Located::new(0, 0, 11, 14, Var(module_parts, "foo")));
         let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
+        let apply_expr = Expr::ParensAround(arena.alloc(Expr::Apply(
             arena.alloc(Located::new(0, 0, 2, 6, Var(module_parts, "whee"))),
             args,
             CalledVia::Space,
-        );
+        )));
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
         let actual = parse_with(&arena, "!(whee  12 foo)");
 
@@ -1064,6 +1063,159 @@ mod test_parse {
                 "#
             ),
         );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn case_with_records() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let identifiers1 = bumpalo::vec![in &arena; Located::new(1, 1, 3, 4, Identifier("y")) ];
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(RecordDestructure(identifiers1)),
+            newlines.into_bump_slice(),
+        );
+        let loc_pattern1 = Located::new(1, 1, 1, 6, pattern1);
+        let expr1 = Int("2");
+        let loc_expr1 = Located::new(1, 1, 10, 11, expr1);
+        let branch1 = &*arena.alloc((loc_pattern1, loc_expr1));
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let identifiers2 = bumpalo::vec![in &arena; Located::new(2, 2, 3, 4, Identifier("z")), Located::new(2, 2, 6, 7, Identifier("w"))  ];
+        let pattern2 = Pattern::SpaceBefore(
+            arena.alloc(RecordDestructure(identifiers2)),
+            newlines.into_bump_slice(),
+        );
+        let loc_pattern2 = Located::new(2, 2, 1, 9, pattern2);
+        let expr2 = Int("4");
+        let loc_expr2 = Located::new(2, 2, 13, 14, expr2);
+        let branch2 = &*arena.alloc((loc_pattern2, loc_expr2));
+        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
+        let expected = Expr::Case(arena.alloc(loc_cond), branches);
+        let actual = parse_with(
+            &arena,
+            indoc!(
+                r#"
+                case x when
+                 { y } -> 2
+                 { z, w } -> 4
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // MODULE
+
+    #[test]
+    fn empty_module() {
+        let arena = Bump::new();
+        let exposes = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let module_name = ModuleName::new("Foo");
+        let expected = InterfaceHeader {
+            name: Located::new(0, 0, 10, 13, module_name),
+            exposes,
+            imports,
+
+            after_interface: &[],
+            before_exposes: &[],
+            after_exposes: &[],
+            before_imports: &[],
+            after_imports: &[],
+        };
+        let src = indoc!(
+            r#"
+                interface Foo exposes [] imports []
+            "#
+        );
+        let actual = interface_header()
+            .parse(&arena, State::new(&src, Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn nested_module() {
+        let arena = Bump::new();
+        let exposes = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let module_name = ModuleName::new("Foo.Bar.Baz");
+        let expected = InterfaceHeader {
+            name: Located::new(0, 0, 10, 21, module_name),
+            exposes,
+            imports,
+
+            after_interface: &[],
+            before_exposes: &[],
+            after_exposes: &[],
+            before_imports: &[],
+            after_imports: &[],
+        };
+        let src = indoc!(
+            r#"
+                interface Foo.Bar.Baz exposes [] imports []
+            "#
+        );
+        let actual = interface_header()
+            .parse(&arena, State::new(&src, Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn standalone_module_defs() {
+        use roc::parse::ast::Def::*;
+
+        let arena = Bump::new();
+        let newlines1 = bumpalo::vec![in &arena; Newline, Newline];
+        let newlines2 = bumpalo::vec![in &arena; Newline];
+        let newlines3 = bumpalo::vec![in &arena; Newline];
+        let pattern1 = Identifier("foo");
+        let pattern2 = Identifier("bar");
+        let pattern3 = Identifier("baz");
+        let def1 = SpaceAfter(
+            arena.alloc(Body(
+                Located::new(0, 0, 0, 3, pattern1),
+                arena.alloc(Located::new(0, 0, 6, 7, Int("1"))),
+            )),
+            newlines1.into_bump_slice(),
+        );
+        let def2 = SpaceAfter(
+            arena.alloc(Body(
+                Located::new(2, 2, 0, 3, pattern2),
+                arena.alloc(Located::new(2, 2, 6, 10, Str("hi"))),
+            )),
+            newlines2.into_bump_slice(),
+        );
+        let def3 = SpaceAfter(
+            arena.alloc(Body(
+                Located::new(3, 3, 0, 3, pattern3),
+                arena.alloc(Located::new(3, 3, 6, 13, Str("stuff"))),
+            )),
+            newlines3.into_bump_slice(),
+        );
+
+        let expected = bumpalo::vec![in &arena;
+            Located::new(0, 0, 0, 7, def1),
+            Located::new(2, 2, 0, 10, def2),
+            Located::new(3, 3, 0, 13, def3)
+        ];
+        let src = indoc!(
+            r#"
+                foo = 1
+
+                bar = "hi"
+                baz = "stuff"
+            "#
+        );
+        let actual = module_defs()
+            .parse(&arena, State::new(&src, Attempting::Module))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }

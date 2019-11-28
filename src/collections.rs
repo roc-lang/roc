@@ -2,14 +2,14 @@ use bumpalo::collections::String;
 use bumpalo::Bump;
 use std::hash::BuildHasherDefault;
 
-pub use fxhash::FxHasher;
+pub use wyhash::WyHash;
 
 #[inline(always)]
-pub fn default_hasher() -> BuildHasherDefault<FxHasher> {
+pub fn default_hasher() -> BuildHasherDefault<WyHash> {
     BuildHasherDefault::default()
 }
 
-pub type BuildHasher = BuildHasherDefault<FxHasher>;
+pub type BuildHasher = BuildHasherDefault<WyHash>;
 
 // Versions of HashMap and HashSet from both std and im_rc
 // which use the FNV hasher instead of the default SipHash hasher.

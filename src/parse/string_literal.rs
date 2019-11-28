@@ -1,7 +1,7 @@
+use crate::parse::ast::Attempting;
+use crate::parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use parse::ast::Attempting;
-use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use std::char;
 
 pub enum StringLiteral<'a> {
@@ -103,7 +103,7 @@ where
 
     let mut lines = Vec::new_in(arena);
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         parsed_chars += 1;
 
         // Potentially end the string (unless this is an escaped `"`!)
