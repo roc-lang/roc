@@ -343,8 +343,8 @@ impl<'a> Pattern<'a> {
 }
 
 pub trait Spaceable<'a> {
-    fn before(&'a self, &'a [CommentOrNewline<'a>]) -> Self;
-    fn after(&'a self, &'a [CommentOrNewline<'a>]) -> Self;
+    fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
+    fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
 
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where

@@ -181,7 +181,7 @@ pub struct Fail {
 }
 
 pub trait Parser<'a, Output> {
-    fn parse(&self, &'a Bump, State<'a>) -> ParseResult<'a, Output>;
+    fn parse(&self, _: &'a Bump, _: State<'a>) -> ParseResult<'a, Output>;
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
