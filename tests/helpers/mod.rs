@@ -16,6 +16,8 @@ use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
 use roc::subs::{Subs, Variable};
 use roc::types::{Expected, Type};
+use std::hash::Hash;
+use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
@@ -94,16 +96,38 @@ pub fn can_expr_with(
     (loc_expr.value, output, problems, procedures, subs, variable)
 }
 
-// pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>
-// where
-//     I: IntoIterator<Item = (K, V)>,
-//     K: Hash + Eq,
-// {
-//     let mut answer = MutMap::default();
+#[allow(dead_code)]
+pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Hash + Eq,
+{
+    let mut answer = MutMap::default();
 
-//     for (key, value) in pairs {
-//         answer.insert(key, value);
-//     }
+    for (key, value) in pairs {
+        answer.insert(key, value);
+    }
 
-//     answer
-// }
+    answer
+}
+
+#[allow(dead_code)]
+pub fn im_map_from_pairs<K, V, I>(pairs: I) -> ImMap<K, V>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Hash + Eq + Clone,
+    V: Clone,
+{
+    let mut answer = ImMap::default();
+
+    for (key, value) in pairs {
+        answer.insert(key, value);
+    }
+
+    answer
+}
+
+#[allow(dead_code)]
+pub fn fixtures_dir<'a>() -> PathBuf {
+    Path::new("tests").join("fixtures").join("build")
+}

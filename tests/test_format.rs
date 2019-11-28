@@ -10,12 +10,13 @@ extern crate roc;
 mod test_format {
     use bumpalo::collections::String;
     use bumpalo::Bump;
+    use roc::fmt::def::fmt_def;
     use roc::fmt::expr::fmt_expr;
     use roc::fmt::module::fmt_module;
     use roc::parse;
     use roc::parse::ast::{Attempting, Expr};
     use roc::parse::blankspace::space0_before;
-    use roc::parse::module::module;
+    use roc::parse::module::{module, module_defs};
     use roc::parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
@@ -55,14 +56,23 @@ mod test_format {
         let expected = expected.trim_end();
 
         match module().parse(&arena, State::new(&src, Attempting::Module)) {
-            Ok((actual, _)) => {
+            Ok((actual, state)) => {
                 let mut buf = String::new_in(&arena);
 
                 fmt_module(&mut buf, &actual);
 
+                match module_defs().parse(&arena, state) {
+                    Ok((loc_defs, _)) => {
+                        for loc_def in loc_defs {
+                            fmt_def(&mut buf, arena.alloc(loc_def.value), 0);
+                        }
+                    }
+                    Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+                }
+
                 assert_eq!(buf, expected)
             },
-            Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+            Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
     }
 

@@ -4,7 +4,7 @@ use parse::ast::{
     AppHeader, Attempting, CommentOrNewline, Def, ExposesEntry, ImportsEntry, InterfaceHeader,
     Module,
 };
-use parse::blankspace::{space1, space1_around};
+use parse::blankspace::{space0_around, space1};
 use parse::ident::unqualified_ident;
 use parse::parse;
 use parse::parser::{self, char, loc, optional, string, unexpected, unexpected_eof, Parser, State};
@@ -16,16 +16,14 @@ pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
 
 #[inline(always)]
 pub fn interface_module<'a>() -> impl Parser<'a, Module<'a>> {
-    map!(and!(interface_header(), module_defs()), |(header, defs)| {
-        Module::Interface { header, defs }
+    map!(interface_header(), |header| {
+        Module::Interface { header }
     })
 }
 
 #[inline(always)]
 pub fn app_module<'a>() -> impl Parser<'a, Module<'a>> {
-    map!(and!(app_header(), module_defs()), |(header, defs)| {
-        Module::App { header, defs }
-    })
+    map!(app_header(), |header| { Module::App { header } })
 }
 
 #[inline(always)]
@@ -97,6 +95,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                     Some(next) => {
                         if next.is_uppercase() {
                             // If we hit another uppercase letter, keep going!
+                            buf.push('.');
                             buf.push(next);
                         } else {
                             // We have finished parsing the module name.
@@ -134,8 +133,8 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
 }
 
 #[inline(always)]
-fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
-    zero_or_more!(space1_around(loc(parse::def(0)), 0))
+pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
+    zero_or_more!(space0_around(loc(parse::def(0)), 0))
 }
 
 #[inline(always)]
