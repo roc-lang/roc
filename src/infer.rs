@@ -1,8 +1,8 @@
-use can::symbol::Symbol;
-use collections::ImMap;
-use solve::solve;
-use subs::{Content, Subs, Variable};
-use types::Constraint;
+use crate::can::symbol::Symbol;
+use crate::collections::ImMap;
+use crate::solve::solve;
+use crate::subs::{Content, Subs, Variable};
+use crate::types::Constraint;
 
 pub fn infer_expr(subs: &mut Subs, constraint: &Constraint, expr_var: Variable) -> Content {
     let env: ImMap<Symbol, Variable> = ImMap::default();

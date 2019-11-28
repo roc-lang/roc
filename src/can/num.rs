@@ -1,14 +1,14 @@
-use can::env::Env;
-use can::expr::Expr;
-use can::problem::Problem;
-use can::problem::RuntimeError::*;
-use constrain;
-use region::Region;
+use crate::can::env::Env;
+use crate::can::expr::Expr;
+use crate::can::problem::Problem;
+use crate::can::problem::RuntimeError::*;
+use crate::constrain;
+use crate::region::Region;
+use crate::subs::Subs;
+use crate::types::Constraint::{self, *};
+use crate::types::Expected;
+use crate::types::Type;
 use std::i64;
-use subs::Subs;
-use types::Constraint::{self, *};
-use types::Expected;
-use types::Type;
 
 #[inline(always)]
 pub fn int_expr_from_result(

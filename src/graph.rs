@@ -22,9 +22,7 @@
 // Secondarily, SipHash isn't the fastest hashing algorithm out there, so we can get
 // slightly better performance by using a faster hasher.
 
-// Find a topological order in a directed graph if one exists.
-
-use collections::{default_hasher, BuildHasher, MutSet};
+use crate::collections::{default_hasher, BuildHasher, MutSet};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::mem;

@@ -1,8 +1,8 @@
-use can::problem::Problem;
-use can::procedure::References;
-use can::symbol::Symbol;
-use collections::{ImMap, MutMap};
-use region::Located;
+use crate::can::problem::Problem;
+use crate::can::procedure::References;
+use crate::can::symbol::Symbol;
+use crate::collections::{ImMap, MutMap};
+use crate::region::Located;
 
 /// The canonicalization environment for a particular module.
 pub struct Env {

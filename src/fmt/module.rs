@@ -1,23 +1,15 @@
+use crate::fmt::spaces::{fmt_spaces, INDENT};
+use crate::parse::ast::{AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, Module};
+use crate::region::Located;
 use bumpalo::collections::{String, Vec};
-use fmt::def::fmt_def;
-use fmt::spaces::{fmt_spaces, INDENT};
-use parse::ast::{AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, Module};
-use region::Located;
 
 pub fn fmt_module<'a>(buf: &mut String<'a>, module: &'a Module<'a>) {
     match module {
-        Module::Interface { header, defs } => {
+        Module::Interface { header } => {
             fmt_interface_header(buf, header);
-
-            for loc_def in defs {
-                fmt_def(buf, &loc_def.value, 0);
-            }
         }
-        Module::App { header, defs } => {
+        Module::App { header } => {
             fmt_app_header(buf, header);
-            for loc_def in defs {
-                fmt_def(buf, &loc_def.value, 0);
-            }
         }
     }
 }
@@ -135,7 +127,7 @@ fn fmt_exposes<'a>(
 }
 
 fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a>, indent: u16) {
-    use parse::ast::ExposesEntry::*;
+    use crate::parse::ast::ExposesEntry::*;
 
     match entry {
         Ident(ident) => buf.push_str(ident.as_str()),
@@ -152,7 +144,7 @@ fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a>, inde
 }
 
 fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &'a ImportsEntry<'a>, indent: u16) {
-    use parse::ast::ImportsEntry::*;
+    use crate::parse::ast::ImportsEntry::*;
 
     match entry {
         Module(module, loc_exposes_entries) => {

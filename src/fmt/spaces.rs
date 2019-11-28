@@ -1,5 +1,5 @@
+use crate::parse::ast::CommentOrNewline;
 use bumpalo::collections::String;
-use parse::ast::CommentOrNewline;
 
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;

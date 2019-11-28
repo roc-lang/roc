@@ -1,5 +1,3 @@
-extern crate inkwell;
-
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -8,15 +6,15 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
-use can::expr::Expr;
-use can::pattern::Pattern::{self, *};
-use can::procedure::Procedure;
-use can::symbol::Symbol;
-use collections::ImMap;
-use collections::MutMap;
-use subs::FlatType::*;
-use subs::{Content, Subs, Variable};
-use types;
+use crate::can::expr::Expr;
+use crate::can::pattern::Pattern::{self, *};
+use crate::can::procedure::Procedure;
+use crate::can::symbol::Symbol;
+use crate::collections::ImMap;
+use crate::collections::MutMap;
+use crate::subs::FlatType::*;
+use crate::subs::{Content, Subs, Variable};
+use crate::types;
 
 enum TypedVal<'ctx> {
     FloatConst(FloatValue<'ctx>),
@@ -109,7 +107,7 @@ fn compile_expr<'ctx, 'env>(
     vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
 ) -> TypedVal<'ctx> {
     use self::TypedVal::*;
-    use can::expr::Expr::*;
+    use crate::can::expr::Expr::*;
 
     match *expr {
         Int(num) => IntConst(env.context.i64_type().const_int(num as u64, false)),

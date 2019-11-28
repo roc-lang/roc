@@ -10,8 +10,8 @@ mod helpers;
 
 #[cfg(test)]
 mod test_canonicalize {
+    use crate::helpers::can_expr_with;
     use bumpalo::Bump;
-    use helpers::can_expr_with;
     use roc::can::expr::Expr::{self, *};
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;

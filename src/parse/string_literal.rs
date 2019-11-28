@@ -1,7 +1,7 @@
+use crate::parse::ast::Attempting;
+use crate::parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use parse::ast::Attempting;
-use parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use std::char;
 
 pub enum StringLiteral<'a> {

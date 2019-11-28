@@ -1,13 +1,13 @@
+use crate::collections::arena_join;
+use crate::parse::ast::{Attempting, TypeAnnotation};
+use crate::parse::blankspace::{space0_around, space1_before};
+use crate::parse::parser::{
+    char, optional, string, unexpected, unexpected_eof, ParseResult, Parser, State,
+};
+use crate::region::Located;
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use collections::arena_join;
-use parse::ast::{Attempting, TypeAnnotation};
-use parse::blankspace::{space0_around, space1_before};
-use parse::parser::{
-    char, optional, string, unexpected, unexpected_eof, ParseResult, Parser, State,
-};
-use region::Located;
 
 pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     one_of!(
@@ -36,7 +36,7 @@ fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAn
 
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
-    use parse::type_annotation::TypeAnnotation::*;
+    use crate::parse::type_annotation::TypeAnnotation::*;
 
     map_with_arena!(
         and!(

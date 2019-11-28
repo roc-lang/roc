@@ -14,9 +14,9 @@ mod helpers;
 
 #[cfg(test)]
 mod test_parse {
+    use crate::helpers::parse_with;
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
-    use helpers::parse_with;
     use roc::module::ModuleName;
     use roc::operator::BinOp::*;
     use roc::operator::CalledVia;
@@ -25,7 +25,7 @@ mod test_parse {
     use roc::parse::ast::Expr::{self, *};
     use roc::parse::ast::Pattern::{self, *};
     use roc::parse::ast::{Attempting, Def, InterfaceHeader, Spaceable};
-    use roc::parse::module::interface_header;
+    use roc::parse::module::{interface_header, module_defs};
     use roc::parse::parser::{Fail, FailReason, Parser, State};
     use roc::region::{Located, Region};
     use std::{f64, i64};
@@ -1132,6 +1132,88 @@ mod test_parse {
             "#
         );
         let actual = interface_header()
+            .parse(&arena, State::new(&src, Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn nested_module() {
+        let arena = Bump::new();
+        let exposes = Vec::new_in(&arena);
+        let imports = Vec::new_in(&arena);
+        let module_name = ModuleName::new("Foo.Bar.Baz");
+        let expected = InterfaceHeader {
+            name: Located::new(0, 0, 10, 21, module_name),
+            exposes,
+            imports,
+
+            after_interface: &[],
+            before_exposes: &[],
+            after_exposes: &[],
+            before_imports: &[],
+            after_imports: &[],
+        };
+        let src = indoc!(
+            r#"
+                interface Foo.Bar.Baz exposes [] imports []
+            "#
+        );
+        let actual = interface_header()
+            .parse(&arena, State::new(&src, Attempting::Module))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn standalone_module_defs() {
+        use roc::parse::ast::Def::*;
+
+        let arena = Bump::new();
+        let newlines1 = bumpalo::vec![in &arena; Newline, Newline];
+        let newlines2 = bumpalo::vec![in &arena; Newline];
+        let newlines3 = bumpalo::vec![in &arena; Newline];
+        let pattern1 = Identifier("foo");
+        let pattern2 = Identifier("bar");
+        let pattern3 = Identifier("baz");
+        let def1 = SpaceAfter(
+            arena.alloc(Body(
+                Located::new(0, 0, 0, 3, pattern1),
+                arena.alloc(Located::new(0, 0, 6, 7, Int("1"))),
+            )),
+            newlines1.into_bump_slice(),
+        );
+        let def2 = SpaceAfter(
+            arena.alloc(Body(
+                Located::new(2, 2, 0, 3, pattern2),
+                arena.alloc(Located::new(2, 2, 6, 10, Str("hi"))),
+            )),
+            newlines2.into_bump_slice(),
+        );
+        let def3 = SpaceAfter(
+            arena.alloc(Body(
+                Located::new(3, 3, 0, 3, pattern3),
+                arena.alloc(Located::new(3, 3, 6, 13, Str("stuff"))),
+            )),
+            newlines3.into_bump_slice(),
+        );
+
+        let expected = bumpalo::vec![in &arena;
+            Located::new(0, 0, 0, 7, def1),
+            Located::new(2, 2, 0, 10, def2),
+            Located::new(3, 3, 0, 13, def3)
+        ];
+        let src = indoc!(
+            r#"
+                foo = 1
+
+                bar = "hi"
+                baz = "stuff"
+            "#
+        );
+        let actual = module_defs()
             .parse(&arena, State::new(&src, Attempting::Module))
             .map(|tuple| tuple.0);
 

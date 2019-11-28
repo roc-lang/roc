@@ -11,7 +11,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_gen {
-    use helpers::can_expr;
+    use crate::helpers::can_expr;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
     use inkwell::types::BasicType;

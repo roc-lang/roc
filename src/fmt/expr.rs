@@ -1,9 +1,9 @@
+use crate::fmt::def::fmt_def;
+use crate::fmt::pattern::fmt_pattern;
+use crate::fmt::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, INDENT};
+use crate::parse::ast::{AssignedField, Expr, Pattern};
+use crate::region::Located;
 use bumpalo::collections::{String, Vec};
-use fmt::def::fmt_def;
-use fmt::pattern::fmt_pattern;
-use fmt::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, INDENT};
-use parse::ast::{AssignedField, Expr, Pattern};
-use region::Located;
 
 pub fn fmt_expr<'a>(
     buf: &mut String<'a>,
@@ -234,7 +234,7 @@ pub fn fmt_field<'a>(
 }
 
 pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
-    use parse::ast::Expr::*;
+    use crate::parse::ast::Expr::*;
     // TODO cache these answers using a Map<Pointer, bool>, so
     // we don't have to traverse subexpressions repeatedly
 

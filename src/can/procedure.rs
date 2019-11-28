@@ -1,9 +1,9 @@
-use can::expr::Expr;
-use can::pattern::Pattern;
-use can::symbol::Symbol;
-use collections::ImSet;
-use region::{Located, Region};
-use subs::Variable;
+use crate::can::expr::Expr;
+use crate::can::pattern::Pattern;
+use crate::can::symbol::Symbol;
+use crate::collections::ImSet;
+use crate::region::{Located, Region};
+use crate::subs::Variable;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Procedure {
