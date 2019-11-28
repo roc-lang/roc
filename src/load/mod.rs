@@ -36,7 +36,7 @@ pub enum LoadedHeader<'a> {
     ParsingFailed(Fail),
 }
 
-pub fn build<'a>(
+pub fn load<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     filename: &Path,

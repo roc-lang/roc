@@ -8,12 +8,12 @@ pub mod region;
 
 pub mod string;
 
-pub mod build;
 pub mod constrain;
 pub mod ena;
 pub mod fmt;
 pub mod gen;
 pub mod infer;
+pub mod load;
 pub mod module;
 pub mod pretty_print_types;
 pub mod solve;

@@ -10,13 +10,13 @@ extern crate roc;
 mod helpers;
 
 #[cfg(test)]
-mod test_build {
+mod test_load {
     use bumpalo::Bump;
     use helpers::{fixtures_dir, im_map_from_pairs, mut_map_from_pairs};
-    use roc::build::LoadedHeader::*;
-    use roc::build::{build, LoadedHeader};
     use roc::can::symbol::Symbol;
     use roc::ident::UnqualifiedIdent;
+    use roc::load::LoadedHeader::*;
+    use roc::load::{load, LoadedHeader};
     use roc::module::ModuleName;
     use roc::region::Region;
 
@@ -25,8 +25,7 @@ mod test_build {
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
         let arena = Bump::new();
-        let (app_header, problems, loaded_defs, loaded_headers) =
-            build(&arena, &src_dir, &filename);
+        let (app_header, problems, loaded_defs, loaded_headers) = load(&arena, &src_dir, &filename);
 
         assert!(problems.is_empty());
 
