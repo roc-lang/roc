@@ -9,6 +9,7 @@ log = "0.4.8"
 petgraph = { version = "0.4.5", optional = true }
 im-rc = "14.0.0"
 wyhash = "0.3.0"
+tokio = { version = "0.2", features = ["fs", "rt-threaded"] }
 bumpalo = "2.6.0"
 # NOTE: Breaking API changes get pushed directly to this Inkwell branch, so be
 # very careful when running `cargo update` to get a new revision into Cargo.lock.
