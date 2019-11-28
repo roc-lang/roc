@@ -841,9 +841,14 @@ fn canonicalize_case_branch<'a>(
 
     // If all branches are tail calling the same symbol, then so is the conditional as a whole.
     if !*recorded_tail_call {
-        // If we haven't recorded output.tail_call yet, record it.
-        output.tail_call = branch_output.tail_call;
-        *recorded_tail_call = true;
+        match branch_output.tail_call {
+            Some(call) => {
+                // If we haven't recorded output.tail_call yet, record it.
+                output.tail_call = Some(call);
+                *recorded_tail_call = true;
+            }
+            None => output.tail_call = None,
+        };
     } else if branch_output.tail_call != output.tail_call {
         // If we recorded output.tail_call, but what we recorded differs from what we just saw,
         // then game over. This can't possibly be a self tail call!
@@ -1506,7 +1511,7 @@ fn can_defs<'a>(
                 ret_constraint: can_output.constraint.clone(),
             })));
 
-            // see below: a closure needs a fresh References! 
+            // see below: a closure needs a fresh References!
             let mut is_closure = false;
 
             match (
@@ -1532,7 +1537,11 @@ fn can_defs<'a>(
                     let references = env.closures.remove(&symbol).unwrap_or_else(||
                         panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.closures));
 
-                    dbg!(loc_can_expr.clone(), can_output.tail_call.clone(), defined_symbol.clone());
+                    dbg!(
+                        loc_can_expr.clone(),
+                        can_output.tail_call.clone(),
+                        defined_symbol.clone()
+                    );
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
                     let is_recursive = if let Some(ref symbol) = can_output.tail_call {
                         if symbol == defined_symbol {
@@ -1578,7 +1587,6 @@ fn can_defs<'a>(
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
                     // parent commit for the bug this fixed!
-                      
                     if is_closure {
                         References::new()
                     } else {
