@@ -304,7 +304,8 @@ fn canonicalize_expr(
                     output.references.calls.insert(sym.clone());
 
                     // we're tail-calling a symbol by name
-                    output.tail_call = Some(sym.clone());
+                    // TODO re-enable tail-call detection
+                    // output.tail_call = Some(sym.clone());
 
                     Call(Box::new(fn_expr.value), args, *application_style)
                 }
