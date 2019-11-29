@@ -1,11 +1,8 @@
-use crate::can::expr::Expr;
-use crate::can::pattern::Pattern;
 use crate::can::problem::Problem;
-use crate::can::procedure::{Procedure, References};
+use crate::can::procedure::References;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, MutMap};
-use crate::region::{Located, Region};
-use crate::subs::Variable;
+use crate::region::Located;
 
 /// The canonicalization environment for a particular module.
 pub struct Env {
@@ -19,8 +16,8 @@ pub struct Env {
     /// Variants either declared in this module, or imported.
     pub variants: ImMap<Symbol, Located<Box<str>>>,
 
-    /// Former closures converted to top-level procedures.
-    pub procedures: MutMap<Symbol, Procedure>,
+    /// Closures
+    pub closures: MutMap<Symbol, References>,
 }
 
 impl Env {
@@ -29,7 +26,7 @@ impl Env {
             home,
             variants: declared_variants,
             problems: Vec::new(),
-            procedures: MutMap::default(),
+            closures: MutMap::default(),
         }
     }
 
@@ -37,33 +34,7 @@ impl Env {
         self.problems.push(problem)
     }
 
-    // TODO trim down these arguments
-    #[allow(clippy::too_many_arguments)]
-    pub fn register_closure(
-        &mut self,
-        symbol: Symbol,
-        args: Vec<Located<Pattern>>,
-        body: Located<Expr>,
-        definition: Region,
-        references: References,
-        var: Variable,
-        ret_var: Variable,
-    ) {
-        // We can't if the closure is self tail recursive yet, because it doesn't know its final name yet.
-        // (Assign sets that.) Assume this is false, and let Assign change it to true after it sets final name.
-        let is_self_tail_recursive = false;
-        let name = None; // The Assign logic is also responsible for setting names after the fact.
-        let procedure = Procedure {
-            args,
-            name,
-            body,
-            is_self_tail_recursive,
-            definition,
-            references,
-            var,
-            ret_var,
-        };
-
-        self.procedures.insert(symbol, procedure);
+    pub fn register_closure(&mut self, symbol: Symbol, references: References) {
+        self.closures.insert(symbol, references);
     }
 }

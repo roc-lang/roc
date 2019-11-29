@@ -42,10 +42,19 @@ pub enum Expr {
 
     Call(Box<Expr>, Vec<Located<Expr>>, CalledVia),
 
+    Closure(Symbol, Recursive, Vec<Located<Pattern>>, Box<Located<Expr>>),
+
     // Product Types
     Record(Variable, Vec<Located<(Box<str>, Located<Expr>)>>),
     EmptyRecord,
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Recursive {
+    Recursive,
+    TailRecursive,
+    NotRecursive,
 }
