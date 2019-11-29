@@ -218,44 +218,6 @@ mod test_canonicalize {
         );
     }
 
-    #[test]
-    fn recognize_recursion() {
-        // This function will get passed in as a pointer.
-        let src = indoc!(
-            r#"
-            f = \x -> f x
-
-            g = \x -> x
-
-            f (g 3)
-        "#
-        );
-        let arena = Bump::new();
-        let (actual, mut output, problems, _subs, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
-
-        assert_eq!(problems, vec![]);
-
-        dbg!(actual);
-
-        assert_eq!(0, 1);
-
-        // We don't care about constraint for this test.
-        output.constraint = Constraint::True;
-
-        assert_eq!(
-            output,
-            Out {
-                locals: vec!["f"],
-                globals: vec![],
-                variants: vec![],
-                calls: vec!["f", "x"],
-                tail_call: None
-            }
-            .into()
-        );
-    }
-
     //#[test]
     //fn closing_over_locals() {
     //    // "local" should be used, because the closure used it.

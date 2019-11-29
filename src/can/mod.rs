@@ -1332,42 +1332,6 @@ fn pattern_from_def<'a>(def: &'a Def<'a>) -> Option<&'a Located<ast::Pattern<'a>
     }
 }
 
-fn closure_recursivity(
-    symbol: Symbol,
-    references: &References,
-    closures: &MutMap<Symbol, References>,
-) -> Recursive {
-    let mut visited = MutSet::default();
-
-    let mut stack = Vec::new();
-
-    for v in &references.calls {
-        stack.push(v.clone());
-    }
-
-    // while there are symbols left to visit
-    while let Some(nested_symbol) = stack.pop() {
-        if nested_symbol.clone() == symbol {
-            return Recursive::Recursive;
-        }
-
-        // if the called symbol not yet in the graph
-        if !visited.contains(&nested_symbol) {
-            // add it to the visited set
-            // if it calls any functions
-            if let Some(nested_references) = closures.get(&nested_symbol) {
-                // add its called to the stack
-                for v in &nested_references.calls {
-                    stack.push(v.clone());
-                }
-            }
-            visited.insert(nested_symbol);
-        }
-    }
-
-    Recursive::NotRecursive
-}
-
 #[inline(always)]
 fn can_defs<'a>(
     rigids: &Rigids,
@@ -1538,22 +1502,11 @@ fn can_defs<'a>(
                     let references = env.closures.remove(&symbol).unwrap_or_else(||
                         panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.closures));
 
-                    dbg!(
-                        loc_can_expr.clone(),
-                        can_output.tail_call.clone(),
-                        defined_symbol.clone()
-                    );
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
-                    let is_recursive = if let Some(ref symbol) = can_output.tail_call {
-                        if symbol == defined_symbol {
-                            Recursive::TailRecursive
-                        } else {
-                            closure_recursivity(defined_symbol.clone(), &references, &env.closures)
-                        }
-                    } else {
-                        closure_recursivity(defined_symbol.clone(), &references, &env.closures)
+                    let is_recursive = match can_output.tail_call {
+                        Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
+                        _ => Recursive::NotRecursive,
                     };
-
                     // Re-insert the procedure into the map, under its defined name. This way,
                     // when code elsewhere calls it by defined name, it'll resolve properly.
                     env.closures.insert(defined_symbol.clone(), references);
