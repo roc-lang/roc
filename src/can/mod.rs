@@ -1479,55 +1479,56 @@ fn can_defs<'a>(
             // see below: a closure needs a fresh References!
             let mut is_closure = false;
 
-            match (
+            // First, make sure we are actually assigning an identifier instead of (for example) a variant.
+            //
+            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
+            // which also implies it's not a self tail call!
+            //
+            // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
+            if let (
+                &ast::Pattern::Identifier(ref _name),
+                &Pattern::Identifier(_, ref defined_symbol),
+                &Closure(ref symbol, _, ref arguments, ref body),
+            ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
                 &loc_can_expr.value.clone(),
             ) {
-                // First, make sure we are actually assigning an identifier instead of (for example) a variant.
-                //
-                // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
-                // which also implies it's not a self tail call!
-                //
-                // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-                (
-                    &ast::Pattern::Identifier(ref _name),
-                    &Pattern::Identifier(_, ref defined_symbol),
-                    &Closure(ref symbol, _, ref arguments, ref body),
-                ) => {
-                    is_closure = true;
+                is_closure = true;
 
-                    // Since everywhere in the code it'll be referred to by its defined name,
-                    // remove its generated name from the procedure map. (We'll re-insert it later.)
-                    let references = env.closures.remove(&symbol).unwrap_or_else(||
-                        panic!("Tried to remove symbol {:?} from procedures, but it was not found: {:?}", symbol, env.closures));
+                // Since everywhere in the code it'll be referred to by its defined name,
+                // remove its generated name from the procedure map. (We'll re-insert it later.)
+                let references = env.closures.remove(&symbol).unwrap_or_else(|| {
+                    panic!(
+                        "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
+                        symbol, env.closures
+                    )
+                });
 
-                    // The closure is self tail recursive iff it tail calls itself (by defined name).
-                    let is_recursive = match can_output.tail_call {
-                        Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
-                        _ => Recursive::NotRecursive,
-                    };
-                    // Re-insert the procedure into the map, under its defined name. This way,
-                    // when code elsewhere calls it by defined name, it'll resolve properly.
-                    env.closures.insert(defined_symbol.clone(), references);
+                // The closure is self tail recursive iff it tail calls itself (by defined name).
+                let is_recursive = match can_output.tail_call {
+                    Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
+                    _ => Recursive::NotRecursive,
+                };
+                // Re-insert the procedure into the map, under its defined name. This way,
+                // when code elsewhere calls it by defined name, it'll resolve properly.
+                env.closures.insert(defined_symbol.clone(), references);
 
-                    // Recursion doesn't count as referencing. (If it did, all recursive functions
-                    // would result in circular def errors!)
-                    refs_by_def
-                        .entry(defined_symbol.clone())
-                        .and_modify(|(_, refs)| {
-                            refs.locals = refs.locals.without(defined_symbol);
-                        });
+                // Recursion doesn't count as referencing. (If it did, all recursive functions
+                // would result in circular def errors!)
+                refs_by_def
+                    .entry(defined_symbol.clone())
+                    .and_modify(|(_, refs)| {
+                        refs.locals = refs.locals.without(defined_symbol);
+                    });
 
-                    // renamed_closure_def = Some(&defined_symbol);
-                    loc_can_expr.value = Closure(
-                        symbol.clone(),
-                        is_recursive,
-                        arguments.clone(),
-                        body.clone(),
-                    );
-                }
-                _ => {}
+                // renamed_closure_def = Some(&defined_symbol);
+                loc_can_expr.value = Closure(
+                    symbol.clone(),
+                    is_recursive,
+                    arguments.clone(),
+                    body.clone(),
+                );
             }
 
             let mut defined_symbols = Vec::new();
