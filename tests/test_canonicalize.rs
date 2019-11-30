@@ -219,13 +219,16 @@ mod test_canonicalize {
         );
     }
 
-    fn get_closure(expr: &Expr, i: usize) -> Option<roc::can::expr::Recursive> {
+    fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
-            Defs(_, assignments, _) => match &assignments[i].1.value {
-                Closure(_, recursion, _, _) => Some(recursion.clone()),
-                _ => None,
+            Defs(_, assignments, _) => match &assignments.get(i).map(|(_, loc)| &loc.value) {
+                Some(Closure(_, recursion, _, _)) => recursion.clone(),
+                Some(other @ _) => {
+                    panic!("assignment at {} is not a closure, but a {:?}", i, other)
+                }
+                None => panic!("Looking for assignment at {} but the list is too short", i),
             },
-            _ => None,
+            _ => panic!("expression is not a Defs, but a {:?}", expr),
         }
     }
 
@@ -257,13 +260,13 @@ mod test_canonicalize {
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Some(Recursive::TailRecursive));
+        assert_eq!(detected, Recursive::TailRecursive);
 
         let detected = get_closure(&actual, 1);
-        assert_eq!(detected, Some(Recursive::NotRecursive));
+        assert_eq!(detected, Recursive::NotRecursive);
 
         let detected = get_closure(&actual, 2);
-        assert_eq!(detected, Some(Recursive::TailRecursive));
+        assert_eq!(detected, Recursive::TailRecursive);
     }
 
     #[test]
@@ -283,7 +286,7 @@ mod test_canonicalize {
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Some(Recursive::TailRecursive));
+        assert_eq!(detected, Recursive::TailRecursive);
     }
 
     #[test]
@@ -300,7 +303,7 @@ mod test_canonicalize {
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Some(Recursive::TailRecursive));
+        assert_eq!(detected, Recursive::TailRecursive);
     }
 
     #[test]
@@ -320,7 +323,7 @@ mod test_canonicalize {
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Some(Recursive::Recursive));
+        assert_eq!(detected, Recursive::Recursive);
     }
 
     #[test]
@@ -346,10 +349,10 @@ mod test_canonicalize {
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Some(Recursive::Recursive));
+        assert_eq!(detected, Recursive::Recursive);
 
         let detected = get_closure(&actual, 1);
-        assert_eq!(detected, Some(Recursive::Recursive));
+        assert_eq!(detected, Recursive::Recursive);
     }
 
     //#[test]
