@@ -1,33 +1,28 @@
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, MutMap};
+use crate::collections::{SendMap, SendSet};
 use crate::ident::UnqualifiedIdent;
 use crate::module::ModuleName;
 use crate::parse::ast::{Attempting, Def, ExposesEntry, ImportsEntry, Module};
 use crate::parse::module;
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
-use bumpalo::collections::Vec;
+use im::Vector;
 use bumpalo::Bump;
-use std::fs::read_to_string;
+use tokio::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
+use tokio::prelude::*;
+
 
 pub struct Loaded<'a> {
-    pub requested_header: LoadedHeader<'a>,
-    pub dependent_headers: MutMap<ModuleName<'a>, LoadedHeader<'a>>,
-    pub defs: MutMap<ModuleName<'a>, Result<Vec<'a, Located<Def<'a>>>, Fail>>,
-    pub problems: Vec<'a, BuildProblem<'a>>,
+    pub requested_header: LoadedHeader,
+    pub dependent_headers: SendMap<ModuleName<'a>, LoadedHeader>,
+    pub defs: SendMap<ModuleName<'a>, Result<Vector<Located<Def<'a>>>, Fail>>,
 }
 
-struct Env<'a, 'p> {
-    pub arena: &'a Bump,
-    pub src_dir: &'p Path,
-    pub problems: Vec<'a, BuildProblem<'a>>,
-    pub loaded_headers: MutMap<ModuleName<'a>, LoadedHeader<'a>>,
-    pub queue: Queue<'a>,
+struct Env {
+    pub src_dir: PathBuf
 }
-
-type Queue<'a> = MutMap<ModuleName<'a>, State<'a>>;
 
 #[derive(Debug)]
 pub enum BuildProblem<'a> {
@@ -35,41 +30,53 @@ pub enum BuildProblem<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum LoadedHeader<'a> {
+pub enum LoadedHeader {
     Valid {
-        scope: ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
+        declared_name: Option<Box<str>>,
+        deps: SendSet<Box<str>>,
+        scope: SendMap<Box<str>, (Symbol, Region)>,
+        bytes_parsed: usize
     },
     FileProblem(io::ErrorKind),
     ParsingFailed(Fail),
 }
 
-pub fn load<'a>(arena: &'a Bump, src_dir: &Path, filename: &Path) -> Loaded<'a> {
-    let mut env = Env {
-        arena,
-        src_dir,
-        problems: Vec::new_in(&arena),
-        loaded_headers: MutMap::default(),
-        queue: MutMap::default(),
-    };
-
-    let requested_header = load_filename(&mut env, filename);
-    let mut defs = MutMap::default();
-
-    for (module_name, state) in env.queue {
-        let loaded_defs = match module::module_defs().parse(arena, state) {
-            Ok((defs, _)) => Ok(defs),
-            Err((fail, _)) => Err(fail),
+pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded<'a> {
+    let handle = tokio::spawn(async move {
+        let mut env = Env {
+            src_dir
         };
 
-        defs.insert(module_name, loaded_defs);
-    }
+        load_filename(&mut env, &filename).await
+    });
 
-    Loaded {
-        requested_header,
-        dependent_headers: env.loaded_headers,
-        defs,
-        problems: env.problems,
-    }
+    let requested_header = handle.await;
+
+    panic!("TODO");
+
+
+//     // TODO parse defs on a different thread, and parse them
+//     // directly into a Vector rather than into a Vec, so
+//     // we don't have to reallocate here.
+//     let defs = match module::module_defs().parse(&arena, state) {
+//         Ok((defs, _)) => {
+//             let mut send_vec = Vector::new();
+
+//             for def in defs {
+//                 send_vec.push_back(def);
+//             }
+
+//             Ok(send_vec)
+//         },
+//         Err((fail, _)) => Err(fail),
+//     };
+
+    // Loaded {
+    //     requested_header,
+    //     dependent_headers: env.loaded_headers,
+    //     defs,
+    //     problems: env.problems,
+    // }
 }
 
 /// The long-term plan is for the loading process to work like this, starting from main.roc:
@@ -117,94 +124,98 @@ pub fn load<'a>(arena: &'a Bump, src_dir: &Path, filename: &Path) -> Loaded<'a> 
 /// module's canonicalization.
 ///
 /// If a given import has not been loaded yet, load it too.
-fn load_module<'a, 'p>(env: &mut Env<'a, 'p>, module_name: &ModuleName<'a>) -> LoadedHeader<'a> {
-    // 1. Convert module_name to filename, using src_dir.
-    // 2. Open that file for reading. (If there's a problem, record it and bail.)
-    // 3. Read the whole file into a string. (In the future, we can read just the header.)
-    // 4. Parse the header.
-    // 5. Use the parsed header to load more modules as necessary.
-    // 6. Now that all the headers have been parsed, parse the bodies too.
-    // 7. Once all the bodies have been parsed, canonicalize beginning with the leaves.
+// fn load_module<'a, 'p>(env: &mut Env<'a, 'p>, module_name: &ModuleName<'a>) -> LoadedHeader<'a> {
+//     // 1. Convert module_name to filename, using src_dir.
+//     // 2. Open that file for reading. (If there's a problem, record it and bail.)
+//     // 3. Read the whole file into a string. (In the future, we can read just the header.)
+//     // 4. Parse the header.
+//     // 5. Use the parsed header to load more modules as necessary.
+//     // 6. Now that all the headers have been parsed, parse the bodies too.
+//     // 7. Once all the bodies have been parsed, canonicalize beginning with the leaves.
 
-    let mut filename = PathBuf::new();
+//     let mut filename = PathBuf::new();
 
-    filename.push(env.src_dir);
+//     filename.push(env.src_dir);
 
-    // Convert dots in module name to directories
-    for part in module_name.as_str().split('.') {
-        filename.push(part);
-    }
+//     // Convert dots in module name to directories
+//     for part in module_name.as_str().split('.') {
+//         filename.push(part);
+//     }
 
-    // End with .roc
-    filename.set_extension("roc");
+//     // End with .roc
+//     filename.set_extension("roc");
 
-    load_filename(env, &filename)
-}
+//     load_filename(env, &filename)
+// }
 
-fn load_filename<'a, 'p>(env: &mut Env<'a, 'p>, filename: &Path) -> LoadedHeader<'a> {
-    match read_to_string(filename) {
+async fn load_filename(env: &mut Env, filename: &Path) -> LoadedHeader {
+    match read_to_string(filename).await {
         Ok(src) => {
+            let arena = Bump::new();
             // TODO instead of env.arena.alloc(src), we should create a new buffer
             // in the arena as a Vec<'a, u8> and call .as_mut_slice() on it to
             // get a (&mut [u8]) which can be passed to io::Read::read directly
             // instead of using read_to_string. This way, we avoid both heap-allocating
             // the String (which read_to_string does) and also re-allocating it
             // in the arena after read_to_string completes.
-            let state = State::new(env.arena.alloc(src), Attempting::Module);
+            let state = State::new(&src, Attempting::Module);
 
-            match module::module().parse(env.arena, state) {
+            let answer = match module::module().parse(&arena, state) {
                 Ok((Module::Interface { header }, state)) => {
-                    let mut scope = ImMap::default();
+                    let declared_name = Some(header.name.value.as_str().into());
 
-                    // Enqueue the defs parsing job for background processing.
-                    env.queue.insert(header.name.value, state);
+                    let mut scope = SendMap::default();
+                    let mut deps = SendSet::default();
 
                     for loc_entry in header.imports {
-                        load_import(env, loc_entry.region, &loc_entry.value, &mut scope);
+                        deps.insert(load_import(env, loc_entry.region, &loc_entry.value, &mut scope));
                     }
 
-                    LoadedHeader::Valid { scope }
+                    let bytes_parsed = state.bytes_consumed();
+
+                    LoadedHeader::Valid { scope, declared_name, deps, bytes_parsed }
                 }
                 Ok((Module::App { header }, state)) => {
-                    let mut scope = ImMap::default();
+                    // The app module has no declared name.
+                    let declared_name = None;
 
-                    // Enqueue the defs parsing job for background processing.
-                    // The app module has a module name of ""
-                    env.queue.insert(ModuleName::new(""), state);
+                    let mut scope = SendMap::default();
+                    let mut deps = SendSet::default();
 
                     for loc_entry in header.imports {
-                        load_import(env, loc_entry.region, &loc_entry.value, &mut scope);
+                        deps.insert(load_import(env, loc_entry.region, &loc_entry.value, &mut scope));
                     }
 
-                    LoadedHeader::Valid { scope }
+                    let bytes_parsed = state.bytes_consumed();
+
+                    LoadedHeader::Valid { scope, declared_name, deps, bytes_parsed }
                 }
                 Err((fail, _)) => LoadedHeader::ParsingFailed(fail),
-            }
+            };
+
+            answer
         }
         Err(err) => LoadedHeader::FileProblem(err.kind()),
     }
 }
 
-fn load_import<'a, 'p>(
-    env: &mut Env<'a, 'p>,
+fn load_import<'a, 'p, 'out>(
+    env: &mut Env,
     region: Region,
-    entry: &ImportsEntry<'a>,
-    scope: &mut ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
-) {
+    entry: &ImportsEntry<'_>,
+    scope: &mut SendMap<Box<str>, (Symbol, Region)>,
+) -> Box<str> {
     use crate::parse::ast::ImportsEntry::*;
 
     match entry {
         Module(module_name, exposes) => {
-            // If we haven't already loaded the module, load it!
-            if !env.loaded_headers.contains_key(&module_name) {
-                let loaded = load_module(env, module_name);
-
-                env.loaded_headers.insert(*module_name, loaded);
-            }
-
             for loc_entry in exposes {
-                expose(*module_name, &loc_entry.value, loc_entry.region, scope)
+                let (key, value) = expose(*module_name, &loc_entry.value, loc_entry.region);
+
+                scope.insert(key, value);
             }
+
+            module_name.as_str().into()
         }
 
         SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => {
@@ -214,12 +225,11 @@ fn load_import<'a, 'p>(
     }
 }
 
-fn expose<'a>(
+fn expose<'out>(
     module_name: ModuleName<'_>,
-    entry: &ExposesEntry<'a>,
+    entry: &ExposesEntry<'_>,
     region: Region,
-    scope: &mut ImMap<UnqualifiedIdent<'a>, (Symbol, Region)>,
-) {
+)->  (Box<str>, (Symbol, Region)){
     use crate::parse::ast::ExposesEntry::*;
 
     match entry {
@@ -227,11 +237,38 @@ fn expose<'a>(
             // Since this value is exposed, add it to our module's default scope.
             let symbol = Symbol::from_module(&module_name, &ident);
 
-            scope.insert(ident.clone(), (symbol, region));
+            (ident.as_str().into(), (symbol, region))
         }
         SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => {
             // Ignore spaces.
-            expose(module_name, *sub_entry, region, scope)
+            expose(module_name, *sub_entry, region)
         }
     }
+}
+
+#[test]
+fn test_tokio() {
+    test_async(async {
+        let handle = tokio::spawn(async {
+            println!("doing some work, asynchronously");
+
+            // Return a value for the example
+            "result of the computation"
+        });
+
+        // Wait for the spawned task to finish
+        let res = handle.await;
+
+        println!("got {:?}", res);
+    })
+}
+
+fn test_async<F: std::future::Future>(future: F) -> F::Output {
+    use tokio::runtime::Runtime;
+
+    // Create the runtime
+    let mut rt = Runtime::new().expect("Error initializing Tokio runtime.");
+
+    // Spawn the root task
+    rt.block_on(future)
 }
