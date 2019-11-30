@@ -13,6 +13,7 @@ mod test_canonicalize {
     use crate::helpers::can_expr_with;
     use bumpalo::Bump;
     use roc::can::expr::Expr::{self, *};
+    use roc::can::expr::Recursive;
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
     use roc::can::symbol::Symbol;
@@ -216,6 +217,57 @@ mod test_canonicalize {
             }
             .into()
         );
+    }
+
+    fn get_closure(expr: &Expr, i: usize) -> Option<roc::can::expr::Recursive> {
+        match expr {
+            Defs(_, assignments, _) => match &assignments[i].1.value {
+                Closure(_, recursion, _, _) => Some(recursion.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn recognize_tail_calls() {
+        let src = indoc!(
+            r#"
+            g = \x -> 
+                case x when
+                    0 -> 0
+                    _ -> g (x - 1)
+
+            h = \x -> 
+                case x when
+                    0 -> 0
+                    _ -> g (x - 1)
+
+            p = \x -> 
+                case x when
+                    0 -> 0
+                    1 -> g (x - 1)
+                    _ -> p (x - 1)
+
+            f = \x -> f x
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Some(Recursive::TailRecursive));
+
+        let detected = get_closure(&actual, 1);
+        assert_eq!(detected, Some(Recursive::NotRecursive));
+
+        let detected = get_closure(&actual, 2);
+        assert_eq!(detected, Some(Recursive::TailRecursive));
+
+        let detected = get_closure(&actual, 3);
+        assert_eq!(detected, Some(Recursive::TailRecursive));
     }
 
     //#[test]

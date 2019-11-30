@@ -303,9 +303,12 @@ fn canonicalize_expr(
                     // something like ((\a b -> a + b) 1 2).
                     output.references.calls.insert(sym.clone());
 
-                    // we're tail-calling a symbol by name
-                    // TODO re-enable tail-call detection
-                    // output.tail_call = Some(sym.clone());
+                    // we're tail-calling a symbol by name, check if it's the tail-callable symbol
+                    output.tail_call = if Some(sym.clone()) == env.tailcallable_symbol {
+                        Some(sym.clone())
+                    } else {
+                        None
+                    };
 
                     Call(Box::new(fn_expr.value), args, *application_style)
                 }
@@ -1445,6 +1448,18 @@ fn can_defs<'a>(
                     expr_type.clone(),
                 );
 
+                // bookkeeping for tail-call detection. If we're assigning to an
+                // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
+                let outer_identifier = env.tailcallable_symbol.clone();
+
+                if let (
+                    &ast::Pattern::Identifier(ref _name),
+                    &Pattern::Identifier(_, ref defined_symbol),
+                ) = (&loc_pattern.value, &loc_can_pattern.value)
+                {
+                    env.tailcallable_symbol = Some(defined_symbol.clone());
+                };
+
                 let (mut loc_can_expr, can_output) = canonicalize_expr(
                     rigids,
                     env,
@@ -1454,6 +1469,9 @@ fn can_defs<'a>(
                     &loc_expr.value,
                     NoExpectation(expr_type.clone()),
                 );
+
+                // reset the tailcallable_symbol
+                env.tailcallable_symbol = outer_identifier;
 
                 flex_info.constraints.push(Let(Box::new(LetConstraint {
                     rigid_vars: Vec::new(),
