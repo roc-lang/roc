@@ -304,10 +304,9 @@ fn canonicalize_expr(
                     output.references.calls.insert(sym.clone());
 
                     // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                    output.tail_call = if Some(sym.clone()) == env.tailcallable_symbol {
-                        Some(sym.clone())
-                    } else {
-                        None
+                    output.tail_call = match &env.tailcallable_symbol {
+                        Some(tc_sym) if tc_sym == sym => Some(sym.clone()),
+                        Some(_) | None => None,
                     };
 
                     Call(Box::new(fn_expr.value), args, *application_style)
