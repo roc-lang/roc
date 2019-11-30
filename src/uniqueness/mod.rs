@@ -67,8 +67,6 @@ pub struct PatternState {
 }
 
 fn canonicalize_pattern(
-    _subs: &mut Subs,
-    _env: &mut Env,
     state: &mut PatternState,
     pattern: &Located<Pattern>,
     expected: PExpected<Type>,
@@ -76,11 +74,7 @@ fn canonicalize_pattern(
     use crate::can::pattern::Pattern::*;
     use crate::types::PatternCategory;
 
-    let region = pattern.region;
     match &pattern.value {
-        Underscore(_) => {
-            // underscore adds no constraints
-        }
         Identifier(_, symbol) => {
             state.headers.insert(
                 symbol.clone(),
@@ -93,14 +87,37 @@ fn canonicalize_pattern(
 
         IntLiteral(_) => {
             state.constraints.push(Constraint::Pattern(
-                region,
+                pattern.region,
                 PatternCategory::Int,
                 Type::int(),
                 expected,
             ));
         }
+        FloatLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                pattern.region,
+                PatternCategory::Float,
+                Type::float(),
+                expected,
+            ));
+        }
 
-        _ => panic!("TODO implement patterns {:?}", &pattern.value),
+        ExactString(_) => {
+            state.constraints.push(Constraint::Pattern(
+                pattern.region,
+                PatternCategory::Str,
+                Type::string(),
+                expected,
+            ));
+        }
+
+        Variant(_, _) | AppliedVariant(_, _, _) | EmptyRecordLiteral(_) => {
+            panic!("TODO add_constraints for {:?}", pattern);
+        }
+
+        Underscore(_) | Shadowed(_) | UnrecognizedVariant(_) | UnsupportedPattern(_) => {
+            // no constraints
+        }
     }
 }
 
@@ -231,8 +248,6 @@ pub fn canonicalize_expr(
                 let arg_var = subs.mk_flex_var();
                 let arg_typ = Variable(arg_var);
                 canonicalize_pattern(
-                    subs,
-                    env,
                     &mut state,
                     &pattern,
                     PExpected::NoExpectation(arg_typ.clone()),
@@ -499,8 +514,7 @@ fn canonicalize_case_branch(
         constraints: Vec::with_capacity(1),
     };
 
-    let _loc_can_pattern =
-        canonicalize_pattern(subs, env, &mut state, &loc_pattern, pattern_expected);
+    let _loc_can_pattern = canonicalize_pattern(&mut state, &loc_pattern, pattern_expected);
 
     let constraint = Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
@@ -572,7 +586,7 @@ fn can_defs(
             constraints: Vec::with_capacity(1),
         };
 
-        canonicalize_pattern(subs, env, &mut state, pattern, pattern_expected);
+        canonicalize_pattern(&mut state, pattern, pattern_expected);
 
         flex_info.vars.push(pattern_var);
 
