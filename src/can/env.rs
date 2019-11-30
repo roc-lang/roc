@@ -18,6 +18,9 @@ pub struct Env {
 
     /// Closures
     pub closures: MutMap<Symbol, References>,
+
+    /// current tail-callable symbol
+    pub tailcallable_symbol: Option<Symbol>,
 }
 
 impl Env {
@@ -27,6 +30,7 @@ impl Env {
             variants: declared_variants,
             problems: Vec::new(),
             closures: MutMap::default(),
+            tailcallable_symbol: None,
         }
     }
 
