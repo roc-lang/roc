@@ -249,7 +249,6 @@ mod test_canonicalize {
                     1 -> g (x - 1)
                     _ -> p (x - 1)
 
-            f = \x -> f x
             0
         "#
         );
@@ -265,9 +264,63 @@ mod test_canonicalize {
 
         let detected = get_closure(&actual, 2);
         assert_eq!(detected, Some(Recursive::TailRecursive));
+    }
 
-        let detected = get_closure(&actual, 3);
+    #[test]
+    fn case_tail_call() {
+        let src = indoc!(
+            r#"
+            g = \x -> 
+                case x when
+                    0 -> 0
+                    _ -> g (x - 1)
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
         assert_eq!(detected, Some(Recursive::TailRecursive));
+    }
+
+    #[test]
+    fn immediate_tail_call() {
+        let src = indoc!(
+            r#"
+            f = \x -> f x
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Some(Recursive::TailRecursive));
+    }
+
+    #[test]
+    fn case_condition_is_no_tail_call() {
+        // TODO when a case witn no branches parses, remove the pattern wildcard here
+        let src = indoc!(
+            r#"
+            q = \x -> 
+                    case q x when
+                        _ -> 0
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Some(Recursive::NotRecursive));
     }
 
     //#[test]

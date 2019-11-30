@@ -599,7 +599,9 @@ fn canonicalize_expr(
                 NoExpectation(cond_type.clone()),
             );
 
-            let mut recorded_tail_call = false;
+            // the condition can never be a tail-call
+            output.tail_call = None;
+
             let mut can_branches = Vec::with_capacity(branches.len());
             let mut constraints = Vec::with_capacity(branches.len() + 1);
             let expr_con = output.constraint.clone();
@@ -630,7 +632,6 @@ fn canonicalize_expr(
                                     typ.clone(),
                                 ),
                                 &mut output,
-                                &mut recorded_tail_call,
                             );
 
                         output.references = output.references.union(branch_references);
@@ -676,7 +677,6 @@ fn canonicalize_expr(
                                     region,
                                 ),
                                 &mut output,
-                                &mut recorded_tail_call,
                             );
 
                         output.references = output.references.union(branch_references);
@@ -813,7 +813,6 @@ fn canonicalize_case_branch<'a>(
     pattern_expected: PExpected<Type>,
     expr_expected: Expected<Type>,
     output: &mut Output,
-    recorded_tail_call: &mut bool,
 ) -> (Located<Pattern>, Located<Expr>, Constraint, References) {
     // Each case branch gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the
@@ -843,21 +842,12 @@ fn canonicalize_case_branch<'a>(
         expr_expected,
     );
 
-    // If all branches are tail calling the same symbol, then so is the conditional as a whole.
-    if !*recorded_tail_call {
-        match branch_output.tail_call {
-            Some(call) => {
-                // If we haven't recorded output.tail_call yet, record it.
-                output.tail_call = Some(call);
-                *recorded_tail_call = true;
-            }
-            None => output.tail_call = None,
-        };
-    } else if branch_output.tail_call != output.tail_call {
-        // If we recorded output.tail_call, but what we recorded differs from what we just saw,
-        // then game over. This can't possibly be a self tail call!
-        output.tail_call = None;
-    }
+    // set the tail-call. If we already recorded one, keep it, otherwise
+    // use this branch's tail call
+    match &output.tail_call {
+        Some(_) => {}
+        None => output.tail_call = branch_output.tail_call,
+    };
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
