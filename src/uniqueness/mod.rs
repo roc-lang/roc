@@ -9,10 +9,12 @@ use crate::constrain::{self, exists};
 use crate::ident::Ident;
 use crate::region::{Located, Region};
 use crate::subs::{Subs, Variable};
+use crate::types::AnnotationSource::TypedCaseBranch;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self};
 use crate::types::LetConstraint;
 use crate::types::PExpected::{self};
+use crate::types::PReason::{self};
 use crate::types::Reason;
 use crate::types::Type::{self, *};
 use std::fmt::Debug;
@@ -45,7 +47,7 @@ pub fn canonicalize_declaration(
     };
     let rigids = ImMap::default();
 
-    let mut output = canonicalize_expr(
+    let output = canonicalize_expr(
         &rigids,
         &mut env,
         subs,
@@ -65,13 +67,16 @@ pub struct PatternState {
 }
 
 fn canonicalize_pattern(
-    subs: &mut Subs,
-    env: &mut Env,
+    _subs: &mut Subs,
+    _env: &mut Env,
     state: &mut PatternState,
     pattern: &Located<Pattern>,
     expected: PExpected<Type>,
 ) {
     use crate::can::pattern::Pattern::*;
+    use crate::types::PatternCategory;
+
+    let region = pattern.region;
     match &pattern.value {
         Underscore(_) => {
             // underscore adds no constraints
@@ -86,7 +91,16 @@ fn canonicalize_pattern(
             );
         }
 
-        _ => panic!("TODO implement patterns"),
+        IntLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Int,
+                Type::int(),
+                expected,
+            ));
+        }
+
+        _ => panic!("TODO implement patterns {:?}", &pattern.value),
     }
 }
 
@@ -202,7 +216,7 @@ pub fn canonicalize_expr(
             Some(var) => Output::new(Eq(Variable(*var), expected, Region::zero())),
         },
 
-        Closure(symbol, _recursion, args, body) => {
+        Closure(_symbol, _recursion, args, body) => {
             // first, generate constraints for the arguments
             let mut arg_types = Vec::new();
             let mut arg_vars = Vec::new();
@@ -344,9 +358,159 @@ pub fn canonicalize_expr(
                 loc_ret,
             ))
         }
+        // Case( Variable, Box<Located<Expr>>, Vec<(Located<Pattern>, Located<Expr>)>,
+        Case(_variable, loc_cond, branches) => {
+            let cond_var = subs.mk_flex_var();
+            let cond_type = Variable(cond_var);
+            let mut output = canonicalize_expr(
+                rigids,
+                env,
+                subs,
+                scope,
+                region,
+                &loc_cond.value,
+                Expected::NoExpectation(cond_type.clone()),
+            );
 
+            let mut constraints = Vec::with_capacity(branches.len() + 1);
+            let expr_con = output.constraint.clone();
+
+            match expected {
+                Expected::FromAnnotation(name, arity, _, typ) => {
+                    for (index, (loc_pattern, loc_expr)) in branches.into_iter().enumerate() {
+                        let branch_con = canonicalize_case_branch(
+                            env,
+                            subs,
+                            rigids,
+                            scope,
+                            region,
+                            loc_pattern,
+                            loc_expr,
+                            PExpected::ForReason(
+                                PReason::CaseMatch { index },
+                                cond_type.clone(),
+                                region,
+                            ),
+                            Expected::FromAnnotation(
+                                name.clone(),
+                                arity,
+                                TypedCaseBranch(index),
+                                typ.clone(),
+                            ),
+                            &mut output,
+                        );
+
+                        constraints.push(exists(
+                            vec![cond_var],
+                            // Each branch's pattern must have the same type
+                            // as the condition expression did.
+                            And(vec![expr_con.clone(), branch_con]),
+                        ));
+                    }
+                }
+
+                _ => {
+                    let branch_var = subs.mk_flex_var();
+                    let branch_type = Variable(branch_var);
+                    let mut branch_cons = Vec::with_capacity(branches.len());
+
+                    for (index, (loc_pattern, loc_expr)) in branches.into_iter().enumerate() {
+                        let branch_con = canonicalize_case_branch(
+                            env,
+                            subs,
+                            rigids,
+                            scope,
+                            region,
+                            loc_pattern,
+                            loc_expr,
+                            PExpected::ForReason(
+                                PReason::CaseMatch { index },
+                                cond_type.clone(),
+                                region,
+                            ),
+                            Expected::ForReason(
+                                Reason::CaseBranch { index },
+                                branch_type.clone(),
+                                region,
+                            ),
+                            &mut output,
+                        );
+
+                        branch_cons.push(branch_con);
+                    }
+
+                    constraints.push(exists(
+                        vec![cond_var],
+                        And(vec![
+                            // Record the original conditional expression's constraint.
+                            expr_con.clone(),
+                            // Each branch's pattern must have the same type
+                            // as the condition expression did.
+                            And(branch_cons),
+                            // The return type of each branch must equal
+                            // the return type of the entire case-expression.
+                            Eq(branch_type, expected, region),
+                        ]),
+                    ));
+                }
+            }
+
+            output.constraint = And(constraints);
+
+            output
+        }
         _ => panic!("{:?}", expr),
     }
+}
+
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn canonicalize_case_branch(
+    env: &mut Env,
+    subs: &mut Subs,
+    rigids: &Rigids,
+    scope: &mut can::scope::Scope,
+    region: Region,
+    loc_pattern: &Located<Pattern>,
+    loc_expr: &Located<Expr>,
+    pattern_expected: PExpected<Type>,
+    expr_expected: Expected<Type>,
+    _output: &mut Output,
+) -> (Constraint) {
+    // Each case branch gets a new scope for canonicalization.
+    // Shadow `scope` to make sure we don't accidentally use the original one for the
+    // rest of this block.
+    let mut scope = scope.clone();
+
+    let branch_output = canonicalize_expr(
+        rigids,
+        env,
+        subs,
+        &mut scope,
+        region,
+        &loc_expr.value,
+        expr_expected,
+    );
+
+    let mut state = PatternState {
+        headers: ImMap::default(),
+        vars: Vec::with_capacity(1),
+        constraints: Vec::with_capacity(1),
+    };
+
+    let _loc_can_pattern =
+        canonicalize_pattern(subs, env, &mut state, &loc_pattern, pattern_expected);
+
+    let constraint = Constraint::Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars: state.vars,
+        def_types: state.headers,
+        defs_constraint: Constraint::And(state.constraints),
+        ret_constraint: branch_output.constraint,
+    }));
+
+    constraint
 }
 
 struct Info {
