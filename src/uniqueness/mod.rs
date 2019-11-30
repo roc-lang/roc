@@ -58,74 +58,6 @@ pub fn canonicalize_declaration(
     (output, env)
 }
 
-///
-fn canonicalize_procedure(
-    rigids: &Rigids,
-    env: &mut Env,
-    scope: &mut can::scope::Scope,
-    subs: &mut Subs,
-    procedure: &mut Procedure,
-    expected: Expected<Type>,
-) -> Constraint {
-    let region = procedure.definition.clone();
-
-    // first, generate constraints for the arguments
-    let mut arg_types = Vec::new();
-    let mut arg_vars = Vec::new();
-
-    let mut state = PatternState {
-        headers: ImMap::default(),
-        vars: Vec::with_capacity(1),
-        constraints: Vec::with_capacity(1),
-    };
-
-    for pattern in &procedure.args {
-        let arg_var = subs.mk_flex_var();
-        let arg_typ = Variable(arg_var);
-        canonicalize_pattern(
-            subs,
-            env,
-            &mut state,
-            &pattern,
-            PExpected::NoExpectation(arg_typ.clone()),
-        );
-        arg_types.push(arg_typ);
-        arg_vars.push(arg_var);
-    }
-
-    let ret_var = subs.mk_flex_var();
-    let ret_typ = Variable(ret_var);
-
-    let ret_constraint = canonicalize_expr(
-        rigids,
-        env,
-        subs,
-        scope,
-        region,
-        &procedure.body.value,
-        Expected::NoExpectation(ret_typ.clone()),
-    );
-
-    arg_vars.push(ret_var);
-
-    let fn_con = Eq(
-        Function(arg_types, Box::new(ret_typ.clone())),
-        expected.clone(),
-        region,
-    );
-
-    let whole_var = subs.mk_flex_var();
-    procedure.var = whole_var.clone();
-    procedure.ret_var = ret_var;
-
-    And(vec![
-        fn_con,
-        ret_constraint.constraint,
-        Eq(Variable(whole_var), expected, Region::zero()),
-        And(state.constraints),
-    ])
-}
-
 pub struct PatternState {
     pub headers: ImMap<Symbol, Located<Type>>,
     pub vars: Vec<Variable>,
@@ -270,88 +202,69 @@ pub fn canonicalize_expr(
             Some(var) => Output::new(Eq(Variable(*var), expected, Region::zero())),
         },
 
-        /*
-        CallByName(symbol, loc_args, _) => {
-            let mut output = Output::new(True);
+        Closure(symbol, _recursion, args, body) => {
+            // first, generate constraints for the arguments
+            let mut arg_types = Vec::new();
+            let mut arg_vars = Vec::new();
 
-            match env.procedures.get(symbol) {
-                None => {
-                    for k in env.procedures.keys() {
-                        println!("{:?}", k.clone());
-                    }
-                    panic!(
-                        "CallByName: no procedure for {:?} in {:?}",
-                        symbol, env.procedures
-                    )
-                }
-                Some(procedure) => {
-                    let fn_type = Variable(procedure.var);
-                    let ret_type = Variable(procedure.ret_var);
-                    let fn_region = procedure.definition;
+            let mut state = PatternState {
+                headers: ImMap::default(),
+                vars: Vec::with_capacity(1),
+                constraints: Vec::with_capacity(1),
+            };
 
-                    let mut vars = Vec::with_capacity(2 + loc_args.len());
-
-                    // TODO look up the name and use NamedFnArg if possible.
-                    let fn_reason = Reason::AnonymousFnCall {
-                        arity: loc_args.len() as u8,
-                    };
-
-                    let mut arg_types = Vec::with_capacity(loc_args.len());
-                    let mut arg_cons = Vec::with_capacity(loc_args.len());
-
-                    // for arg_out in outputs { output.references = output.references.union(arg_out.references); }
-                    for (index, loc_arg) in loc_args.iter().enumerate() {
-                        let region = loc_arg.region;
-                        let arg_var = subs.mk_flex_var();
-                        let arg_type = Variable(arg_var);
-
-                        dbg!(arg_var);
-                        // TODO look up the name and use NamedFnArg if possible.
-                        let reason = Reason::AnonymousFnArg {
-                            arg_index: index as u8,
-                        };
-                        let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
-                        let arg_con = canonicalize_expr(
-                            rigids,
-                            env,
-                            subs,
-                            scope,
-                            loc_arg.region,
-                            &loc_arg.value,
-                            expected_arg,
-                        )
-                        .constraint;
-
-                        vars.push(arg_var);
-                        arg_types.push(arg_type);
-                        arg_cons.push(arg_con);
-                    }
-
-                    let fn_con = output.constraint;
-                    let expected_fn_type = Expected::ForReason(
-                        fn_reason,
-                        Function(arg_types, Box::new(ret_type.clone())),
-                        region,
-                    );
-
-                    dbg!(fn_type.clone());
-
-                    output.constraint = exists(
-                        vars,
-                        And(vec![
-                            fn_con,
-                            Eq(fn_type, expected_fn_type, fn_region),
-                            And(arg_cons),
-                            Eq(ret_type, expected, region),
-                        ]),
-                    );
-
-                    output
-                }
+            for pattern in args {
+                let arg_var = subs.mk_flex_var();
+                let arg_typ = Variable(arg_var);
+                canonicalize_pattern(
+                    subs,
+                    env,
+                    &mut state,
+                    &pattern,
+                    PExpected::NoExpectation(arg_typ.clone()),
+                );
+                arg_types.push(arg_typ);
+                arg_vars.push(arg_var);
             }
+
+            let ret_var = subs.mk_flex_var();
+            let ret_type = Variable(ret_var);
+
+            state.vars.push(ret_var);
+
+            let fn_typ = Type::Function(arg_types, Box::new(ret_type.clone()));
+
+            let mut output = canonicalize_expr(
+                rigids,
+                env,
+                subs,
+                scope,
+                region,
+                &body.value,
+                Expected::NoExpectation(ret_type.clone()),
+            );
+
+            let defs_constraint = And(state.constraints);
+            let ret_constraint = output.constraint;
+
+            output.constraint = exists(
+                state.vars.clone(),
+                And(vec![
+                    Let(Box::new(LetConstraint {
+                        rigid_vars: Vec::new(),
+                        flex_vars: state.vars,
+                        def_types: state.headers,
+                        defs_constraint: defs_constraint,
+                        ret_constraint,
+                    })),
+                    // "the closure's type is equal to expected  type"
+                    Eq(fn_typ, expected, region),
+                ]),
+            );
+
+            output
         }
-        */
-        // CallPointer(Box<Expr>, Vec<Located<Expr>>, CalledVia),
+
         Call(fn_expr, loc_args, _) => {
             let fn_var = subs.mk_flex_var();
             let fn_type = Variable(fn_var);
