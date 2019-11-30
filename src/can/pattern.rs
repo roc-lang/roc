@@ -40,6 +40,7 @@ pub enum Pattern {
 /// arg patterns and in case branch patterns, but not in assignments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PatternType {
+    TopLevelDef,
     Assignment,
     FunctionArg,
     CaseBranch,
@@ -188,12 +189,14 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::FloatLiteral(float)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+                unsupported_pattern(env, ptype, region)
+            }
         },
 
         &Underscore => match pattern_type {
             CaseBranch | FunctionArg => Pattern::Underscore(subs.mk_flex_var()),
-            Assignment => unsupported_pattern(env, Assignment, region),
+            ptype @ Assignment | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
         },
 
         &IntLiteral(string) => match pattern_type {
@@ -203,7 +206,9 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+                unsupported_pattern(env, ptype, region)
+            }
         },
 
         &HexIntLiteral(string) => match pattern_type {
@@ -213,7 +218,9 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+                unsupported_pattern(env, ptype, region)
+            }
         },
 
         &OctalIntLiteral(string) => match pattern_type {
@@ -223,7 +230,9 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+                unsupported_pattern(env, ptype, region)
+            }
         },
 
         &BinaryIntLiteral(string) => match pattern_type {
@@ -233,7 +242,9 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+                unsupported_pattern(env, ptype, region)
+            }
         },
 
         &StrLiteral(_string) => match pattern_type {
@@ -241,7 +252,9 @@ pub fn canonicalize_pattern<'a>(
                 panic!("TODO check whether string pattern is malformed.");
                 // Pattern::ExactString((*string).into())
             }
-            ptype @ Assignment | ptype @ FunctionArg => unsupported_pattern(env, ptype, region),
+            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+                unsupported_pattern(env, ptype, region)
+            }
         },
 
         // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
