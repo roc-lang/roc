@@ -24,6 +24,12 @@ pub struct State<'a> {
     pub is_indenting: bool,
 
     pub attempting: Attempting,
+
+    /// The original length of the string, before any bytes were consumed.
+    /// This is used internally by the State::bytes_consumed() function.
+    ///
+    /// TODO make this private, in a way that doesn't break macros!
+    pub original_len: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -41,6 +47,7 @@ impl<'a> State<'a> {
             indent_col: 0,
             is_indenting: true,
             attempting,
+            original_len: input.len(),
         }
     }
 
@@ -58,6 +65,13 @@ impl<'a> State<'a> {
         }
     }
 
+    /// Returns the total number of bytes consumed since the parser began parsing.
+    ///
+    /// So if the parser has consumed 8 bytes, this function will return 8.
+    pub fn bytes_consumed(&self) -> usize {
+        self.original_len - self.input.len()
+    }
+
     /// Increments the line, then resets column, indent_col, and is_indenting.
     /// Advances the input by 1, to consume the newline character.
     pub fn newline(&self) -> Result<Self, (Fail, Self)> {
@@ -69,6 +83,7 @@ impl<'a> State<'a> {
                 indent_col: 0,
                 is_indenting: true,
                 attempting: self.attempting,
+                original_len: self.original_len,
             }),
             None => Err((
                 Fail {
@@ -95,6 +110,7 @@ impl<'a> State<'a> {
                     // Once we hit a nonspace character, we are no longer indenting.
                     is_indenting: false,
                     attempting: self.attempting,
+                    original_len: self.original_len,
                 })
             }
             _ => Err(line_too_long(self.attempting, self.clone())),
@@ -131,6 +147,7 @@ impl<'a> State<'a> {
                     indent_col,
                     is_indenting,
                     attempting: self.attempting,
+                    original_len: self.original_len,
                 })
             }
             _ => Err(line_too_long(self.attempting, self.clone())),
@@ -360,6 +377,7 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
         is_indenting: state.is_indenting,
         column,
         attempting,
+        original_len: state.original_len,
     };
 
     (fail, state)
