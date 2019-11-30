@@ -15,7 +15,6 @@ use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
 use roc::subs::{Subs, VarStore, Variable};
 use roc::types::{Expected, Type};
-use roc::uniqueness;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -53,7 +52,6 @@ pub fn uniq_expr(
     roc::uniqueness::Output,
     Output,
     Vec<Problem>,
-    MutMap<Symbol, Procedure>,
     Subs,
     Variable,
     roc::uniqueness::Env,
@@ -80,16 +78,12 @@ pub fn uniq_expr_with(
     roc::uniqueness::Output,
     Output,
     Vec<Problem>,
-    MutMap<Symbol, Procedure>,
     Subs,
     Variable,
     roc::uniqueness::Env,
     Subs,
     Variable,
 ) {
-    use roc::ident::Ident;
-    use roc::parse::ast::MaybeQualified;
-;
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?}",
@@ -101,7 +95,7 @@ pub fn uniq_expr_with(
     let variable = subs.mk_flex_var();
     let expected = Expected::NoExpectation(Type::Variable(variable));
     let home = "Test";
-    let (loc_expr, output, problems, procedures) = can::canonicalize_declaration(
+    let (loc_expr, output, problems) = can::canonicalize_declaration(
         arena,
         &mut subs,
         home.into(),
@@ -113,38 +107,26 @@ pub fn uniq_expr_with(
         expected,
     );
 
-    for k in procedures.keys() {
-        println!("procedure {:?}", k.clone());
-    }
-
-    dbg!(output.constraint.clone());
-
-    let mut extracted_procedures = ImMap::default();
-
-    for (k, v) in procedures.iter() {
-        extracted_procedures.insert(k.clone(), v.clone());
-    }
-
     // double check
     let mut subs2 = Subs::new();
 
     let variable2 = subs2.mk_flex_var();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
-    let (mut output2, env) = roc::uniqueness::canonicalize_declaration(
+    let (output2, env) = roc::uniqueness::canonicalize_declaration(
         &mut subs2,
         home.into(),
         name.into(),
         Region::zero(),
         loc_expr,
-        &extracted_procedures,
         declared_idents,
         declared_variants,
         expected2,
     );
 
+    dbg!(output.constraint.clone());
     dbg!(output2.constraint.clone());
     (
-        output2, output, problems, procedures, subs, variable, env, subs2, variable2,
+        output2, output, problems, subs, variable, env, subs2, variable2,
     )
 }
 

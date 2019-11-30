@@ -19,7 +19,7 @@ pub fn infer_uniq(
     constraint: &Constraint,
     expr_var: Variable,
 ) -> Content {
-    let mut env: ImMap<Symbol, Variable> = environment.bound_names.clone();
+    let env: ImMap<Symbol, Variable> = environment.bound_names.clone();
 
     solve(&env, subs, constraint);
 
