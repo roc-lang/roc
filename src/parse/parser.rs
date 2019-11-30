@@ -5,7 +5,7 @@ use bumpalo::Bump;
 use std::{char, u16};
 
 /// A position in a source file.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State<'a> {
     /// The raw input string.
     pub input: &'a str,
