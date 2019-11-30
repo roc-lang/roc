@@ -464,6 +464,8 @@ fn canonicalize_expr(
             // index (0-based) of the closure within that declaration.
             //
             // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
+            //
+            // In the case of `foo = \x y -> ...`, the symbol is later changed to `foo`.
             let symbol = scope.gen_unique_symbol();
 
             // The body expression gets a new scope for canonicalization.
@@ -926,7 +928,7 @@ fn call_successors<'a>(
     call_symbol: &'a Symbol,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
-    // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 procedures reference each other; may need to track visited procedures!
+    // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 definitions reference each other; may need to track visited definitions!
     match closures.get(call_symbol) {
         Some(references) => {
             let mut answer = local_successors(&references, closures);
@@ -1075,7 +1077,7 @@ where
             answer
         }
         None => {
-            // If the call symbol was not in the procedures map, that means we're calling a non-function and
+            // If the call symbol was not in the closure map, that means we're calling a non-function and
             // will get a type mismatch later. For now, assume no references as a result of the "call."
             References::new()
         }
@@ -1524,7 +1526,7 @@ fn can_defs<'a>(
                     is_closure = true;
 
                     // Since everywhere in the code it'll be referred to by its defined name,
-                    // remove its generated name from the procedure map. (We'll re-insert it later.)
+                    // remove its generated name from the closure map. (We'll re-insert it later.)
                     let references = env.closures.remove(&symbol).unwrap_or_else(|| {
                         panic!(
                         "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
@@ -1532,14 +1534,17 @@ fn can_defs<'a>(
                     )
                     });
 
+                    // Re-insert the closure into the map, under its defined name.
+                    // closures don't have a name, and therefore pick a fresh symbol. But in this
+                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
+                    // and we want to reference it by that name.
+                    env.closures.insert(defined_symbol.clone(), references);
+
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
                     let is_recursive = match can_output.tail_call {
                         Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
                         _ => Recursive::NotRecursive,
                     };
-                    // Re-insert the procedure into the map, under its defined name. This way,
-                    // when code elsewhere calls it by defined name, it'll resolve properly.
-                    env.closures.insert(defined_symbol.clone(), references);
 
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
