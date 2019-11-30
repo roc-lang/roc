@@ -320,7 +320,36 @@ mod test_canonicalize {
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Some(Recursive::NotRecursive));
+        assert_eq!(detected, Some(Recursive::Recursive));
+    }
+
+    #[test]
+    fn mutual_recursion() {
+        // TODO when a case witn no branches parses, remove the pattern wildcard here
+        let src = indoc!(
+            r#"
+            q = \x -> 
+                    case x when
+                        0 -> 0
+                        _ -> p (x - 1)
+
+            p = \x -> 
+                    case x when
+                        0 -> 0
+                        _ -> q (x - 1)
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Some(Recursive::Recursive));
+
+        let detected = get_closure(&actual, 1);
+        assert_eq!(detected, Some(Recursive::Recursive));
     }
 
     //#[test]

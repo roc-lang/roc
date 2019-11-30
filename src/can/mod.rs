@@ -842,9 +842,8 @@ fn canonicalize_case_branch<'a>(
         expr_expected,
     );
 
-    // set the tail-call. If we already recorded one, keep it, otherwise
-    // use this branch's tail call
-    match &output.tail_call {
+    // If we already recorded a tail call then keep it, else use this branch's tail call
+    match output.tail_call {
         Some(_) => {}
         None => output.tail_call = branch_output.tail_call,
     };
@@ -1325,6 +1324,40 @@ fn pattern_from_def<'a>(def: &'a Def<'a>) -> Option<&'a Located<ast::Pattern<'a>
     }
 }
 
+fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) -> Recursive {
+    let mut visited = MutSet::default();
+
+    let mut stack = Vec::new();
+
+    if let Some(references) = closures.get(&symbol) {
+        for v in &references.calls {
+            stack.push(v.clone());
+        }
+
+        // while there are symbols left to visit
+        while let Some(nested_symbol) = stack.pop() {
+            if nested_symbol.clone() == symbol {
+                return Recursive::Recursive;
+            }
+
+            // if the called symbol not yet in the graph
+            if !visited.contains(&nested_symbol) {
+                // add it to the visited set
+                // if it calls any functions
+                if let Some(nested_references) = closures.get(&nested_symbol) {
+                    // add its called to the stack
+                    for v in &nested_references.calls {
+                        stack.push(v.clone());
+                    }
+                }
+                visited.insert(nested_symbol);
+            }
+        }
+    }
+
+    Recursive::NotRecursive
+}
+
 #[inline(always)]
 fn can_defs<'a>(
     rigids: &Rigids,
@@ -1705,6 +1738,17 @@ fn can_defs<'a>(
                 .rev()
             {
                 if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
+                    // Determine recursivity of closures that are not tail-recursive
+                    if let Closure(name, Recursive::NotRecursive, args, body) =
+                        can_def.1.value.clone()
+                    {
+                        let recursion = closure_recursivity(symbol.clone(), &env.closures);
+
+                        let mut new_def = can_def.clone();
+                        new_def.1.value = Closure(name, recursion, args, body);
+                        can_defs.push(new_def);
+                        continue;
+                    }
                     can_defs.push(can_def.clone());
                 }
             }
