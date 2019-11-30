@@ -7,7 +7,8 @@ edition = "2018"
 [dependencies]
 log = "0.4.8"
 petgraph = { version = "0.4.5", optional = true }
-im-rc = "14.0.0"
+im = "14.0.0"    # im and im-rc should always have the same version!
+im-rc = "14.0.0" # im and im-rc should always have the same version!
 wyhash = "0.3.0"
 tokio = { version = "0.2", features = ["fs", "rt-threaded"] }
 bumpalo = "2.6.0"
