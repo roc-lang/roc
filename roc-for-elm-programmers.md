@@ -795,4 +795,58 @@ List.map : List a, (a -> b) -> List b
 Roc has no `<<` or `>>` operators, and there are no functions in the standard library
 for general-purpose pointfree function composition.
 
+## Standard library
+
+`elm/core` has these modules:
+
+* `Array`
+* `Basics`
+* `Bitwise`
+* `Char`
+* `Debug`
+* `Dict`
+* `List`
+* `Maybe`
+* `Platform`
+* `Platform.Cmd`
+* `Platform.Sub`
+* `Process`
+* `Result`
+* `Set`
+* `String`
+* `Task`
+* `Tuple`
+
+In Roc, the standard library is not a standalone package. It is baked into the compiler,
+and you can't upgrade it independently of a compiler release; whatever version of
+Roc you're using, that's the version of the standard library you're using too.
+(This is because Roc doesn't have a concept like Elm's "Kernel"; it would not be
+possible to ship Roc's standard library as a separate package!)
+
+Roc's standard library has these modules:
+
+* `Bool`
+* `Num`
+* `Int`
+* `Float`
+* `List`
+* `Map`
+* `Set`
+* `Bytes`
+* `Str`
+* `Result`
+* `Sort`
+
+Some differences to note:
+
+* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `Int`, `Result`) but they do not expose any values. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
+* In Roc it's called `Str` instead of `String`.
+* No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of code points - and there's no upper bound on how many code points there can be. In a world of emoji, I think this makes `Char` error-prone and it's better to have `String` be the smallest indivisible unit. If you want to iterate over grapheme clusters, use a `Str -> List Str` function which breaks the string down on grapheme boundaries. For this reason there also isn't a `Str.length` function; in the context of strings, "length" is ambiguous. (Does it refer to number of bytes? Number of Unicode code points? Number of graphemes?)
+* No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.isEq` or `Num.add` or `Float.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implmement it: `never = \a -> never a`.)
+* No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in the standard library, since `Task` should be opaque.
+* No `Process`, `Platform`, `Cmd`, or `Sub` - similar to `Task`; these are things platform authors would include, or not.
+* No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arity tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*`) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]`.
+* `List` refers to something more like Elm's `Array`, as noted earlier.
+* `Sort` works [like this](https://package.elm-lang.org/packages/rtfeldman/elm-sorter-experiment/2.1.1/Sort). It's only for `List`, but it's important enough to be one of the standard modules - not only so that lists can be sortable without needing to install a separate package, but also because it demonstrates the "decoder pattern" of API design using opaque types.
+
 ## Operator Desugaring Table
