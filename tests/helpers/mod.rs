@@ -6,7 +6,7 @@ use roc::can::expr::Expr;
 use roc::can::problem::Problem;
 use roc::can::symbol::Symbol;
 use roc::can::Output;
-use roc::collections::{ImMap, MutMap};
+use roc::collections::{ImMap, MutMap, SendSet};
 use roc::ident::Ident;
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
@@ -105,6 +105,21 @@ where
 
     for (key, value) in pairs {
         answer.insert(key, value);
+    }
+
+    answer
+}
+
+#[allow(dead_code)]
+pub fn send_set_from<V, I>(elems: I) -> SendSet<V>
+where
+    I: IntoIterator<Item = V>,
+    V: Hash + Eq + Clone,
+{
+    let mut answer = SendSet::default();
+
+    for elem in elems {
+        answer.insert(elem);
     }
 
     answer

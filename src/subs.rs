@@ -9,6 +9,7 @@ pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
 }
 
+#[derive(Debug, Default)]
 pub struct VarStore {
     next: AtomicUsize,
 }

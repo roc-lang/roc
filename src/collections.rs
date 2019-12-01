@@ -24,6 +24,10 @@ pub type ImMap<K, V> = im_rc::hashmap::HashMap<K, V, BuildHasher>;
 
 pub type ImSet<K> = im_rc::hashset::HashSet<K, BuildHasher>;
 
+pub type SendMap<K, V> = im::hashmap::HashMap<K, V, BuildHasher>;
+
+pub type SendSet<K> = im::hashset::HashSet<K, BuildHasher>;
+
 pub fn arena_join<'a, I>(arena: &'a Bump, strings: &mut I, join_str: &str) -> String<'a>
 where
     I: Iterator<Item = &'a str>,

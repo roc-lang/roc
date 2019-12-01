@@ -1,8 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 
-/// An identifier, possibly fully-qualified with a module name
-/// e.g. (Http.Request from http)
-/// Parameterized on a phantom marker for whether it has been canonicalized
+/// An unqualified identifier, possibly capitalized.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UnqualifiedIdent<'a>(&'a str);
 

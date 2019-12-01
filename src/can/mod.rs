@@ -13,6 +13,7 @@ use self::problem::RuntimeError::*;
 use self::procedure::References;
 use self::scope::Scope;
 use self::symbol::Symbol;
+use crate::can::pattern::PatternType;
 use crate::collections::{ImMap, ImSet, MutMap, MutSet};
 use crate::constrain::{self, exists};
 use crate::graph::{strongly_connected_component, topological_sort};
@@ -26,10 +27,12 @@ use crate::types::Expected::{self, *};
 use crate::types::Type::{self, *};
 use crate::types::{LetConstraint, PExpected, PReason, Reason};
 use bumpalo::Bump;
+use im::Vector;
 use std::fmt::Debug;
 
 pub mod env;
 pub mod expr;
+pub mod module;
 pub mod num;
 pub mod operator;
 pub mod pattern;
@@ -43,6 +46,115 @@ pub mod symbol;
 /// for example `a` in the annotation `identity : a -> a`, we add it to this
 /// map so that expressions within that annotation can share these vars.
 type Rigids = ImMap<Box<str>, Type>;
+
+pub fn canonicalize_module_defs<'a>(
+    arena: &Bump,
+    loc_defs: bumpalo::collections::Vec<'a, Located<Def<'a>>>,
+    home: Box<str>,
+    scope: &mut ImMap<Box<str>, (Symbol, Region)>,
+    var_store: &VarStore,
+) -> Vector<(Located<Pattern>, Located<Expr>)> {
+    let mut buf = Vector::new();
+
+    for loc_def in loc_defs {
+        buf.push_back(canonicalize_def(
+            arena,
+            loc_def.value,
+            loc_def.region,
+            home.clone(),
+            scope,
+            var_store,
+        ));
+    }
+
+    buf
+}
+
+fn canonicalize_def<'a>(
+    arena: &Bump,
+    def: Def<'a>,
+    region: Region,
+    home: Box<str>,
+    scope: &mut ImMap<Box<str>, (Symbol, Region)>,
+    var_store: &VarStore,
+) -> (Located<Pattern>, Located<Expr>) {
+    match def {
+        Def::Annotation(_loc_pattern, _loc_ann) => {
+            panic!("TODO canonicalize top-level annotations");
+        }
+        Def::Body(loc_pattern, loc_expr) => {
+            let variable = var_store.fresh();
+            let expected = Expected::NoExpectation(Type::Variable(variable));
+            let declared_idents = ImMap::default(); // TODO FIXME infer this from scope arg
+            let declared_variants = ImMap::default(); // TODO get rid of this
+            let name: Box<str> = "TODOfixme".into();
+
+            // Desugar operators (convert them to Apply calls, taking into account
+            // operator precedence and associativity rules), before doing other canonicalization.
+            //
+            // If we did this *during* canonicalization, then each time we
+            // visited a BinOp node we'd recursively try to apply this to each of its nested
+            // operators, and then again on *their* nested operators, ultimately applying the
+            // rules multiple times unnecessarily.
+            let loc_expr = operator::desugar(arena, &loc_expr);
+
+            // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
+            // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
+            let scope_prefix = format!("{}.{}$", home, name).into();
+            let mut scope = Scope::new(scope_prefix, declared_idents.clone());
+            let mut env = Env::new(home, declared_variants.clone());
+            let (loc_expr, _) = canonicalize_expr(
+                &ImMap::default(),
+                &mut env,
+                var_store,
+                &mut scope,
+                region,
+                &loc_expr.value,
+                expected,
+            );
+
+            // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+            // (However, still include it in scope, because you *can* recursively refer to yourself.)
+            let mut shadowable_idents = scope.idents.clone();
+            remove_idents(&loc_pattern.value, &mut shadowable_idents);
+
+            let pattern_var = var_store.fresh();
+            let pattern_type = Type::Variable(pattern_var);
+            let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
+
+            let mut pattern_state = PatternState {
+                headers: ImMap::default(),
+                vars: Vec::with_capacity(1),
+                constraints: Vec::with_capacity(1),
+            };
+            let loc_pattern = canonicalize_pattern(
+                &mut env,
+                &mut pattern_state,
+                var_store,
+                &mut scope,
+                PatternType::TopLevelDef,
+                &loc_pattern.value,
+                loc_pattern.region,
+                &mut shadowable_idents,
+                pattern_expected,
+            );
+
+            (loc_pattern, loc_expr)
+        }
+        Def::CustomType(_, _) => {
+            panic!("TODO remove CustomType syntax");
+        }
+        Def::TypeAlias(_, _) => {
+            panic!("TODO remove TypeAlias syntax");
+        }
+
+        // Ignore spaces
+        Def::SpaceBefore(def, _) | Def::SpaceAfter(def, _) => {
+            // TODO FIXME performance disaster!!!
+            canonicalize_def(arena, def.clone(), region, home, scope, var_store)
+        }
+    }
+}
 
 // TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
