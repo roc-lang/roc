@@ -153,6 +153,10 @@ async fn load_filename(
             // in the arena after read_to_string completes.
             let state = State::new(&src, Attempting::Module);
 
+            // TODO figure out if there's a way to address this clippy error
+            // without introducing a borrow error. ("let and return" is literally
+            // what the borrow checker suggested using here to fix the problem, so...)
+            #[allow(clippy::let_and_return)]
             let answer = match module::module().parse(&arena, state) {
                 Ok((ast::Module::Interface { header }, state)) => {
                     let declared_name: Box<str> = header.name.value.as_str().into();
