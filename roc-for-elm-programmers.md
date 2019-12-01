@@ -258,7 +258,7 @@ Each of these type annotations involves a *tag union* - a collection of tags bra
 * The type `[ Foo, Bar Float ]` is a **closed** tag union.
 * The type `[ Foo ]*` is an **open** tag union.
 
-You can pass either `x` to `toInt` because an open tag union is type-compatible with
+You can pass `x` to `toInt` because an open tag union is type-compatible with
 any closed tag union which contains its tags (in this case, the `Foo` tag). You can also
 pass `y` to `toInt` for the same reason.
 
@@ -311,12 +311,18 @@ Here's `Maybe` defined using tags:
 Maybe a : [ Just a, Nothing ]
 ```
 
-You can also use tags to define recursive data structures, and name them, by using the `as`
-keyword in your type alias. (This is exactly how OCaml supports recursive polymorphic variants.)
+You can also use tags to define recursive data structures, because recursive
+type aliases are allowed as long as the recursion happens within a tag. For example:
 
 ```elm
-LinkedList elem : [ Nil, Cons elem list ] as list
+LinkedList a : [ Nil, Cons a (LinkedList a) ]
 ```
+
+> Inferred recursive tags use the `as` keyword, which is what OCaml does to
+> display inferred types of recursive polymorphic variants. For example, the
+> inferred version of the above type alias would be:
+>
+> `[ Nil, Cons a b ] as b`
  
 The `*` in open tag unions is actually an unbound ("wildcard") type variable. 
 It can be bound too, with a lowercase letter like any other bound type variable. 
@@ -884,23 +890,23 @@ Some differences to note:
 
 Here are various Roc expressions involving operators, and what they desugar to.
 
-| Expression     | Desugars to      |
-| -------------- | ---------------- |
-| a + b          | Num.add a b      |
-| a - b          | Num.sub a b      |
-| a * b          | Num.mul a b      |
-| a / b          | Float.div a b    |
-| a // b         | Int.div a b      |
-| a ^ b          | Num.pow a b      |
-| a % b          | Float.rem a b    |
-| a %% b         | Float.mod a b    |
-| -a             | Num.neg a        |
-| -f x y         | Num.neg (f x y)  |
-| a == b         | Bool.isEq a b    |
-| a != b         | Bool.isNotEq a b |
-| a && b         | Bool.and a b     |
-| a || b         | Bool.or a b      |
-| !a             | Bool.not a       |
-| !f x y         | Bool.not (f x y) |
-| a |> b         | b a              |
-| a b c |> f x y | f (a b c) x y    |
+| Expression      | Desugars to      |
+| --------------- | ---------------- |
+| `a + b`           | `Num.add a b`      |
+| `a - b`           | `Num.sub a b`      |
+| `a * b`           | `Num.mul a b`      |
+| `a / b`           | `Float.div a b`    |
+| `a // b`          | `Int.div a b`      |
+| `a ^ b`           | `Num.pow a b`      |
+| `a % b`           | `Float.rem a b`    |
+| `a %% b`          | `Float.mod a b`    |
+| `-a`              | `Num.neg a`        |
+| `-f x y`          | `Num.neg (f x y)`  |
+| `a == b`          | `Bool.isEq a b`    |
+| `a != b`          | `Bool.isNotEq a b` |
+| `a && b`          | `Bool.and a b`     |
+| `a \|\| b`          | `Bool.or a b`      |
+| `!a`              | `Bool.not a`       |
+| `!f x y`          | `Bool.not (f x y)` |
+| `a \|> b`          | `b a`              |
+| `a b c \|> f x y`  | `f (a b c) x y`    |
