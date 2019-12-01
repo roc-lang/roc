@@ -14,15 +14,18 @@ mod test_infer {
     use roc::infer::infer_expr;
     use roc::infer::infer_uniq;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
+    use roc::subs::Subs;
 
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (output2, output1, _, mut subs1, variable1, env, mut subs2, variable2) = uniq_expr(src);
+        let (output2, output1, _, var_store1, variable1, env, var_store2, variable2) =
+            uniq_expr(src);
 
-        //dbg!(subs1.clone());
+        let mut subs1 = Subs::new(var_store1.into());
+        let mut subs2 = Subs::new(var_store2.into());
+
         let content1 = infer_expr(&mut subs1, &output1.constraint, variable1);
-        // dbg!(subs2.clone());
         let content2 = infer_uniq(&mut subs2, &env, &output2.constraint, variable2);
 
         name_all_type_vars(variable1, &mut subs1);

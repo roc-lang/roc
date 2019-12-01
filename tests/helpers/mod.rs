@@ -13,7 +13,7 @@ use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
 use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
-use roc::subs::{Subs, VarStore, Variable};
+use roc::subs::{VarStore, Variable};
 use roc::types::{Expected, Type};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -52,10 +52,10 @@ pub fn uniq_expr(
     roc::uniqueness::Output,
     Output,
     Vec<Problem>,
-    Subs,
+    VarStore,
     Variable,
     roc::uniqueness::Env,
-    Subs,
+    VarStore,
     Variable,
 ) {
     uniq_expr_with(
@@ -78,10 +78,10 @@ pub fn uniq_expr_with(
     roc::uniqueness::Output,
     Output,
     Vec<Problem>,
-    Subs,
+    VarStore,
     Variable,
     roc::uniqueness::Env,
-    Subs,
+    VarStore,
     Variable,
 ) {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
@@ -91,13 +91,13 @@ pub fn uniq_expr_with(
         )
     });
 
-    let mut subs = Subs::new();
-    let variable = subs.mk_flex_var();
+    let var_store1 = VarStore::new();
+    let variable = var_store1.fresh();
     let expected = Expected::NoExpectation(Type::Variable(variable));
     let home = "Test";
     let (loc_expr, output, problems) = can::canonicalize_declaration(
         arena,
-        &mut subs,
+        &var_store1,
         home.into(),
         name.into(),
         Region::zero(),
@@ -108,12 +108,12 @@ pub fn uniq_expr_with(
     );
 
     // double check
-    let mut subs2 = Subs::new();
+    let var_store2 = VarStore::new();
 
-    let variable2 = subs2.mk_flex_var();
+    let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
     let (output2, env) = roc::uniqueness::canonicalize_declaration(
-        &mut subs2,
+        &var_store2,
         home.into(),
         name.into(),
         Region::zero(),
@@ -126,7 +126,7 @@ pub fn uniq_expr_with(
     dbg!(output.constraint.clone());
     dbg!(output2.constraint.clone());
     (
-        output2, output, problems, subs, variable, env, subs2, variable2,
+        output2, output, problems, var_store1, variable, env, var_store2, variable2,
     )
 }
 
