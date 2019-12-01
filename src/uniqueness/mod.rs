@@ -1,4 +1,3 @@
-pub mod scope;
 use crate::can::expr::Expr::{self};
 use crate::can::pattern::Pattern;
 use crate::can::procedure::{Procedure, References};
