@@ -19,6 +19,7 @@ use std::sync::Arc;
 use tokio::fs::read_to_string;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
+#[derive(Debug)]
 pub struct Loaded {
     pub requested_module: LoadedModule,
     pub vars_created: usize,
