@@ -13,6 +13,7 @@ mod test_canonicalize {
     use crate::helpers::can_expr_with;
     use bumpalo::Bump;
     use roc::can::expr::Expr::{self, *};
+    use roc::can::expr::Recursive;
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
     use roc::can::symbol::Symbol;
@@ -216,6 +217,142 @@ mod test_canonicalize {
             }
             .into()
         );
+    }
+
+    fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
+        match expr {
+            Defs(_, assignments, _) => match &assignments.get(i).map(|(_, loc)| &loc.value) {
+                Some(Closure(_, recursion, _, _)) => recursion.clone(),
+                Some(other @ _) => {
+                    panic!("assignment at {} is not a closure, but a {:?}", i, other)
+                }
+                None => panic!("Looking for assignment at {} but the list is too short", i),
+            },
+            _ => panic!("expression is not a Defs, but a {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn recognize_tail_calls() {
+        let src = indoc!(
+            r#"
+            g = \x -> 
+                case x when
+                    0 -> 0
+                    _ -> g (x - 1)
+
+            h = \x -> 
+                case x when
+                    0 -> 0
+                    _ -> g (x - 1)
+
+            p = \x -> 
+                case x when
+                    0 -> 0
+                    1 -> g (x - 1)
+                    _ -> p (x - 1)
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Recursive::TailRecursive);
+
+        let detected = get_closure(&actual, 1);
+        assert_eq!(detected, Recursive::NotRecursive);
+
+        let detected = get_closure(&actual, 2);
+        assert_eq!(detected, Recursive::TailRecursive);
+    }
+
+    #[test]
+    fn case_tail_call() {
+        let src = indoc!(
+            r#"
+            g = \x -> 
+                case x when
+                    0 -> 0
+                    _ -> g (x - 1)
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Recursive::TailRecursive);
+    }
+
+    #[test]
+    fn immediate_tail_call() {
+        let src = indoc!(
+            r#"
+            f = \x -> f x
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Recursive::TailRecursive);
+    }
+
+    #[test]
+    fn case_condition_is_no_tail_call() {
+        // TODO when a case witn no branches parses, remove the pattern wildcard here
+        let src = indoc!(
+            r#"
+            q = \x -> 
+                    case q x when
+                        _ -> 0
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Recursive::Recursive);
+    }
+
+    #[test]
+    fn mutual_recursion() {
+        // TODO when a case witn no branches parses, remove the pattern wildcard here
+        let src = indoc!(
+            r#"
+            q = \x -> 
+                    case x when
+                        0 -> 0
+                        _ -> p (x - 1)
+
+            p = \x -> 
+                    case x when
+                        0 -> 0
+                        _ -> q (x - 1)
+
+            0
+        "#
+        );
+        let arena = Bump::new();
+        let (actual, _output, _problems, _subs, _vars) =
+            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Recursive::Recursive);
+
+        let detected = get_closure(&actual, 1);
+        assert_eq!(detected, Recursive::Recursive);
     }
 
     //#[test]

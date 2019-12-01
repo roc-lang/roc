@@ -303,9 +303,11 @@ fn canonicalize_expr(
                     // something like ((\a b -> a + b) 1 2).
                     output.references.calls.insert(sym.clone());
 
-                    // we're tail-calling a symbol by name
-                    // TODO re-enable tail-call detection
-                    // output.tail_call = Some(sym.clone());
+                    // we're tail-calling a symbol by name, check if it's the tail-callable symbol
+                    output.tail_call = match &env.tailcallable_symbol {
+                        Some(tc_sym) if tc_sym == sym => Some(sym.clone()),
+                        Some(_) | None => None,
+                    };
 
                     Call(Box::new(fn_expr.value), args, *application_style)
                 }
@@ -462,6 +464,8 @@ fn canonicalize_expr(
             // index (0-based) of the closure within that declaration.
             //
             // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
+            //
+            // In the case of `foo = \x y -> ...`, the symbol is later changed to `foo`.
             let symbol = scope.gen_unique_symbol();
 
             // The body expression gets a new scope for canonicalization.
@@ -596,7 +600,9 @@ fn canonicalize_expr(
                 NoExpectation(cond_type.clone()),
             );
 
-            let mut recorded_tail_call = false;
+            // the condition can never be a tail-call
+            output.tail_call = None;
+
             let mut can_branches = Vec::with_capacity(branches.len());
             let mut constraints = Vec::with_capacity(branches.len() + 1);
             let expr_con = output.constraint.clone();
@@ -627,7 +633,6 @@ fn canonicalize_expr(
                                     typ.clone(),
                                 ),
                                 &mut output,
-                                &mut recorded_tail_call,
                             );
 
                         output.references = output.references.union(branch_references);
@@ -673,7 +678,6 @@ fn canonicalize_expr(
                                     region,
                                 ),
                                 &mut output,
-                                &mut recorded_tail_call,
                             );
 
                         output.references = output.references.union(branch_references);
@@ -810,7 +814,6 @@ fn canonicalize_case_branch<'a>(
     pattern_expected: PExpected<Type>,
     expr_expected: Expected<Type>,
     output: &mut Output,
-    recorded_tail_call: &mut bool,
 ) -> (Located<Pattern>, Located<Expr>, Constraint, References) {
     // Each case branch gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the
@@ -840,21 +843,11 @@ fn canonicalize_case_branch<'a>(
         expr_expected,
     );
 
-    // If all branches are tail calling the same symbol, then so is the conditional as a whole.
-    if !*recorded_tail_call {
-        match branch_output.tail_call {
-            Some(call) => {
-                // If we haven't recorded output.tail_call yet, record it.
-                output.tail_call = Some(call);
-                *recorded_tail_call = true;
-            }
-            None => output.tail_call = None,
-        };
-    } else if branch_output.tail_call != output.tail_call {
-        // If we recorded output.tail_call, but what we recorded differs from what we just saw,
-        // then game over. This can't possibly be a self tail call!
-        output.tail_call = None;
-    }
+    // If we already recorded a tail call then keep it, else use this branch's tail call
+    match output.tail_call {
+        Some(_) => {}
+        None => output.tail_call = branch_output.tail_call,
+    };
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
@@ -935,7 +928,7 @@ fn call_successors<'a>(
     call_symbol: &'a Symbol,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
-    // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 procedures reference each other; may need to track visited procedures!
+    // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 definitions reference each other; may need to track visited definitions!
     match closures.get(call_symbol) {
         Some(references) => {
             let mut answer = local_successors(&references, closures);
@@ -1084,7 +1077,7 @@ where
             answer
         }
         None => {
-            // If the call symbol was not in the procedures map, that means we're calling a non-function and
+            // If the call symbol was not in the closure map, that means we're calling a non-function and
             // will get a type mismatch later. For now, assume no references as a result of the "call."
             References::new()
         }
@@ -1332,6 +1325,40 @@ fn pattern_from_def<'a>(def: &'a Def<'a>) -> Option<&'a Located<ast::Pattern<'a>
     }
 }
 
+fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) -> Recursive {
+    let mut visited = MutSet::default();
+
+    let mut stack = Vec::new();
+
+    if let Some(references) = closures.get(&symbol) {
+        for v in &references.calls {
+            stack.push(v.clone());
+        }
+
+        // while there are symbols left to visit
+        while let Some(nested_symbol) = stack.pop() {
+            if nested_symbol.clone() == symbol {
+                return Recursive::Recursive;
+            }
+
+            // if the called symbol not yet in the graph
+            if !visited.contains(&nested_symbol) {
+                // add it to the visited set
+                // if it calls any functions
+                if let Some(nested_references) = closures.get(&nested_symbol) {
+                    // add its called to the stack
+                    for v in &nested_references.calls {
+                        stack.push(v.clone());
+                    }
+                }
+                visited.insert(nested_symbol);
+            }
+        }
+    }
+
+    Recursive::NotRecursive
+}
+
 #[inline(always)]
 fn can_defs<'a>(
     rigids: &Rigids,
@@ -1372,7 +1399,7 @@ fn can_defs<'a>(
 
         // Each def gets to have all the idents in scope that are defined in this
         // block. Order of defs doesn't matter, thanks to referential transparency!
-        let (opt_loc_pattern, (mut loc_can_expr, can_output)) = match loc_def.value {
+        let (_opt_loc_pattern, (_loc_can_expr, _can_output)) = match loc_def.value {
             Def::Annotation(ref _loc_pattern, ref loc_annotation) => {
                 // TODO implement this:
                 //
@@ -1402,8 +1429,62 @@ fn can_defs<'a>(
 
                 (None, (loc_expr, Output::new(True)))
             }
+            // If we have a pattern, then the def has a body (that is, it's not a
+            // standalone annotation), so we need to canonicalize the pattern and expr.
             Def::Body(ref loc_pattern, loc_expr) => {
-                let (loc_can_expr, output) = canonicalize_expr(
+                // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+                // (However, still include it in scope, because you *can* recursively refer to yourself.)
+                let mut shadowable_idents = scope.idents.clone();
+                remove_idents(&loc_pattern.value, &mut shadowable_idents);
+
+                let pattern_var = subs.mk_flex_var();
+                let pattern_type = Type::Variable(pattern_var);
+                let pattern_expected = PExpected::NoExpectation(pattern_type);
+
+                let mut state = PatternState {
+                    headers: ImMap::default(),
+                    vars: Vec::with_capacity(1),
+                    constraints: Vec::with_capacity(1),
+                };
+
+                let loc_can_pattern = canonicalize_pattern(
+                    env,
+                    &mut state,
+                    subs,
+                    &mut scope,
+                    Assignment,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    &mut shadowable_idents,
+                    pattern_expected,
+                );
+
+                flex_info.vars.push(pattern_var);
+
+                // Any time there's a lookup on this symbol in the outer Let,
+                // it should result in this expression's type. After all, this
+                // is the type to which this symbol is defined!
+                add_pattern_to_lookup_types(
+                    &scope,
+                    // TODO can we we avoid this clone?
+                    loc_pattern.clone(),
+                    &mut flex_info.def_types,
+                    expr_type.clone(),
+                );
+
+                // bookkeeping for tail-call detection. If we're assigning to an
+                // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
+                let outer_identifier = env.tailcallable_symbol.clone();
+
+                if let (
+                    &ast::Pattern::Identifier(ref _name),
+                    &Pattern::Identifier(_, ref defined_symbol),
+                ) = (&loc_pattern.value, &loc_can_pattern.value)
+                {
+                    env.tailcallable_symbol = Some(defined_symbol.clone());
+                };
+
+                let (mut loc_can_expr, can_output) = canonicalize_expr(
                     rigids,
                     env,
                     subs,
@@ -1413,7 +1494,120 @@ fn can_defs<'a>(
                     NoExpectation(expr_type.clone()),
                 );
 
-                (Some(loc_pattern), (loc_can_expr, output))
+                // reset the tailcallable_symbol
+                env.tailcallable_symbol = outer_identifier;
+
+                flex_info.constraints.push(Let(Box::new(LetConstraint {
+                    rigid_vars: Vec::new(),
+                    flex_vars: state.vars,
+                    def_types: state.headers,
+                    defs_constraint: And(state.constraints),
+                    ret_constraint: can_output.constraint.clone(),
+                })));
+
+                // see below: a closure needs a fresh References!
+                let mut is_closure = false;
+
+                // First, make sure we are actually assigning an identifier instead of (for example) a variant.
+                //
+                // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
+                // which also implies it's not a self tail call!
+                //
+                // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
+                if let (
+                    &ast::Pattern::Identifier(ref _name),
+                    &Pattern::Identifier(_, ref defined_symbol),
+                    &Closure(ref symbol, _, ref arguments, ref body),
+                ) = (
+                    &loc_pattern.value,
+                    &loc_can_pattern.value,
+                    &loc_can_expr.value.clone(),
+                ) {
+                    is_closure = true;
+
+                    // Since everywhere in the code it'll be referred to by its defined name,
+                    // remove its generated name from the closure map. (We'll re-insert it later.)
+                    let references = env.closures.remove(&symbol).unwrap_or_else(|| {
+                        panic!(
+                        "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
+                        symbol, env.closures
+                    )
+                    });
+
+                    // Re-insert the closure into the map, under its defined name.
+                    // closures don't have a name, and therefore pick a fresh symbol. But in this
+                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
+                    // and we want to reference it by that name.
+                    env.closures.insert(defined_symbol.clone(), references);
+
+                    // The closure is self tail recursive iff it tail calls itself (by defined name).
+                    let is_recursive = match can_output.tail_call {
+                        Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
+                        _ => Recursive::NotRecursive,
+                    };
+
+                    // Recursion doesn't count as referencing. (If it did, all recursive functions
+                    // would result in circular def errors!)
+                    refs_by_def
+                        .entry(defined_symbol.clone())
+                        .and_modify(|(_, refs)| {
+                            refs.locals = refs.locals.without(defined_symbol);
+                        });
+
+                    // renamed_closure_def = Some(&defined_symbol);
+                    loc_can_expr.value = Closure(
+                        symbol.clone(),
+                        is_recursive,
+                        arguments.clone(),
+                        body.clone(),
+                    );
+                }
+
+                let mut defined_symbols = Vec::new();
+
+                // Store the referenced locals in the refs_by_def map, so we can later figure out
+                // which defined names reference each other.
+                for (ident, (symbol, region)) in
+                    idents_from_patterns(std::iter::once(loc_pattern), &scope)
+                {
+                    let refs =
+                    // Functions' references don't count in defs.
+                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                    // parent commit for the bug this fixed!
+                    if is_closure {
+                        References::new()
+                    } else {
+                        can_output.references.clone()
+                    };
+
+                    refs_by_def.insert(
+                        symbol.clone(),
+                        (
+                            Located {
+                                value: ident,
+                                region,
+                            },
+                            refs,
+                        ),
+                    );
+
+                    defined_symbols.push(symbol.clone());
+                }
+
+                for symbol in defined_symbols {
+                    can_defs_by_symbol.insert(
+                        symbol,
+                        (
+                            loc_can_pattern.clone(),
+                            Located {
+                                region: loc_can_expr.region,
+                                value: loc_can_expr.value.clone(),
+                            },
+                        ),
+                    );
+                }
+
+                (Some(loc_pattern), (loc_can_expr, can_output))
             }
             Def::CustomType(_, _) => {
                 panic!("TODO error - custom types can only be defined at the toplevel")
@@ -1424,157 +1618,6 @@ fn can_defs<'a>(
             Def::SpaceBefore(_, _) => panic!("TODO support SpaceBefore in canonical defs"),
             Def::SpaceAfter(_, _) => panic!("TODO support SpaceAfter in canonical defs"),
         };
-
-        // If we have a pattern, then the def has a body (that is, it's not a
-        // standalone annotation), so we need to canonicalize the pattern and expr.
-        if let Some(loc_pattern) = opt_loc_pattern {
-            // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-            // (However, still include it in scope, because you *can* recursively refer to yourself.)
-            let mut shadowable_idents = scope.idents.clone();
-            remove_idents(&loc_pattern.value, &mut shadowable_idents);
-
-            let pattern_var = subs.mk_flex_var();
-            let pattern_type = Type::Variable(pattern_var);
-            let pattern_expected = PExpected::NoExpectation(pattern_type);
-
-            let mut state = PatternState {
-                headers: ImMap::default(),
-                vars: Vec::with_capacity(1),
-                constraints: Vec::with_capacity(1),
-            };
-
-            let loc_can_pattern = canonicalize_pattern(
-                env,
-                &mut state,
-                subs,
-                &mut scope,
-                Assignment,
-                &loc_pattern.value,
-                loc_pattern.region,
-                &mut shadowable_idents,
-                pattern_expected,
-            );
-
-            flex_info.vars.push(pattern_var);
-
-            // Any time there's a lookup on this symbol in the outer Let,
-            // it should result in this expression's type. After all, this
-            // is the type to which this symbol is defined!
-            add_pattern_to_lookup_types(
-                &scope,
-                // TODO can we we avoid this clone?
-                loc_pattern.clone(),
-                &mut flex_info.def_types,
-                expr_type.clone(),
-            );
-
-            flex_info.constraints.push(Let(Box::new(LetConstraint {
-                rigid_vars: Vec::new(),
-                flex_vars: state.vars,
-                def_types: state.headers,
-                defs_constraint: And(state.constraints),
-                ret_constraint: can_output.constraint.clone(),
-            })));
-
-            // see below: a closure needs a fresh References!
-            let mut is_closure = false;
-
-            // First, make sure we are actually assigning an identifier instead of (for example) a variant.
-            //
-            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
-            // which also implies it's not a self tail call!
-            //
-            // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let (
-                &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(_, ref defined_symbol),
-                &Closure(ref symbol, _, ref arguments, ref body),
-            ) = (
-                &loc_pattern.value,
-                &loc_can_pattern.value,
-                &loc_can_expr.value.clone(),
-            ) {
-                is_closure = true;
-
-                // Since everywhere in the code it'll be referred to by its defined name,
-                // remove its generated name from the procedure map. (We'll re-insert it later.)
-                let references = env.closures.remove(&symbol).unwrap_or_else(|| {
-                    panic!(
-                        "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                        symbol, env.closures
-                    )
-                });
-
-                // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
-                    _ => Recursive::NotRecursive,
-                };
-                // Re-insert the procedure into the map, under its defined name. This way,
-                // when code elsewhere calls it by defined name, it'll resolve properly.
-                env.closures.insert(defined_symbol.clone(), references);
-
-                // Recursion doesn't count as referencing. (If it did, all recursive functions
-                // would result in circular def errors!)
-                refs_by_def
-                    .entry(defined_symbol.clone())
-                    .and_modify(|(_, refs)| {
-                        refs.locals = refs.locals.without(defined_symbol);
-                    });
-
-                // renamed_closure_def = Some(&defined_symbol);
-                loc_can_expr.value = Closure(
-                    symbol.clone(),
-                    is_recursive,
-                    arguments.clone(),
-                    body.clone(),
-                );
-            }
-
-            let mut defined_symbols = Vec::new();
-
-            // Store the referenced locals in the refs_by_def map, so we can later figure out
-            // which defined names reference each other.
-            for (ident, (symbol, region)) in
-                idents_from_patterns(std::iter::once(loc_pattern), &scope)
-            {
-                let refs =
-                    // Functions' references don't count in defs.
-                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-                    // parent commit for the bug this fixed!
-                    if is_closure {
-                        References::new()
-                    } else {
-                        can_output.references.clone()
-                    };
-
-                refs_by_def.insert(
-                    symbol.clone(),
-                    (
-                        Located {
-                            value: ident,
-                            region,
-                        },
-                        refs,
-                    ),
-                );
-
-                defined_symbols.push(symbol.clone());
-            }
-
-            for symbol in defined_symbols {
-                can_defs_by_symbol.insert(
-                    symbol,
-                    (
-                        loc_can_pattern.clone(),
-                        Located {
-                            region: loc_can_expr.region,
-                            value: loc_can_expr.value.clone(),
-                        },
-                    ),
-                );
-            }
-        }
     }
 
     // The def as a whole is a tail call iff its return expression is a tail call.
@@ -1699,6 +1742,17 @@ fn can_defs<'a>(
                 .rev()
             {
                 if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
+                    // Determine recursivity of closures that are not tail-recursive
+                    if let Closure(name, Recursive::NotRecursive, args, body) =
+                        can_def.1.value.clone()
+                    {
+                        let recursion = closure_recursivity(symbol.clone(), &env.closures);
+
+                        let mut new_def = can_def.clone();
+                        new_def.1.value = Closure(name, recursion, args, body);
+                        can_defs.push(new_def);
+                        continue;
+                    }
                     can_defs.push(can_def.clone());
                 }
             }
