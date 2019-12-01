@@ -29,7 +29,7 @@ pub trait UnificationStore:
 
     fn values_since_snapshot(&self, snapshot: &Self::Snapshot) -> Range<usize>;
 
-    fn reset_unifications(&mut self, value: impl FnMut(u32) -> VarValue<Self::Key>);
+    fn reset_unifications(&mut self, value: impl FnMut(usize) -> VarValue<Self::Key>);
 
     fn len(&self) -> usize;
 
@@ -90,8 +90,8 @@ impl<K: UnifyKey> UnificationStore for InPlace<K> {
     }
 
     #[inline]
-    fn reset_unifications(&mut self, mut value: impl FnMut(u32) -> VarValue<Self::Key>) {
-        self.values.set_all(|i| value(i as u32));
+    fn reset_unifications(&mut self, mut value: impl FnMut(usize) -> VarValue<Self::Key>) {
+        self.values.set_all(|i| value(i));
     }
 
     fn len(&self) -> usize {
@@ -182,12 +182,12 @@ impl<K: UnifyKey> UnificationStore for Persistent<K> {
     }
 
     #[inline]
-    fn reset_unifications(&mut self, mut value: impl FnMut(u32) -> VarValue<Self::Key>) {
+    fn reset_unifications(&mut self, mut value: impl FnMut(usize) -> VarValue<Self::Key>) {
         // Without extending dogged, there isn't obviously a more
         // efficient way to do this. But it's pretty dumb. Maybe
         // dogged needs a `map`. [NOTE: revisit in light of replacing dogged with im_rc!]
         for i in 0..self.values.len() {
-            self.values[i] = value(i as u32);
+            self.values[i] = value(i);
         }
     }
 

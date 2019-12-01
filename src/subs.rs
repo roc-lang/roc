@@ -9,10 +9,10 @@ pub struct Subs {
 }
 
 #[derive(Copy, PartialEq, Eq, Clone, Hash)]
-pub struct Variable(u32);
+pub struct Variable(usize);
 
 impl Variable {
-    pub fn new_for_testing_only(num: u32) -> Self {
+    pub fn new_for_testing_only(num: usize) -> Self {
         // This is a hack that should only ever be used for testing!
         Variable(num)
     }
@@ -27,11 +27,11 @@ impl fmt::Debug for Variable {
 impl UnifyKey for Variable {
     type Value = Descriptor;
 
-    fn index(&self) -> u32 {
+    fn index(&self) -> usize {
         self.0
     }
 
-    fn from_index(index: u32) -> Self {
+    fn from_index(index: usize) -> Self {
         Variable(index)
     }
 
