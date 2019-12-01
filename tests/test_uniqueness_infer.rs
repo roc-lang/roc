@@ -12,21 +12,19 @@ mod helpers;
 mod test_infer {
     use crate::helpers::uniq_expr;
     use roc::infer::infer_expr;
-    use roc::infer::infer_uniq;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
 
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (output2, output1, _, var_store1, variable1, env, var_store2, variable2) =
-            uniq_expr(src);
+        let (output2, output1, _, var_store1, variable1, var_store2, variable2) = uniq_expr(src);
 
         let mut subs1 = Subs::new(var_store1.into());
         let mut subs2 = Subs::new(var_store2.into());
 
         let content1 = infer_expr(&mut subs1, &output1.constraint, variable1);
-        let content2 = infer_uniq(&mut subs2, &env, &output2.constraint, variable2);
+        let content2 = infer_expr(&mut subs2, &output2.constraint, variable2);
 
         name_all_type_vars(variable1, &mut subs1);
         name_all_type_vars(variable2, &mut subs2);

@@ -54,7 +54,6 @@ pub fn uniq_expr(
     Vec<Problem>,
     VarStore,
     Variable,
-    roc::uniqueness::Env,
     VarStore,
     Variable,
 ) {
@@ -80,7 +79,6 @@ pub fn uniq_expr_with(
     Vec<Problem>,
     VarStore,
     Variable,
-    roc::uniqueness::Env,
     VarStore,
     Variable,
 ) {
@@ -112,10 +110,8 @@ pub fn uniq_expr_with(
 
     let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
-    let (output2, env) = roc::uniqueness::canonicalize_declaration(
+    let output2 = roc::uniqueness::canonicalize_declaration(
         &var_store2,
-        home.into(),
-        name.into(),
         Region::zero(),
         loc_expr,
         declared_idents,
@@ -126,7 +122,7 @@ pub fn uniq_expr_with(
     dbg!(output.constraint.clone());
     dbg!(output2.constraint.clone());
     (
-        output2, output, problems, var_store1, variable, env, var_store2, variable2,
+        output2, output, problems, var_store1, variable, var_store2, variable2,
     )
 }
 
