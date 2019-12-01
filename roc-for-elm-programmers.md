@@ -850,3 +850,24 @@ Some differences to note:
 * `Sort` works [like this](https://package.elm-lang.org/packages/rtfeldman/elm-sorter-experiment/2.1.1/Sort). It's only for `List`, but it's important enough to be one of the standard modules - not only so that lists can be sortable without needing to install a separate package, but also because it demonstrates the "decoder pattern" of API design using opaque types.
 
 ## Operator Desugaring Table
+
+| Expression     | Desugars to      |
+| -------------- | ---------------- |
+| a + b          | Num.add a b      |
+| a - b          | Num.sub a b      |
+| a * b          | Num.mul a b      |
+| a / b          | Float.div a b    |
+| a // b         | Int.div a b      |
+| a ^ b          | Num.pow a b      |
+| a % b          | Float.rem a b    |
+| a %% b         | Float.mod a b    |
+| -a             | Num.neg a        |
+| -f x y         | Num.neg (f x y)  |
+| a == b         | Bool.isEq a b    |
+| a != b         | Bool.isNotEq a b |
+| a && b         | Bool.and a b     |
+| a || b         | Bool.or a b      |
+| !a             | Bool.not a       |
+| !f x y         | Bool.not (f x y) |
+| a |> b         | b a              |
+| a b c |> f x y | f (a b c) x y    |
