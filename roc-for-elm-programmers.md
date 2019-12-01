@@ -35,7 +35,7 @@ needs to be a string already. Arbitrary expressions are not allowed, which means
 weird situations like string literals inside string literals do not come up.
 
 Roc strings also have the type `Str` rather than Elm's `String`. This is to make
-common qualified operations like `Str.len` more concise; the idea is that you'll use the
+common qualified operations like `Str.toInt` more concise; the idea is that you'll use the
 abbreviation often enough that you'll quickly get used to it. (I got used to [`str` in
 Rust](https://doc.rust-lang.org/std/primitive.str.html) very quickly.)
 
@@ -226,10 +226,10 @@ Now let's say I do a pattern match with no type annotations.
 ```elm
 case foo when
     MyInt num -> num + 1
-    MyStr str -> Str.len str
+    MyFloat float -> Float.round float
 ```
 
-The inferred type of this expression would be `[ MyInt Int, MyStr Str ]`,
+The inferred type of this expression would be `[ MyInt Int, MyFloat Float ]`,
 based on its usage.
 
 > As with OCaml's polymorphic variants, exhaustiveness checking is still in full effect here.
@@ -246,16 +246,16 @@ x = Foo
 y : [ Bar Str ]*
 y = Bar "hi!"
 
-toInt : [ Foo, Bar Str ] -> Int
+toInt : [ Foo, Bar Float ] -> Int
 toInt = \tag ->
     case tag when
         Foo -> 1
-        Bar str -> Str.len str
+        Bar float -> Float.round float
 ```
 
 Each of these type annotations includes a *tag union* - a collection of tags bracketed by `[` and `]`.
 
-* The type `[ Foo, Bar Str ]` is a **closed** tag union.
+* The type `[ Foo, Bar Float ]` is a **closed** tag union.
 * The type `[ Foo ]*` is an **open** tag union.
 
 You can pass `x` to `toInt` because an open tag union is type-compatible with
