@@ -30,9 +30,9 @@ impl VarStore {
     }
 }
 
-impl Into<Variable> for VarStore {
-    fn into(self) -> Variable {
-        Variable(self.next.into_inner())
+impl Into<usize> for VarStore {
+    fn into(self) -> usize {
+        self.next.into_inner()
     }
 }
 
@@ -69,10 +69,20 @@ impl UnifyKey for Variable {
 }
 
 impl Subs {
-    pub fn new() -> Self {
-        Subs {
+    pub fn new(entries: usize) -> Self {
+        let mut subs = Subs {
             utable: UnificationTable::default(),
+        };
+
+        // TODO There are at least these opportunities for performance optimization here:
+        //
+        // * Initializing the backing vec using with_capacity instead of default()
+        // * Making the default flex_var_descriptor be all 0s, so no init step is needed.
+        for _ in 0..entries {
+            subs.utable.new_key(flex_var_descriptor());
         }
+
+        subs
     }
 
     pub fn fresh(&mut self, value: Descriptor) -> Variable {
@@ -104,10 +114,6 @@ impl Subs {
         let unified = unify::unify_var_val(self, l_key, &r_value);
 
         self.utable.update_value(l_key, |node| node.value = unified);
-    }
-
-    pub fn mk_flex_var(&mut self) -> Variable {
-        self.fresh(flex_var_descriptor())
     }
 
     pub fn copy_var(&mut self, var: Variable) -> Variable {
