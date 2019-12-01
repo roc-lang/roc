@@ -2,10 +2,38 @@ use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types::Problem;
 use crate::unify;
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Default)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
+}
+
+pub struct VarStore {
+    next: AtomicUsize,
+}
+
+impl VarStore {
+    pub fn new() -> Self {
+        VarStore {
+            next: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn fresh(&self) -> Variable {
+        // Increment the counter and return the previous value.
+        //
+        // Since the counter starts at 0, this will return 0 on first invocation,
+        // and var_store.into() will return the number of Variables distributed
+        // (in this case, 1).
+        Variable(AtomicUsize::fetch_add(&self.next, 1, Ordering::Relaxed))
+    }
+}
+
+impl Into<Variable> for VarStore {
+    fn into(self) -> Variable {
+        Variable(self.next.into_inner())
+    }
 }
 
 #[derive(Copy, PartialEq, Eq, Clone, Hash)]

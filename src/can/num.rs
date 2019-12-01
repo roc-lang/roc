@@ -4,7 +4,7 @@ use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError::*;
 use crate::constrain;
 use crate::region::Region;
-use crate::subs::Subs;
+use crate::subs::VarStore;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected;
 use crate::types::Type;
@@ -12,7 +12,7 @@ use std::i64;
 
 #[inline(always)]
 pub fn int_expr_from_result(
-    subs: &mut Subs,
+    var_store: &VarStore,
     result: Result<i64, &str>,
     env: &mut Env,
     expected: Expected<Type>,
@@ -20,7 +20,7 @@ pub fn int_expr_from_result(
 ) -> (Constraint, Expr) {
     match result {
         Ok(int) => (
-            constrain::int_literal(subs, expected, region),
+            constrain::int_literal(var_store, expected, region),
             Expr::Int(int),
         ),
         Err(raw) => {
@@ -35,7 +35,7 @@ pub fn int_expr_from_result(
 
 #[inline(always)]
 pub fn float_expr_from_result(
-    subs: &mut Subs,
+    var_store: &VarStore,
     result: Result<f64, &str>,
     env: &mut Env,
     expected: Expected<Type>,
@@ -43,7 +43,7 @@ pub fn float_expr_from_result(
 ) -> (Constraint, Expr) {
     match result {
         Ok(float) => (
-            constrain::float_literal(subs, expected, region),
+            constrain::float_literal(var_store, expected, region),
             Expr::Float(float),
         ),
         Err(raw) => {

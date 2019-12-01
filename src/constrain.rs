@@ -1,6 +1,6 @@
 use crate::collections::ImMap;
 use crate::region::Region;
-use crate::subs::{Subs, Variable};
+use crate::subs::{VarStore, Variable};
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
 use crate::types::Type::{self, *};
@@ -16,30 +16,30 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
     }))
 }
 
-pub fn int_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
+pub fn int_literal(var_store: &VarStore, expected: Expected<Type>, region: Region) -> Constraint {
     let typ = number_literal_type("Int", "Integer");
     let reason = Reason::IntLiteral;
 
-    num_literal(subs, typ, reason, expected, region)
+    num_literal(var_store, typ, reason, expected, region)
 }
 
 #[inline(always)]
-pub fn float_literal(subs: &mut Subs, expected: Expected<Type>, region: Region) -> Constraint {
+pub fn float_literal(var_store: &VarStore, expected: Expected<Type>, region: Region) -> Constraint {
     let typ = number_literal_type("Float", "FloatingPoint");
     let reason = Reason::FloatLiteral;
 
-    num_literal(subs, typ, reason, expected, region)
+    num_literal(var_store, typ, reason, expected, region)
 }
 
 #[inline(always)]
 fn num_literal(
-    subs: &mut Subs,
+    var_store: &VarStore,
     literal_type: Type,
     reason: Reason,
     expected: Expected<Type>,
     region: Region,
 ) -> Constraint {
-    let num_var = subs.mk_flex_var();
+    let num_var = var_store.fresh();
     let num_type = Variable(num_var);
     let expected_literal = ForReason(reason, literal_type, region);
 
