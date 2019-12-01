@@ -333,6 +333,28 @@ includes in its union."
 
 > The Roc type `[]` is equivalent to Elm's `Never`. You can never satisfy it!
 
+One final note about tags: *tag application* is not the same as *function application*,
+the way it is with Elm's variants. For example:
+
+* `foo bar` is function application, because `foo` is lowercase.
+* `Foo bar` is tag application, because `Foo` is uppercase.
+
+So this wouldn't compile:
+
+```
+foo : [ Foo ]*
+foo = Foo
+
+foo bar
+```
+
+You can't "call" the type `[ Foo ]*` because it's not a function.
+
+In practical terms, this also means you can't do `|> Decode.map UserId`
+because `UserId` is not a function, and `map` expects a function.
+This code would work in Elm, but in Roc you'd need to use an anonymous function -
+e.g. `|> Decode.map (\val -> UserId val)`. Trade-offs!
+
 ## Opaque Types
 
 The tags discussed in the previous section are globally available, which means
