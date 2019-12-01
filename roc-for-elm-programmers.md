@@ -311,12 +311,18 @@ Here's `Maybe` defined using tags:
 Maybe a : [ Just a, Nothing ]
 ```
 
-You can also use tags to define recursive data structures, and name them, by using the `as`
-keyword in your type alias. (This is exactly how OCaml supports recursive polymorphic variants.)
+You can also use tags to define recursive data structures, because recursive
+type aliases are allowed as long as the recursion happens within a tag. For example:
 
 ```elm
-LinkedList elem : [ Nil, Cons elem list ] as list
+LinkedList a : [ Nil, Cons a (LinkedList a) ]
 ```
+
+> Inferred recursive tags use the `as` keyword, which is what OCaml does to
+> display inferred types of recursive polymorphic variants. For example, the
+> inferred version of the above type alias would be:
+>
+> `[ Nil, Cons a b ] as b`
  
 The `*` in open tag unions is actually an unbound ("wildcard") type variable. 
 It can be bound too, with a lowercase letter like any other bound type variable. 
