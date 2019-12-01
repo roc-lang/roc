@@ -1,30 +1,33 @@
-use crate::can::symbol::Symbol;
-use crate::can::expr::Expr;
-use crate::can::pattern::Pattern;
 use crate::can::canonicalize_module_defs;
-use crate::collections::{SendSet, ImMap};
+use crate::can::expr::Expr;
+use crate::can::module::Module;
+use crate::can::pattern::Pattern;
+use crate::can::symbol::Symbol;
+use crate::collections::{ImMap, SendSet};
 use crate::module::ModuleName;
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
-use im::Vector;
+use crate::subs::VarStore;
 use bumpalo::Bump;
-use tokio::fs::read_to_string;
-use tokio::sync::mpsc::{self, Sender, Receiver};
+use futures::future::join_all;
+use im::Vector;
 use std::io;
 use std::path::{Path, PathBuf};
-use crate::can::module::Module;
-use futures::future::join_all;
+use std::sync::Arc;
+use tokio::fs::read_to_string;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 
 pub struct Loaded {
     pub requested_module: LoadedModule,
+    pub vars_created: usize,
     pub deps: Deps,
 }
 
 #[derive(Debug, Clone)]
 struct Env {
-    pub src_dir: PathBuf
+    pub src_dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -51,13 +54,16 @@ pub enum LoadedModule {
 /// 5. Parse the module's defs.
 /// 6. Canonicalize the module.
 pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
-    let env = Env { src_dir: src_dir.clone() };
+    let env = Env {
+        src_dir: src_dir.clone(),
+    };
     let (tx, mut rx): (Sender<Deps>, Receiver<Deps>) = mpsc::channel(1024);
+    let arc_var_store = Arc::new(VarStore::new());
 
     let main_tx = tx.clone();
-    let handle = tokio::spawn(async move {
-        load_filename(&env, &filename, main_tx).await
-    });
+    let var_store = Arc::clone(&arc_var_store);
+    let handle =
+        tokio::spawn(async move { load_filename(&env, &filename, main_tx, &var_store).await });
 
     let requested_module = handle.await.expect("Unable to load requested module.");
     let mut other_modules = Vec::new();
@@ -78,14 +84,14 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
         // We don't want to accidentally process them more than once!
         all_deps = all_deps.union(deps_to_load.clone());
 
-        let loaded_modules = join_all(deps_to_load.into_iter().map(|dep|{
+        let loaded_modules = join_all(deps_to_load.into_iter().map(|dep| {
             let env = env.clone();
             let tx = tx.clone();
+            let var_store = Arc::clone(&arc_var_store);
 
-            tokio::spawn(async move {
-                load_module(&env, dep, tx).await
-            })
-        })).await;
+            tokio::spawn(async move { load_module(&env, dep, tx, &var_store).await })
+        }))
+        .await;
 
         for module in loaded_modules {
             other_modules.push(module.expect("Unable to load dependent module"));
@@ -97,14 +103,23 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
         }
     }
 
-    println!("= = = = = = = = = = = = = = = = = = = = = = = = finished!");
-    println!("\n\nmain module: {:?}", requested_module);
-    println!("\n\nother modules: {:?}", other_modules);
+    let vars_created: usize = Arc::try_unwrap(arc_var_store)
+        .expect("TODO better error for Arc being unable to unwrap")
+        .into();
 
-    Loaded { requested_module, deps: all_deps }
+    Loaded {
+        requested_module,
+        deps: all_deps,
+        vars_created,
+    }
 }
 
-async fn load_module(env: &Env, module_name: Box<str>, tx: Sender<Deps>) -> LoadedModule {
+async fn load_module(
+    env: &Env,
+    module_name: Box<str>,
+    tx: Sender<Deps>,
+    var_store: &VarStore,
+) -> LoadedModule {
     let mut filename = PathBuf::new();
 
     filename.push(env.src_dir.clone());
@@ -117,10 +132,15 @@ async fn load_module(env: &Env, module_name: Box<str>, tx: Sender<Deps>) -> Load
     // End with .roc
     filename.set_extension("roc");
 
-    load_filename(env, &filename, tx).await
+    load_filename(env, &filename, tx, var_store).await
 }
 
-async fn load_filename(env: &Env, filename: &Path, tx: Sender<Deps>) -> LoadedModule {
+async fn load_filename(
+    env: &Env,
+    filename: &Path,
+    tx: Sender<Deps>,
+    var_store: &VarStore,
+) -> LoadedModule {
     match read_to_string(filename).await {
         Ok(src) => {
             let arena = Bump::new();
@@ -143,7 +163,12 @@ async fn load_filename(env: &Env, filename: &Path, tx: Sender<Deps>) -> LoadedMo
                     let mut deps = SendSet::default();
 
                     for loc_entry in header.imports {
-                        deps.insert(load_import(env, loc_entry.region, &loc_entry.value, &mut scope));
+                        deps.insert(load_import(
+                            env,
+                            loc_entry.region,
+                            &loc_entry.value,
+                            &mut scope,
+                        ));
                     }
 
                     tokio::spawn(async move {
@@ -154,8 +179,17 @@ async fn load_filename(env: &Env, filename: &Path, tx: Sender<Deps>) -> LoadedMo
                         tx.send(deps).await.unwrap();
                     });
 
-                    let defs = parse_and_canonicalize_defs(&arena,  state, declared_name.clone(), &mut scope);
-                    let module = Module { name: Some(declared_name), defs };
+                    let defs = parse_and_canonicalize_defs(
+                        &arena,
+                        state,
+                        declared_name.clone(),
+                        &mut scope,
+                        var_store,
+                    );
+                    let module = Module {
+                        name: Some(declared_name),
+                        defs,
+                    };
 
                     LoadedModule::Valid(module)
                 }
@@ -164,7 +198,12 @@ async fn load_filename(env: &Env, filename: &Path, tx: Sender<Deps>) -> LoadedMo
                     let mut deps = SendSet::default();
 
                     for loc_entry in header.imports {
-                        deps.insert(load_import(env, loc_entry.region, &loc_entry.value, &mut scope));
+                        deps.insert(load_import(
+                            env,
+                            loc_entry.region,
+                            &loc_entry.value,
+                            &mut scope,
+                        ));
                     }
 
                     tokio::spawn(async move {
@@ -176,7 +215,13 @@ async fn load_filename(env: &Env, filename: &Path, tx: Sender<Deps>) -> LoadedMo
                     });
 
                     // The app module has no declared name. Pass it as "".
-                    let defs = parse_and_canonicalize_defs(&arena, state, "".into(), &mut scope);
+                    let defs = parse_and_canonicalize_defs(
+                        &arena,
+                        state,
+                        "".into(),
+                        &mut scope,
+                        var_store,
+                    );
                     let module = Module { name: None, defs };
 
                     LoadedModule::Valid(module)
@@ -190,10 +235,18 @@ async fn load_filename(env: &Env, filename: &Path, tx: Sender<Deps>) -> LoadedMo
     }
 }
 
-fn parse_and_canonicalize_defs(arena: &Bump, state: State<'_>, home: Box<str>, scope: &mut ImMap<Box<str>, (Symbol, Region)>) -> Vector<(Located<Pattern>, Located<Expr>)> {
-    let (parsed_defs, _) = module_defs().parse(arena, state).expect("TODO gracefully handle parse error on module defs");
+fn parse_and_canonicalize_defs(
+    arena: &Bump,
+    state: State<'_>,
+    home: Box<str>,
+    scope: &mut ImMap<Box<str>, (Symbol, Region)>,
+    var_store: &VarStore,
+) -> Vector<(Located<Pattern>, Located<Expr>)> {
+    let (parsed_defs, _) = module_defs()
+        .parse(arena, state)
+        .expect("TODO gracefully handle parse error on module defs");
 
-    canonicalize_module_defs(arena, parsed_defs, home, scope)
+    canonicalize_module_defs(arena, parsed_defs, home, scope, var_store)
 }
 
 fn load_import(
@@ -226,7 +279,7 @@ fn expose(
     module_name: ModuleName<'_>,
     entry: &ExposesEntry<'_>,
     region: Region,
-)->  (Box<str>, (Symbol, Region)){
+) -> (Box<str>, (Symbol, Region)) {
     use crate::parse::ast::ExposesEntry::*;
 
     match entry {

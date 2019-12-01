@@ -52,9 +52,8 @@ pub fn canonicalize_module_defs<'a>(
     loc_defs: bumpalo::collections::Vec<'a, Located<Def<'a>>>,
     home: Box<str>,
     scope: &mut ImMap<Box<str>, (Symbol, Region)>,
+    var_store: &VarStore,
 ) -> Vector<(Located<Pattern>, Located<Expr>)> {
-    // TODO FIXME need to remove Subs from this - distribute Variables but don't make Subs yet!
-    let mut subs = Subs::new();
     let mut buf = Vector::new();
 
     for loc_def in loc_defs {
@@ -64,7 +63,7 @@ pub fn canonicalize_module_defs<'a>(
             loc_def.region,
             home.clone(),
             scope,
-            &mut subs,
+            var_store,
         ));
     }
 
@@ -77,15 +76,14 @@ fn canonicalize_def<'a>(
     region: Region,
     home: Box<str>,
     scope: &mut ImMap<Box<str>, (Symbol, Region)>,
-    // TODO FIXME need to remove Subs from this - distribute Variables but don't make Subs yet!
-    subs: &mut Subs,
+    var_store: &VarStore,
 ) -> (Located<Pattern>, Located<Expr>) {
     match def {
         Def::Annotation(_loc_pattern, _loc_ann) => {
             panic!("TODO canonicalize top-level annotations");
         }
         Def::Body(loc_pattern, loc_expr) => {
-            let variable = subs.mk_flex_var();
+            let variable = var_store.fresh();
             let expected = Expected::NoExpectation(Type::Variable(variable));
             let declared_idents = ImMap::default(); // TODO FIXME infer this from scope arg
             let declared_variants = ImMap::default(); // TODO get rid of this
@@ -108,7 +106,7 @@ fn canonicalize_def<'a>(
             let (loc_expr, _) = canonicalize_expr(
                 &ImMap::default(),
                 &mut env,
-                subs,
+                var_store,
                 &mut scope,
                 region,
                 &loc_expr.value,
@@ -120,7 +118,7 @@ fn canonicalize_def<'a>(
             let mut shadowable_idents = scope.idents.clone();
             remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-            let pattern_var = subs.mk_flex_var();
+            let pattern_var = var_store.fresh();
             let pattern_type = Type::Variable(pattern_var);
             let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
 
@@ -132,7 +130,7 @@ fn canonicalize_def<'a>(
             let loc_pattern = canonicalize_pattern(
                 &mut env,
                 &mut pattern_state,
-                subs,
+                var_store,
                 &mut scope,
                 PatternType::TopLevelDef,
                 &loc_pattern.value,
@@ -153,7 +151,7 @@ fn canonicalize_def<'a>(
         // Ignore spaces
         Def::SpaceBefore(def, _) | Def::SpaceAfter(def, _) => {
             // TODO FIXME performance disaster!!!
-            canonicalize_def(arena, def.clone(), region, home, scope, subs)
+            canonicalize_def(arena, def.clone(), region, home, scope, var_store)
         }
     }
 }
