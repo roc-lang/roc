@@ -159,6 +159,22 @@ always : a -> (* -> a)
 This makes unbound type variables easier to talk about out loud. Rather than saying
 (for example) "List a" or "Html msg with a lowercase m" you can say "List star" or "Html star".
 
+## case-expressions
+
+Roc's *case-expressions* are about the same as they are in Elm. Here are two differences:
+
+* Roc uses the syntax `case`...`when` instead of `case`...`of`
+* In Roc, you can use `|` to handle multiple patterns in the same way
+
+For example:
+
+```elm
+case color when
+    Blue -> 1
+    Green | Red | Yellow -> 2
+    Purple -> 3
+```
+
 ## Custom Types
 
 This is the biggest difference between Roc and Elm.
@@ -206,7 +222,6 @@ In the REPL above, `x`, `y`, and `z`, can all coexist in the same module even th
 they use `Foo` with different arities - and also with different types within the same arity.
 
 Now let's say I do a pattern match with no type annotations. 
-(Note that Roc uses the syntax `case`...`when` instead of `case`...`of`.)
 
 ```elm
 case foo when
