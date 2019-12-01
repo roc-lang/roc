@@ -41,6 +41,15 @@ pub enum LoadedModule {
     ParsingFailed(Fail),
 }
 
+/// The loading process works like this, starting from the given filename (e.g. "main.roc"):
+///
+/// 1. Open the file.
+/// 2. Parse the module's header.
+/// 3. For each of its imports, send a message on the channel to the coordinator thread, which
+///    will repeat this process to load that module - starting with step 1.
+/// 4. Add everything we were able to import unqualified to the module's default scope.
+/// 5. Parse the module's defs.
+/// 6. Canonicalize the module.
 pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
     let env = Env { src_dir: src_dir.clone() };
     let (tx, mut rx): (Sender<Deps>, Receiver<Deps>) = mpsc::channel(1024);
@@ -90,60 +99,7 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
     Loaded { requested_module, deps: all_deps }
 }
 
-/// The long-term plan is for the loading process to work like this, starting from main.roc:
-///
-/// 1. Open the file.
-/// 2. Parse its header.
-/// 3. For each of its imports, repeat this process starting with step 1.
-/// 4. Once a given import is finished parsing, we can process that import.
-/// 5. Processing an import entails checking what we want to import against what it exposes.
-/// 6. If anything we want to import unqualified is not exposed, record a problem.
-/// 7. Add everything we were able to import unqualified to the module's default scope.
-/// 8. Once all imports have been processed for this module, canonicalize it.
-///
-/// This would ideally be done using a parallel work-stealing scheduler like tokio_threadpool.
-/// However, a prerequisite of this is that we are able to canonicalize in parallel!
-///
-/// To canonicalize in parallel, we want to be able to generate Variables in parallel,
-/// which currently would require a Mutex on Subs. We can avoid that Mutex in one of two ways.
-///
-/// One way would be to give each thread in a thread pool a "starting id" -
-/// distributed into (usize::MAX / n) ranges.  For example, if there are 2 threads,
-/// the first thread gets to start at id 0, and the second thread starts at
-/// id (usize::MAX / 2). That way both of them can increment in parallel without colliding.
-/// (If we have 1024 threads running at once, on a 64-bit system, we still have
-/// over 1 quadrillion Variables per thread. Seems like enough.)
-/// However, to support that, we need to change Subs to be able to look up arbitrary IDs,
-/// instead of being backed by a flat Vec where each Variable is a direct array index.
-///
-/// A strategy I like better, which should be slightly slower for canonicalization
-/// (which is likely I/O bound anyway since it'll be happening concurrently with file reads),
-/// but *much* faster for unification, is to give each thread a shared AtomicUsize which
-/// they each call .fetch_add(1) on to get a fresh ID. Atomic increment is a bit slower than
-/// regular increment, but it means afterwards unification (which I'm not yet sure how to
-/// parallelize) no longer needs to use a hashing function to get the contents of each ID;
-/// the IDs will already correspond directly to array indices like they do in the status quo.
-///
-/// Separately, if we use that strategy, there's probably another optimization opportunity:
-/// instead of instantiating fresh structs with mk_fresh_var(), ensure that the default of
-/// each struct will be all 0s in memory. That way, after we've distributed all the IDs,
-/// we can do one single Vec resize (to zeroed memory) and they're all instantly ready to go.
-///
-/// Anyway, that'll all take awhile; for now, we'll do this in a synchronous, blocking way.
-
-/// Resolve a module's list of imports, creating a Scope map for use in the
-/// module's canonicalization.
-///
-/// If a given import has not been loaded yet, load it too.
 async fn load_module(env: &Env, module_name: Box<str>, tx: Sender<Deps>) -> LoadedModule {
-    // 1. Convert module_name to filename, using src_dir.
-    // 2. Open that file for reading. (If there's a problem, record it and bail.)
-    // 3. Read the whole file into a string. (In the future, we can read just the header.)
-    // 4. Parse the header.
-    // 5. Use the parsed header to load more modules as necessary.
-    // 6. Now that all the headers have been parsed, parse the bodies too.
-    // 7. Once all the bodies have been parsed, canonicalize beginning with the leaves.
-
     let mut filename = PathBuf::new();
 
     filename.push(env.src_dir.clone());
