@@ -140,7 +140,7 @@ mod test_canonicalize {
             func 2
         "#
         );
-        let (_actual, mut output, problems, _subs, _vars) =
+        let (_actual, mut output, problems, _var_store, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         assert_eq!(problems, vec![]);
@@ -198,7 +198,7 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (_actual, mut output, problems, _subs, _vars) =
+        let (_actual, mut output, problems, _var_store, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         assert_eq!(problems, vec![]);
@@ -256,7 +256,7 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _subs, _vars) =
+        let (actual, _output, _problems, _var_store, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
@@ -282,7 +282,7 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _subs, _vars) =
+        let (actual, _output, _problems, _var_store, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
@@ -299,7 +299,7 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _subs, _vars) =
+        let (actual, _output, _problems, _var_store, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
@@ -319,7 +319,7 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _subs, _vars) =
+        let (actual, _output, _problems, _var_store, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);
@@ -345,7 +345,7 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _subs, _vars) =
+        let (actual, _output, _problems, _var_store, _vars) =
             can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
 
         let detected = get_closure(&actual, 0);

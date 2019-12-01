@@ -10,7 +10,7 @@ use crate::collections::ImMap;
 use crate::ident::{Ident, VariantName};
 use crate::parse::ast;
 use crate::region::{Located, Region};
-use crate::subs::Subs;
+use crate::subs::VarStore;
 use crate::subs::Variable;
 use crate::types::{Constraint, PExpected, PatternCategory, Type};
 
@@ -51,7 +51,7 @@ pub enum PatternType {
 pub fn canonicalize_pattern<'a>(
     env: &'a mut Env,
     state: &'a mut PatternState,
-    subs: &mut Subs,
+    var_store: &VarStore,
     scope: &mut Scope,
     pattern_type: PatternType,
     pattern: &'a ast::Pattern<'a>,
@@ -126,7 +126,7 @@ pub fn canonicalize_pattern<'a>(
                                 .insert(new_ident.clone(), symbol_and_region.clone());
                             shadowable_idents.insert(new_ident, symbol_and_region.clone());
 
-                            Pattern::Identifier(subs.mk_flex_var(), symbol)
+                            Pattern::Identifier(var_store.fresh(), symbol)
                         }
                     }
                 }
@@ -169,7 +169,7 @@ pub fn canonicalize_pattern<'a>(
 
             if env.variants.contains_key(&symbol) {
                 // No problems; the qualified variant name was in scope!
-                Pattern::Variant(subs.mk_flex_var(), symbol)
+                Pattern::Variant(var_store.fresh(), symbol)
             } else {
                 let loc_name = Located {
                     region,
@@ -195,7 +195,7 @@ pub fn canonicalize_pattern<'a>(
         },
 
         &Underscore => match pattern_type {
-            CaseBranch | FunctionArg => Pattern::Underscore(subs.mk_flex_var()),
+            CaseBranch | FunctionArg => Pattern::Underscore(var_store.fresh()),
             ptype @ Assignment | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
         },
 
@@ -262,7 +262,7 @@ pub fn canonicalize_pattern<'a>(
             return canonicalize_pattern(
                 env,
                 state,
-                subs,
+                var_store,
                 scope,
                 pattern_type,
                 sub_pattern,

@@ -20,7 +20,7 @@ use crate::graph::{strongly_connected_component, topological_sort};
 use crate::ident::Ident;
 use crate::parse::ast::{self, Def};
 use crate::region::{Located, Region};
-use crate::subs::{Subs, Variable};
+use crate::subs::{VarStore, Variable};
 use crate::types::AnnotationSource::*;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
@@ -162,7 +162,7 @@ fn canonicalize_def<'a>(
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_declaration<'a>(
     arena: &Bump,
-    subs: &mut Subs,
+    var_store: &VarStore,
     home: Box<str>,
     name: Box<str>,
     region: Region,
@@ -188,7 +188,7 @@ pub fn canonicalize_declaration<'a>(
     let (loc_expr, output) = canonicalize_expr(
         &ImMap::default(),
         &mut env,
-        subs,
+        var_store,
         &mut scope,
         region,
         &loc_expr.value,
@@ -218,7 +218,7 @@ impl Output {
 fn canonicalize_expr(
     rigids: &Rigids,
     env: &mut Env,
-    subs: &mut Subs,
+    var_store: &VarStore,
     scope: &mut Scope,
     region: Region,
     expr: &ast::Expr,
@@ -229,13 +229,18 @@ fn canonicalize_expr(
     let (expr, output) = match expr {
         ast::Expr::Int(string) => {
             let (constraint, answer) =
-                int_expr_from_result(subs, finish_parsing_int(string), env, expected, region);
+                int_expr_from_result(var_store, finish_parsing_int(string), env, expected, region);
 
             (answer, Output::new(constraint))
         }
         ast::Expr::Float(string) => {
-            let (constraint, answer) =
-                float_expr_from_result(subs, finish_parsing_float(string), env, expected, region);
+            let (constraint, answer) = float_expr_from_result(
+                var_store,
+                finish_parsing_float(string),
+                env,
+                expected,
+                region,
+            );
 
             (answer, Output::new(constraint))
         }
@@ -261,19 +266,19 @@ fn canonicalize_expr(
         }
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
-                let list_var = subs.mk_flex_var();
+                let list_var = var_store.fresh();
                 let constraint = Eq(constrain::empty_list_type(list_var), expected, region);
 
                 (List(list_var, Vec::new()), Output::new(constraint))
             } else {
                 let mut can_elems = Vec::with_capacity(loc_elems.len());
-                let list_var = subs.mk_flex_var(); // `v` in the type (List v)
+                let list_var = var_store.fresh(); // `v` in the type (List v)
                 let list_type = Type::Variable(list_var);
                 let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
                 let mut references = References::new();
 
                 for loc_elem in loc_elems.iter() {
-                    let elem_var = subs.mk_flex_var();
+                    let elem_var = var_store.fresh();
                     let elem_type = Variable(elem_var);
                     let elem_expected = NoExpectation(elem_type.clone());
                     let list_elem_constraint = Eq(
@@ -284,7 +289,7 @@ fn canonicalize_expr(
                     let (can_expr, elem_out) = canonicalize_expr(
                         rigids,
                         env,
-                        subs,
+                        var_store,
                         scope,
                         loc_elem.region,
                         &loc_elem.value,
@@ -343,7 +348,7 @@ fn canonicalize_expr(
         ast::Expr::Apply(loc_fn, loc_args, application_style) => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let fn_var = subs.mk_flex_var();
+            let fn_var = var_store.fresh();
             let fn_type = Variable(fn_var);
             let fn_region = loc_fn.region;
             let fn_expected = NoExpectation(fn_type.clone());
@@ -356,7 +361,7 @@ fn canonicalize_expr(
             let (fn_expr, mut output) = canonicalize_expr(
                 rigids,
                 env,
-                subs,
+                var_store,
                 scope,
                 loc_fn.region,
                 &loc_fn.value,
@@ -364,7 +369,7 @@ fn canonicalize_expr(
             );
 
             // The function's return type
-            let ret_var = subs.mk_flex_var();
+            let ret_var = var_store.fresh();
             let ret_type = Variable(ret_var);
 
             // This will be used in the occurs check
@@ -381,7 +386,7 @@ fn canonicalize_expr(
 
             for (index, loc_arg) in loc_args.iter().enumerate() {
                 let region = loc_arg.region;
-                let arg_var = subs.mk_flex_var();
+                let arg_var = var_store.fresh();
                 let arg_type = Variable(arg_var);
                 // TODO look up the name and use NamedFnArg if possible.
                 let reason = Reason::AnonymousFnArg {
@@ -391,7 +396,7 @@ fn canonicalize_expr(
                 let (arg_expr, arg_out) = canonicalize_expr(
                     rigids,
                     env,
-                    subs,
+                    var_store,
                     scope,
                     loc_arg.region,
                     &loc_arg.value,
@@ -468,7 +473,7 @@ fn canonicalize_expr(
             let mut output = Output::new(Lookup(symbol, expected, region));
             let ident = Ident::new(module_parts, name);
             let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
-                Ok(symbol) => Var(subs.mk_flex_var(), symbol),
+                Ok(symbol) => Var(var_store.fresh(), symbol),
                 Err(ident) => {
                     let loc_ident = Located {
                         region,
@@ -568,7 +573,15 @@ fn canonicalize_expr(
         ast::Expr::Defs(defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             // so clone it.
-            can_defs(rigids, env, subs, scope.clone(), defs, expected, loc_ret)
+            can_defs(
+                rigids,
+                env,
+                var_store,
+                scope.clone(),
+                defs,
+                expected,
+                loc_ret,
+            )
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             // The globally unique symbol that will refer to this closure once it gets converted
@@ -609,7 +622,7 @@ fn canonicalize_expr(
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-                let pattern_var = subs.mk_flex_var();
+                let pattern_var = var_store.fresh();
                 let pattern_type = Type::Variable(pattern_var);
                 let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
 
@@ -618,7 +631,7 @@ fn canonicalize_expr(
                 let can_arg = canonicalize_pattern(
                     env,
                     &mut state,
-                    subs,
+                    var_store,
                     &mut scope,
                     FunctionArg,
                     &loc_pattern.value,
@@ -632,7 +645,7 @@ fn canonicalize_expr(
                 can_args.push(can_arg);
             }
 
-            let ret_var = subs.mk_flex_var();
+            let ret_var = var_store.fresh();
             let ret_type = Type::Variable(ret_var);
 
             state.vars.push(ret_var);
@@ -643,7 +656,7 @@ fn canonicalize_expr(
             let (loc_body_expr, mut output) = canonicalize_expr(
                 rigids,
                 env,
-                subs,
+                var_store,
                 &mut scope,
                 loc_body_expr.region,
                 &loc_body_expr.value,
@@ -702,12 +715,12 @@ fn canonicalize_expr(
 
         ast::Expr::Case(loc_cond, branches) => {
             // Infer the condition expression's type.
-            let cond_var = subs.mk_flex_var();
+            let cond_var = var_store.fresh();
             let cond_type = Variable(cond_var);
             let (can_cond, mut output) = canonicalize_expr(
                 rigids,
                 env,
-                subs,
+                var_store,
                 scope,
                 region,
                 &loc_cond.value,
@@ -729,7 +742,7 @@ fn canonicalize_expr(
                         let (can_pattern, loc_can_expr, branch_con, branch_references) =
                             canonicalize_case_branch(
                                 env,
-                                subs,
+                                var_store,
                                 rigids,
                                 scope,
                                 region,
@@ -763,7 +776,7 @@ fn canonicalize_expr(
                 }
 
                 _ => {
-                    let branch_var = subs.mk_flex_var();
+                    let branch_var = var_store.fresh();
                     let branch_type = Variable(branch_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
@@ -775,7 +788,7 @@ fn canonicalize_expr(
                         let (can_pattern, loc_can_expr, branch_con, branch_references) =
                             canonicalize_case_branch(
                                 env,
-                                subs,
+                                var_store,
                                 rigids,
                                 scope,
                                 region,
@@ -851,17 +864,17 @@ fn canonicalize_expr(
         }
         ast::Expr::BinaryInt(string) => {
             let (constraint, answer) =
-                int_expr_from_result(subs, finish_parsing_bin(string), env, expected, region);
+                int_expr_from_result(var_store, finish_parsing_bin(string), env, expected, region);
             (answer, Output::new(constraint))
         }
         ast::Expr::HexInt(string) => {
             let (constraint, answer) =
-                int_expr_from_result(subs, finish_parsing_hex(string), env, expected, region);
+                int_expr_from_result(var_store, finish_parsing_hex(string), env, expected, region);
             (answer, Output::new(constraint))
         }
         ast::Expr::OctalInt(string) => {
             let (constraint, answer) =
-                int_expr_from_result(subs, finish_parsing_oct(string), env, expected, region);
+                int_expr_from_result(var_store, finish_parsing_oct(string), env, expected, region);
             (answer, Output::new(constraint))
         }
         // Below this point, we shouln't see any of these nodes anymore because
@@ -919,7 +932,7 @@ fn canonicalize_expr(
 #[inline(always)]
 fn canonicalize_case_branch<'a>(
     env: &mut Env,
-    subs: &mut Subs,
+    var_store: &VarStore,
     rigids: &Rigids,
     scope: &Scope,
     region: Region,
@@ -950,7 +963,7 @@ fn canonicalize_case_branch<'a>(
     let (can_expr, branch_output) = canonicalize_expr(
         rigids,
         env,
-        subs,
+        var_store,
         &mut scope,
         region,
         &loc_expr.value,
@@ -985,7 +998,7 @@ fn canonicalize_case_branch<'a>(
     let loc_can_pattern = canonicalize_pattern(
         env,
         &mut state,
-        subs,
+        var_store,
         &mut scope,
         CaseBranch,
         &loc_pattern.value,
@@ -1477,7 +1490,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
 fn can_defs<'a>(
     rigids: &Rigids,
     env: &mut Env,
-    subs: &mut Subs,
+    var_store: &VarStore,
     scope: Scope,
     defs: &'a bumpalo::collections::Vec<'a, &'a Located<Def<'a>>>,
     expected: Expected<Type>,
@@ -1508,7 +1521,7 @@ fn can_defs<'a>(
 
     for loc_def in iter {
         // Make types for the body expr, even if we won't end up having a body.
-        let expr_var = subs.mk_flex_var();
+        let expr_var = var_store.fresh();
         let expr_type = Type::Variable(expr_var);
 
         // Each def gets to have all the idents in scope that are defined in this
@@ -1551,7 +1564,7 @@ fn can_defs<'a>(
                 let mut shadowable_idents = scope.idents.clone();
                 remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-                let pattern_var = subs.mk_flex_var();
+                let pattern_var = var_store.fresh();
                 let pattern_type = Type::Variable(pattern_var);
                 let pattern_expected = PExpected::NoExpectation(pattern_type);
 
@@ -1564,7 +1577,7 @@ fn can_defs<'a>(
                 let loc_can_pattern = canonicalize_pattern(
                     env,
                     &mut state,
-                    subs,
+                    var_store,
                     &mut scope,
                     Assignment,
                     &loc_pattern.value,
@@ -1601,7 +1614,7 @@ fn can_defs<'a>(
                 let (mut loc_can_expr, can_output) = canonicalize_expr(
                     rigids,
                     env,
-                    subs,
+                    var_store,
                     &mut scope,
                     loc_expr.region,
                     &loc_expr.value,
@@ -1739,7 +1752,7 @@ fn can_defs<'a>(
     let (ret_expr, mut output) = canonicalize_expr(
         rigids,
         env,
-        subs,
+        var_store,
         &mut scope,
         loc_ret.region,
         &loc_ret.value,
@@ -1872,7 +1885,7 @@ fn can_defs<'a>(
             }
 
             (
-                Defs(subs.mk_flex_var(), can_defs, Box::new(ret_expr)),
+                Defs(var_store.fresh(), can_defs, Box::new(ret_expr)),
                 output,
             )
         }

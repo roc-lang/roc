@@ -19,11 +19,12 @@ mod test_gen {
     use roc::collections::MutMap;
     use roc::gen::{compile_standalone_expr, content_to_basic_type, Env};
     use roc::infer::infer_expr;
+    use roc::subs::Subs;
 
     macro_rules! assert_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
-            let (expr, output, _problems, mut subs, variable) = can_expr($src);
-
+            let (expr, output, _problems, var_store, variable) = can_expr($src);
+            let mut subs = Subs::new(var_store.into());
             let content = infer_expr(&mut subs, &output.constraint, variable);
 
             let context = Context::create();

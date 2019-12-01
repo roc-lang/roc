@@ -2,17 +2,45 @@ use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types::Problem;
 use crate::unify;
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Default)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
 }
 
+pub struct VarStore {
+    next: AtomicUsize,
+}
+
+impl VarStore {
+    pub fn new() -> Self {
+        VarStore {
+            next: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn fresh(&self) -> Variable {
+        // Increment the counter and return the previous value.
+        //
+        // Since the counter starts at 0, this will return 0 on first invocation,
+        // and var_store.into() will return the number of Variables distributed
+        // (in this case, 1).
+        Variable(AtomicUsize::fetch_add(&self.next, 1, Ordering::Relaxed))
+    }
+}
+
+impl Into<usize> for VarStore {
+    fn into(self) -> usize {
+        self.next.into_inner()
+    }
+}
+
 #[derive(Copy, PartialEq, Eq, Clone, Hash)]
-pub struct Variable(u32);
+pub struct Variable(usize);
 
 impl Variable {
-    pub fn new_for_testing_only(num: u32) -> Self {
+    pub fn new_for_testing_only(num: usize) -> Self {
         // This is a hack that should only ever be used for testing!
         Variable(num)
     }
@@ -27,11 +55,11 @@ impl fmt::Debug for Variable {
 impl UnifyKey for Variable {
     type Value = Descriptor;
 
-    fn index(&self) -> u32 {
+    fn index(&self) -> usize {
         self.0
     }
 
-    fn from_index(index: u32) -> Self {
+    fn from_index(index: usize) -> Self {
         Variable(index)
     }
 
@@ -41,10 +69,20 @@ impl UnifyKey for Variable {
 }
 
 impl Subs {
-    pub fn new() -> Self {
-        Subs {
+    pub fn new(entries: usize) -> Self {
+        let mut subs = Subs {
             utable: UnificationTable::default(),
+        };
+
+        // TODO There are at least these opportunities for performance optimization here:
+        //
+        // * Initializing the backing vec using with_capacity instead of default()
+        // * Making the default flex_var_descriptor be all 0s, so no init step is needed.
+        for _ in 0..entries {
+            subs.utable.new_key(flex_var_descriptor());
         }
+
+        subs
     }
 
     pub fn fresh(&mut self, value: Descriptor) -> Variable {
@@ -76,10 +114,6 @@ impl Subs {
         let unified = unify::unify_var_val(self, l_key, &r_value);
 
         self.utable.update_value(l_key, |node| node.value = unified);
-    }
-
-    pub fn mk_flex_var(&mut self) -> Variable {
-        self.fresh(flex_var_descriptor())
     }
 
     pub fn copy_var(&mut self, var: Variable) -> Variable {

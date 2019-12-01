@@ -13,12 +13,13 @@ mod test_infer {
     use crate::helpers::can_expr;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
+    use roc::subs::Subs;
 
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, output, _, mut subs, variable) = can_expr(src);
-
+        let (_, output, _, var_store, variable) = can_expr(src);
+        let mut subs = Subs::new(var_store.into());
         let content = infer_expr(&mut subs, &output.constraint, variable);
 
         name_all_type_vars(variable, &mut subs);
