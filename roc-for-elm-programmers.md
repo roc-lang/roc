@@ -884,23 +884,23 @@ Some differences to note:
 
 Here are various Roc expressions involving operators, and what they desugar to.
 
-| Expression       | Desugars to        |
-| ---------------- | ------------------ |
-| `a + b`          | `Num.add a b`      |
-| `a - b`          | `Num.sub a b`      |
-| `a * b`          | `Num.mul a b`      |
-| `a / b`          | `Float.div a b`    |
-| `a // b`         | `Int.div a b`      |
-| `a ^ b`          | `Num.pow a b`      |
-| `a % b`          | `Float.rem a b`    |
-| `a %% b`         | `Float.mod a b`    |
-| `-a`             | `Num.neg a`        |
-| `-f x y`         | `Num.neg (f x y)`  |
-| `a == b`         | `Bool.isEq a b`    |
-| `a != b`         | `Bool.isNotEq a b` |
-| `a && b`         | `Bool.and a b`     |
-| `a || b`         | `Bool.or a b`      |
-| `!a`             | `Bool.not a`       |
-| `!f x y`         | `Bool.not (f x y)` |
-| `a |> b`         | `b a`              |
-| `a b c |> f x y` | `f (a b c) x y`    |
+| Expression     | Desugars to      |
+| -------------- | ---------------- |
+| a + b          | Num.add a b      |
+| a - b          | Num.sub a b      |
+| a * b          | Num.mul a b      |
+| a / b          | Float.div a b    |
+| a // b         | Int.div a b      |
+| a ^ b          | Num.pow a b      |
+| a % b          | Float.rem a b    |
+| a %% b         | Float.mod a b    |
+| -a             | Num.neg a        |
+| -f x y         | Num.neg (f x y)  |
+| a == b         | Bool.isEq a b    |
+| a != b         | Bool.isNotEq a b |
+| a && b         | Bool.and a b     |
+| a || b         | Bool.or a b      |
+| !a             | Bool.not a       |
+| !f x y         | Bool.not (f x y) |
+| a |> b         | b a              |
+| a b c |> f x y | f (a b c) x y    |
