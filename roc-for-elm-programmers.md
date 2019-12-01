@@ -1,6 +1,6 @@
 # Roc for Elm programmers
 
-Roc is a direct descendant of the [Elm programming language](https://elm-lang.org/). This means the two languages are similar, but not quite the same!
+Roc is a direct descendant of the [Elm programming language](https://elm-lang.org/). The two languages are similar, but not quite the same!
 
 This is a guide to help Elm programmers learn what's different between Elm and Roc.
 
@@ -8,7 +8,7 @@ This is a guide to help Elm programmers learn what's different between Elm and R
 
 ## Comments
 
-Like Elixir, inline comments in Roc begin with `#` instead of `--`. 
+Like [Python](https://www.python.org), [Ruby](https://www.ruby-lang.org), [Perl](https://www.perl.org), and [Elixir](https://elixir-lang.org/), inline comments in Roc begin with `#` instead of `--`.
 
 Doc comments begin with `##` instead.
 
@@ -186,7 +186,7 @@ This is the biggest difference between Roc and Elm.
 > that explanation, this section is already the longest!
 
 Instead of traditional algebraic data types (like Elm has), Roc uses something more like
-OCaml's *polymorphic variants*. They're called *tags*. Here are some examples of using tags in a REPL:
+OCaml's *polymorphic variants*. In Roc they're called *tags*. Here are some examples of using tags in a REPL:
 
 ```
 > True
@@ -243,8 +243,8 @@ the inferred type of a tag value. Note which types have a `*` and which do not.
 x : [ Foo ]*
 x = Foo
 
-y : [ Bar Str ]*
-y = Bar "hi!"
+y : [ Bar Float ]*
+y = Bar 3.14
 
 toInt : [ Foo, Bar Float ] -> Int
 toInt = \tag ->
@@ -253,13 +253,14 @@ toInt = \tag ->
         Bar float -> Float.round float
 ```
 
-Each of these type annotations includes a *tag union* - a collection of tags bracketed by `[` and `]`.
+Each of these type annotations involves a *tag union* - a collection of tags bracketed by `[` and `]`.
 
 * The type `[ Foo, Bar Float ]` is a **closed** tag union.
 * The type `[ Foo ]*` is an **open** tag union.
 
-You can pass `x` to `toInt` because an open tag union is type-compatible with
-any closed tag union which contains its tags (in this case, the `Foo` tag).
+You can pass either `x` to `toInt` because an open tag union is type-compatible with
+any closed tag union which contains its tags (in this case, the `Foo` tag). You can also
+pass `y` to `toInt` for the same reason.
 
 In general, when you make a tag value, you'll get an open tag union (with a `*`).
 When you use `case`, you *can* get a closed union (without a `*`) but that's not
@@ -277,7 +278,7 @@ The return value is an open tag union because all branches return something
 tagged with `Foo`.
 
 The argument is also an open tag union, because this *case-expression* has
-a default branch; that argument is compatible with any argument. This means you
+a default branch; that argument is compatible with any tag union. This means you
 can pass the function some totally nonsensical tag, and it will still compile.
 
 > Note that the argument does *not* have the type `*`. That's because you
@@ -296,20 +297,22 @@ by removing the `*`. For example, if you changed the annotation to this...
 alwaysFoo : [ Foo Int, Bar Str ] -> [ Foo Int ]*
 ```
 
-...then the function would only accept tags like `Foo 5` and `Bar "hi"`. Just
-like traditional algebraic data types, if you want to write out the annotation,
-you can restrict even *case-expressions* with default branches to accept only
-the values you define to be valid in this context.
+...then the function would only accept tags like `Foo 5` and `Bar "hi"`. By writing
+out your own annotations, you can get the same level of restriction you get with
+traditional algebraic data types (which, after all, come with the requirement that
+you write out their annotations). Using annotations, you can restrict even
+*case-expressions* with default branches to accept only the values you define to be valid.
 
-In fact, if you want a traditional algebraic data type, you can essentially get one
-by making a type alias for it. Here's `Maybe` defined using tags:
+In fact, if you want a traditional algebraic data type in Roc, you can get about the same
+functionality by making (and using) a type alias for a closed tag union.
+Here's `Maybe` defined using tags:
 
 ```elm
 Maybe a : [ Just a, Nothing ]
 ```
 
-You can use tags to define recursive data structures, and name them, by using the `as`
-keyword in your type alias. (This is also how OCaml supports recursive polymorphic variants.)
+You can also use tags to define recursive data structures, and name them, by using the `as`
+keyword in your type alias. (This is exactly how OCaml supports recursive polymorphic variants.)
 
 ```elm
 LinkedList elem : [ Nil, Cons elem list ] as list
@@ -327,7 +330,7 @@ incrementFoo = \tag ->
         other -> other
 ```
 
-The `*` says "this union can also accept any other tags", and here the `a` says
+The `*` says "this union can also include any other tags", and here the `a` says
 "the return value union includes `Foo Int`, plus whichever other tags the argument 
 includes in its union."
 
@@ -353,7 +356,7 @@ You can't "call" the type `[ Foo ]*` because it's not a function.
 In practical terms, this also means you can't do `|> Decode.map UserId`
 because `UserId` is not a function, and `map` expects a function.
 This code would work in Elm, but in Roc you'd need to use an anonymous function -
-e.g. `|> Decode.map (\val -> UserId val)`. Trade-offs!
+e.g. `|> Decode.map (\val -> UserId val)`.
 
 ## Opaque Types
 
@@ -385,19 +388,13 @@ I can now expose the `UserId` type alias, which other modules can use as an opaq
 It's not even syntactically possible for me to expose the `@UserId` tag, because `@` tags are not allowed in the exposing list. Only code written in this `UserId` module can instantiate a `@UserId` instance.
 
 > If I were to write `@UserId` inside another module (e.g. `Main`), it would compile,
-> but that `@UserId` would be type-incompatible one created inside the `UserId` module.
+> but that `@UserId` would be type-incompatible with one created inside the `UserId` module.
 > Even trying to use `==` on them would be a type mismatch, because I would be comparing
-> a `[ UserId.@UserId Int ]*` with a `[ Main.@UserId Int ]*`, which are incompatible types.
+> a `[ UserId.@UserId Int ]*` with a `[ Main.@UserId Int ]*`, which are incompatible.
 
 ## Modules and Shadowing
 
-Roc application modules (where the equivalent of `main` lives) begin like this:
-
-```elm
-app imports [ Parser, Http.{ Request }, Task.{ Task, after } ]
-```
-
-In Elm, this module header would look like this:
+In Elm, my main module (where `main` lives) might begin like this:
 
 ```elm
 module MyApp exposing (main)
@@ -405,6 +402,14 @@ module MyApp exposing (main)
 import Parser
 import Http exposing (Request)
 import Task exposing (Task, after)
+```
+
+Roc application modules (where the equivalent of `main` lives) begin with the
+`app` keyword rather than the `module` keyword, and the import syntax is a bit different.
+Here's how the above module header would look in Roc:
+
+```elm
+app imports [ Parser, Http.{ Request }, Task.{ Task, after } ]
 ```
 
 `app` modules are application entrypoints, and they don't formally expose anything.
@@ -421,12 +426,11 @@ interface Parser
 The name `interface` is intended to draw attention to the fact that the interface
 these expose is very important. 
 
-Roc does not have an `exposing (..)` equivalent, and since neither global tags nor
-private tags have a notion of "importing variants" (global tags are always available
-in all modules, and private tags are never available in other modules), there's
-also no `exposing (Foo(..))` equivalent.
-
 All imports and exports in Roc are enumerated explicitly; there is no `..` syntax.
+
+> Since neither global tags nor private tags have a notion of "importing variants"
+> (global tags are always available in all modules, and private tags are
+> never available in other modules), there's also no `exposing (Foo(..))` equivalent.
 
 Like Elm, Roc does not allow shadowing.
 
@@ -440,11 +444,11 @@ Roc uses Rust/JavaScript syntax for record literals, e.g. `{ x: 1, y: 2 }`.
 
 It also allows omitting the value; `{ x, y }` is sugar for `{ x: x, y: y }`.
 
-Roc does not have the "a type alias for a Record creates a convenience constructor function" 
+You can pattern match on exact record values, e.g. `{ x: 5 } ->`.
+
+Roc does not have the "a type alias for a record creates a convenience constructor function" 
 feature that Elm has. This is partly because `Point x y` is already defined to be tag application 
 in Roc, but also because `{ x, y }` would be the recommended way to write it regardless.
-
-You can pattern match on exact record values, e.g. `{ x: 5 } ->`.
 
 Closed record annotations look the same as they do in Elm, e.g.
 `{ x : Int, y : Int }`. Open record annotations look a bit different.
@@ -479,10 +483,11 @@ In Roc:
 
 By design, this syntax makes the unbound case look natural and the bound case look unnatural. 
 
-That's because writing a function that takes "this record, plus other fields if you like" 
-is a totally reasonable thing to do - as often as you like! It has multiple upsides:
-it makes "named arguments" work with data model records more often, and makes it
-easier to change functions in backwards-compatible ways. It has no major downsides.
+That's because writing a function that accepts an open record with an unbound
+type variable (e.g. "this record, plus other fields if you like") is a totally reasonable
+thing to do - as often as you like! It has multiple upsides: it makes "named arguments"
+work with data model records more often, and makes it easier to change functions in
+backwards-compatible ways. It has no major downsides.
 
 The syntax encourages doing this. "Just add a star" like so:
 
@@ -524,13 +529,13 @@ This works even if their fields do not overlap perfectly. So this works:
 ```
 
 If any fields *do* overlap, their values must have compatible types.
-So `{ x: 1 }...{ x: "foo" }` would not copmpile, but `{ nums: [ 1.1, 2.2 ] }...{ nums: [] }` would - because `List Float` is compatible with `List *`.
+So `{ x: 1 }...{ x: "foo" }` would not compile, but `{ nums: [ 1.1, 2.2 ] }...{ nums: [] }` would - because `List Float` is compatible with `List *`.
 
-> This is different from Elm 0.14 "extensible records" feature. That feature
+> This is different from the Elm 0.13 "extensible records" feature. That feature
 > let you say "given this record, whose shape I may not know at all, add this field."
 > Roc's `...` merge syntax does not offer that.
 
-This is designed to make "config records" nicer, by allowing this:
+This "record merge" feature is designed to make "config records" nicer, by allowing this:
 
 ```
 foo = \opts ->
@@ -562,27 +567,27 @@ The type of `foo` could be written as:
 foo : { timeZone? : Time.Zone, lang? : Lang, encoding? : Encoding }* -> …
 ```
 
-It could be written with or without the `*` at the end, like any other record.
-I included it because this is the type the compiler would infer, based on
-the usage of `...` in the implementation.
+> It could be written with or without the `*` at the end, like any other record.
+> I included it because this is the type the compiler would infer, based on
+> the usage of `...` in the implementation.
 
 When a record field in an annotation ends in `?`, it is an optional field.
-These work just like normal fields, except:
+Optional fields work just like normal fields, except:
 
-* They cannot be accessed with the normal `.` syntax. If a record has a type of `{ foo? : Int }`, trying to invoke `.foo` will give a compile error - because `foo` might not be defined!
+* They cannot be accessed with the normal `.` syntax. If a record has a type of `{ foo? : Int }`, trying to invoke `.foo` will give a compile error - because `foo` might not be present!
 * If you merge (using `...`) a record with an optional field, and the record on the other side of the merge (either side) has a non-optional version of that field, the resulting record has the field non-optional. One way or another, there *will* be a value associated with that field after the merge!
 * Optional fields can be accessed directly using `myRecord.foo?` - which returns a `Result` containing either `Ok` wrapping the value (if the field was present on the record) or `Err MissingField` if the field was missing.
 
 > The reason for this last bit of syntax is also for the sake of config records.
 >
-> Without it, if you wanted to have an optional field like { limit? : Int }
-> and you wanted it to default to "unlimited" if the user did not specify `limit`,
+> Without it, if you wanted to have an optional field like `{ limit? : Int }`
+> and you wanted it to default to "unlimited" if the user did not specify a `limit` field,
 > then you would have to resort to something like merging it with a record
 > that has `limit: Int.highestValue` and do a special-case check later which
 > enables the "unlimited" behavior if `limit` is set to exactly that magic number.
 
 Optional fields should not come up nearly as often as normal fields.
-In the particular case of config records, though, they should make things nicer.
+In the particular situation of config records, though, they should make things nicer.
 
 ## Standard Data Structures
 
@@ -595,7 +600,7 @@ Here are the differences:
 * `List` in Roc uses the term "list" the way Python does: to mean an unordered sequence of elements. Roc's `List` is more like Elm's `Array`; under the hood it is a RRB tree - specifically, [this one](https://docs.rs/im/14.0.0/im/vector/index.html). It still uses the `[` `]` syntax for values. Also there is no `::` operator because "cons" is not a notably efficient operation on a RRB tree like it is in a linked list; adding an element to either the beginning or end of a Roc `List` is an amortized constant time operation.
 * `Bytes` in Roc works like [`Bytes` in `elm/bytes`](https://package.elm-lang.org/packages/elm/bytes/latest/Bytes). It's in the standard library because Roc does not have a concept analogous to Elm's `Kernel`, so if `Bytes` weren't in the standard library, it could not exist as a separate package (and thus operating on raw byte streams would not be supported in Roc).
 * `Map` in Roc is like `Dict` in Elm, except it's backed by hashing rather than ordering. Like `List`, it uses [one of Bodil Stokke's `im-rs` persistent data structures](https://docs.rs/im/14.0.0/im/hashmap/index.html) under the hood. Roc also silently computes hash values for any value that can be used with `==`, so there is no `comparable` (or similar) constraint on `Map` keys in Roc.
-* * `Set` in Roc is like `Set` in Elm: it's shorthand for a `Map` with keys but no value, and a slightly different API. Like with `Map`, there is no `comparable` (or similar) constraint on the values that can go in a Roc `Set`.
+* `Set` in Roc is like `Set` in Elm: it's shorthand for a `Map` with keys but no value, and it has a slightly different API. Like with `Map`, there is no `comparable` (or similar) constraint on the values that can go in a Roc `Set`.
 
 > The main reason it's called `Map` instead of `Dict` is that it's annoying to have a conversation about `Dict` out loud, let alone to teach it in a workshop, because you have to be so careful to enunciate. `Map` is one letter shorter, doesn't have this problem, is widely used, and never seems to be confused with the `map` function in practice (in e.g. JavaScript and Rust, both of which have both `Map` and `map`) even though it seems like it would in theory.
 
@@ -634,14 +639,14 @@ Roc does not have syntax for pattern matching on data structures - not even `[` 
 
 ## Numbers
 
+Like Elm, Roc has two numeric types: `Int` and `Float`. `Float` is the same as it is in
+Elm: it's a 64-bit floating point number. In Roc, `Int` is a 64-bit integer. Also
+unlike Elm, if you encounter an overflow with either of them, you get a runtime
+exception rather than wrapping overflow behavior (or a float becoming `Infinity` or `-Infinity`).
+
 Roc does not let calculations result in `Infinity`, `-Infinity`, or `NaN`.
 Any operation which would result in one of these (such as `sqrt` or `/`) returns
 a `Result`.
-
-Like Elm, Roc has two numeric types: Int and Float. Float is the same as it is in
-Elm: it's a 64-bit floating point number. In Roc, Int is a 64-bit integer. Also
-unlike Elm, if you encounter an overflow with either of them, you get a runtime
-exception rather than wrapping overflow behavior.
 
 Also like Elm, number literals with decimal points are `Float`. However, number
 literals *without* a decimal point are always `Int`. So `x / 2` will never
@@ -675,6 +680,7 @@ a type alias for `Num FloatingPoint`. That's exactly how things work in Roc.
 They are used only as phantom types.)
 
 So Roc does not use `number`, but rather uses `Num` - which works more like `List`.
+Either way, you get `+` being able to work on both `Int` and `Float`!
 
 ## `comparable`, `appendable`, and `number`
 
@@ -691,12 +697,13 @@ means, for example, that you cannot write `(/)` in Roc; that would be a syntax
 error. However, the `/` operator in Roc is infix syntax sugar for `Float.div`, 
 which is a normal function you can pass to anything you like.
 
-Elm has one unary operator, namely `-`. (`-x` in Elm means 
-"apply unary `negate` to `x`.") Roc has that one, and also unary `!`. 
+Elm has one unary operator, namely `-`. (In Elm, `-x` means
+"apply unary `negate` to `x`.") Roc has that one, and also unary `!`.
 The expression `!foo` desugars to `not foo`, and `!foo bar` desugars to `not (foo bar)`.
 
-This was done because Roc does not expose any functions (e.g. `not` in Elm) globally by
-default. Only operators and types (like `Bool`) are exposed globally.
+This was done because Roc does not expose any functions globally by default
+(the way Elm does with `Basics` functions like `not`, `round`, etc.)
+In Roc, only operators and standard types (like `Int` and `Bool`) are exposed globally.
 Having to fully qualify `not` was annoying, and making an exception just for `not` seemed
 less appealing than making an operator for it, especially when unary `!` is so widely used.
 
@@ -708,7 +715,7 @@ what each Roc operator desugars to.
 
 ## The `<|` operator
 
-Roc has no `<|` operator.
+Roc has no `<|` operator. (It does have `|>` though.)
 
 In Elm, `<|` is used as a minor convenience for when you want to avoid some parens
 in a single-line expression (e.g. `foo <| bar baz` over `foo (bar baz)`) and as
@@ -740,7 +747,7 @@ foo 1 2 if something then 3 else 4
 
 ## Currying and `|>`
 
-Roc functions aren't curried. If you call `List.map foo` you'll get a type mismatch
+Roc functions aren't curried. Calling `(List.map foo)` is a type mismatch
 because `List.map` takes 2 arguments, not 1.
 
 For this reasons, function type annotations separate arguments with `,` instead of `->`. In Roc, the type of `List.map` is:
@@ -763,7 +770,7 @@ a b c
 In Roc, the `|>` operator inserts the previous expression as the *first* argument
 to the subsequent expression, rather than as the *last* argument as it does in Elm.
 
-This makes a number of operations more useful in pipelines. For example, in Roc:
+This makes a number of operations more useful in pipelines. For example, in Roc, `|> Float.div 2.0` divides by 2:
 
 ```elixir
 2000
@@ -772,7 +779,8 @@ This makes a number of operations more useful in pipelines. For example, in Roc:
 # 1000.0 : Float
 ```
 
-However, in Elm:
+In Elm, where `|>` inserts 2 as the last argument, 2 ends up being the *numerator*
+rather than the denominator:
 
 ```elm
 2000
@@ -842,7 +850,7 @@ for general-purpose pointfree function composition.
 In Roc, the standard library is not a standalone package. It is baked into the compiler,
 and you can't upgrade it independently of a compiler release; whatever version of
 Roc you're using, that's the version of the standard library you're using too.
-(This is because Roc doesn't have a concept like Elm's "Kernel"; it would not be
+(This is because Roc doesn't have a concept like Elm's `Kernel`; it would not be
 possible to ship Roc's standard library as a separate package!)
 
 Roc's standard library has these modules:
@@ -861,35 +869,38 @@ Roc's standard library has these modules:
 
 Some differences to note:
 
-* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `Int`, `Result`) but they do not expose any values. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
+* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `Int`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
 * In Roc it's called `Str` instead of `String`.
-* No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of code points - and there's no upper bound on how many code points there can be. In a world of emoji, I think this makes `Char` error-prone and it's better to have `String` be the smallest indivisible unit. If you want to iterate over grapheme clusters, use a `Str -> List Str` function which breaks the string down on grapheme boundaries. For this reason there also isn't a `Str.length` function; in the context of strings, "length" is ambiguous. (Does it refer to number of bytes? Number of Unicode code points? Number of graphemes?)
+* No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `String` be the smallest indivisible unit. If you want to iterate over grapheme clusters, use a `Str -> List Str` function which breaks the string down on grapheme boundaries. For this reason there also isn't a `Str.length` function; in the context of strings, "length" is ambiguous. (Does it refer to number of bytes? Number of Unicode code points? Number of graphemes?)
 * No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.isEq` or `Num.add` or `Float.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implmement it: `never = \a -> never a`.)
-* No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in the standard library, since `Task` should be opaque.
-* No `Process`, `Platform`, `Cmd`, or `Sub` - similar to `Task`; these are things platform authors would include, or not.
-* No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arity tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*`) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]`.
+* No `Tuple`. Roc doesn't have tuple syntax.
+* No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in Roc's standard library.
+* No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
+* No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arity tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]`.
 * `List` refers to something more like Elm's `Array`, as noted earlier.
 * `Sort` works [like this](https://package.elm-lang.org/packages/rtfeldman/elm-sorter-experiment/2.1.1/Sort). It's only for `List`, but it's important enough to be one of the standard modules - not only so that lists can be sortable without needing to install a separate package, but also because it demonstrates the "decoder pattern" of API design using opaque types.
 
 ## Operator Desugaring Table
 
-| Expression     | Desugars to      |
-| -------------- | ---------------- |
-| a + b          | Num.add a b      |
-| a - b          | Num.sub a b      |
-| a * b          | Num.mul a b      |
-| a / b          | Float.div a b    |
-| a // b         | Int.div a b      |
-| a ^ b          | Num.pow a b      |
-| a % b          | Float.rem a b    |
-| a %% b         | Float.mod a b    |
-| -a             | Num.neg a        |
-| -f x y         | Num.neg (f x y)  |
-| a == b         | Bool.isEq a b    |
-| a != b         | Bool.isNotEq a b |
-| a && b         | Bool.and a b     |
-| a || b         | Bool.or a b      |
-| !a             | Bool.not a       |
-| !f x y         | Bool.not (f x y) |
-| a |> b         | b a              |
-| a b c |> f x y | f (a b c) x y    |
+Here are various Roc expressions involving operators, and what they desugar to.
+
+| Expression       | Desugars to        |
+| ---------------- | ------------------ |
+| `a + b`          | `Num.add a b`      |
+| `a - b`          | `Num.sub a b`      |
+| `a * b`          | `Num.mul a b`      |
+| `a / b`          | `Float.div a b`    |
+| `a // b`         | `Int.div a b`      |
+| `a ^ b`          | `Num.pow a b`      |
+| `a % b`          | `Float.rem a b`    |
+| `a %% b`         | `Float.mod a b`    |
+| `-a`             | `Num.neg a`        |
+| `-f x y`         | `Num.neg (f x y)`  |
+| `a == b`         | `Bool.isEq a b`    |
+| `a != b`         | `Bool.isNotEq a b` |
+| `a && b`         | `Bool.and a b`     |
+| `a || b`         | `Bool.or a b`      |
+| `!a`             | `Bool.not a`       |
+| `!f x y`         | `Bool.not (f x y)` |
+| `a |> b`         | `b a`              |
+| `a b c |> f x y` | `f (a b c) x y`    |
