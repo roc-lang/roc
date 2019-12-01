@@ -258,7 +258,7 @@ Each of these type annotations involves a *tag union* - a collection of tags bra
 * The type `[ Foo, Bar Float ]` is a **closed** tag union.
 * The type `[ Foo ]*` is an **open** tag union.
 
-You can pass either `x` to `toInt` because an open tag union is type-compatible with
+You can pass `x` to `toInt` because an open tag union is type-compatible with
 any closed tag union which contains its tags (in this case, the `Foo` tag). You can also
 pass `y` to `toInt` for the same reason.
 
