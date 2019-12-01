@@ -75,6 +75,7 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
         pending = pending + deps_to_load.len() - 1;
 
         // Record that these are loaded *before* spawning threads to load them.
+        // We don't want to accidentally process them more than once!
         all_deps = all_deps.union(deps_to_load.clone());
 
         let loaded_modules = join_all(deps_to_load.into_iter().map(|dep|{
@@ -95,6 +96,10 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
             break;
         }
     }
+
+    println!("= = = = = = = = = = = = = = = = = = = = = = = = finished!");
+    println!("\n\nmain module: {:?}", requested_module);
+    println!("\n\nother modules: {:?}", other_modules);
 
     Loaded { requested_module, deps: all_deps }
 }
