@@ -168,6 +168,10 @@ pub enum Expr<'a> {
     SpaceAfter(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
     ParensAround(&'a Expr<'a>),
 
+    /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
+    /// It lets us take an (&Expr) and create a plain (Expr) from it.
+    Nested(&'a Expr<'a>),
+
     // Problems
     MalformedIdent(&'a str),
     MalformedClosure,
@@ -278,6 +282,10 @@ pub enum Pattern<'a> {
     /// A field pattern, e.g. { x: Just 0 } -> ...
     /// can only occur inside of a RecordDestructure
     RecordField(&'a str, &'a Loc<Pattern<'a>>),
+
+    /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
+    /// It lets us take an (&Expr) and create a plain (Expr) from it.
+    Nested(&'a Pattern<'a>),
 
     // Literal
     IntLiteral(&'a str),

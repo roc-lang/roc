@@ -59,7 +59,7 @@ pub fn canonicalize_module_defs<'a>(
     for loc_def in loc_defs {
         buf.push_back(canonicalize_def(
             arena,
-            loc_def.value,
+            &loc_def.value,
             loc_def.region,
             home.clone(),
             scope,
@@ -72,7 +72,7 @@ pub fn canonicalize_module_defs<'a>(
 
 fn canonicalize_def<'a>(
     arena: &Bump,
-    def: Def<'a>,
+    def: &'a Def<'a>,
     region: Region,
     home: Box<str>,
     scope: &mut ImMap<Box<str>, (Symbol, Region)>,
@@ -150,8 +150,7 @@ fn canonicalize_def<'a>(
 
         // Ignore spaces
         Def::SpaceBefore(def, _) | Def::SpaceAfter(def, _) => {
-            // TODO FIXME performance disaster!!!
-            canonicalize_def(arena, def.clone(), region, home, scope, var_store)
+            canonicalize_def(arena, def, region, home, scope, var_store)
         }
     }
 }
@@ -860,6 +859,12 @@ fn canonicalize_expr(
                 local_successors(&References::new(), &env.closures)
             );
         }
+        ast::Expr::Nested(sub_expr) => {
+            let (answer, output) =
+                canonicalize_expr(rigids, env, var_store, scope, region, sub_expr, expected);
+
+            (answer.value, output)
+        }
         ast::Expr::BinaryInt(string) => {
             let (constraint, answer) =
                 int_expr_from_result(var_store, finish_parsing_bin(string), env, expected, region);
@@ -903,7 +908,7 @@ fn canonicalize_expr(
         }
         ast::Expr::UnaryOp(_, loc_op) => {
             panic!(
-                "A binary operator did not get desugared somehow: {:?}",
+                "A unary operator did not get desugared somehow: {:?}",
                 loc_op
             );
         }
@@ -1258,7 +1263,7 @@ fn add_idents_from_pattern<'a>(
         RecordField(_, _) => {
             panic!("TODO implement RecordField pattern in add_idents_from_pattern.");
         }
-        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             add_idents_from_pattern(region, pattern, scope, answer)
         }
@@ -1300,7 +1305,7 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
         RecordField(_, _) => {
             panic!("TODO implement RecordField pattern in remove_idents.");
         }
-        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             remove_idents(pattern, idents)
         }

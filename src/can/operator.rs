@@ -34,30 +34,41 @@ fn new_op_expr<'a>(
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
 pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Located<Expr<'a>> {
-    use crate::operator::Associativity::*;
-    use std::cmp::Ordering;
-
     match &loc_expr.value {
         Float(_)
+        | Nested(Float(_))
         | Int(_)
+        | Nested(Int(_))
         | HexInt(_)
+        | Nested(HexInt(_))
         | OctalInt(_)
+        | Nested(OctalInt(_))
         | BinaryInt(_)
+        | Nested(BinaryInt(_))
         | Str(_)
+        | Nested(Str(_))
         | BlockStr(_)
+        | Nested(BlockStr(_))
         | QualifiedField(_, _)
+        | Nested(QualifiedField(_, _))
         | AccessorFunction(_)
+        | Nested(AccessorFunction(_))
         | Var(_, _)
+        | Nested(Var(_, _))
         | MalformedIdent(_)
+        | Nested(MalformedIdent(_))
         | MalformedClosure
+        | Nested(MalformedClosure)
         | PrecedenceConflict(_, _, _)
-        | Variant(_, _) => loc_expr,
+        | Nested(PrecedenceConflict(_, _, _))
+        | Variant(_, _)
+        | Nested(Variant(_, _)) => loc_expr,
 
-        Field(sub_expr, paths) => arena.alloc(Located {
+        Field(sub_expr, paths) | Nested(Field(sub_expr, paths)) => arena.alloc(Located {
             region: loc_expr.region,
             value: Field(desugar(arena, sub_expr), paths.clone()),
         }),
-        List(elems) => {
+        List(elems) | Nested(List(elems)) => {
             let mut new_elems = Vec::with_capacity_in(elems.len(), arena);
 
             for elem in elems {
@@ -70,7 +81,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 value,
             })
         }
-        Record(fields) => {
+        Record(fields) | Nested(Record(fields)) => {
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
             for field in fields {
@@ -87,171 +98,14 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 value: Record(new_fields),
             })
         }
-        Closure(loc_patterns, loc_ret) => arena.alloc(Located {
-            region: loc_expr.region,
-            value: Closure(loc_patterns, desugar(arena, loc_ret)),
-        }),
-        BinOp(_) => {
-            let mut infixes = Infixes::new(arena.alloc(loc_expr));
-            let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
-            let mut op_stack: Vec<Located<BinOp>> = Vec::new_in(arena);
-
-            while let Some(token) = infixes.next() {
-                match token {
-                    InfixToken::Arg(next_expr) => arg_stack.push(next_expr),
-                    InfixToken::Op(next_op) => {
-                        match op_stack.pop() {
-                            Some(stack_op) => {
-                                match next_op.value.cmp(&stack_op.value) {
-                                    Ordering::Less => {
-                                        // Inline
-                                        let right = arg_stack.pop().unwrap();
-                                        let left = arg_stack.pop().unwrap();
-
-                                        infixes.next_op = Some(next_op);
-                                        arg_stack.push(arena.alloc(new_op_expr(
-                                            arena,
-                                            left.clone(),
-                                            stack_op,
-                                            right.clone(),
-                                        )));
-                                    }
-
-                                    Ordering::Greater => {
-                                        // Swap
-                                        op_stack.push(stack_op);
-                                        op_stack.push(next_op);
-                                    }
-
-                                    Ordering::Equal => {
-                                        match (
-                                            next_op.value.associativity(),
-                                            stack_op.value.associativity(),
-                                        ) {
-                                            (LeftAssociative, LeftAssociative) => {
-                                                // Inline
-                                                let right = arg_stack.pop().unwrap();
-                                                let left = arg_stack.pop().unwrap();
-
-                                                infixes.next_op = Some(next_op);
-                                                arg_stack.push(arena.alloc(new_op_expr(
-                                                    arena,
-                                                    left.clone(),
-                                                    stack_op,
-                                                    right.clone(),
-                                                )));
-                                            }
-
-                                            (RightAssociative, RightAssociative) => {
-                                                // Swap
-                                                op_stack.push(stack_op);
-                                                op_stack.push(next_op);
-                                            }
-
-                                            (NonAssociative, NonAssociative) => {
-                                                // Both operators were non-associative, e.g. (True == False == False).
-                                                // We should tell the author to disambiguate by grouping them with parens.
-                                                let bad_op = next_op.clone();
-                                                let right = arg_stack.pop().unwrap();
-                                                let left = arg_stack.pop().unwrap();
-                                                let broken_expr = new_op_expr(
-                                                    arena,
-                                                    left.clone(),
-                                                    next_op,
-                                                    right.clone(),
-                                                );
-                                                let region = broken_expr.region;
-                                                let value = Expr::PrecedenceConflict(
-                                                    bad_op,
-                                                    stack_op,
-                                                    arena.alloc(broken_expr),
-                                                );
-
-                                                return arena.alloc(Located { region, value });
-                                            }
-
-                                            _ => {
-                                                // The operators had the same precedence but different associativity.
-                                                //
-                                                // In many languages, this case can happen due to (for example) <| and |> having the same
-                                                // precedence but different associativity. Languages which support custom operators with
-                                                // (e.g. Haskell) can potentially have arbitrarily many of these cases.
-                                                //
-                                                // By design, Roc neither allows custom operators nor has any built-in operators with
-                                                // the same precedence and different associativity, so this should never happen!
-                                                panic!("BinOps had the same associativity, but different precedence. This should never happen!");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            None => op_stack.push(next_op),
-                        };
-                    }
-                }
-            }
-
-            for loc_op in op_stack.into_iter().rev() {
-                let right = desugar(arena, arg_stack.pop().unwrap());
-                let left = desugar(arena, arg_stack.pop().unwrap());
-
-                let region = Region::span_across(&left.region, &right.region);
-                let value = match loc_op.value {
-                    Pizza => {
-                        // Rewrite the Pizza operator into an Apply
-
-                        match &right.value {
-                            Apply(function, arguments, _called_via) => {
-                                let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
-
-                                args.push(left);
-
-                                for arg in arguments {
-                                    args.push(arg);
-                                }
-
-                                Apply(function, args, CalledVia::BinOp(Pizza))
-                            }
-                            expr => {
-                                // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
-                                let mut args = Vec::with_capacity_in(1, arena);
-                                args.push(*arena.alloc(left));
-
-                                let function = arena.alloc(Located {
-                                    value: expr.clone(),
-                                    region: right.region,
-                                });
-
-                                Apply(function, args, CalledVia::BinOp(Pizza))
-                            }
-                        }
-                    }
-                    binop => {
-                        // This is a normal binary operator like (+), so desugar it
-                        // into the appropriate function call.
-                        let (module_parts, name) = desugar_binop(binop, arena);
-                        let mut args = Vec::with_capacity_in(2, arena);
-
-                        args.push(left);
-                        args.push(right);
-
-                        let loc_expr = arena.alloc(Located {
-                            value: Expr::Var(module_parts, name),
-                            region: loc_op.region,
-                        });
-
-                        Apply(loc_expr, args, CalledVia::BinOp(binop))
-                    }
-                };
-
-                arg_stack.push(arena.alloc(Located { region, value }));
-            }
-
-            assert_eq!(arg_stack.len(), 1);
-
-            arg_stack.pop().unwrap()
+        Closure(loc_patterns, loc_ret) | Nested(Closure(loc_patterns, loc_ret)) => {
+            arena.alloc(Located {
+                region: loc_expr.region,
+                value: Closure(loc_patterns, desugar(arena, loc_ret)),
+            })
         }
-        Defs(defs, loc_ret) => {
+        BinOp(_) | Nested(BinOp(_)) => desugar_bin_op(arena, loc_expr),
+        Defs(defs, loc_ret) | Nested(Defs(defs, loc_ret)) => {
             let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
             for loc_def in defs.into_iter() {
@@ -265,7 +119,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        Apply(loc_fn, loc_args, called_via) => {
+        Apply(loc_fn, loc_args, called_via) | Nested(Apply(loc_fn, loc_args, called_via)) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
 
             for loc_arg in loc_args {
@@ -277,15 +131,22 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        Case(loc_cond_expr, branches) => {
+        Case(loc_cond_expr, branches) | Nested(Case(loc_cond_expr, branches)) => {
             let loc_desugared_cond = &*arena.alloc(desugar(arena, &loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
             for (loc_pattern, loc_branch_expr) in branches.into_iter() {
-                // TODO FIXME cloning performance disaster
+                let desugared = desugar(arena, &loc_branch_expr);
+
                 desugared_branches.push(&*arena.alloc((
-                    loc_pattern.clone(),
-                    desugar(arena, &loc_branch_expr).clone(),
+                    Located {
+                        region: loc_pattern.region,
+                        value: Pattern::Nested(&loc_pattern.value),
+                    },
+                    Located {
+                        region: desugared.region,
+                        value: Nested(&desugared.value),
+                    },
                 )));
             }
 
@@ -294,7 +155,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        UnaryOp(loc_arg, loc_op) => {
+        UnaryOp(loc_arg, loc_op) | Nested(UnaryOp(loc_arg, loc_op)) => {
             use crate::operator::UnaryOp::*;
 
             let region = loc_op.region;
@@ -317,25 +178,25 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+        SpaceBefore(expr, _)
+        | Nested(SpaceBefore(expr, _))
+        | SpaceAfter(expr, _)
+        | Nested(SpaceAfter(expr, _))
+        | ParensAround(expr)
+        | Nested(ParensAround(expr))
+        | Nested(Nested(expr)) => {
             // Since we've already begun canonicalization, spaces and parens
             // are no longer needed and should be dropped.
             desugar(
                 arena,
                 arena.alloc(Located {
-                    // TODO FIXME performance disaster!!! Must remove this clone!
-                    //
-                    // This won't be easy because:
-                    //
-                    // * If this function takes an &'a Expr, then Infixes hits a problem.
-                    // * If SpaceBefore holds a Loc<&'a Expr>, then Spaceable hits a problem.
-                    // * If all the existing &'a Loc<Expr> values become Loc<&'a Expr>...who knows?
-                    value: (*expr).clone(),
+                    value: Nested(expr),
                     region: loc_expr.region,
                 }),
             )
         }
-        If((condition, then_branch, else_branch)) => {
+        If((condition, then_branch, else_branch))
+        | Nested(If((condition, then_branch, else_branch))) => {
             // desugar if into case, meaning that
             //
             //      if b then x else y
@@ -358,13 +219,15 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             // no type errors will occur here so using this region should be fine
             let pattern_region = condition.region;
 
-            // TODO make False qualified
             branches.push(&*arena.alloc((
                 Located {
                     value: Pattern::Variant(&[], "False"),
                     region: pattern_region,
                 },
-                else_branch.clone(),
+                Located {
+                    value: Nested(&else_branch.value),
+                    region: else_branch.region,
+                },
             )));
 
             branches.push(&*arena.alloc((
@@ -372,7 +235,10 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                     value: Pattern::Underscore,
                     region: pattern_region,
                 },
-                then_branch.clone(),
+                Located {
+                    value: Nested(&then_branch.value),
+                    region: then_branch.region,
+                },
             )));
 
             desugar(
@@ -417,23 +283,27 @@ fn desugar_field<'a>(
     use crate::parse::ast::AssignedField::*;
 
     match field {
-        LabeledValue(ref loc_str, spaces, loc_expr) => {
-            AssignedField::LabeledValue(loc_str.clone(), spaces, desugar(arena, loc_expr))
-        }
-        LabelOnly(ref loc_str) => LabelOnly(loc_str.clone()),
-        SpaceBefore(ref field, spaces) => {
-            SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces)
-        }
-        SpaceAfter(ref field, spaces) => {
-            SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces)
-        }
+        LabeledValue(loc_str, spaces, loc_expr) => AssignedField::LabeledValue(
+            Located {
+                value: loc_str.value,
+                region: loc_str.region,
+            },
+            spaces,
+            desugar(arena, loc_expr),
+        ),
+        LabelOnly(loc_str) => LabelOnly(Located {
+            value: loc_str.value,
+            region: loc_str.region,
+        }),
+        SpaceBefore(field, spaces) => SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces),
+        SpaceAfter(field, spaces) => SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces),
 
         Malformed(string) => Malformed(string),
     }
 }
 
 #[inline(always)]
-fn desugar_binop(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
+fn binop_to_function(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
     use self::BinOp::*;
 
     match binop {
@@ -505,6 +375,189 @@ fn desugar_binop(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
     }
 }
 
+fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a Located<Expr<'a>> {
+    use crate::operator::Associativity::*;
+    use std::cmp::Ordering;
+
+    let mut infixes = Infixes::new(loc_expr);
+    let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
+    let mut op_stack: Vec<Located<BinOp>> = Vec::new_in(arena);
+
+    while let Some(token) = infixes.next() {
+        match token {
+            InfixToken::Arg(next_expr) => arg_stack.push(next_expr),
+            InfixToken::Op(next_op) => {
+                match op_stack.pop() {
+                    Some(stack_op) => {
+                        match next_op.value.cmp(&stack_op.value) {
+                            Ordering::Less => {
+                                // Inline
+                                let right = arg_stack.pop().unwrap();
+                                let left = arg_stack.pop().unwrap();
+
+                                infixes.next_op = Some(next_op);
+                                arg_stack.push(arena.alloc(new_op_expr(
+                                    arena,
+                                    Located {
+                                        value: Nested(&left.value),
+                                        region: left.region,
+                                    },
+                                    stack_op,
+                                    Located {
+                                        value: Nested(&right.value),
+                                        region: right.region,
+                                    },
+                                )));
+                            }
+
+                            Ordering::Greater => {
+                                // Swap
+                                op_stack.push(stack_op);
+                                op_stack.push(next_op);
+                            }
+
+                            Ordering::Equal => {
+                                match (
+                                    next_op.value.associativity(),
+                                    stack_op.value.associativity(),
+                                ) {
+                                    (LeftAssociative, LeftAssociative) => {
+                                        // Inline
+                                        let right = arg_stack.pop().unwrap();
+                                        let left = arg_stack.pop().unwrap();
+
+                                        infixes.next_op = Some(next_op);
+                                        arg_stack.push(arena.alloc(new_op_expr(
+                                            arena,
+                                            Located {
+                                                value: Nested(&left.value),
+                                                region: left.region,
+                                            },
+                                            stack_op,
+                                            Located {
+                                                value: Nested(&right.value),
+                                                region: right.region,
+                                            },
+                                        )));
+                                    }
+
+                                    (RightAssociative, RightAssociative) => {
+                                        // Swap
+                                        op_stack.push(stack_op);
+                                        op_stack.push(next_op);
+                                    }
+
+                                    (NonAssociative, NonAssociative) => {
+                                        // Both operators were non-associative, e.g. (True == False == False).
+                                        // We should tell the author to disambiguate by grouping them with parens.
+                                        let bad_op = next_op.clone();
+                                        let right = arg_stack.pop().unwrap();
+                                        let left = arg_stack.pop().unwrap();
+                                        let broken_expr = new_op_expr(
+                                            arena,
+                                            Located {
+                                                value: Nested(&left.value),
+                                                region: left.region,
+                                            },
+                                            next_op,
+                                            Located {
+                                                value: Nested(&right.value),
+                                                region: right.region,
+                                            },
+                                        );
+                                        let region = broken_expr.region;
+                                        let value = Expr::PrecedenceConflict(
+                                            bad_op,
+                                            stack_op,
+                                            arena.alloc(broken_expr),
+                                        );
+
+                                        return arena.alloc(Located { region, value });
+                                    }
+
+                                    _ => {
+                                        // The operators had the same precedence but different associativity.
+                                        //
+                                        // In many languages, this case can happen due to (for example) <| and |> having the same
+                                        // precedence but different associativity. Languages which support custom operators with
+                                        // (e.g. Haskell) can potentially have arbitrarily many of these cases.
+                                        //
+                                        // By design, Roc neither allows custom operators nor has any built-in operators with
+                                        // the same precedence and different associativity, so this should never happen!
+                                        panic!("BinOps had the same associativity, but different precedence. This should never happen!");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None => op_stack.push(next_op),
+                };
+            }
+        }
+    }
+
+    for loc_op in op_stack.into_iter().rev() {
+        let right = desugar(arena, arg_stack.pop().unwrap());
+        let left = desugar(arena, arg_stack.pop().unwrap());
+
+        let region = Region::span_across(&left.region, &right.region);
+        let value = match loc_op.value {
+            Pizza => {
+                // Rewrite the Pizza operator into an Apply
+
+                match &right.value {
+                    Apply(function, arguments, _called_via) => {
+                        let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
+
+                        args.push(left);
+
+                        for arg in arguments {
+                            args.push(arg);
+                        }
+
+                        Apply(function, args, CalledVia::BinOp(Pizza))
+                    }
+                    expr => {
+                        // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
+                        let mut args = Vec::with_capacity_in(1, arena);
+
+                        args.push(left);
+
+                        let function = arena.alloc(Located {
+                            value: Nested(expr),
+                            region: right.region,
+                        });
+
+                        Apply(function, args, CalledVia::BinOp(Pizza))
+                    }
+                }
+            }
+            binop => {
+                // This is a normal binary operator like (+), so desugar it
+                // into the appropriate function call.
+                let (module_parts, name) = binop_to_function(binop, arena);
+                let mut args = Vec::with_capacity_in(2, arena);
+
+                args.push(left);
+                args.push(right);
+
+                let loc_expr = arena.alloc(Located {
+                    value: Expr::Var(module_parts, name),
+                    region: loc_op.region,
+                });
+
+                Apply(loc_expr, args, CalledVia::BinOp(binop))
+            }
+        };
+
+        arg_stack.push(arena.alloc(Located { region, value }));
+    }
+
+    assert_eq!(arg_stack.len(), 1);
+
+    arg_stack.pop().unwrap()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum InfixToken<'a> {
     Arg(&'a Located<Expr<'a>>),
@@ -561,9 +614,10 @@ impl<'a> Iterator for Infixes<'a> {
                 .remaining_expr
                 .take()
                 .map(|loc_expr| match loc_expr.value {
-                    Expr::BinOp((left, op, right)) => {
+                    Expr::BinOp((left, loc_op, right))
+                    | Expr::Nested(Expr::BinOp((left, loc_op, right))) => {
                         self.remaining_expr = Some(right);
-                        self.next_op = Some(op.clone());
+                        self.next_op = Some(loc_op.clone());
 
                         InfixToken::Arg(left)
                     }

@@ -84,6 +84,10 @@ pub fn fmt_pattern<'a>(
             fmt_spaces(buf, spaces.iter(), indent);
         }
 
+        Nested(sub_pattern) => {
+            fmt_pattern(buf, sub_pattern, indent, apply_needs_parens);
+        }
+
         // Malformed
         Malformed(string) => buf.push_str(string),
         QualifiedIdentifier(maybe_qualified) => {
