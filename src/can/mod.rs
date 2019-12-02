@@ -524,47 +524,6 @@ fn canonicalize_expr(
 
         //    (InterpolatedStr(can_pairs, suffix), output)
         //}
-
-        //ast::Expr::ApplyVariant(variant_name, opt_args) => {
-        //    // Canonicalize the arguments and union their references into our output.
-        //    // We'll do this even if the variant name isn't recognized, since we still
-        //    // want to report canonicalization problems with the variant's arguments,
-        //    // and their references still matter for purposes of detecting unused things.
-        //    let mut output = Output::new();
-
-        //    let opt_can_args = match opt_args {
-        //        Some(args) => {
-        //            let mut can_args = Vec::with_capacity(args.len());
-
-        //            for arg in args {
-        //                let (loc_expr, arg_output) = canonicalize(env, scope, arg);
-
-        //                output.references = output.references.union(arg_output.references);
-
-        //                can_args.push(loc_expr);
-        //            }
-
-        //            Some(can_args)
-        //        }
-        //        None => None,
-        //    };
-
-        //    let can_expr = match resolve_variant_name(&env, variant_name, &mut output.references) {
-        //        Ok(symbol) => ApplyVariant(symbol, opt_can_args),
-        //        Err(variant_name) => {
-        //            let loc_variant = Located {
-        //                region: loc_expr.region,
-        //                value: variant_name,
-        //            };
-
-        //            env.problem(Problem::UnrecognizedVariant(loc_variant.clone()));
-
-        //            RuntimeError(UnrecognizedVariant(loc_variant))
-        //        }
-        //    };
-
-        //    (can_expr, output)
-        //}
         ast::Expr::Defs(defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             // so clone it.
@@ -1356,26 +1315,6 @@ fn resolve_ident<'a>(
         }
     }
 }
-
-///// Translate a VariantName into a resolved symbol if it's found in env.declared_variants.
-///// If it could not be found, return it unchanged as an Err.
-//#[inline(always)]
-//fn resolve_variant_name(
-//    env: &Env,
-//    variant_name: VariantName,
-//    references: &mut References,
-//) -> Result<Symbol, VariantName> {
-//    let symbol = Symbol::from_variant(&variant_name, &env.home);
-
-//    if env.variants.contains_key(&symbol) {
-//        references.variants.insert(symbol.clone());
-
-//        Ok(symbol)
-//    } else {
-//        // We couldn't find the qualified variant name in scope. NAMING PROBLEM!
-//        Err(variant_name)
-//    }
-//}
 
 struct Info {
     pub vars: Vec<Variable>,
