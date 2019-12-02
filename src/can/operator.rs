@@ -249,7 +249,8 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                             expr => {
                                 // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
                                 let mut args = Vec::with_capacity_in(1, arena);
-                                args.push(*arena.alloc(left));
+
+                                args.push(left);
 
                                 let function = arena.alloc(Located {
                                     value: Nested(expr),
