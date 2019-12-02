@@ -258,7 +258,7 @@ pub fn canonicalize_pattern<'a>(
         },
 
         // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
-        &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
+        &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
             return canonicalize_pattern(
                 env,
                 state,
@@ -271,6 +271,7 @@ pub fn canonicalize_pattern<'a>(
                 expected,
             )
         }
+
         _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
 
@@ -356,7 +357,7 @@ fn add_constraints<'a>(
             ));
         }
 
-        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             add_constraints(pattern, scope, region, expected, state)
         }
 

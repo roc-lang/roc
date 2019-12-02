@@ -286,7 +286,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
             is_multiline_expr(&loc_subexpr.value)
         }
 
-        ParensAround(subexpr) => is_multiline_expr(&subexpr),
+        ParensAround(subexpr) | Nested(subexpr) => is_multiline_expr(&subexpr),
 
         Closure(loc_patterns, loc_body) => {
             // check the body first because it's more likely to be multiline
