@@ -10,13 +10,14 @@ pub mod problems;
 pub mod string_literal;
 pub mod type_annotation;
 
+use crate::ident::UnqualifiedIdent;
 use crate::operator::{BinOp, CalledVia, UnaryOp};
 use crate::parse::ast::{AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable};
 use crate::parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_after, space1_around,
     space1_before,
 };
-use crate::parse::ident::{ident, lowercase_ident, variant_or_ident, Ident};
+use crate::parse::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::parse::number_literal::number_literal;
 use crate::parse::parser::{
     allocated, char, not, not_followed_by, optional, string, then, unexpected, unexpected_eof,
@@ -216,13 +217,24 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                     Ok((Located { value, region }, state))
                 }
                 // '.' and a record field immediately after ')', no optional spaces
-                Some(Either::Second(Either::First(fields))) => Ok((
-                    Located {
-                        region: loc_expr_with_extras.region,
-                        value: Expr::Field(arena.alloc(loc_expr), fields),
-                    },
-                    state,
-                )),
+                Some(Either::Second(Either::First(fields))) => {
+                    let mut value = loc_expr.value;
+
+                    for field in fields {
+                        // Wrap the previous answer in the new one, so we end up
+                        // with a nested Expr. That way, `foo.bar.baz` gets represented
+                        // in the AST as if it had been written (foo.bar).baz all along.
+                        value = Expr::Access(arena.alloc(value), UnqualifiedIdent::new(field));
+                    }
+
+                    Ok((
+                        Located {
+                            region: loc_expr.region,
+                            value,
+                        },
+                        state,
+                    ))
+                }
                 None => Ok((loc_expr, state)),
             }
         },
@@ -243,7 +255,8 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
                 }))
             }
         }
-        Expr::Variant(module_parts, value) => Ok(Pattern::Variant(module_parts, value)),
+        Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
+        Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
             let value = expr_to_pattern(arena, &loc_val.value)?;
@@ -298,7 +311,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         // These would not have parsed as patterns
         Expr::BlockStr(_)
         | Expr::AccessorFunction(_)
-        | Expr::Field(_, _)
+        | Expr::Access(_, _)
         | Expr::List(_)
         | Expr::Closure(_, _)
         | Expr::BinOp(_)
@@ -307,8 +320,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::Case(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _)
-        | Expr::UnaryOp(_, _)
-        | Expr::QualifiedField(_, _) => Err(Fail {
+        | Expr::UnaryOp(_, _) => Err(Fail {
             attempting: Attempting::Def,
             reason: FailReason::InvalidPattern,
         }),
@@ -655,9 +667,10 @@ fn parse_closure_param<'a>(
             char(')')
         ),
         // The least common, but still allowed, e.g. \Foo -> ...
-        loc!(map!(unqualified_variant(), |name| {
-            Pattern::Variant(&[], name)
-        }))
+        loc!(one_of!(
+            map!(private_tag(), Pattern::PrivateTag),
+            map!(global_tag(), Pattern::GlobalTag)
+        ))
     )
     .parse(arena, state)
 }
@@ -665,7 +678,7 @@ fn parse_closure_param<'a>(
 fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     one_of!(
         underscore_pattern(),
-        variant_pattern(),
+        tag_pattern(),
         ident_pattern(),
         record_destructure(min_indent),
         string_pattern(),
@@ -708,8 +721,11 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     )
 }
 
-fn variant_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map!(unqualified_variant(), |name| Pattern::Variant(&[], name))
+fn tag_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
+    one_of!(
+        map!(private_tag(), Pattern::PrivateTag),
+        map!(global_tag(), Pattern::GlobalTag)
+    )
 }
 
 fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
@@ -958,7 +974,7 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 Some(Either::First(loc_args)) => {
                     let loc_expr = Located {
                         region: loc_ident.region,
-                        value: ident_to_expr(loc_ident.value),
+                        value: ident_to_expr(arena, loc_ident.value),
                     };
 
                     let mut allocated_args = Vec::with_capacity_in(loc_args.len(), arena);
@@ -999,7 +1015,7 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 None => {
                     let ident = loc_ident.value.clone();
 
-                    Ok((ident_to_expr(ident), state))
+                    Ok((ident_to_expr(arena, ident), state))
                 }
             }
         },
@@ -1007,8 +1023,8 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 }
 
 pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {
-    then(loc!(ident()), move |_arena, state, loc_ident| {
-        Ok((ident_to_expr(loc_ident.value), state))
+    then(loc!(ident()), move |arena, state, loc_ident| {
+        Ok((ident_to_expr(arena, loc_ident.value), state))
     })
 }
 
@@ -1047,12 +1063,34 @@ pub fn case_with_indent<'a>() -> impl Parser<'a, u16> {
     }
 }
 
-fn ident_to_expr(src: Ident<'_>) -> Expr<'_> {
+fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
-        Ident::Var(info) => Expr::Var(info.module_parts, info.value),
-        Ident::Variant(info) => Expr::Variant(info.module_parts, info.value),
-        Ident::Field(info) => Expr::QualifiedField(info.module_parts, info.value),
-        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::GlobalTag(string) => Expr::GlobalTag(string),
+        Ident::PrivateTag(string) => Expr::PrivateTag(string),
+        Ident::Access(info) => {
+            let mut iter = info.value.into_iter();
+
+            // The first value in the iterator is the variable name,
+            // e.g. `foo` in `foo.bar.baz`
+            let mut answer = match iter.next() {
+                Some(var) => Expr::Var(info.module_parts, var),
+                None => {
+                    panic!("Parsed an Ident::Access with no parts");
+                }
+            };
+
+            // The remaining items in the iterator are record field accesses,
+            // e.g. `bar` in `foo.bar.baz`, followed by `baz`
+            for field in iter {
+                // Wrap the previous answer in the new one, so we end up
+                // with a nested Expr. That way, `foo.bar.baz` gets represented
+                // in the AST as if it had been written (foo.bar).baz all along.
+                answer = Expr::Access(arena.alloc(answer), UnqualifiedIdent::new(field));
+            }
+
+            answer
+        }
+        Ident::AccessorFunction(string) => Expr::AccessorFunction(UnqualifiedIdent::new(string)),
         Ident::Malformed(string) => Expr::MalformedIdent(string),
     }
 }
@@ -1162,11 +1200,17 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     )
 }
 
-/// This is mainly for matching variants in closure params, e.g. \Foo -> ...
-///
-/// TODO: this should absolutely support qualified variants. Need to change it and rename it!
-fn unqualified_variant<'a>() -> impl Parser<'a, &'a str> {
-    variant_or_ident(|first_char| first_char.is_uppercase())
+/// This is mainly for matching tags in closure params, e.g. \@Foo -> ...
+fn private_tag<'a>() -> impl Parser<'a, &'a str> {
+    skip_first!(char('@'), global_tag())
+}
+
+/// This is mainly for matching tags in closure params, e.g. \Foo -> ...
+fn global_tag<'a>() -> impl Parser<'a, &'a str> {
+    skip_first!(
+        char('@'),
+        global_tag_or_ident(|first_char| first_char.is_uppercase())
+    )
 }
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {

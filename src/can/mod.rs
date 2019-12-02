@@ -86,7 +86,6 @@ fn canonicalize_def<'a>(
             let variable = var_store.fresh();
             let expected = Expected::NoExpectation(Type::Variable(variable));
             let declared_idents = ImMap::default(); // TODO FIXME infer this from scope arg
-            let declared_variants = ImMap::default(); // TODO get rid of this
             let name: Box<str> = "TODOfixme".into();
 
             // Desugar operators (convert them to Apply calls, taking into account
@@ -102,7 +101,7 @@ fn canonicalize_def<'a>(
             // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
             let scope_prefix = format!("{}.{}$", home, name).into();
             let mut scope = Scope::new(scope_prefix, declared_idents.clone());
-            let mut env = Env::new(home, declared_variants.clone());
+            let mut env = Env::new(home);
             let (loc_expr, _) = canonicalize_expr(
                 &ImMap::default(),
                 &mut env,
@@ -165,7 +164,6 @@ pub fn canonicalize_declaration<'a>(
     region: Region,
     loc_expr: Located<ast::Expr<'a>>,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    declared_variants: &ImMap<Symbol, Located<Box<str>>>,
     expected: Expected<Type>,
 ) -> (Located<Expr>, Output, Vec<Problem>) {
     // Desugar operators (convert them to Apply calls, taking into account
@@ -181,7 +179,7 @@ pub fn canonicalize_declaration<'a>(
     // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
     let scope_prefix = format!("{}.{}$", home, name).into();
     let mut scope = Scope::new(scope_prefix, declared_idents.clone());
-    let mut env = Env::new(home, declared_variants.clone());
+    let mut env = Env::new(home);
     let (loc_expr, output) = canonicalize_expr(
         &ImMap::default(),
         &mut env,
@@ -846,11 +844,11 @@ fn canonicalize_expr(
 
             (expr, output)
         }
-        ast::Expr::Field(_, _)
-        | ast::Expr::QualifiedField(_, _)
+        ast::Expr::Access(_, _)
         | ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)
-        | ast::Expr::Variant(_, _)
+        | ast::Expr::GlobalTag(_)
+        | ast::Expr::PrivateTag(_)
         | ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
         | ast::Expr::PrecedenceConflict(_, _, _) => {
@@ -1267,17 +1265,9 @@ fn add_idents_from_pattern<'a>(
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             add_idents_from_pattern(region, pattern, scope, answer)
         }
-        Variant(_, _)
-        | IntLiteral(_)
-        | HexIntLiteral(_)
-        | OctalIntLiteral(_)
-        | BinaryIntLiteral(_)
-        | FloatLiteral(_)
-        | StrLiteral(_)
-        | BlockStrLiteral(_)
-        | EmptyRecordLiteral
-        | Malformed(_)
-        | Underscore => (),
+        GlobalTag(_) | PrivateTag(_) | IntLiteral(_) | HexIntLiteral(_) | OctalIntLiteral(_)
+        | BinaryIntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | BlockStrLiteral(_)
+        | EmptyRecordLiteral | Malformed(_) | Underscore => (),
     }
 }
 
@@ -1309,17 +1299,9 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             remove_idents(pattern, idents)
         }
-        Variant(_, _)
-        | IntLiteral(_)
-        | HexIntLiteral(_)
-        | BinaryIntLiteral(_)
-        | OctalIntLiteral(_)
-        | FloatLiteral(_)
-        | StrLiteral(_)
-        | BlockStrLiteral(_)
-        | EmptyRecordLiteral
-        | Malformed(_)
-        | Underscore => {}
+        GlobalTag(_) | PrivateTag(_) | IntLiteral(_) | HexIntLiteral(_) | BinaryIntLiteral(_)
+        | OctalIntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | BlockStrLiteral(_)
+        | EmptyRecordLiteral | Malformed(_) | Underscore => {}
     }
 }
 
@@ -1638,7 +1620,7 @@ fn can_defs<'a>(
                 // see below: a closure needs a fresh References!
                 let mut is_closure = false;
 
-                // First, make sure we are actually assigning an identifier instead of (for example) a variant.
+                // First, make sure we are actually assigning an identifier instead of (for example) a tag.
                 //
                 // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
                 // which also implies it's not a self tail call!
