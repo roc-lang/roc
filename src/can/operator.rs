@@ -400,7 +400,6 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             // no type errors will occur here so using this region should be fine
             let pattern_region = condition.region;
 
-            // TODO make False qualified
             branches.push(&*arena.alloc((
                 Located {
                     value: Pattern::Variant(&[], "False"),
