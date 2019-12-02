@@ -909,7 +909,7 @@ fn canonicalize_expr(
         }
         ast::Expr::UnaryOp(_, loc_op) => {
             panic!(
-                "A binary operator did not get desugared somehow: {:?}",
+                "A unary operator did not get desugared somehow: {:?}",
                 loc_op
             );
         }
