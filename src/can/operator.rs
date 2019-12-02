@@ -282,10 +282,15 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
             for (loc_pattern, loc_branch_expr) in branches.into_iter() {
+                let desugared = desugar(arena, &loc_branch_expr);
+
                 // TODO FIXME cloning performance disaster
                 desugared_branches.push(&*arena.alloc((
                     loc_pattern.clone(),
-                    desugar(arena, &loc_branch_expr).clone(),
+                    Located {
+                        region: desugared.region,
+                        value: Nested(&desugared.value),
+                    },
                 )));
             }
 
@@ -317,7 +322,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) | Nested(expr) => {
             // Since we've already begun canonicalization, spaces and parens
             // are no longer needed and should be dropped.
             desugar(

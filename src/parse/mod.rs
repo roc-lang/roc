@@ -272,7 +272,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             spaces,
         )),
 
-        Expr::ParensAround(sub_expr) => expr_to_pattern(arena, sub_expr),
+        Expr::ParensAround(sub_expr) | Expr::Nested(sub_expr) => expr_to_pattern(arena, sub_expr),
 
         Expr::Record(loc_assigned_fields) => {
             let mut loc_patterns = Vec::with_capacity_in(loc_assigned_fields.len(), arena);

@@ -860,6 +860,12 @@ fn canonicalize_expr(
                 local_successors(&References::new(), &env.closures)
             );
         }
+        ast::Expr::Nested(sub_expr) => {
+            let (answer, output) =
+                canonicalize_expr(rigids, env, var_store, scope, region, sub_expr, expected);
+
+            (answer.value, output)
+        }
         ast::Expr::BinaryInt(string) => {
             let (constraint, answer) =
                 int_expr_from_result(var_store, finish_parsing_bin(string), env, expected, region);
