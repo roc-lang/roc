@@ -104,14 +104,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 value: Closure(loc_patterns, desugar(arena, loc_ret)),
             })
         }
-        BinOp(_) => desugar_bin_op(arena, loc_expr),
-        Nested(BinOp(op)) => desugar_bin_op(
-            arena,
-            arena.alloc(Located {
-                value: BinOp(op),
-                region: loc_expr.region,
-            }),
-        ),
+        BinOp(_) | Nested(BinOp(_)) => desugar_bin_op(arena, loc_expr),
         Defs(defs, loc_ret) | Nested(Defs(defs, loc_ret)) => {
             let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
@@ -621,7 +614,8 @@ impl<'a> Iterator for Infixes<'a> {
                 .remaining_expr
                 .take()
                 .map(|loc_expr| match loc_expr.value {
-                    Expr::BinOp((left, loc_op, right)) => {
+                    Expr::BinOp((left, loc_op, right))
+                    | Expr::Nested(Expr::BinOp((left, loc_op, right))) => {
                         self.remaining_expr = Some(right);
                         self.next_op = Some(loc_op.clone());
 
