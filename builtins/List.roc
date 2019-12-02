@@ -13,7 +13,7 @@ interface List
 ## > [ [ 1.1 ], [], [ 2.2, 3.3 ] ] # a list of lists of floats
 ##
 ## The list [ 1, "a" ] gives an error, because each element in a list must have
-## the same type. If you want to put a mix of @Int and @Str values into a list, try this:
+## the same type. If you want to put a mix of #Int and #Str values into a list, try this:
 ##
 ## ```
 ## IntOrString := IntElem Int, StrElem Str
@@ -26,33 +26,33 @@ interface List
 ## Under the hood, large lists are Reduced Radix Balanced Trees. Small lists are
 ## stored as flat arrays. This "small list optimization" applies to lists that
 ## take up 8 machine words in memory or fewer, so for example on a 64-bit system,
-## a list of 8 @Int values will be stored as a flat array instead of an RRBT.
+## a list of 8 #Int values will be stored as a flat array instead of an RRBT.
 Float : Num FloatingPoint
 
-## Returned in an @Err by functions like @List.first and @List.last when they are
+## Returned in an #Err by functions like #List.first and #List.last when they are
 ## passed an empty list.
 ListWasEmpty := ListWasEmpty
 
-## Returned in an @Err by @List.zip when given lists of different lengths.
+## Returned in an #Err by #List.zip when given lists of different lengths.
 DifferentLengths := DifferentLengths
 
 ## Initialize
 
 single : elem -> List elem
 
-## If given any number less than 1, returns @[].
+## If given any number less than 1, returns #[].
 repeat : elem, Int -> List elem
 
 range : Int, Int -> List Int
 
-## When given an @Err, returns @[], and when given @Ok, returns a list containing
+## When given an #Err, returns #[], and when given #Ok, returns a list containing
 ## only that value.
 ##
 ## > List.fromResult (Ok 5)
 ##
 ## > List.fromResult (Err "the Err's contents get discarded")
 ##
-## This is useful when using `List.joinMap` with a function ## that returns a @Result.
+## This is useful when using `List.joinMap` with a function ## that returns a #Result.
 ##
 ## > (List.joinMap [ "cat", "", "bat", "" ] Str.first) |> List.map List.fromResult
 fromResult : Result elem * -> List elem
@@ -80,7 +80,7 @@ join : List (List elem) -> List elem
 
 joinMap : List before, (before -> List after) -> List after
 
-## Useful when applying an operation that returns a @Result on each element of
+## Useful when applying an operation that returns a #Result on each element of
 ## a list.
 ##
 ## > (List.joinMap [ "cat", "", "bat", "" ] Str.first) |> List.map List.fromResult
