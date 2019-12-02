@@ -1264,7 +1264,7 @@ fn add_idents_from_pattern<'a>(
         RecordField(_, _) => {
             panic!("TODO implement RecordField pattern in add_idents_from_pattern.");
         }
-        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             add_idents_from_pattern(region, pattern, scope, answer)
         }
@@ -1306,7 +1306,7 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
         RecordField(_, _) => {
             panic!("TODO implement RecordField pattern in remove_idents.");
         }
-        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) => {
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             remove_idents(pattern, idents)
         }

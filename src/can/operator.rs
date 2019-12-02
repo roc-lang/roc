@@ -300,9 +300,11 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
             for (loc_pattern, loc_branch_expr) in branches.into_iter() {
                 let desugared = desugar(arena, &loc_branch_expr);
 
-                // TODO FIXME cloning performance disaster
                 desugared_branches.push(&*arena.alloc((
-                    loc_pattern.clone(),
+                    Located {
+                        region: loc_pattern.region,
+                        value: Pattern::Nested(&loc_pattern.value),
+                    },
                     Located {
                         region: desugared.region,
                         value: Nested(&desugared.value),
