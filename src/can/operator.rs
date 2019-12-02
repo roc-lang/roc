@@ -34,9 +34,6 @@ fn new_op_expr<'a>(
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
 pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Located<Expr<'a>> {
-    use crate::operator::Associativity::*;
-    use std::cmp::Ordering;
-
     match &loc_expr.value {
         Float(_)
         | Nested(Float(_))
@@ -107,185 +104,14 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 value: Closure(loc_patterns, desugar(arena, loc_ret)),
             })
         }
-        BinOp(_) | Nested(BinOp(_)) => {
-            let mut infixes = Infixes::new(arena.alloc(loc_expr));
-            let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
-            let mut op_stack: Vec<Located<BinOp>> = Vec::new_in(arena);
-
-            while let Some(token) = infixes.next() {
-                match token {
-                    InfixToken::Arg(next_expr) => arg_stack.push(next_expr),
-                    InfixToken::Op(next_op) => {
-                        match op_stack.pop() {
-                            Some(stack_op) => {
-                                match next_op.value.cmp(&stack_op.value) {
-                                    Ordering::Less => {
-                                        // Inline
-                                        let right = arg_stack.pop().unwrap();
-                                        let left = arg_stack.pop().unwrap();
-
-                                        infixes.next_op = Some(next_op);
-                                        arg_stack.push(arena.alloc(new_op_expr(
-                                            arena,
-                                            Located {
-                                                value: Nested(&left.value),
-                                                region: left.region,
-                                            },
-                                            stack_op,
-                                            Located {
-                                                value: Nested(&right.value),
-                                                region: right.region,
-                                            },
-                                        )));
-                                    }
-
-                                    Ordering::Greater => {
-                                        // Swap
-                                        op_stack.push(stack_op);
-                                        op_stack.push(next_op);
-                                    }
-
-                                    Ordering::Equal => {
-                                        match (
-                                            next_op.value.associativity(),
-                                            stack_op.value.associativity(),
-                                        ) {
-                                            (LeftAssociative, LeftAssociative) => {
-                                                // Inline
-                                                let right = arg_stack.pop().unwrap();
-                                                let left = arg_stack.pop().unwrap();
-
-                                                infixes.next_op = Some(next_op);
-                                                arg_stack.push(arena.alloc(new_op_expr(
-                                                    arena,
-                                                    Located {
-                                                        value: Nested(&left.value),
-                                                        region: left.region,
-                                                    },
-                                                    stack_op,
-                                                    Located {
-                                                        value: Nested(&right.value),
-                                                        region: right.region,
-                                                    },
-                                                )));
-                                            }
-
-                                            (RightAssociative, RightAssociative) => {
-                                                // Swap
-                                                op_stack.push(stack_op);
-                                                op_stack.push(next_op);
-                                            }
-
-                                            (NonAssociative, NonAssociative) => {
-                                                // Both operators were non-associative, e.g. (True == False == False).
-                                                // We should tell the author to disambiguate by grouping them with parens.
-                                                let bad_op = next_op.clone();
-                                                let right = arg_stack.pop().unwrap();
-                                                let left = arg_stack.pop().unwrap();
-                                                let broken_expr = new_op_expr(
-                                                    arena,
-                                                    Located {
-                                                        value: Nested(&left.value),
-                                                        region: left.region,
-                                                    },
-                                                    next_op,
-                                                    Located {
-                                                        value: Nested(&right.value),
-                                                        region: right.region,
-                                                    },
-                                                );
-                                                let region = broken_expr.region;
-                                                let value = Expr::PrecedenceConflict(
-                                                    bad_op,
-                                                    stack_op,
-                                                    arena.alloc(broken_expr),
-                                                );
-
-                                                return arena.alloc(Located { region, value });
-                                            }
-
-                                            _ => {
-                                                // The operators had the same precedence but different associativity.
-                                                //
-                                                // In many languages, this case can happen due to (for example) <| and |> having the same
-                                                // precedence but different associativity. Languages which support custom operators with
-                                                // (e.g. Haskell) can potentially have arbitrarily many of these cases.
-                                                //
-                                                // By design, Roc neither allows custom operators nor has any built-in operators with
-                                                // the same precedence and different associativity, so this should never happen!
-                                                panic!("BinOps had the same associativity, but different precedence. This should never happen!");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            None => op_stack.push(next_op),
-                        };
-                    }
-                }
-            }
-
-            for loc_op in op_stack.into_iter().rev() {
-                let right = desugar(arena, arg_stack.pop().unwrap());
-                let left = desugar(arena, arg_stack.pop().unwrap());
-
-                let region = Region::span_across(&left.region, &right.region);
-                let value = match loc_op.value {
-                    Pizza => {
-                        // Rewrite the Pizza operator into an Apply
-
-                        match &right.value {
-                            Apply(function, arguments, _called_via) => {
-                                let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
-
-                                args.push(left);
-
-                                for arg in arguments {
-                                    args.push(arg);
-                                }
-
-                                Apply(function, args, CalledVia::BinOp(Pizza))
-                            }
-                            expr => {
-                                // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
-                                let mut args = Vec::with_capacity_in(1, arena);
-
-                                args.push(left);
-
-                                let function = arena.alloc(Located {
-                                    value: Nested(expr),
-                                    region: right.region,
-                                });
-
-                                Apply(function, args, CalledVia::BinOp(Pizza))
-                            }
-                        }
-                    }
-                    binop => {
-                        // This is a normal binary operator like (+), so desugar it
-                        // into the appropriate function call.
-                        let (module_parts, name) = desugar_binop(binop, arena);
-                        let mut args = Vec::with_capacity_in(2, arena);
-
-                        args.push(left);
-                        args.push(right);
-
-                        let loc_expr = arena.alloc(Located {
-                            value: Expr::Var(module_parts, name),
-                            region: loc_op.region,
-                        });
-
-                        Apply(loc_expr, args, CalledVia::BinOp(binop))
-                    }
-                };
-
-                arg_stack.push(arena.alloc(Located { region, value }));
-            }
-
-            assert_eq!(arg_stack.len(), 1);
-
-            arg_stack.pop().unwrap()
-        }
+        BinOp(_) => desugar_bin_op(arena, loc_expr),
+        Nested(BinOp(op)) => desugar_bin_op(
+            arena,
+            arena.alloc(Located {
+                value: BinOp(op),
+                region: loc_expr.region,
+            }),
+        ),
         Defs(defs, loc_ret) | Nested(Defs(defs, loc_ret)) => {
             let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
@@ -484,7 +310,7 @@ fn desugar_field<'a>(
 }
 
 #[inline(always)]
-fn desugar_binop(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
+fn binop_to_function(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
     use self::BinOp::*;
 
     match binop {
@@ -554,6 +380,189 @@ fn desugar_binop(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
         ),
         Pizza => panic!("Cannot desugar the |> operator"),
     }
+}
+
+fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a Located<Expr<'a>> {
+    use crate::operator::Associativity::*;
+    use std::cmp::Ordering;
+
+    let mut infixes = Infixes::new(loc_expr);
+    let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
+    let mut op_stack: Vec<Located<BinOp>> = Vec::new_in(arena);
+
+    while let Some(token) = infixes.next() {
+        match token {
+            InfixToken::Arg(next_expr) => arg_stack.push(next_expr),
+            InfixToken::Op(next_op) => {
+                match op_stack.pop() {
+                    Some(stack_op) => {
+                        match next_op.value.cmp(&stack_op.value) {
+                            Ordering::Less => {
+                                // Inline
+                                let right = arg_stack.pop().unwrap();
+                                let left = arg_stack.pop().unwrap();
+
+                                infixes.next_op = Some(next_op);
+                                arg_stack.push(arena.alloc(new_op_expr(
+                                    arena,
+                                    Located {
+                                        value: Nested(&left.value),
+                                        region: left.region,
+                                    },
+                                    stack_op,
+                                    Located {
+                                        value: Nested(&right.value),
+                                        region: right.region,
+                                    },
+                                )));
+                            }
+
+                            Ordering::Greater => {
+                                // Swap
+                                op_stack.push(stack_op);
+                                op_stack.push(next_op);
+                            }
+
+                            Ordering::Equal => {
+                                match (
+                                    next_op.value.associativity(),
+                                    stack_op.value.associativity(),
+                                ) {
+                                    (LeftAssociative, LeftAssociative) => {
+                                        // Inline
+                                        let right = arg_stack.pop().unwrap();
+                                        let left = arg_stack.pop().unwrap();
+
+                                        infixes.next_op = Some(next_op);
+                                        arg_stack.push(arena.alloc(new_op_expr(
+                                            arena,
+                                            Located {
+                                                value: Nested(&left.value),
+                                                region: left.region,
+                                            },
+                                            stack_op,
+                                            Located {
+                                                value: Nested(&right.value),
+                                                region: right.region,
+                                            },
+                                        )));
+                                    }
+
+                                    (RightAssociative, RightAssociative) => {
+                                        // Swap
+                                        op_stack.push(stack_op);
+                                        op_stack.push(next_op);
+                                    }
+
+                                    (NonAssociative, NonAssociative) => {
+                                        // Both operators were non-associative, e.g. (True == False == False).
+                                        // We should tell the author to disambiguate by grouping them with parens.
+                                        let bad_op = next_op.clone();
+                                        let right = arg_stack.pop().unwrap();
+                                        let left = arg_stack.pop().unwrap();
+                                        let broken_expr = new_op_expr(
+                                            arena,
+                                            Located {
+                                                value: Nested(&left.value),
+                                                region: left.region,
+                                            },
+                                            next_op,
+                                            Located {
+                                                value: Nested(&right.value),
+                                                region: right.region,
+                                            },
+                                        );
+                                        let region = broken_expr.region;
+                                        let value = Expr::PrecedenceConflict(
+                                            bad_op,
+                                            stack_op,
+                                            arena.alloc(broken_expr),
+                                        );
+
+                                        return arena.alloc(Located { region, value });
+                                    }
+
+                                    _ => {
+                                        // The operators had the same precedence but different associativity.
+                                        //
+                                        // In many languages, this case can happen due to (for example) <| and |> having the same
+                                        // precedence but different associativity. Languages which support custom operators with
+                                        // (e.g. Haskell) can potentially have arbitrarily many of these cases.
+                                        //
+                                        // By design, Roc neither allows custom operators nor has any built-in operators with
+                                        // the same precedence and different associativity, so this should never happen!
+                                        panic!("BinOps had the same associativity, but different precedence. This should never happen!");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None => op_stack.push(next_op),
+                };
+            }
+        }
+    }
+
+    for loc_op in op_stack.into_iter().rev() {
+        let right = desugar(arena, arg_stack.pop().unwrap());
+        let left = desugar(arena, arg_stack.pop().unwrap());
+
+        let region = Region::span_across(&left.region, &right.region);
+        let value = match loc_op.value {
+            Pizza => {
+                // Rewrite the Pizza operator into an Apply
+
+                match &right.value {
+                    Apply(function, arguments, _called_via) => {
+                        let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
+
+                        args.push(left);
+
+                        for arg in arguments {
+                            args.push(arg);
+                        }
+
+                        Apply(function, args, CalledVia::BinOp(Pizza))
+                    }
+                    expr => {
+                        // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
+                        let mut args = Vec::with_capacity_in(1, arena);
+
+                        args.push(left);
+
+                        let function = arena.alloc(Located {
+                            value: Nested(expr),
+                            region: right.region,
+                        });
+
+                        Apply(function, args, CalledVia::BinOp(Pizza))
+                    }
+                }
+            }
+            binop => {
+                // This is a normal binary operator like (+), so desugar it
+                // into the appropriate function call.
+                let (module_parts, name) = binop_to_function(binop, arena);
+                let mut args = Vec::with_capacity_in(2, arena);
+
+                args.push(left);
+                args.push(right);
+
+                let loc_expr = arena.alloc(Located {
+                    value: Expr::Var(module_parts, name),
+                    region: loc_op.region,
+                });
+
+                Apply(loc_expr, args, CalledVia::BinOp(binop))
+            }
+        };
+
+        arg_stack.push(arena.alloc(Located { region, value }));
+    }
+
+    assert_eq!(arg_stack.len(), 1);
+
+    arg_stack.pop().unwrap()
 }
 
 #[derive(Debug, Clone, PartialEq)]
