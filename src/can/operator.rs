@@ -127,9 +127,15 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                                         infixes.next_op = Some(next_op);
                                         arg_stack.push(arena.alloc(new_op_expr(
                                             arena,
-                                            left.clone(),
+                                            Located {
+                                                value: Nested(&left.value),
+                                                region: left.region,
+                                            },
                                             stack_op,
-                                            right.clone(),
+                                            Located {
+                                                value: Nested(&right.value),
+                                                region: right.region,
+                                            },
                                         )));
                                     }
 
@@ -152,9 +158,15 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                                                 infixes.next_op = Some(next_op);
                                                 arg_stack.push(arena.alloc(new_op_expr(
                                                     arena,
-                                                    left.clone(),
+                                                    Located {
+                                                        value: Nested(&left.value),
+                                                        region: left.region,
+                                                    },
                                                     stack_op,
-                                                    right.clone(),
+                                                    Located {
+                                                        value: Nested(&right.value),
+                                                        region: right.region,
+                                                    },
                                                 )));
                                             }
 
@@ -172,9 +184,15 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                                                 let left = arg_stack.pop().unwrap();
                                                 let broken_expr = new_op_expr(
                                                     arena,
-                                                    left.clone(),
+                                                    Located {
+                                                        value: Nested(&left.value),
+                                                        region: left.region,
+                                                    },
                                                     next_op,
-                                                    right.clone(),
+                                                    Located {
+                                                        value: Nested(&right.value),
+                                                        region: right.region,
+                                                    },
                                                 );
                                                 let region = broken_expr.region;
                                                 let value = Expr::PrecedenceConflict(
@@ -234,7 +252,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                                 args.push(*arena.alloc(left));
 
                                 let function = arena.alloc(Located {
-                                    value: expr.clone(),
+                                    value: Nested(expr),
                                     region: right.region,
                                 });
 
@@ -387,7 +405,10 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                     value: Pattern::Variant(&[], "False"),
                     region: pattern_region,
                 },
-                else_branch.clone(),
+                Located {
+                    value: Nested(&else_branch.value),
+                    region: else_branch.region,
+                },
             )));
 
             branches.push(&*arena.alloc((
@@ -395,7 +416,10 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                     value: Pattern::Underscore,
                     region: pattern_region,
                 },
-                then_branch.clone(),
+                Located {
+                    value: Nested(&then_branch.value),
+                    region: then_branch.region,
+                },
             )));
 
             desugar(
@@ -440,16 +464,20 @@ fn desugar_field<'a>(
     use crate::parse::ast::AssignedField::*;
 
     match field {
-        LabeledValue(ref loc_str, spaces, loc_expr) => {
-            AssignedField::LabeledValue(loc_str.clone(), spaces, desugar(arena, loc_expr))
-        }
-        LabelOnly(ref loc_str) => LabelOnly(loc_str.clone()),
-        SpaceBefore(ref field, spaces) => {
-            SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces)
-        }
-        SpaceAfter(ref field, spaces) => {
-            SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces)
-        }
+        LabeledValue(loc_str, spaces, loc_expr) => AssignedField::LabeledValue(
+            Located {
+                value: loc_str.value,
+                region: loc_str.region,
+            },
+            spaces,
+            desugar(arena, loc_expr),
+        ),
+        LabelOnly(loc_str) => LabelOnly(Located {
+            value: loc_str.value,
+            region: loc_str.region,
+        }),
+        SpaceBefore(field, spaces) => SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces),
+        SpaceAfter(field, spaces) => SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces),
 
         Malformed(string) => Malformed(string),
     }
@@ -584,9 +612,9 @@ impl<'a> Iterator for Infixes<'a> {
                 .remaining_expr
                 .take()
                 .map(|loc_expr| match loc_expr.value {
-                    Expr::BinOp((left, op, right)) => {
+                    Expr::BinOp((left, loc_op, right)) => {
                         self.remaining_expr = Some(right);
-                        self.next_op = Some(op.clone());
+                        self.next_op = Some(loc_op.clone());
 
                         InfixToken::Arg(left)
                     }
