@@ -39,25 +39,39 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
 
     match &loc_expr.value {
         Float(_)
+        | Nested(Float(_))
         | Int(_)
+        | Nested(Int(_))
         | HexInt(_)
+        | Nested(HexInt(_))
         | OctalInt(_)
+        | Nested(OctalInt(_))
         | BinaryInt(_)
+        | Nested(BinaryInt(_))
         | Str(_)
+        | Nested(Str(_))
         | BlockStr(_)
+        | Nested(BlockStr(_))
         | QualifiedField(_, _)
+        | Nested(QualifiedField(_, _))
         | AccessorFunction(_)
+        | Nested(AccessorFunction(_))
         | Var(_, _)
+        | Nested(Var(_, _))
         | MalformedIdent(_)
+        | Nested(MalformedIdent(_))
         | MalformedClosure
+        | Nested(MalformedClosure)
         | PrecedenceConflict(_, _, _)
-        | Variant(_, _) => loc_expr,
+        | Nested(PrecedenceConflict(_, _, _))
+        | Variant(_, _)
+        | Nested(Variant(_, _)) => loc_expr,
 
-        Field(sub_expr, paths) => arena.alloc(Located {
+        Field(sub_expr, paths) | Nested(Field(sub_expr, paths)) => arena.alloc(Located {
             region: loc_expr.region,
             value: Field(desugar(arena, sub_expr), paths.clone()),
         }),
-        List(elems) => {
+        List(elems) | Nested(List(elems)) => {
             let mut new_elems = Vec::with_capacity_in(elems.len(), arena);
 
             for elem in elems {
@@ -70,7 +84,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 value,
             })
         }
-        Record(fields) => {
+        Record(fields) | Nested(Record(fields)) => {
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
             for field in fields {
@@ -87,11 +101,13 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 value: Record(new_fields),
             })
         }
-        Closure(loc_patterns, loc_ret) => arena.alloc(Located {
-            region: loc_expr.region,
-            value: Closure(loc_patterns, desugar(arena, loc_ret)),
-        }),
-        BinOp(_) => {
+        Closure(loc_patterns, loc_ret) | Nested(Closure(loc_patterns, loc_ret)) => {
+            arena.alloc(Located {
+                region: loc_expr.region,
+                value: Closure(loc_patterns, desugar(arena, loc_ret)),
+            })
+        }
+        BinOp(_) | Nested(BinOp(_)) => {
             let mut infixes = Infixes::new(arena.alloc(loc_expr));
             let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
             let mut op_stack: Vec<Located<BinOp>> = Vec::new_in(arena);
@@ -251,7 +267,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
 
             arg_stack.pop().unwrap()
         }
-        Defs(defs, loc_ret) => {
+        Defs(defs, loc_ret) | Nested(Defs(defs, loc_ret)) => {
             let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
             for loc_def in defs.into_iter() {
@@ -265,7 +281,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        Apply(loc_fn, loc_args, called_via) => {
+        Apply(loc_fn, loc_args, called_via) | Nested(Apply(loc_fn, loc_args, called_via)) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
 
             for loc_arg in loc_args {
@@ -277,7 +293,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        Case(loc_cond_expr, branches) => {
+        Case(loc_cond_expr, branches) | Nested(Case(loc_cond_expr, branches)) => {
             let loc_desugared_cond = &*arena.alloc(desugar(arena, &loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
@@ -299,7 +315,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        UnaryOp(loc_arg, loc_op) => {
+        UnaryOp(loc_arg, loc_op) | Nested(UnaryOp(loc_arg, loc_op)) => {
             use crate::operator::UnaryOp::*;
 
             let region = loc_op.region;
@@ -322,25 +338,25 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) | Nested(expr) => {
+        SpaceBefore(expr, _)
+        | Nested(SpaceBefore(expr, _))
+        | SpaceAfter(expr, _)
+        | Nested(SpaceAfter(expr, _))
+        | ParensAround(expr)
+        | Nested(ParensAround(expr))
+        | Nested(Nested(expr)) => {
             // Since we've already begun canonicalization, spaces and parens
             // are no longer needed and should be dropped.
             desugar(
                 arena,
                 arena.alloc(Located {
-                    // TODO FIXME performance disaster!!! Must remove this clone!
-                    //
-                    // This won't be easy because:
-                    //
-                    // * If this function takes an &'a Expr, then Infixes hits a problem.
-                    // * If SpaceBefore holds a Loc<&'a Expr>, then Spaceable hits a problem.
-                    // * If all the existing &'a Loc<Expr> values become Loc<&'a Expr>...who knows?
-                    value: (*expr).clone(),
+                    value: Nested(expr),
                     region: loc_expr.region,
                 }),
             )
         }
-        If((condition, then_branch, else_branch)) => {
+        If((condition, then_branch, else_branch))
+        | Nested(If((condition, then_branch, else_branch))) => {
             // desugar if into case, meaning that
             //
             //      if b then x else y
