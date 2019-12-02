@@ -59,7 +59,7 @@ pub fn canonicalize_module_defs<'a>(
     for loc_def in loc_defs {
         buf.push_back(canonicalize_def(
             arena,
-            loc_def.value,
+            &loc_def.value,
             loc_def.region,
             home.clone(),
             scope,
@@ -72,7 +72,7 @@ pub fn canonicalize_module_defs<'a>(
 
 fn canonicalize_def<'a>(
     arena: &Bump,
-    def: Def<'a>,
+    def: &'a Def<'a>,
     region: Region,
     home: Box<str>,
     scope: &mut ImMap<Box<str>, (Symbol, Region)>,
@@ -150,8 +150,7 @@ fn canonicalize_def<'a>(
 
         // Ignore spaces
         Def::SpaceBefore(def, _) | Def::SpaceAfter(def, _) => {
-            // TODO FIXME performance disaster!!!
-            canonicalize_def(arena, def.clone(), region, home, scope, var_store)
+            canonicalize_def(arena, def, region, home, scope, var_store)
         }
     }
 }
