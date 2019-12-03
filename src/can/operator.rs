@@ -49,8 +49,6 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
         | Nested(Str(_))
         | BlockStr(_)
         | Nested(BlockStr(_))
-        | QualifiedField(_, _)
-        | Nested(QualifiedField(_, _))
         | AccessorFunction(_)
         | Nested(AccessorFunction(_))
         | Var(_, _)
@@ -61,13 +59,24 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
         | Nested(MalformedClosure)
         | PrecedenceConflict(_, _, _)
         | Nested(PrecedenceConflict(_, _, _))
-        | Variant(_, _)
-        | Nested(Variant(_, _)) => loc_expr,
+        | GlobalTag(_)
+        | Nested(GlobalTag(_))
+        | PrivateTag(_)
+        | Nested(PrivateTag(_)) => loc_expr,
 
-        Field(sub_expr, paths) | Nested(Field(sub_expr, paths)) => arena.alloc(Located {
-            region: loc_expr.region,
-            value: Field(desugar(arena, sub_expr), paths.clone()),
-        }),
+        Access(sub_expr, paths) | Nested(Access(sub_expr, paths)) => {
+            let region = loc_expr.region;
+            let loc_sub_expr = Located {
+                region,
+                value: Nested(sub_expr),
+            };
+            let value = Access(
+                &desugar(arena, arena.alloc(loc_sub_expr)).value,
+                paths.clone(),
+            );
+
+            arena.alloc(Located { region, value })
+        }
         List(elems) | Nested(List(elems)) => {
             let mut new_elems = Vec::with_capacity_in(elems.len(), arena);
 
@@ -221,7 +230,7 @@ pub fn desugar<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Loca
 
             branches.push(&*arena.alloc((
                 Located {
-                    value: Pattern::Variant(&[], "False"),
+                    value: Pattern::GlobalTag("False"),
                     region: pattern_region,
                 },
                 Located {

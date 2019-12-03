@@ -86,7 +86,6 @@ fn canonicalize_def<'a>(
             let variable = var_store.fresh();
             let expected = Expected::NoExpectation(Type::Variable(variable));
             let declared_idents = ImMap::default(); // TODO FIXME infer this from scope arg
-            let declared_variants = ImMap::default(); // TODO get rid of this
             let name: Box<str> = "TODOfixme".into();
 
             // Desugar operators (convert them to Apply calls, taking into account
@@ -102,7 +101,7 @@ fn canonicalize_def<'a>(
             // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
             let scope_prefix = format!("{}.{}$", home, name).into();
             let mut scope = Scope::new(scope_prefix, declared_idents.clone());
-            let mut env = Env::new(home, declared_variants.clone());
+            let mut env = Env::new(home);
             let (loc_expr, _) = canonicalize_expr(
                 &ImMap::default(),
                 &mut env,
@@ -165,7 +164,6 @@ pub fn canonicalize_declaration<'a>(
     region: Region,
     loc_expr: Located<ast::Expr<'a>>,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    declared_variants: &ImMap<Symbol, Located<Box<str>>>,
     expected: Expected<Type>,
 ) -> (Located<Expr>, Output, Vec<Problem>) {
     // Desugar operators (convert them to Apply calls, taking into account
@@ -181,7 +179,7 @@ pub fn canonicalize_declaration<'a>(
     // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
     let scope_prefix = format!("{}.{}$", home, name).into();
     let mut scope = Scope::new(scope_prefix, declared_idents.clone());
-    let mut env = Env::new(home, declared_variants.clone());
+    let mut env = Env::new(home);
     let (loc_expr, output) = canonicalize_expr(
         &ImMap::default(),
         &mut env,
@@ -526,47 +524,6 @@ fn canonicalize_expr(
 
         //    (InterpolatedStr(can_pairs, suffix), output)
         //}
-
-        //ast::Expr::ApplyVariant(variant_name, opt_args) => {
-        //    // Canonicalize the arguments and union their references into our output.
-        //    // We'll do this even if the variant name isn't recognized, since we still
-        //    // want to report canonicalization problems with the variant's arguments,
-        //    // and their references still matter for purposes of detecting unused things.
-        //    let mut output = Output::new();
-
-        //    let opt_can_args = match opt_args {
-        //        Some(args) => {
-        //            let mut can_args = Vec::with_capacity(args.len());
-
-        //            for arg in args {
-        //                let (loc_expr, arg_output) = canonicalize(env, scope, arg);
-
-        //                output.references = output.references.union(arg_output.references);
-
-        //                can_args.push(loc_expr);
-        //            }
-
-        //            Some(can_args)
-        //        }
-        //        None => None,
-        //    };
-
-        //    let can_expr = match resolve_variant_name(&env, variant_name, &mut output.references) {
-        //        Ok(symbol) => ApplyVariant(symbol, opt_can_args),
-        //        Err(variant_name) => {
-        //            let loc_variant = Located {
-        //                region: loc_expr.region,
-        //                value: variant_name,
-        //            };
-
-        //            env.problem(Problem::UnrecognizedVariant(loc_variant.clone()));
-
-        //            RuntimeError(UnrecognizedVariant(loc_variant))
-        //        }
-        //    };
-
-        //    (can_expr, output)
-        //}
         ast::Expr::Defs(defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             // so clone it.
@@ -846,11 +803,11 @@ fn canonicalize_expr(
 
             (expr, output)
         }
-        ast::Expr::Field(_, _)
-        | ast::Expr::QualifiedField(_, _)
+        ast::Expr::Access(_, _)
         | ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)
-        | ast::Expr::Variant(_, _)
+        | ast::Expr::GlobalTag(_)
+        | ast::Expr::PrivateTag(_)
         | ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
         | ast::Expr::PrecedenceConflict(_, _, _) => {
@@ -1267,17 +1224,9 @@ fn add_idents_from_pattern<'a>(
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             add_idents_from_pattern(region, pattern, scope, answer)
         }
-        Variant(_, _)
-        | IntLiteral(_)
-        | HexIntLiteral(_)
-        | OctalIntLiteral(_)
-        | BinaryIntLiteral(_)
-        | FloatLiteral(_)
-        | StrLiteral(_)
-        | BlockStrLiteral(_)
-        | EmptyRecordLiteral
-        | Malformed(_)
-        | Underscore => (),
+        GlobalTag(_) | PrivateTag(_) | IntLiteral(_) | HexIntLiteral(_) | OctalIntLiteral(_)
+        | BinaryIntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | BlockStrLiteral(_)
+        | EmptyRecordLiteral | Malformed(_) | Underscore => (),
     }
 }
 
@@ -1309,17 +1258,9 @@ fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Regi
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             remove_idents(pattern, idents)
         }
-        Variant(_, _)
-        | IntLiteral(_)
-        | HexIntLiteral(_)
-        | BinaryIntLiteral(_)
-        | OctalIntLiteral(_)
-        | FloatLiteral(_)
-        | StrLiteral(_)
-        | BlockStrLiteral(_)
-        | EmptyRecordLiteral
-        | Malformed(_)
-        | Underscore => {}
+        GlobalTag(_) | PrivateTag(_) | IntLiteral(_) | HexIntLiteral(_) | BinaryIntLiteral(_)
+        | OctalIntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | BlockStrLiteral(_)
+        | EmptyRecordLiteral | Malformed(_) | Underscore => {}
     }
 }
 
@@ -1374,26 +1315,6 @@ fn resolve_ident<'a>(
         }
     }
 }
-
-///// Translate a VariantName into a resolved symbol if it's found in env.declared_variants.
-///// If it could not be found, return it unchanged as an Err.
-//#[inline(always)]
-//fn resolve_variant_name(
-//    env: &Env,
-//    variant_name: VariantName,
-//    references: &mut References,
-//) -> Result<Symbol, VariantName> {
-//    let symbol = Symbol::from_variant(&variant_name, &env.home);
-
-//    if env.variants.contains_key(&symbol) {
-//        references.variants.insert(symbol.clone());
-
-//        Ok(symbol)
-//    } else {
-//        // We couldn't find the qualified variant name in scope. NAMING PROBLEM!
-//        Err(variant_name)
-//    }
-//}
 
 struct Info {
     pub vars: Vec<Variable>,
@@ -1638,7 +1559,7 @@ fn can_defs<'a>(
                 // see below: a closure needs a fresh References!
                 let mut is_closure = false;
 
-                // First, make sure we are actually assigning an identifier instead of (for example) a variant.
+                // First, make sure we are actually assigning an identifier instead of (for example) a tag.
                 //
                 // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
                 // which also implies it's not a self tail call!

@@ -1,5 +1,5 @@
 use crate::can::pattern::PatternType;
-use crate::ident::{Ident, VariantName};
+use crate::ident::Ident;
 use crate::operator::BinOp;
 use crate::region::{Located, Region};
 
@@ -9,7 +9,6 @@ pub enum Problem {
     Shadowing(Located<Ident>),
     UnrecognizedFunctionName(Located<Ident>),
     UnrecognizedConstant(Located<Ident>),
-    UnrecognizedVariant(Located<VariantName>),
     UnusedAssignment(Located<Ident>),
     UnusedArgument(Located<Ident>),
     PrecedenceProblem(PrecedenceProblem),
@@ -29,7 +28,6 @@ pub enum RuntimeError {
     InvalidPrecedence(PrecedenceProblem, Region),
     UnrecognizedFunctionName(Located<Ident>),
     UnrecognizedConstant(Located<Ident>),
-    UnrecognizedVariant(Located<VariantName>),
     FloatOutsideRange(Box<str>),
     IntOutsideRange(Box<str>),
     InvalidHex(std::num::ParseIntError, Box<str>),

@@ -40,15 +40,6 @@ impl<'a> UnqualifiedIdent<'a> {
     }
 }
 
-/// A variant name, possibly fully-qualified with a module name
-/// e.g. (Result.Ok)
-/// Parameterized on a phantom marker for whether it has been canonicalized
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum VariantName {
-    Unqualified(String),
-    Qualified(String, String),
-}
-
 /// An identifier, possibly fully-qualified with a module name
 /// e.g. (Http.Request from http)
 /// Parameterized on a phantom marker for whether it has been canonicalized
@@ -86,15 +77,6 @@ impl Display for Ident {
         match self {
             Ident::Unqualified(name) => write!(f, "{}", name),
             Ident::Qualified(path, name) => write!(f, "{}.{}", path, name),
-        }
-    }
-}
-
-impl Display for VariantName {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            VariantName::Unqualified(name) => write!(f, "{}", name),
-            VariantName::Qualified(path, name) => write!(f, "{}.{}", path, name),
         }
     }
 }

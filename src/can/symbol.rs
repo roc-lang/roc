@@ -1,8 +1,8 @@
-use crate::ident::{UnqualifiedIdent, VariantName};
+use crate::ident::UnqualifiedIdent;
 use crate::module::ModuleName;
 use std::fmt;
 
-/// A globally unique identifier, used for both vars and variants.
+/// A globally unique identifier, used for both vars and tags.
 /// It will be used directly in code gen.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Symbol(Box<str>);
@@ -33,12 +33,12 @@ impl Symbol {
         })
     }
 
-    pub fn from_variant(variant_name: &VariantName, home: &str) -> Symbol {
-        match variant_name {
-            VariantName::Unqualified(name) => Symbol::new(home, name),
+    pub fn from_global_tag(tag_name: &str) -> Symbol {
+        Symbol(tag_name.into())
+    }
 
-            VariantName::Qualified(path, name) => Symbol::new(path, name),
-        }
+    pub fn from_private_tag(home: &str, tag_name: &str) -> Symbol {
+        Symbol(format!("{}.{}", home, tag_name).into())
     }
 
     pub fn from_module<'a>(

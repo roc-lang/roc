@@ -46,7 +46,6 @@ impl Procedure {
 pub struct References {
     pub locals: ImSet<Symbol>,
     pub globals: ImSet<Symbol>,
-    pub variants: ImSet<Symbol>,
     pub calls: ImSet<Symbol>,
 }
 
@@ -55,7 +54,6 @@ impl References {
         References {
             locals: ImSet::default(),
             globals: ImSet::default(),
-            variants: ImSet::default(),
             calls: ImSet::default(),
         }
     }
@@ -63,7 +61,6 @@ impl References {
     pub fn union(mut self, other: References) -> Self {
         self.locals = self.locals.union(other.locals);
         self.globals = self.globals.union(other.globals);
-        self.variants = self.variants.union(other.variants);
         self.calls = self.calls.union(other.calls);
 
         self
@@ -71,9 +68,5 @@ impl References {
 
     pub fn has_local(&self, symbol: &Symbol) -> bool {
         self.locals.contains(symbol)
-    }
-
-    pub fn has_variant(&self, symbol: &Symbol) -> bool {
-        self.variants.contains(symbol)
     }
 }

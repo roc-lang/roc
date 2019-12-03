@@ -127,13 +127,10 @@ pub enum Expr<'a> {
     // String Literals
     Str(&'a str),
     BlockStr(&'a [&'a str]),
-    /// e.g. `(expr).foo.bar` - we rule out nested lookups in canonicalization,
-    /// but we want to keep the nesting here to give a nicer error message.
-    Field(&'a Loc<Expr<'a>>, Vec<'a, &'a str>),
-    /// e.g. `Foo.Bar.baz.qux`
-    QualifiedField(&'a [&'a str], &'a [&'a str]),
+    /// Look up exactly one field on a record, e.g. (expr).foo.
+    Access(&'a Expr<'a>, UnqualifiedIdent<'a>),
     /// e.g. `.foo`
-    AccessorFunction(&'a str),
+    AccessorFunction(UnqualifiedIdent<'a>),
 
     // Collection Literals
     List(Vec<'a, &'a Loc<Expr<'a>>>),
@@ -141,7 +138,10 @@ pub enum Expr<'a> {
 
     // Lookups
     Var(&'a [&'a str], &'a str),
-    Variant(&'a [&'a str], &'a str),
+
+    // Tags
+    GlobalTag(&'a str),
+    PrivateTag(&'a str),
 
     // Pattern Matching
     Closure(&'a Vec<'a, Loc<Pattern<'a>>>, &'a Loc<Expr<'a>>),
@@ -150,7 +150,7 @@ pub enum Expr<'a> {
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
-    /// To apply a variant by name, do Apply(Variant(...), ...)
+    /// To apply a tag by name, do Apply(Tag(...), ...)
     Apply(&'a Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>, CalledVia),
     BinOp(&'a (Loc<Expr<'a>>, Loc<BinOp>, Loc<Expr<'a>>)),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
@@ -272,8 +272,8 @@ pub enum Pattern<'a> {
     // Identifier
     Identifier(&'a str),
 
-    // Variant, optionally qualified
-    Variant(&'a [&'a str], &'a str),
+    GlobalTag(&'a str),
+    PrivateTag(&'a str),
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
@@ -310,39 +310,35 @@ pub enum Pattern<'a> {
 impl<'a> Pattern<'a> {
     pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
         match ident {
-            Ident::Var(maybe_qualified) => {
-                if maybe_qualified.module_parts.is_empty() {
-                    Pattern::Identifier(maybe_qualified.value)
+            Ident::GlobalTag(string) => Pattern::GlobalTag(string),
+            Ident::PrivateTag(string) => Pattern::PrivateTag(string),
+            Ident::Access(maybe_qualified) => {
+                if maybe_qualified.value.len() == 1 {
+                    Pattern::Identifier(maybe_qualified.value.iter().next().unwrap())
                 } else {
-                    Pattern::Variant(maybe_qualified.module_parts, maybe_qualified.value)
-                }
-            }
-            Ident::Variant(maybe_qualified) => {
-                Pattern::Variant(maybe_qualified.module_parts, maybe_qualified.value)
-            }
-            Ident::Field(maybe_qualified) => {
-                let mut buf = String::with_capacity_in(
-                    maybe_qualified.module_parts.len() + maybe_qualified.value.len(),
-                    arena,
-                );
+                    let mut buf = String::with_capacity_in(
+                        maybe_qualified.module_parts.len() + maybe_qualified.value.len(),
+                        arena,
+                    );
 
-                for part in maybe_qualified.module_parts.iter() {
-                    buf.push_str(part);
-                    buf.push('.');
-                }
-
-                let mut iter = maybe_qualified.value.iter().peekable();
-
-                while let Some(part) = iter.next() {
-                    buf.push_str(part);
-
-                    // If there are more fields to come, add a "."
-                    if iter.peek().is_some() {
+                    for part in maybe_qualified.module_parts.iter() {
+                        buf.push_str(part);
                         buf.push('.');
                     }
-                }
 
-                Pattern::Malformed(buf.into_bump_str())
+                    let mut iter = maybe_qualified.value.iter().peekable();
+
+                    while let Some(part) = iter.next() {
+                        buf.push_str(part);
+
+                        // If there are more fields to come, add a "."
+                        if iter.peek().is_some() {
+                            buf.push('.');
+                        }
+                    }
+
+                    Pattern::Malformed(buf.into_bump_str())
+                }
             }
             Ident::AccessorFunction(string) => Pattern::Malformed(string),
             Ident::Malformed(string) => Pattern::Malformed(string),
