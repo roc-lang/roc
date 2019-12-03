@@ -36,13 +36,7 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 
 #[allow(dead_code)]
 pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, VarStore, Variable) {
-    can_expr_with(
-        &Bump::new(),
-        "blah",
-        expr_str,
-        &ImMap::default(),
-        &ImMap::default(),
-    )
+    can_expr_with(&Bump::new(), "blah", expr_str, &ImMap::default())
 }
 
 #[allow(dead_code)]
@@ -132,7 +126,6 @@ pub fn can_expr_with(
     name: &str,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    declared_variants: &ImMap<Symbol, Located<Box<str>>>,
 ) -> (Expr, Output, Vec<Problem>, VarStore, Variable) {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
         panic!(
@@ -153,7 +146,6 @@ pub fn can_expr_with(
         Region::zero(),
         loc_expr,
         declared_idents,
-        declared_variants,
         expected,
     );
 

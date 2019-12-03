@@ -48,7 +48,6 @@ mod test_canonicalize {
     struct Out<'a> {
         locals: Vec<&'a str>,
         globals: Vec<&'a str>,
-        variants: Vec<&'a str>,
         calls: Vec<&'a str>,
         tail_call: Option<&'a str>,
     }
@@ -58,7 +57,6 @@ mod test_canonicalize {
             let references = References {
                 locals: vec_to_set(self.locals),
                 globals: vec_to_set(self.globals),
-                variants: vec_to_set(self.variants),
                 calls: vec_to_set(self.calls),
             };
 
@@ -78,8 +76,7 @@ mod test_canonicalize {
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _, _) =
-            can_expr_with(&arena, "Blah", input, &ImMap::default(), &ImMap::default());
+        let (actual, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
 
         assert_eq!(expected, actual);
     }
@@ -141,7 +138,7 @@ mod test_canonicalize {
         "#
         );
         let (_actual, mut output, problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+            can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         assert_eq!(problems, vec![]);
 
@@ -153,7 +150,6 @@ mod test_canonicalize {
             Out {
                 locals: vec!["func"],
                 globals: vec![],
-                variants: vec![],
                 calls: vec!["func"],
                 tail_call: None
             }
@@ -177,7 +173,6 @@ mod test_canonicalize {
         //             references: References {
         //                 locals: vec_to_set(vec![]),
         //                 globals: vec_to_set(vec![]),
-        //                 variants: vec_to_set(vec![]),
         //                 calls: vec_to_set(vec![]),
         //             }
         //         }
@@ -199,7 +194,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (_actual, mut output, problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+            can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         assert_eq!(problems, vec![]);
 
@@ -211,7 +206,6 @@ mod test_canonicalize {
             Out {
                 locals: vec!["identity", "apply"],
                 globals: vec![],
-                variants: vec![],
                 calls: vec!["f", "apply"],
                 tail_call: None
             }
@@ -257,7 +251,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+            can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         let detected = get_closure(&actual, 0);
         assert_eq!(detected, Recursive::TailRecursive);
@@ -283,7 +277,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+            can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         let detected = get_closure(&actual, 0);
         assert_eq!(detected, Recursive::TailRecursive);
@@ -300,7 +294,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+            can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         let detected = get_closure(&actual, 0);
         assert_eq!(detected, Recursive::TailRecursive);
@@ -320,7 +314,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+            can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         let detected = get_closure(&actual, 0);
         assert_eq!(detected, Recursive::Recursive);
@@ -346,7 +340,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default(), &ImMap::default());
+            can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         let detected = get_closure(&actual, 0);
         assert_eq!(detected, Recursive::Recursive);
@@ -381,7 +375,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["func", "local"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec!["func"],
     //            tail_call: None
     //        }
@@ -415,7 +408,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["local"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -450,7 +442,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec![],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -481,7 +472,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["a", "b"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -512,7 +502,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["c"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -541,7 +530,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["fibonacci"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec!["fibonacci"],
     //            tail_call: None
     //        }
@@ -576,7 +564,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["factorial", "factorialHelp"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec!["factorial", "factorialHelp"],
     //            tail_call: None
     //        }
@@ -604,7 +591,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["a", "b"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -634,7 +620,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["increment", "x", "y", "z"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec!["increment"],
     //            tail_call: None
     //        }
@@ -675,7 +660,6 @@ mod test_canonicalize {
     //        Out {
     //            locals: vec!["func1", "func2", "x", "y", "z"],
     //            globals: vec![],
-    //            variants: vec![],
     //            calls: vec!["func1", "func2"],
     //            tail_call: None
     //        }

@@ -2,9 +2,9 @@ api Num provides Num, DivByZero..., negate, abs, add, sub, mul, isOdd, isEven, i
 
 ## Types
 
-## Represents a number that could be either an @Int or a @Float.
+## Represents a number that could be either an #Int or a #Float.
 ##
-## This is useful for functions that can work on either, for example @Num.add, whose type is:
+## This is useful for functions that can work on either, for example #Num.add, whose type is:
 ##
 ## ```
 ## add : Num range, Num range -> Num range
@@ -12,16 +12,16 @@ api Num provides Num, DivByZero..., negate, abs, add, sub, mul, isOdd, isEven, i
 ##
 ## The number 1.5 technically has the type `Num FloatingPoint`, so when you pass two of them to `Num.add`, the answer you get is `3.0 : Num FloatingPoint`.
 ##
-## The type @Float is defined to be an alias for `Num FloatingPoint`, so `3.0 : Num FloatingPoint` is the same answer as `3.0 : Float`.
+## The type #Float is defined to be an alias for `Num FloatingPoint`, so `3.0 : Num FloatingPoint` is the same answer as `3.0 : Float`.
 ##
 ## Similarly, the number 1 technically has the type `Num Integer`, so when you pass two of them to `Num.add`, the answer you get is `2 : Num Integer`.
 ##
-## The type @Int is defined to be an alias for `Num Integer`, so `2 : Num Integer` is the same answer as `2 : Int`.
+## The type #Int is defined to be an alias for `Num Integer`, so `2 : Num Integer` is the same answer as `2 : Int`.
 ##
 ## In this way, the `Num` type makes it possible to have `1 + 1` return `2 : Int` and `1.5 + 1.5` return `3.0 : Float`.
 Num range := Num range
 
-## Returned by division operations (@Float.div, @Float.mod, @Int.divFloor, @Int.divMod, and @Float.recip) when they attempt to divide by zero.
+## Returned by division operations (#Float.div, #Float.mod, #Int.divFloor, #Int.divMod, and #Float.recip) when they attempt to divide by zero.
 DivByZero := DivByZero
 
 ## Convert
@@ -38,9 +38,9 @@ DivByZero := DivByZero
 ##
 ## > Num.negate 0.0
 ##
-## This will crash when given @Int.lowestValue, because doing so will result in a number higher than @Int.highestValue.
+## This will crash when given #Int.lowestValue, because doing so will result in a number higher than #Int.highestValue.
 ##
-## (It will never crash when given a @Float, however, because of how floating point numbers represent positive and negative numbers.)
+## (It will never crash when given a #Float, however, because of how floating point numbers represent positive and negative numbers.)
 negate : Num range -> Num range
 
 ## Return the absolute value of the number.
@@ -82,7 +82,7 @@ isOdd : Num * -> Bool
 
 ## Add two numbers of the same type.
 ##
-## (To add an @Int and a @Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both @Int to @Float and the other way around.)
+## (To add an #Int and a #Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both #Int to #Float and the other way around.)
 ##
 ## `a + b` is shorthand for `Num.add a b`.
 ##
@@ -97,7 +97,7 @@ add : Num range, Num range -> Num range
 
 ## Subtract two numbers of the same type.
 ##
-## (To subtract an @Int and a @Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both @Int to @Float and the other way around.)
+## (To subtract an #Int and a #Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both #Int to #Float and the other way around.)
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
 ##
@@ -112,7 +112,7 @@ sub : Num range, Num range -> Num range
 
 ## Multiply two numbers of the same type.
 ##
-## (To multiply an @Int and a @Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both @Int to @Float and the other way around.)
+## (To multiply an #Int and a #Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both #Int to #Float and the other way around.)
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
 ##

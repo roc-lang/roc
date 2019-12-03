@@ -7,7 +7,7 @@ use crate::can::problem::Problem;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
-use crate::ident::{Ident, VariantName};
+use crate::ident::Ident;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::VarStore;
@@ -19,8 +19,9 @@ use crate::types::{Constraint, PExpected, PatternCategory, Type};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Variable, Symbol),
-    Variant(Variable, Symbol),
-    AppliedVariant(Variable, Symbol, Vec<Located<Pattern>>),
+    Tag(Variable, Symbol),
+    /// TODO replace regular Tag with this
+    AppliedTag(Variable, Symbol, Vec<Located<Pattern>>),
     IntLiteral(i64),
     FloatLiteral(f64),
     ExactString(Box<str>),
@@ -29,7 +30,6 @@ pub enum Pattern {
 
     // Runtime Exceptions
     Shadowed(Located<Ident>),
-    UnrecognizedVariant(Located<VariantName>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
 }
@@ -118,9 +118,10 @@ pub fn canonicalize_pattern<'a>(
                             let symbol_and_region = (symbol.clone(), region);
 
                             // Add this to both scope.idents *and* shadowable_idents.
-                            // The latter is relevant when recursively canonicalizing Variant patterns,
-                            // which can bring multiple new idents into scope. For example, it's important
-                            // that we catch (Blah foo foo) as being an example of shadowing.
+                            // The latter is relevant when recursively canonicalizing
+                            // tag application patterns, which can bring multiple
+                            // new idents into scope. For example, it's important that
+                            // we catch (Blah foo foo) as being an example of shadowing.
                             scope
                                 .idents
                                 .insert(new_ident.clone(), symbol_and_region.clone());
@@ -132,56 +133,18 @@ pub fn canonicalize_pattern<'a>(
                 }
             }
         }
+        &GlobalTag(name) => {
+            // Canonicalize the tag's name.
+            let symbol = Symbol::from_global_tag(name);
 
-        //         &AppliedVariant((ref loc_name, ref loc_args)) => {
-        //             // Canonicalize the variant's arguments.
-        //             let mut can_args: Vec<Located<Pattern>> = Vec::new();
-
-        //             for loc_arg in loc_args {
-        //                 let loc_can_arg =
-        //                     canonicalize_pattern(env, subs, constraints, scope, pattern_type, &loc_arg, shadowable_idents);
-
-        //                 can_args.push(loc_can_arg);
-        //             }
-
-        //             // Canonicalize the variant's name.
-        //             let symbol = Symbol::from_variant(&loc_name.value, &env.home);
-
-        //             if env.variants.contains_key(&symbol) {
-        //                 // No problems; the qualified variant name was in scope!
-        //                 Pattern::AppliedVariant(symbol, can_args)
-        //             } else {
-        //                 // We couldn't find the variant name in scope. NAMING PROBLEM!
-        //                 env.problem(Problem::UnrecognizedVariant(loc_name.clone()));
-
-        //                 Pattern::UnrecognizedVariant(loc_name.clone())
-        //             }
-        //         }
-        &Variant(module_parts, name) => {
-            // Canonicalize the variant's name.
-            let variant = if module_parts.is_empty() {
-                VariantName::Unqualified(name.to_string())
-            } else {
-                VariantName::Qualified(module_parts.to_vec().join("."), name.to_string())
-            };
-
-            let symbol = Symbol::from_variant(&variant, &env.home);
-
-            if env.variants.contains_key(&symbol) {
-                // No problems; the qualified variant name was in scope!
-                Pattern::Variant(var_store.fresh(), symbol)
-            } else {
-                let loc_name = Located {
-                    region,
-                    value: variant,
-                };
-                // We couldn't find the variant name in scope. NAMING PROBLEM!
-                env.problem(Problem::UnrecognizedVariant(loc_name.clone()));
-
-                Pattern::UnrecognizedVariant(loc_name.clone())
-            }
+            Pattern::Tag(var_store.fresh(), symbol)
         }
+        &PrivateTag(name) => {
+            // Canonicalize the tag's name.
+            let symbol = Symbol::from_private_tag(&env.home, name);
 
+            Pattern::Tag(var_store.fresh(), symbol)
+        }
         &FloatLiteral(ref string) => match pattern_type {
             CaseBranch => {
                 let float = finish_parsing_float(string)
@@ -361,7 +324,8 @@ fn add_constraints<'a>(
             add_constraints(pattern, scope, region, expected, state)
         }
 
-        Variant(_, _)
+        GlobalTag(_)
+        | PrivateTag(_)
         | Apply(_, _)
         | RecordDestructure(_)
         | RecordField(_, _)

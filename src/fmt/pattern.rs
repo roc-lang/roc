@@ -12,12 +12,7 @@ pub fn fmt_pattern<'a>(
 
     match pattern {
         Identifier(string) => buf.push_str(string),
-        Variant(module_parts, name) => {
-            for part in module_parts.iter() {
-                buf.push_str(part);
-                buf.push('.');
-            }
-
+        GlobalTag(name) | PrivateTag(name) => {
             buf.push_str(name);
         }
         Apply(loc_pattern, loc_arg_patterns) => {

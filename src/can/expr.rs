@@ -22,8 +22,9 @@ pub enum Expr {
     FunctionPointer(Variable, Symbol),
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
-    /// Canonicalization will convert chains to single-access, e.g. foo.bar.baz to (foo.bar).baz.
-    Field(Box<Located<Expr>>, Box<str>),
+    Access(Box<Located<Expr>>, Box<str>),
+
+    Tag(Box<str>, Vec<Expr>),
 
     // Pattern Matching
     /// Case is guaranteed to be exhaustive at this point. (If it wasn't, then
@@ -40,6 +41,8 @@ pub enum Expr {
         Box<Located<Expr>>,
     ),
 
+    /// This is *only* for calling functions, not for tag application.
+    /// The Tag variant contains any applied values inside it.
     Call(Box<Expr>, Vec<Located<Expr>>, CalledVia),
 
     Closure(Symbol, Recursive, Vec<Located<Pattern>>, Box<Located<Expr>>),

@@ -251,13 +251,13 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         | OctalInt(_)
         | BinaryInt(_)
         | Str(_)
-        | Field(_, _)
-        | QualifiedField(_, _)
+        | Access(_, _)
         | AccessorFunction(_)
         | Var(_, _)
         | MalformedIdent(_)
         | MalformedClosure
-        | Variant(_, _) => false,
+        | GlobalTag(_)
+        | PrivateTag(_) => false,
 
         // These expressions always have newlines
         Defs(_, _) | Case(_, _) => true,
