@@ -1,8 +1,46 @@
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types::Problem;
-use crate::unify;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct Mark(u8);
+
+impl Mark {
+    #[inline(always)]
+    pub fn none() -> Mark {
+        Mark(0)
+    }
+
+    #[inline(always)]
+    pub fn occurs() -> Mark {
+        Mark(1)
+    }
+
+    #[inline(always)]
+    pub fn get_var_names() -> Mark {
+        Mark(2)
+    }
+
+    #[inline(always)]
+    pub fn next(self) -> Mark {
+        Mark(self.0 - 1)
+    }
+}
+
+impl fmt::Debug for Mark {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self == &Mark::none() {
+            write!(f, "Mark::none")
+        } else if self == &Mark::occurs() {
+            write!(f, "Mark::occurs")
+        } else if self == &Mark::get_var_names() {
+            write!(f, "Mark::get_var_names")
+        } else {
+            write!(f, "Mark({})", self.0)
+        }
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Subs {
@@ -91,15 +129,11 @@ impl Subs {
     }
 
     /// Unions two keys without the possibility of failure.
-    pub fn union(&mut self, left: Variable, right: Variable) {
+    pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
         let l_root = self.utable.get_root_key(left);
         let r_root = self.utable.get_root_key(right);
 
-        if l_root != r_root {
-            let combined = unify::unify_vars(self, l_root, r_root);
-
-            self.utable.unify_roots(l_root, r_root, combined)
-        }
+        self.utable.unify_roots(l_root, r_root, desc)
     }
 
     pub fn get(&mut self, key: Variable) -> Descriptor {
@@ -112,9 +146,8 @@ impl Subs {
 
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key);
-        let unified = unify::unify_var_val(self, l_key, &r_value);
 
-        self.utable.update_value(l_key, |node| node.value = unified);
+        self.utable.update_value(l_key, |node| node.value = r_value);
     }
 
     pub fn copy_var(&mut self, var: Variable) -> Variable {
@@ -123,20 +156,9 @@ impl Subs {
         var
     }
 
-    //     pub fn set_rank(&mut self, key: Variable, rank: usize) {
-    //         let mut descriptor = self.utable.probe_value(key);
-
-    //         descriptor.rank = rank;
-
-    //         let result = self.utable.unify_var_value(key, descriptor);
-
-    //         // Updating the rank should never fail!
-    //         debug_assert_eq!(result, Ok(()));
-    //     }
-
-    // pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
-    //     self.utable.unioned(left, right)
-    // }
+    pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
+        self.utable.unioned(left, right)
+    }
 }
 
 #[inline(always)]
@@ -152,9 +174,15 @@ fn unnamed_flex_var() -> Content {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Descriptor {
     pub content: Content,
-    pub rank: usize,
-    pub mark: u32,
+    pub rank: u8,
+    pub mark: Mark,
     pub copy: Option<Variable>,
+}
+
+impl Default for Descriptor {
+    fn default() -> Self {
+        unnamed_flex_var().into()
+    }
 }
 
 impl From<Content> for Descriptor {
@@ -162,7 +190,7 @@ impl From<Content> for Descriptor {
         Descriptor {
             content,
             rank: 0,
-            mark: 2, // no mark
+            mark: Mark::none(),
             copy: None,
         }
     }
