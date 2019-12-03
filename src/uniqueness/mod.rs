@@ -88,11 +88,11 @@ fn canonicalize_pattern(
             ));
         }
 
-        Variant(_, _) | AppliedVariant(_, _, _) | EmptyRecordLiteral(_) => {
+        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral(_) => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
-        Underscore(_) | Shadowed(_) | UnrecognizedVariant(_) | UnsupportedPattern(_) => {
+        Underscore(_) | Shadowed(_) | UnsupportedPattern(_) => {
             // no constraints
         }
     }
