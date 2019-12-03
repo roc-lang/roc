@@ -195,12 +195,12 @@ pub fn canonicalize_expr(
             }
         }
         Var(_variable, symbol) => {
-            // constraing expected ~ the type of this symbol in the environment
+            // constraint expected ~ the type of this symbol in the environment
             Output::new(Lookup(symbol.clone(), expected, region))
         }
         /*
         FunctionPointer(_variable, symbol) => match env.bound_names.get(symbol) {
-            // constraing expected ~ the type of this symbol in the environment
+            // constraint expected ~ the type of this symbol in the environment
             None => panic!("FunctionPointer: no variable for {:?}", symbol),
             Some(var) => Output::new(Eq(Variable(*var), expected, Region::zero())),
         },
