@@ -3,6 +3,7 @@ use crate::collections::ImMap;
 use crate::subs::{Content, Descriptor, FlatType, Subs, Variable};
 use crate::types::Constraint::{self, *};
 use crate::types::Type::{self, *};
+use crate::unify::unify;
 
 type Env = ImMap<Symbol, Variable>;
 
@@ -11,10 +12,10 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
         True => (),
         Eq(typ, expected_type, _region) => {
             // TODO use region?
-            let actual = type_to_variable(subs, typ.clone());
-            let expected = type_to_variable(subs, expected_type.clone().get_type());
+            let actual = type_to_var(subs, typ.clone());
+            let expected = type_to_var(subs, expected_type.clone().get_type());
 
-            subs.union(actual, expected);
+            unify(subs, actual, expected);
         }
         Lookup(symbol, expected_type, _region) => {
             // TODO use region?
@@ -22,9 +23,9 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
                 subs.copy_var(*env.get(&symbol).unwrap_or_else(|| {
                     panic!("Could not find symbol {:?} in env {:?}", symbol, env)
                 }));
-            let expected = type_to_variable(subs, expected_type.clone().get_type());
+            let expected = type_to_var(subs, expected_type.clone().get_type());
 
-            subs.union(actual, expected);
+            unify(subs, actual, expected);
         }
         And(sub_constraints) => {
             for sub_constraint in sub_constraints.iter() {
@@ -33,10 +34,10 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
         }
         Pattern(_region, _category, typ, expected) => {
             // TODO use region?
-            let actual = type_to_variable(subs, typ.clone());
-            let expected = type_to_variable(subs, expected.clone().get_type());
+            let actual = type_to_var(subs, typ.clone());
+            let expected = type_to_var(subs, expected.clone().get_type());
 
-            subs.union(actual, expected);
+            unify(subs, actual, expected);
         }
         Let(let_con) => {
             match &let_con.ret_constraint {
@@ -58,7 +59,7 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
                         // inserted earlier in solving. (If we allowed
                         // shadowing, we'd need to do something fancier here.)
                         if !new_env.contains_key(&symbol) {
-                            let var = type_to_variable(subs, loc_type.value.clone());
+                            let var = type_to_var(subs, loc_type.value.clone());
 
                             new_env.insert(symbol.clone(), var);
                         }
@@ -75,7 +76,11 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
     }
 }
 
-fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
+fn type_to_var(subs: &mut Subs, typ: Type) -> Variable {
+    type_to_variable(subs, &ImMap::default(), typ)
+}
+
+fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
         Apply {
@@ -86,7 +91,7 @@ fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
-                arg_vars.push(type_to_variable(subs, arg.clone()))
+                arg_vars.push(type_to_variable(subs, aliases, arg.clone()))
             }
 
             let flat_type = FlatType::Apply {
@@ -107,11 +112,11 @@ fn type_to_variable(subs: &mut Subs, typ: Type) -> Variable {
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
-                arg_vars.push(type_to_variable(subs, arg.clone()))
+                arg_vars.push(type_to_variable(subs, aliases, arg.clone()))
             }
 
-            let ret_var = type_to_variable(subs, *ret_type);
-            let content: Content = Content::Structure(FlatType::Func(arg_vars, ret_var));
+            let ret_var = type_to_variable(subs, aliases, *ret_type);
+            let content = Content::Structure(FlatType::Func(arg_vars, ret_var));
 
             subs.fresh(Descriptor::from(content))
         }
