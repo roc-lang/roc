@@ -1068,7 +1068,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
         Ident::GlobalTag(string) => Expr::GlobalTag(string),
         Ident::PrivateTag(string) => Expr::PrivateTag(string),
         Ident::Access(info) => {
-            let mut iter = info.value.into_iter();
+            let mut iter = info.value.iter();
 
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`

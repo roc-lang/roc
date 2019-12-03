@@ -210,53 +210,51 @@ where
                 noncapitalized_parts,
             );
         }
-    } else {
-        if noncapitalized_parts.is_empty() {
-            // We have capitalized parts only, so this must be a tag.
-            match capitalized_parts.first() {
-                Some(value) => {
-                    if capitalized_parts.len() == 1 {
-                        if is_private_tag {
-                            Ident::PrivateTag(value)
-                        } else {
-                            Ident::GlobalTag(value)
-                        }
+    } else if noncapitalized_parts.is_empty() {
+        // We have capitalized parts only, so this must be a tag.
+        match capitalized_parts.first() {
+            Some(value) => {
+                if capitalized_parts.len() == 1 {
+                    if is_private_tag {
+                        Ident::PrivateTag(value)
                     } else {
-                        // This is a qualified tag, which is not allowed!
-                        return malformed(
-                            None,
-                            arena,
-                            state,
-                            chars,
-                            capitalized_parts,
-                            noncapitalized_parts,
-                        );
+                        Ident::GlobalTag(value)
                     }
-                }
-                None => {
-                    // We had neither capitalized nor noncapitalized parts,
-                    // yet we made it this far. The only explanation is that this was
-                    // a stray '.' drifting through the cosmos.
-                    return Err(unexpected('.', 1, state, Attempting::Identifier));
+                } else {
+                    // This is a qualified tag, which is not allowed!
+                    return malformed(
+                        None,
+                        arena,
+                        state,
+                        chars,
+                        capitalized_parts,
+                        noncapitalized_parts,
+                    );
                 }
             }
-        } else if is_private_tag {
-            // This is qualified field access with an '@' in front, which does not make sense!
-            return malformed(
-                None,
-                arena,
-                state,
-                chars,
-                capitalized_parts,
-                noncapitalized_parts,
-            );
-        } else {
-            // We have multiple noncapitalized parts, so this must be field access.
-            Ident::Access(MaybeQualified {
-                module_parts: capitalized_parts.into_bump_slice(),
-                value: noncapitalized_parts.into_bump_slice(),
-            })
+            None => {
+                // We had neither capitalized nor noncapitalized parts,
+                // yet we made it this far. The only explanation is that this was
+                // a stray '.' drifting through the cosmos.
+                return Err(unexpected('.', 1, state, Attempting::Identifier));
+            }
         }
+    } else if is_private_tag {
+        // This is qualified field access with an '@' in front, which does not make sense!
+        return malformed(
+            None,
+            arena,
+            state,
+            chars,
+            capitalized_parts,
+            noncapitalized_parts,
+        );
+    } else {
+        // We have multiple noncapitalized parts, so this must be field access.
+        Ident::Access(MaybeQualified {
+            module_parts: capitalized_parts.into_bump_slice(),
+            value: noncapitalized_parts.into_bump_slice(),
+        })
     };
 
     let state = state.advance_without_indenting(chars_parsed)?;
