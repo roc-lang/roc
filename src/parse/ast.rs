@@ -429,69 +429,6 @@ impl<'a> Spaceable<'a> for Def<'a> {
     }
 }
 
-#[test]
-fn expr_size() {
-    // The size of the Expr data structure should be exactly 6 machine words.
-    // This test helps avoid regressions wich accidentally increase its size!
-    assert_eq!(
-        std::mem::size_of::<Expr>(),
-        // TODO [move this comment to an issue] We should be able to get this
-        // down to 2, which would mean we could fit 4 of these nodes in a single
-        // 64-byte cache line instead of only being able to fit 1.
-        //
-        // Doing this would require, among other things:
-        // 1. Making a str replacement where the length is stored as u32 instead of usize,
-        //    to leave room for the tagged union's u8 tag.
-        //    (Alternatively could store it as (&'a &'a str), but ew.)
-        // 2. Similarly, making a slice replacement like that str replacement, and
-        //    also where it doesn't share the bytes with anything else - so its
-        //    elements can be consumed without having to clone them (unlike a slice).
-        //    That's the only reason we're using Vec right now instead of slices -
-        //    if we used slices, we'd have to clone their elements during canonicalization
-        //    just to iterate over them and canonicalize them normally.
-        // 3. Figuring out why (&'a (Foo, Bar)) by default takes up 24 bytes in Rust.
-        //    I assume it's because the struct is being stored inline instead of
-        //    as a pointer, but in this case we actually do want the pointer!
-        //    We want to have the lifetime and we want to avoid using the unsafe keyword,
-        //    but we also want this to only store 1 pointer in the AST node.
-        //    Hopefully there's a way!
-        //
-        // It's also possible that 4 machine words might yield better performance
-        // than 2, due to more data structures being inlinable, and therefore
-        // having fewer pointers to chase. This seems worth investigating as well.
-        std::mem::size_of::<usize>() * 6
-    );
-}
-
-#[test]
-fn pattern_size() {
-    // The size of the Pattern data structure should be exactly 4 machine words.
-    // This test helps avoid regressions wich accidentally increase its size!
-    assert_eq!(
-        std::mem::size_of::<Pattern>(),
-        // TODO [move this comment to an issue] We should be able to get this
-        // down to 2, which would mean we could fit 4 of these nodes in a single
-        // 64-byte cache line instead of only being able to fit 2.
-        //
-        // Doing this would require, among other things:
-        // 1. Making a str replacement where the length is stored as u32 instead of usize,
-        //    to leave room for the tagged union's u8 tag.
-        //    (Alternatively could store it as (&'a &'a str), but ew.)
-        // 2. Figuring out why &'a (Foo, Bar) by default takes up 24 bytes in Rust.
-        //    I assume it's because the struct is being stored inline instead of
-        //    as a pointer, but in this case we actually do want the pointer!
-        //    We want to have the lifetime and we want to avoid using the unsafe keyword,
-        //    but we also want this to only store 1 pointer in the AST node.
-        //    Hopefully there's a way!
-        //
-        // It's also possible that going up to 4 machine words might yield even
-        // better performance, due to more data structures being inlinable,
-        // and therefore having fewer pointers to chase. This seems worth
-        // investigating as well.
-        std::mem::size_of::<usize>() * 5
-    );
-}
-
 /// What we're currently attempting to parse, e.g.
 /// "currently attempting to parse a list." This helps error messages!
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
