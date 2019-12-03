@@ -3,7 +3,7 @@ use crate::can::pattern::Pattern;
 use crate::can::procedure::{Procedure, References};
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
-use crate::constrain::{self, exists};
+// use crate::constrain::{self, exists};
 use crate::ident::Ident;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
@@ -15,9 +15,12 @@ use crate::types::PExpected::{self};
 use crate::types::PReason::{self};
 use crate::types::Reason;
 use crate::types::Type::{self, *};
+use crate::uniqueness::constrain::exists;
 use std::fmt::Debug;
 
 pub use crate::can::expr::Expr::*;
+
+mod constrain;
 
 pub struct Env {
     pub bound_names: ImMap<Symbol, Variable>,
@@ -122,7 +125,6 @@ type Rigids = ImMap<Box<str>, Type>;
 
 pub fn canonicalize_expr(
     rigids: &Rigids,
-
     var_store: &VarStore,
     region: Region,
     expr: &Expr,
@@ -140,18 +142,21 @@ pub fn canonicalize_expr(
             (Output::new(constraint))
         }
         BlockStr(_) | Str(_) => {
-            let constraint = Eq(constrain::str_type(), expected, region);
+            let inferred = constrain::lift(var_store, constrain::str_type());
+            let constraint = Eq(inferred, expected, region);
             (Output::new(constraint))
         }
         EmptyRecord => {
-            let constraint = Eq(EmptyRec, expected, region);
+            let inferred = constrain::lift(var_store, EmptyRec);
+            let constraint = Eq(inferred, expected, region);
             (Output::new(constraint))
         }
         Record(_, _) => panic!("TODO implement records"),
         List(_variable, loc_elems) => {
             if loc_elems.is_empty() {
                 let list_var = var_store.fresh();
-                let constraint = Eq(constrain::empty_list_type(list_var), expected, region);
+                let inferred = constrain::lift(var_store, constrain::empty_list_type(list_var));
+                let constraint = Eq(inferred, expected, region);
                 (Output::new(constraint))
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
@@ -182,7 +187,8 @@ pub fn canonicalize_expr(
 
                     references = references.union(elem_out.references);
                 }
-                constraints.push(Eq(constrain::list_type(list_type), expected, region));
+                let inferred = constrain::lift(var_store, constrain::list_type(list_type));
+                constraints.push(Eq(inferred, expected, region));
 
                 let mut output = Output::new(And(constraints));
 
@@ -233,7 +239,10 @@ pub fn canonicalize_expr(
 
             state.vars.push(ret_var);
 
-            let fn_typ = Type::Function(arg_types, Box::new(ret_type.clone()));
+            let fn_typ = constrain::lift(
+                var_store,
+                Type::Function(arg_types, Box::new(ret_type.clone())),
+            );
 
             let mut output = canonicalize_expr(
                 rigids,
@@ -312,7 +321,7 @@ pub fn canonicalize_expr(
 
             let expected_fn_type = Expected::ForReason(
                 fn_reason,
-                Function(arg_types, Box::new(ret_type.clone())),
+                constrain::lift(var_store, Function(arg_types, Box::new(ret_type.clone()))),
                 region,
             );
 
