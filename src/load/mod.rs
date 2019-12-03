@@ -23,7 +23,6 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 pub struct Loaded {
     pub requested_module: LoadedModule,
     pub vars_created: usize,
-    pub deps: Deps,
 }
 
 #[derive(Debug, Clone)]
@@ -36,13 +35,23 @@ pub enum BuildProblem<'a> {
     FileNotFound(&'a Path),
 }
 
-type Deps = SendSet<Box<str>>;
+type LoadedDeps = Vec<LoadedModule>;
+type DepNames = SendSet<Box<str>>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LoadedModule {
     Valid(Module),
-    FileProblem(io::ErrorKind),
-    ParsingFailed(Fail),
+    FileProblem { filename: PathBuf, error: io::ErrorKind },
+    ParsingFailed { filename: PathBuf, fail: Fail },
+}
+
+impl LoadedModule {
+    pub fn into_module(self) -> Option<Module> {
+        match self {
+            LoadedModule::Valid(module) => Some(module),
+            _ => None
+        }
+    }
 }
 
 /// The loading process works like this, starting from the given filename (e.g. "main.roc"):
@@ -54,21 +63,26 @@ pub enum LoadedModule {
 /// 4. Add everything we were able to import unqualified to the module's default scope.
 /// 5. Parse the module's defs.
 /// 6. Canonicalize the module.
-pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
+///
+/// The loaded_modules argument specifies which modules have already been loaded.
+/// It typically contains the standard modules, but is empty when loading the
+/// standard modules themselves.
+pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf, loaded_deps: &mut LoadedDeps) -> Loaded {
     let env = Env {
         src_dir: src_dir.clone(),
     };
-    let (tx, mut rx): (Sender<Deps>, Receiver<Deps>) = mpsc::channel(1024);
+    let (tx, mut rx): (Sender<DepNames>, Receiver<DepNames>) = mpsc::channel(1024);
     let arc_var_store = Arc::new(VarStore::new());
 
     let main_tx = tx.clone();
     let var_store = Arc::clone(&arc_var_store);
     let handle =
-        tokio::spawn(async move { load_filename(&env, &filename, main_tx, &var_store).await });
+        tokio::spawn(async move {
+            load_filename(&env, filename, main_tx, &var_store).await
+        });
 
-    let requested_module = handle.await.expect("Unable to load requested module.");
-    let mut other_modules = Vec::new();
-    let mut all_deps = SendSet::default();
+    let requested_module = handle.await.unwrap_or_else(|err| panic!("Unable to load requested module: {:?}", err));
+    let mut all_deps: SendSet<Box<str>> = SendSet::default();
 
     // Get a fresh env, since the previous one has been consumed
     let env = Env { src_dir };
@@ -95,7 +109,7 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
         .await;
 
         for module in loaded_modules {
-            other_modules.push(module.expect("Unable to load dependent module"));
+            loaded_deps.push(module.expect("Unable to load dependent module"));
         }
 
         // Once we've run out of pending modules to process, we're done!
@@ -110,7 +124,6 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
 
     Loaded {
         requested_module,
-        deps: all_deps,
         vars_created,
     }
 }
@@ -118,7 +131,7 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf) -> Loaded {
 async fn load_module(
     env: &Env,
     module_name: Box<str>,
-    tx: Sender<Deps>,
+    tx: Sender<DepNames>,
     var_store: &VarStore,
 ) -> LoadedModule {
     let mut filename = PathBuf::new();
@@ -133,16 +146,16 @@ async fn load_module(
     // End with .roc
     filename.set_extension("roc");
 
-    load_filename(env, &filename, tx, var_store).await
+    load_filename(env, filename, tx, var_store).await
 }
 
 async fn load_filename(
     env: &Env,
-    filename: &Path,
-    tx: Sender<Deps>,
+    filename: PathBuf,
+    tx: Sender<DepNames>,
     var_store: &VarStore,
 ) -> LoadedModule {
-    match read_to_string(filename).await {
+    match read_to_string(&filename).await {
         Ok(src) => {
             let arena = Bump::new();
             // TODO instead of env.arena.alloc(src), we should create a new buffer
@@ -231,12 +244,12 @@ async fn load_filename(
 
                     LoadedModule::Valid(module)
                 }
-                Err((fail, _)) => LoadedModule::ParsingFailed(fail),
+                Err((fail, _)) => LoadedModule::ParsingFailed{ filename, fail },
             };
 
             answer
         }
-        Err(err) => LoadedModule::FileProblem(err.kind()),
+        Err(err) => LoadedModule::FileProblem { filename, error: err.kind()},
     }
 }
 
