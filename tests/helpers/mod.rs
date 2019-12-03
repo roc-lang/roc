@@ -104,8 +104,6 @@ pub fn uniq_expr_with(
         expected2,
     );
 
-    dbg!(output.constraint.clone());
-    dbg!(output2.constraint.clone());
     (
         output2, output, problems, var_store1, variable, var_store2, variable2,
     )

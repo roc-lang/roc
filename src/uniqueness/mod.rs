@@ -130,12 +130,9 @@ pub fn canonicalize_expr(
 ) -> Output {
     pub use crate::can::expr::Expr::*;
 
-    dbg!(expr.clone());
-
     match expr {
         Int(_) => {
             let constraint = constrain::int_literal(var_store, expected, region);
-            dbg!(constraint.clone());
             (Output::new(constraint))
         }
         Float(_) => {
@@ -548,8 +545,6 @@ fn can_defs(
             &mut flex_info.def_types,
             expr_type.clone(),
         );
-
-        dbg!(state.constraints.clone());
 
         flex_info.constraints.push(Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
