@@ -51,13 +51,7 @@ pub fn uniq_expr(
     VarStore,
     Variable,
 ) {
-    uniq_expr_with(
-        &Bump::new(),
-        "blah",
-        expr_str,
-        &ImMap::default(),
-        &ImMap::default(),
-    )
+    uniq_expr_with(&Bump::new(), "blah", expr_str, &ImMap::default())
 }
 
 #[allow(dead_code)]
@@ -66,7 +60,6 @@ pub fn uniq_expr_with(
     name: &str,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    declared_variants: &ImMap<Symbol, Located<Box<str>>>,
 ) -> (
     roc::uniqueness::Output,
     Output,
@@ -95,7 +88,6 @@ pub fn uniq_expr_with(
         Region::zero(),
         loc_expr,
         declared_idents,
-        declared_variants,
         expected,
     );
 
@@ -109,7 +101,6 @@ pub fn uniq_expr_with(
         Region::zero(),
         loc_expr,
         declared_idents,
-        declared_variants,
         expected2,
     );
 

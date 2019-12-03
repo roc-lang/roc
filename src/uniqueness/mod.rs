@@ -30,7 +30,6 @@ pub fn canonicalize_declaration(
     region: Region,
     loc_expr: Located<Expr>,
     _declared_idents: &ImMap<Ident, (Symbol, Region)>,
-    _declared_variants: &ImMap<Symbol, Located<Box<str>>>,
     expected: Expected<Type>,
 ) -> Output {
     let rigids = ImMap::default();
