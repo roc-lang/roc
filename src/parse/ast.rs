@@ -110,11 +110,6 @@ impl<'a> MaybeQualified<'a, &'a [&'a str]> {
 /// we move on to canonicalization, which often needs to allocate more because
 /// it's doing things like turning local variables into fully qualified symbols.
 /// Once canonicalization is done, the arena and the input string get dropped.
-///
-/// Because we need to store references, which each take 2 machine words, the
-/// smallest this data structure can be in memory is 3 machine words (the third
-/// machine word stores the 1-byte union tag in a memory-aligned way). We have
-/// a test verifying that it never accidentally exceeds 3 machine words in size.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     // Number Literals
