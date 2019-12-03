@@ -40,6 +40,76 @@ pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, VarStore, Variab
 }
 
 #[allow(dead_code)]
+pub fn uniq_expr(
+    expr_str: &str,
+) -> (
+    roc::uniqueness::Output,
+    Output,
+    Vec<Problem>,
+    VarStore,
+    Variable,
+    VarStore,
+    Variable,
+) {
+    uniq_expr_with(&Bump::new(), "blah", expr_str, &ImMap::default())
+}
+
+#[allow(dead_code)]
+pub fn uniq_expr_with(
+    arena: &Bump,
+    name: &str,
+    expr_str: &str,
+    declared_idents: &ImMap<Ident, (Symbol, Region)>,
+) -> (
+    roc::uniqueness::Output,
+    Output,
+    Vec<Problem>,
+    VarStore,
+    Variable,
+    VarStore,
+    Variable,
+) {
+    let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
+        panic!(
+            "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?}",
+            expr_str
+        )
+    });
+
+    let var_store1 = VarStore::new();
+    let variable = var_store1.fresh();
+    let expected = Expected::NoExpectation(Type::Variable(variable));
+    let home = "Test";
+    let (loc_expr, output, problems) = can::canonicalize_declaration(
+        arena,
+        &var_store1,
+        home.into(),
+        name.into(),
+        Region::zero(),
+        loc_expr,
+        declared_idents,
+        expected,
+    );
+
+    // double check
+    let var_store2 = VarStore::new();
+
+    let variable2 = var_store2.fresh();
+    let expected2 = Expected::NoExpectation(Type::Variable(variable2));
+    let output2 = roc::uniqueness::canonicalize_declaration(
+        &var_store2,
+        Region::zero(),
+        loc_expr,
+        declared_idents,
+        expected2,
+    );
+
+    (
+        output2, output, problems, var_store1, variable, var_store2, variable2,
+    )
+}
+
+#[allow(dead_code)]
 pub fn can_expr_with(
     arena: &Bump,
     name: &str,
