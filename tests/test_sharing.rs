@@ -9,22 +9,18 @@ extern crate roc;
 mod helpers;
 
 #[cfg(test)]
-mod test_infer {
-    use helpers::can_expr;
-    use roc::can::sharing;
-    use roc::can::sharing::ReferenceCount::{self, *};
+mod test_sharing {
+    use crate::helpers::can_expr;
     use roc::can::symbol;
+    use roc::uniqueness::sharing;
+    use roc::uniqueness::sharing::ReferenceCount::{self, *};
 
     // HELPERS
 
     fn sharing_eq(src: &str, expected: (&str, ReferenceCount)) {
-        let (expr, _output, _, procedures, _subs, _variable) = can_expr(src);
+        let (expr, _output, _, _subs, _variable) = can_expr(src);
 
-        let usage = sharing::sharing_analysis(&expr, &procedures);
-
-        dbg!(expr);
-        dbg!(procedures);
-        dbg!(usage.clone());
+        let usage = sharing::sharing_analysis(&expr);
 
         let (varname, value) = expected;
         assert_eq!(

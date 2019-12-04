@@ -39,7 +39,6 @@ pub mod pattern;
 pub mod problem;
 pub mod procedure;
 pub mod scope;
-pub mod sharing;
 pub mod string;
 pub mod symbol;
 

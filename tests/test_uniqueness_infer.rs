@@ -467,7 +467,8 @@ mod test_infer_uniq {
                 )
             "#
             ),
-            "Attr.Attr * (a -> a)",
+            // x is used 3 times, so must be shared
+            "Attr.Attr * (Attr.Attr Attr.Shared a -> Attr.Attr Attr.Shared a)",
         );
     }
 

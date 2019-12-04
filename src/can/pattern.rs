@@ -34,6 +34,21 @@ pub enum Pattern {
     UnsupportedPattern(Region),
 }
 
+pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    symbols_from_pattern_help(pattern, &mut symbols);
+
+    symbols
+}
+
+pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
+    use Pattern::*;
+    match pattern {
+        Identifier(_, symbol) => symbols.push(symbol.clone()),
+        _ => {}
+    }
+}
+
 /// Different patterns are supported in different circumstances.
 /// For example, case branches can pattern match on number literals, but
 /// assignments and function args can't. Underscore is supported in function

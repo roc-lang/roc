@@ -82,16 +82,6 @@ pub fn list_type(typ: Type) -> Type {
     builtin_type("List", "List", vec![typ])
 }
 
-/*
-pub fn empty_list_type(var_store: &VarStore, var: Variable) -> Type {
-    list_type(var_store, Type::Variable(var))
-}
-
-pub fn list_type(var_store: &VarStore, typ: Type) -> Type {
-    lift(var_store, builtin_type("List", "List", vec![typ]))
-}
-*/
-
 pub fn str_type() -> Type {
     builtin_type("Str", "Str", Vec::new())
 }
@@ -106,6 +96,8 @@ pub fn shared_type() -> Uniqueness {
     builtin_type("Attr", "Shared", Vec::new())
 }
 
+/// We usually just leave a type parameter unbound (written `*`) when it's unique
+#[allow(dead_code)]
 pub fn unique_type() -> Uniqueness {
     builtin_type("Attr", "Unique", Vec::new())
 }
