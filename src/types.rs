@@ -211,13 +211,45 @@ pub enum Constraint {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BooleanConstraint {
+    Ground(bool),
     Disjunction(Box<BooleanConstraint>, Box<BooleanConstraint>),
-    Shared, // equivalent of True, top element of the lattice
-    Unique, // equivalent of False, bottom element of the lattice
-    // other connectives can result from solving?
-    // Disjunction(Box<BooleanConstraint>, Box<BooleanConstraint>),
-    // Negation(Box<BooleanConstraint>),
+    Conjunction(Box<BooleanConstraint>, Box<BooleanConstraint>),
+    Negation(Box<BooleanConstraint>),
     Variable(Variable),
+}
+
+impl BooleanConstraint {
+    pub fn simplify(&mut self) {
+        *self = simplify(self.clone());
+    }
+}
+
+fn simplify(bconstraint: BooleanConstraint) -> BooleanConstraint {
+    use BooleanConstraint::*;
+    match bconstraint {
+        Variable(_) | Ground(_) => bconstraint,
+
+        Negation(nested) => match simplify(*nested) {
+            Ground(t) => Ground(!t),
+            other => Negation(Box::new(other)),
+        },
+
+        Disjunction(l, r) => match (simplify(*l), simplify(*r)) {
+            (Ground(true), _) => Ground(true),
+            (_, Ground(true)) => Ground(true),
+            (Ground(false), rr) => rr,
+            (ll, Ground(false)) => ll,
+            (ll, rr) => Disjunction(Box::new(ll), Box::new(rr)),
+        },
+
+        Conjunction(l, r) => match (simplify(*l), simplify(*r)) {
+            (Ground(true), rr) => rr,
+            (ll, Ground(true)) => ll,
+            (Ground(false), _) => Ground(false),
+            (_, Ground(false)) => Ground(false),
+            (ll, rr) => Conjunction(Box::new(ll), Box::new(rr)),
+        },
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
