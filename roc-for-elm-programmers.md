@@ -756,7 +756,7 @@ foo 1 2 if something then 3 else 4
 Roc functions aren't curried. Calling `(List.map foo)` is a type mismatch
 because `List.map` takes 2 arguments, not 1.
 
-For this reasons, function type annotations separate arguments with `,` instead of `->`. In Roc, the type of `List.map` is:
+For this reason, function type annotations separate arguments with `,` instead of `->`. In Roc, the type of `List.map` is:
 
 ```elm
 List.map : List a, (a -> b) -> List b
