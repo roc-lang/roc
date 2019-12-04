@@ -206,50 +206,6 @@ pub enum Constraint {
     True, // Used for things that always unify, e.g. blanks and runtime errors
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
-    Boolean(BooleanConstraint, BooleanConstraint),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BooleanConstraint {
-    Ground(bool),
-    Disjunction(Box<BooleanConstraint>, Box<BooleanConstraint>),
-    Conjunction(Box<BooleanConstraint>, Box<BooleanConstraint>),
-    Negation(Box<BooleanConstraint>),
-    Variable(Variable),
-}
-
-impl BooleanConstraint {
-    pub fn simplify(&mut self) {
-        *self = simplify(self.clone());
-    }
-}
-
-fn simplify(bconstraint: BooleanConstraint) -> BooleanConstraint {
-    use BooleanConstraint::*;
-    match bconstraint {
-        Variable(_) | Ground(_) => bconstraint,
-
-        Negation(nested) => match simplify(*nested) {
-            Ground(t) => Ground(!t),
-            other => Negation(Box::new(other)),
-        },
-
-        Disjunction(l, r) => match (simplify(*l), simplify(*r)) {
-            (Ground(true), _) => Ground(true),
-            (_, Ground(true)) => Ground(true),
-            (Ground(false), rr) => rr,
-            (ll, Ground(false)) => ll,
-            (ll, rr) => Disjunction(Box::new(ll), Box::new(rr)),
-        },
-
-        Conjunction(l, r) => match (simplify(*l), simplify(*r)) {
-            (Ground(true), rr) => rr,
-            (ll, Ground(true)) => ll,
-            (Ground(false), _) => Ground(false),
-            (_, Ground(false)) => Ground(false),
-            (ll, rr) => Conjunction(Box::new(ll), Box::new(rr)),
-        },
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
