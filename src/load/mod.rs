@@ -41,15 +41,21 @@ type DepNames = SendSet<Box<str>>;
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoadedModule {
     Valid(Module),
-    FileProblem { filename: PathBuf, error: io::ErrorKind },
-    ParsingFailed { filename: PathBuf, fail: Fail },
+    FileProblem {
+        filename: PathBuf,
+        error: io::ErrorKind,
+    },
+    ParsingFailed {
+        filename: PathBuf,
+        fail: Fail,
+    },
 }
 
 impl LoadedModule {
     pub fn into_module(self) -> Option<Module> {
         match self {
             LoadedModule::Valid(module) => Some(module),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -77,11 +83,11 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf, loaded_deps: &mut Loa
     let main_tx = tx.clone();
     let var_store = Arc::clone(&arc_var_store);
     let handle =
-        tokio::spawn(async move {
-            load_filename(&env, filename, main_tx, &var_store).await
-        });
+        tokio::spawn(async move { load_filename(&env, filename, main_tx, &var_store).await });
 
-    let requested_module = handle.await.unwrap_or_else(|err| panic!("Unable to load requested module: {:?}", err));
+    let requested_module = handle
+        .await
+        .unwrap_or_else(|err| panic!("Unable to load requested module: {:?}", err));
     let mut all_deps: SendSet<Box<str>> = SendSet::default();
 
     // Get a fresh env, since the previous one has been consumed
@@ -244,12 +250,15 @@ async fn load_filename(
 
                     LoadedModule::Valid(module)
                 }
-                Err((fail, _)) => LoadedModule::ParsingFailed{ filename, fail },
+                Err((fail, _)) => LoadedModule::ParsingFailed { filename, fail },
             };
 
             answer
         }
-        Err(err) => LoadedModule::FileProblem { filename, error: err.kind()},
+        Err(err) => LoadedModule::FileProblem {
+            filename,
+            error: err.kind(),
+        },
     }
 }
 

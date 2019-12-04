@@ -11,9 +11,9 @@ mod helpers;
 
 #[cfg(test)]
 mod test_load {
-    use crate::helpers::{fixtures_dir, builtins_dir};
-    use roc::load::{load, Loaded, LoadedModule};
+    use crate::helpers::{builtins_dir, fixtures_dir};
     use roc::can::module::Module;
+    use roc::load::{load, Loaded, LoadedModule};
 
     fn test_async<F: std::future::Future>(future: F) -> F::Output {
         use tokio::runtime::Runtime;
@@ -28,11 +28,11 @@ mod test_load {
     fn expect_module(loaded: Loaded) -> Module {
         match loaded.requested_module {
             LoadedModule::Valid(module) => module,
-            LoadedModule::FileProblem{ filename, error } => panic!(
+            LoadedModule::FileProblem { filename, error } => panic!(
                 "{:?} failed to load with FileProblem: {:?}",
                 filename, error
             ),
-            LoadedModule::ParsingFailed{ filename, fail } => panic!(
+            LoadedModule::ParsingFailed { filename, fail } => panic!(
                 "{:?} failed to load with ParsingFailed: {:?}",
                 filename, fail
             ),
@@ -58,14 +58,19 @@ mod test_load {
             assert_eq!(module.name, Some("Primary".into()));
             assert_eq!(module.defs.len(), 6);
 
-            let module_names: Vec<Option<Box<str>>> =
-                deps.into_iter().map(|dep| dep.into_module().unwrap().name).collect();
+            let module_names: Vec<Option<Box<str>>> = deps
+                .into_iter()
+                .map(|dep| dep.into_module().unwrap().name)
+                .collect();
 
-            assert_eq!(module_names, vec![
-                Some("Dep1".into()),
-                Some("Dep3.Blah".into()),
-                Some("Dep2".into())
-            ]);
+            assert_eq!(
+                module_names,
+                vec![
+                    Some("Dep1".into()),
+                    Some("Dep3.Blah".into()),
+                    Some("Dep2".into())
+                ]
+            );
         });
     }
 
@@ -81,13 +86,12 @@ mod test_load {
             assert_eq!(module.name, Some("Defaults".into()));
             assert_eq!(module.defs.len(), 0);
 
-            let module_names: Vec<Option<Box<str>>> =
-                deps.into_iter().map(|dep| dep.into_module().unwrap().name).collect();
+            let module_names: Vec<Option<Box<str>>> = deps
+                .into_iter()
+                .map(|dep| dep.into_module().unwrap().name)
+                .collect();
 
-            assert_eq!(module_names, vec![
-                Some("Map".into()),
-                Some("Set".into()),
-            ]);
+            assert_eq!(module_names, vec![Some("Map".into()), Some("Set".into()),]);
         });
     }
 
@@ -105,16 +109,21 @@ mod test_load {
             assert_eq!(module.name, Some("Primary".into()));
             assert_eq!(module.defs.len(), 6);
 
-            let module_names: Vec<Option<Box<str>>> =
-                deps.into_iter().map(|dep| dep.into_module().unwrap().name).collect();
+            let module_names: Vec<Option<Box<str>>> = deps
+                .into_iter()
+                .map(|dep| dep.into_module().unwrap().name)
+                .collect();
 
-            assert_eq!(module_names, vec![
-                Some("Map".into()),
-                Some("Set".into()),
-                Some("Dep1".into()),
-                Some("Dep3.Blah".into()),
-                Some("Dep2".into())
-            ]);
+            assert_eq!(
+                module_names,
+                vec![
+                    Some("Map".into()),
+                    Some("Set".into()),
+                    Some("Dep1".into()),
+                    Some("Dep3.Blah".into()),
+                    Some("Dep2".into())
+                ]
+            );
         });
     }
 }
