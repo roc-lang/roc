@@ -1,6 +1,7 @@
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::subs::{Content, Descriptor, FlatType, Subs, Variable};
+use crate::types::BooleanConstraint;
 use crate::types::Constraint::{self, *};
 use crate::types::Type::{self, *};
 use crate::unify::unify;
@@ -31,6 +32,9 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
             for sub_constraint in sub_constraints.iter() {
                 solve(env, subs, sub_constraint);
             }
+        }
+        Boolean(typ, expected) => {
+            solve_boolean_constraint(typ, expected);
         }
         Pattern(_region, _category, typ, expected) => {
             // TODO use region?
@@ -74,6 +78,16 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
             }
         }
     }
+}
+
+pub fn solve_boolean_constraint(typ: &BooleanConstraint, expected: &BooleanConstraint) {
+    if typ == expected {
+        return;
+    }
+
+    // find the most general unifier.
+    // panic!("TODO implement boolean unification");
+    return;
 }
 
 fn type_to_var(subs: &mut Subs, typ: Type) -> Variable {

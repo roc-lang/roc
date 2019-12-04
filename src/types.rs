@@ -206,6 +206,18 @@ pub enum Constraint {
     True, // Used for things that always unify, e.g. blanks and runtime errors
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
+    Boolean(BooleanConstraint, BooleanConstraint),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BooleanConstraint {
+    Disjunction(Box<BooleanConstraint>, Box<BooleanConstraint>),
+    Shared, // equivalent of True, top element of the lattice
+    Unique, // equivalent of False, bottom element of the lattice
+    // other connectives can result from solving?
+    // Disjunction(Box<BooleanConstraint>, Box<BooleanConstraint>),
+    // Negation(Box<BooleanConstraint>),
+    Variable(Variable),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

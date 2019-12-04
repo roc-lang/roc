@@ -201,8 +201,24 @@ pub fn canonicalize_expr(
             }
         }
         Var(_variable, symbol) => {
+            // assume the variable is Shared
+            let val_var = var_store.fresh();
+            let uniq_var = var_store.fresh();
+
+            let val_type = Variable(val_var);
+            let uniq_type = Variable(uniq_var);
+            let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
             // constraint expected ~ the type of this symbol in the environment
-            Output::new(Lookup(symbol.clone(), expected, region))
+            // Output::new(Lookup(symbol.clone(), expected, region))
+            Output::new(And(vec![
+                Lookup(symbol.clone(), expected.clone(), region),
+                Eq(attr_type, expected, region),
+                Eq(
+                    uniq_type,
+                    Expected::NoExpectation(constrain::shared_type()),
+                    region,
+                ),
+            ]))
         }
         /*
         FunctionPointer(_variable, symbol) => match env.bound_names.get(symbol) {

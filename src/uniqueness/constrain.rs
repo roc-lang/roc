@@ -101,3 +101,11 @@ type Uniqueness = Type;
 pub fn attr_type(uniq: Uniqueness, typ: Type) -> Type {
     builtin_type("Attr", "Attr", vec![uniq, typ])
 }
+
+pub fn shared_type() -> Uniqueness {
+    builtin_type("Attr", "Shared", Vec::new())
+}
+
+pub fn unique_type() -> Uniqueness {
+    builtin_type("Attr", "Unique", Vec::new())
+}
