@@ -1,3 +1,21 @@
+use crate::collections::ImMap;
+use crate::subs::Variable;
+
+pub fn unify(typ: &BooleanAlgebra, _expected: &BooleanAlgebra) -> Option<Substitution> {
+    // find the most general unifier.
+    let mut val = typ.clone();
+    let fv = val.variables();
+    let (mgu, consistency_condition) = boolean_unification(&mut val, &fv);
+
+    // the consistency_condition must be a base term, and must evaluate to False
+    if !consistency_condition.evaluate() {
+        Some(mgu)
+    } else {
+        // the unification has no solution
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BooleanAlgebra {
     Ground(bool),
@@ -96,25 +114,6 @@ fn simplify(bconstraint: BooleanAlgebra) -> BooleanAlgebra {
             (_, Ground(false)) => Ground(false),
             (ll, rr) => Conjunction(Box::new(ll), Box::new(rr)),
         },
-    }
-}
-pub fn unify(typ: &BooleanAlgebra, expected: &BooleanAlgebra) -> Option<BooleanAlgebra> {
-    // find the most general unifier.
-    let mut val = typ.clone();
-    let fv = val.variables();
-    let (mgu, consistency_condition) = boolean_unification(&mut val, &fv);
-
-    // the consistency_condition must be a base term, and must evaluate to False
-    if !consistency_condition.evaluate() {
-        // NOTE not sure about this, shouldn't the substitution be applied globally?
-        let mut result = expected.clone();
-        for (symbol, expansion) in mgu {
-            result.substitute(symbol, expansion);
-        }
-
-        Some(result)
-    } else {
-        None
     }
 }
 

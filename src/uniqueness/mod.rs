@@ -22,6 +22,7 @@ use std::fmt::Debug;
 
 pub use crate::can::expr::Expr::*;
 
+pub mod boolean_algebra;
 mod constrain;
 pub mod sharing;
 
