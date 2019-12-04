@@ -616,6 +616,7 @@ fn can_defs(
 ) -> Constraint {
     let rigid_info = Info::with_capacity(defs.len());
     let mut flex_info = Info::with_capacity(defs.len());
+    let mut bound_symbols = Vec::with_capacity(defs.len());
 
     for (pattern, expr) in defs {
         let pattern_var = var_store.fresh();
@@ -651,6 +652,8 @@ fn can_defs(
             expr_type.clone(),
         );
 
+        bound_symbols.extend(pattern::symbols_from_pattern(&pattern.value));
+
         flex_info.constraints.push(Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
             flex_vars: state.vars,
@@ -671,6 +674,11 @@ fn can_defs(
         expected,
     )
     .constraint;
+
+    // remove symbols bound in the let from var_usage
+    for symbol in &bound_symbols {
+        var_usage.unregister(symbol);
+    }
 
     Let(Box::new(LetConstraint {
         rigid_vars: rigid_info.vars,
