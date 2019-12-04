@@ -42,10 +42,8 @@ pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
 }
 
 pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
-    use Pattern::*;
-    match pattern {
-        Identifier(_, symbol) => symbols.push(symbol.clone()),
-        _ => {}
+    if let Pattern::Identifier(_, symbol) = pattern {
+        symbols.push(symbol.clone());
     }
 }
 

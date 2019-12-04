@@ -87,7 +87,6 @@ pub fn solve_boolean_constraint(typ: &BooleanConstraint, expected: &BooleanConst
 
     // find the most general unifier.
     // panic!("TODO implement boolean unification");
-    return;
 }
 
 fn type_to_var(subs: &mut Subs, typ: Type) -> Variable {
