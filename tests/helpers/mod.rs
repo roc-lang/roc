@@ -191,3 +191,8 @@ where
 pub fn fixtures_dir<'a>() -> PathBuf {
     Path::new("tests").join("fixtures").join("build")
 }
+
+#[allow(dead_code)]
+pub fn builtins_dir<'a>() -> PathBuf {
+    PathBuf::new().join("builtins")
+}
