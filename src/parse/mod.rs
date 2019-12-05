@@ -413,77 +413,35 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     // Indented more beyond the original indent.
     let indented_more = min_indent + 1;
 
-    one_of!(
-        // Constant or annotation
-        map_with_arena!(
-            and!(
-                // A pattern followed by '=' or ':'
-                space0_after(loc_closure_param(min_indent), min_indent),
-                either!(
-                    // Constant
-                    skip_first!(
-                        equals_for_def(),
-                        // Spaces after the '=' (at a normal indentation level) and then the expr.
-                        // The expr itself must be indented more than the pattern and '='
-                        space0_before(
-                            loc!(move |arena, state| parse_expr(indented_more, arena, state)),
-                            min_indent,
-                        )
-                    ),
-                    // Annotation
-                    skip_first!(
-                        char(':'),
-                        // Spaces after the ':' (at a normal indentation level) and then the type.
-                        // The type itself must be indented more than the pattern and ':'
-                        space0_before(type_annotation::located(indented_more), indented_more)
+    // Constant or annotation
+    map_with_arena!(
+        and!(
+            // A pattern followed by '=' or ':'
+            space0_after(loc_closure_param(min_indent), min_indent),
+            either!(
+                // Constant
+                skip_first!(
+                    equals_for_def(),
+                    // Spaces after the '=' (at a normal indentation level) and then the expr.
+                    // The expr itself must be indented more than the pattern and '='
+                    space0_before(
+                        loc!(move |arena, state| parse_expr(indented_more, arena, state)),
+                        min_indent,
                     )
-                )
-            ),
-            |arena: &'a Bump, (loc_pattern, expr_or_ann)| match expr_or_ann {
-                Either::First(loc_expr) => Def::Body(loc_pattern, arena.alloc(loc_expr)),
-                Either::Second(loc_ann) => Def::Annotation(loc_pattern, loc_ann),
-            }
-        ),
-        // Type alias or custom type (uppercase ident followed by `:` or `:=` and type annotation)
-        map!(
-            and!(
-                skip_second!(
-                    // TODO FIXME this may need special logic to parse the first part of the type,
-                    // then parse the rest with increased indentation. The current implementation
-                    // may not correctly handle scenarios like this:
-                    //
-                    // Result
-                    // ok err :=
-                    //
-                    // ...which should actually be something like:
-                    //
-                    // Result
-                    //   ok err :=
-                    //
-                    // This seems likely enough to be broken that it's worth trying to reproduce
-                    // and then fix! (Or, if everything is somehow fine, delete this comment.)
-                    space0_after(type_annotation::located(min_indent), min_indent),
-                    char(':')
                 ),
-                either!(
-                    // Custom type
-                    skip_first!(
-                        // The `=` in `:=` (at this point we already consumed the `:`)
-                        char('='),
-                        one_or_more!(space0_before(
-                            type_annotation::located(min_indent),
-                            min_indent,
-                        ))
-                    ),
-                    // Alias
-                    space0_before(type_annotation::located(min_indent), min_indent)
+                // Annotation
+                skip_first!(
+                    char(':'),
+                    // Spaces after the ':' (at a normal indentation level) and then the type.
+                    // The type itself must be indented more than the pattern and ':'
+                    space0_before(type_annotation::located(indented_more), indented_more)
                 )
-            ),
-            |(loc_type_name, rest)| match rest {
-                Either::First(loc_ann) => Def::CustomType(loc_type_name, loc_ann),
-                Either::Second(anns) => Def::TypeAlias(loc_type_name, anns),
-            }
-        )
+            )
+        ),
+        |arena: &'a Bump, (loc_pattern, expr_or_ann)| match expr_or_ann {
+            Either::First(loc_expr) => Def::Body(arena.alloc(loc_pattern), arena.alloc(loc_expr)),
+            Either::Second(loc_ann) => Def::Annotation(loc_pattern, loc_ann),
+        }
     )
 }
 
@@ -541,8 +499,8 @@ fn parse_def_expr<'a>(
             ),
             move |arena, state, (loc_first_body, (mut defs, loc_ret))| {
                 let first_def: Def<'a> =
-                    // TODO if Parser were FnOnce instead of Fn, this might not need .clone()?
-                    Def::Body(loc_first_pattern.clone(), arena.alloc(loc_first_body));
+                    // TODO is there some way to eliminate this .clone() here?
+                    Def::Body(arena.alloc(loc_first_pattern.clone()), arena.alloc(loc_first_body));
 
                 let loc_first_def = Located {
                     value: first_def,
