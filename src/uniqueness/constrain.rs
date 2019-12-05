@@ -1,4 +1,4 @@
-use crate::collections::ImMap;
+use crate::collections::SendMap;
 use crate::region::Region;
 use crate::subs::{VarStore, Variable};
 use crate::types::Constraint::{self, *};
@@ -10,7 +10,7 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
     Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
         flex_vars,
-        def_types: ImMap::default(),
+        def_types: SendMap::default(),
         defs_constraint: constraint,
         ret_constraint: Constraint::True,
     }))

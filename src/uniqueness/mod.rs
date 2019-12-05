@@ -2,7 +2,7 @@ use crate::can::expr::Expr::{self};
 use crate::can::pattern::Pattern;
 use crate::can::procedure::{Procedure, References};
 use crate::can::symbol::Symbol;
-use crate::collections::ImMap;
+use crate::collections::{ImMap, SendMap};
 // use crate::constrain::{self, exists};
 use crate::can::pattern;
 use crate::ident::Ident;
@@ -256,7 +256,7 @@ pub fn canonicalize_expr(
             let mut arg_vars = Vec::new();
 
             let mut state = PatternState {
-                headers: ImMap::default(),
+                headers: SendMap::default(),
                 vars: Vec::with_capacity(1),
                 constraints: Vec::with_capacity(1),
             };
@@ -554,7 +554,7 @@ fn canonicalize_case_branch(
     );
 
     let mut state = PatternState {
-        headers: ImMap::default(),
+        headers: SendMap::default(),
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
     };
@@ -574,7 +574,7 @@ fn canonicalize_case_branch(
 struct Info {
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
-    pub def_types: ImMap<Symbol, Located<Type>>,
+    pub def_types: SendMap<Symbol, Located<Type>>,
 }
 
 impl Info {
@@ -582,14 +582,14 @@ impl Info {
         Info {
             vars: Vec::with_capacity(capacity),
             constraints: Vec::with_capacity(capacity),
-            def_types: ImMap::default(),
+            def_types: SendMap::default(),
         }
     }
 }
 
 fn add_pattern_to_lookup_types(
     loc_pattern: Located<Pattern>,
-    lookup_types: &mut ImMap<Symbol, Located<Type>>,
+    lookup_types: &mut SendMap<Symbol, Located<Type>>,
     expr_type: Type,
 ) {
     let region = loc_pattern.region;

@@ -6,7 +6,7 @@ use crate::can::num::{
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::ImMap;
+use crate::collections::{ImMap, SendMap};
 use crate::ident::Ident;
 use crate::parse::ast;
 use crate::region::{Located, Region};
@@ -270,7 +270,7 @@ fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region)
 // CONSTRAIN
 
 pub struct PatternState {
-    pub headers: ImMap<Symbol, Located<Type>>,
+    pub headers: SendMap<Symbol, Located<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
 }
