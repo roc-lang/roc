@@ -1,7 +1,5 @@
 #[macro_use]
 extern crate pretty_assertions;
-#[macro_use]
-extern crate indoc;
 
 extern crate bumpalo;
 extern crate roc;
@@ -10,11 +8,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_boolean_algebra {
-    use crate::helpers::uniq_expr;
-    use roc::infer::infer_expr;
-    use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs;
-    use roc::subs::Subs;
     use roc::uniqueness::boolean_algebra;
     use roc::uniqueness::boolean_algebra::BooleanAlgebra::{self, *};
 
@@ -80,8 +74,8 @@ mod test_boolean_algebra {
         );
 
         if let Some(sub) = result {
-            assert_eq!(Some(&Variable(b)), sub.get(&a));
-            assert_eq!(Some(&Ground(false)), sub.get(&b));
+            assert_eq!(Some(&Variable(b)), sub.get(a));
+            assert_eq!(Some(&Ground(false)), sub.get(b));
         } else {
             panic!("result is None");
         }
