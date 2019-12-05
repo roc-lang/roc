@@ -565,12 +565,13 @@ mod test_format {
             ),
         );
 
-//      Parse Error!
+//        Test fails on parse error
+//
 //        expr_formats_to(
 //            indoc!(
 //                r#"
 //                x = { x: 4
-//                , y: 42
+//                    , y: 42
 //                }
 //
 //                x
@@ -582,6 +583,8 @@ mod test_format {
 //                    x: 4,
 //                    y: 42
 //                }
+//
+//                x
 //                "#
 //            ),
 //        );
