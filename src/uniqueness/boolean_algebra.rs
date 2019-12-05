@@ -132,6 +132,10 @@ impl Substitution {
     pub fn insert(&mut self, var: Variable, term: BooleanAlgebra) {
         self.pairs.insert(var, term);
     }
+
+    pub fn get(&self, var: Variable) -> Option<&BooleanAlgebra> {
+        self.pairs.get(&var)
+    }
 }
 
 fn boolean_unification(
@@ -148,13 +152,14 @@ fn boolean_unification(
         *term = Conjunction(Box::new(t1.clone()), Box::new(t0.clone()));
         term.simplify();
 
-        let sub = Disjunction(
+        let mut sub = Disjunction(
             Box::new(t0),
             Box::new(Conjunction(
                 Box::new(Variable(*var)),
                 Box::new(Negation(Box::new(t1))),
             )),
         );
+        sub.simplify();
 
         substitution.insert(var.clone(), sub);
     }
