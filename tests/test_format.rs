@@ -92,7 +92,7 @@ mod test_format {
     }
 
     #[test]
-    fn declaration_with_comment() {
+    fn def_with_comment() {
         expr_formats_same(indoc!(
             r#"
             # This variable is for greeting
@@ -103,7 +103,7 @@ mod test_format {
     }
 
     #[test]
-    fn declaration_with_comment_and_extra_space() {
+    fn def_with_comment_and_extra_space() {
         expr_formats_to(indoc!(
             r#"
             # This variable is for greeting
@@ -381,7 +381,7 @@ mod test_format {
     }
 
     #[test]
-    fn comment_betwen_two_defs() {
+    fn comment_between_two_defs() {
         expr_formats_same(indoc!(
             r#"
             x = 5
