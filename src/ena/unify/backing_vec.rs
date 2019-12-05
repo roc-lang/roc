@@ -1,6 +1,6 @@
 use crate::ena::snapshot_vec as sv;
 #[cfg(feature = "persistent")]
-use im::Vector;
+use im_rc::Vector;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{self, Range};
