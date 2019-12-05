@@ -238,7 +238,8 @@ fn spaces<'a>(
                         is_parsing_comment = false;
                     }
                     nonblank => {
-                        state = state.advance_without_indenting(1)?;
+                        // Chars can have btye lengths of more than 1!
+                        state = state.advance_without_indenting(nonblank.len_utf8())?;
 
                         comment_line_buf.push(nonblank);
                     }

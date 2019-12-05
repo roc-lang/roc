@@ -316,6 +316,23 @@ mod test_parse {
     }
 
     #[test]
+    fn comment_with_unicode() {
+        let arena = Bump::new();
+        let spaced_int = arena
+            .alloc(Int("3"))
+            .after(bumpalo::vec![in &arena; LineComment(" 2 × 2")].into_bump_slice());
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, spaced_int),
+            Located::new(1, 1, 0, 1, Plus),
+            Located::new(1, 1, 2, 3, Int("4")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "3  # 2 × 2\n+ 4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn comment_before_op() {
         let arena = Bump::new();
         let spaced_int = arena
