@@ -497,7 +497,6 @@ mod test_format {
             "#
         ));
 
-        // Parse Error
         expr_formats_same(indoc!(
             r#"
             identity = \a ->
@@ -514,6 +513,17 @@ mod test_format {
             identity 42
             "#
         ));
+
+//        Test fails! Parses into syntactically invalid Roc
+//
+//        expr_formats_same(indoc!(
+//            r#"
+//            identity = \a
+//                # Hello
+//                -> a
+//            identity 42
+//            "#
+//        ));
     }
 
     // RECORD LITERALS
