@@ -123,6 +123,9 @@ mod test_format {
             "#
         ));
     }
+
+//    Tests fail! Comment disappears
+//
 //    #[test]
 //    fn string_with_comment_behind() {
 //        expr_formats_same(indoc!(
@@ -134,20 +137,13 @@ mod test_format {
 //
 //    #[test]
 //    fn string_with_comment_underneath() {
-//        expr_formats_to(
+//        expr_formats_same(
 //            indoc!(
 //            r#"
 //            "a"
 //            # b
 //            "#
-//        ), indoc!(
-//            r#"
-//            "a"
-//
-//            # b
-//            "#
-//            )
-//        );
+//        ));
 //    }
 
     #[test]
