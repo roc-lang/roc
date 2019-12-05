@@ -92,6 +92,97 @@ mod test_format {
     }
 
     #[test]
+    fn declaration_with_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            # This variable is for greeting
+            a = "Hello"
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn declaration_with_comment_and_extra_space() {
+        expr_formats_to(indoc!(
+            r#"
+            # This variable is for greeting
+
+
+
+
+            a = "Hello"
+            a
+            "#
+        ), indoc!(
+            r#"
+            # This variable is for greeting
+
+            a = "Hello"
+            a
+            "#
+        ));
+    }
+//    #[test]
+//    fn string_with_comment_behind() {
+//        expr_formats_same(indoc!(
+//            r#"
+//            "a" # b
+//            "#
+//        ));
+//    }
+//
+//    #[test]
+//    fn string_with_comment_underneath() {
+//        expr_formats_to(
+//            indoc!(
+//            r#"
+//            "a"
+//            # b
+//            "#
+//        ), indoc!(
+//            r#"
+//            "a"
+//
+//            # b
+//            "#
+//            )
+//        );
+//    }
+
+    #[test]
+    fn func_def() {
+        expr_formats_same(indoc!(
+            r#"
+                f = \x y ->
+                    x
+
+                f 4
+            "#
+        ));
+    }
+
+
+
+//    #[test]
+//    fn func_def_inserts_line() {
+//        expr_formats_to(indoc!(
+//            r#"
+//                f = \x y ->
+//                    x
+//                f 4
+//            "#
+//        ), indoc!(
+//            r#"
+//                f = \x y ->
+//                    x
+//
+//                f 4
+//            "#
+//        ));
+//    }
+
+    #[test]
     fn basic_string() {
         expr_formats_same(indoc!(
             r#"
@@ -216,6 +307,50 @@ mod test_format {
             42
             "#
         ));
+
+//      None of these work! Rust panics.
+//
+//        expr_formats_same(indoc!(
+//            r#"
+//            x =
+//                5
+//
+//            42
+//            "#
+//        ));
+//
+//        expr_formats_same(indoc!(
+//            r#"
+//            x =
+//                # This is 5
+//                5
+//
+//            42
+//            "#
+//        ));
+//
+//        expr_formats_to(
+//            indoc!(
+//                r#"
+//                x =
+//
+//
+//                    # This is 5
+//                    5
+//
+//                42
+//                "#
+//            ),indoc!(
+//                r#"
+//                x =
+//
+//                    # This is 5
+//                    5
+//
+//                42
+//                "#
+//            )
+//        );
     }
 
     #[test]
@@ -228,6 +363,87 @@ mod test_format {
             42
             "#
         ));
+
+        expr_formats_to(indoc!(
+            r#"
+            x = 5
+
+
+            y = 10
+
+            42
+            "#
+        ),indoc!(
+            r#"
+            x = 5
+
+            y = 10
+
+            42
+            "#
+        ));
+    }
+
+    #[test]
+    fn comment_betwen_two_defs() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 5
+            # Hello
+            y = 10
+
+            42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 5
+            # Hello
+            # two comments
+            y = 10
+
+            42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 5
+            # Hello
+            # two comments
+            y = 10
+
+            # v-- This is the return value
+
+            42
+            "#
+        ));
+    }
+
+    #[test]
+    fn space_between_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            # 9
+
+            # A
+            # B
+
+            # C
+            9
+            "#
+        ));
+    }
+
+    #[test]
+    fn doesnt_detect_comment_in_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            # One Comment # Still one Comment
+            9
+            "#
+        ));
     }
 
     #[test]
@@ -235,6 +451,17 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             (UserId userId) = 5
+            y = 10
+
+            42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            # A
+            (UserId userId) = 5
+            # B
             y = 10
 
             42
@@ -270,6 +497,24 @@ mod test_format {
             r#"
             identity = \a -> a
 
+            identity 42
+            "#
+        ));
+
+        // Parse Error
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a ->
+                a
+
+            identity 42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a -> a
+            # Hello
             identity 42
             "#
         ));
@@ -323,6 +568,27 @@ mod test_format {
                 "#
             ),
         );
+
+//      Parse Error!
+//        expr_formats_to(
+//            indoc!(
+//                r#"
+//                x = { x: 4
+//                , y: 42
+//                }
+//
+//                x
+//                "#
+//            ),
+//            indoc!(
+//                r#"
+//                x = {
+//                    x: 4,
+//                    y: 42
+//                }
+//                "#
+//            ),
+//        );
     }
 
     #[test]
@@ -352,6 +618,55 @@ mod test_format {
         "#
         ));
     }
+
+//    Test Fails!
+//
+//    #[test]
+//    fn comment_in_f_forces_multiline() {
+//        expr_formats_to(
+//            indoc!(
+//                r#"
+//                if # Hello
+//                    foo (a b c) then a b c else d e f
+//                "#
+//            ), indoc!(
+//                r#"
+//                if
+//                    # Hello
+//                    foo (a b c)
+//                then
+//                    a b c
+//
+//                else
+//                    d e f
+//                "#
+//            ))
+//    }
+
+//    Test Fails!
+//
+//    #[test]
+//    fn multi_line_if() {
+//        expr_formats_same(indoc!(
+//            r#"
+//            if foo bar then
+//                a b c
+//
+//            else
+//                d e f
+//            "#
+//        ));
+//
+//        expr_formats_same(indoc!(
+//            r#"
+//            if foo (a b c) then
+//                a b c
+//
+//            else
+//                d e f
+//            "#
+//        ));
+//    }
 
     // CASE
 
