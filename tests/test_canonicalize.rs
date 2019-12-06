@@ -228,8 +228,9 @@ mod test_canonicalize {
 
     #[test]
     fn recognize_tail_calls() {
-        let src = indoc!(
-            r#"
+        with_larger_debug_stack(|| {
+            let src = indoc!(
+                r#"
             g = \x -> 
                 case x when
                     0 -> 0
@@ -248,39 +249,42 @@ mod test_canonicalize {
 
             0
         "#
-        );
-        let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+            );
+            let arena = Bump::new();
+            let (actual, _output, _problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Recursive::TailRecursive);
+            let detected = get_closure(&actual.value, 0);
+            assert_eq!(detected, Recursive::TailRecursive);
 
-        let detected = get_closure(&actual, 1);
-        assert_eq!(detected, Recursive::NotRecursive);
+            let detected = get_closure(&actual.value, 1);
+            assert_eq!(detected, Recursive::NotRecursive);
 
-        let detected = get_closure(&actual, 2);
-        assert_eq!(detected, Recursive::TailRecursive);
+            let detected = get_closure(&actual.value, 2);
+            assert_eq!(detected, Recursive::TailRecursive);
+        });
     }
 
     #[test]
     fn case_tail_call() {
-        let src = indoc!(
-            r#"
-            g = \x -> 
-                case x when
-                    0 -> 0
-                    _ -> g (x - 1)
+        with_larger_debug_stack(|| {
+            let src = indoc!(
+                r#"
+                g = \x ->
+                    case x when
+                        0 -> 0
+                        _ -> g (x + 1)
 
-            0
-        "#
-        );
-        let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+                0
+            "#
+            );
+            let arena = Bump::new();
+            let (actual, _output, _problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Recursive::TailRecursive);
+            let detected = get_closure(&actual.value, 0);
+            assert_eq!(detected, Recursive::TailRecursive);
+        });
     }
 
     #[test]
@@ -313,18 +317,19 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
+        let (actual, _output, _problems, _var_store, _vars, _constraint) =
             can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
+        let detected = get_closure(&actual.value, 0);
         assert_eq!(detected, Recursive::Recursive);
     }
 
     #[test]
     fn mutual_recursion() {
-        // TODO when a case witn no branches parses, remove the pattern wildcard here
-        let src = indoc!(
-            r#"
+        with_larger_debug_stack(|| {
+            // TODO when a case with no branches parses, remove the pattern wildcard here
+            let src = indoc!(
+                r#"
             q = \x -> 
                     case x when
                         0 -> 0
@@ -337,16 +342,17 @@ mod test_canonicalize {
 
             0
         "#
-        );
-        let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+            );
+            let arena = Bump::new();
+            let (actual, _output, _problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Recursive::Recursive);
+            let detected = get_closure(&actual.value, 0);
+            assert_eq!(detected, Recursive::Recursive);
 
-        let detected = get_closure(&actual, 1);
-        assert_eq!(detected, Recursive::Recursive);
+            let detected = get_closure(&actual.value, 1);
+            assert_eq!(detected, Recursive::Recursive);
+        });
     }
 
     //#[test]
