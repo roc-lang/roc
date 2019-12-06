@@ -1048,7 +1048,7 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::Body(
-            Located::new(1, 1, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 2, 3, Int("5"))),
         );
         let loc_def = &*arena.alloc(Located::new(1, 1, 0, 1, def));
@@ -1078,7 +1078,7 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::Body(
-            Located::new(1, 1, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Int("5"))),
         );
         let loc_def = &*arena.alloc(Located::new(1, 1, 0, 1, def));
@@ -1109,13 +1109,13 @@ mod test_parse {
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let newline = bumpalo::vec![in &arena; Newline];
         let def1 = Def::Body(
-            Located::new(1, 1, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Int("5"))),
         );
         let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 1, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
-                Located::new(2, 2, 0, 1, Identifier("y")),
+                arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
                 arena.alloc(Located::new(2, 2, 4, 5, Int("6"))),
             )),
             newline.into_bump_slice(),
@@ -1156,13 +1156,13 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            Located::new(1, 1, 0, 8, RecordDestructure(fields)),
+            arena.alloc(Located::new(1, 1, 0, 8, RecordDestructure(fields))),
             arena.alloc(Located::new(1, 1, 11, 12, Int("5"))),
         );
         let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 8, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
-                Located::new(2, 2, 0, 1, Identifier("y")),
+                arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
                 arena.alloc(Located::new(2, 2, 4, 5, Int("6"))),
             )),
             newline.into_bump_slice(),
@@ -1376,21 +1376,21 @@ mod test_parse {
         let pattern3 = Identifier("baz");
         let def1 = SpaceAfter(
             arena.alloc(Body(
-                Located::new(0, 0, 0, 3, pattern1),
+                arena.alloc(Located::new(0, 0, 0, 3, pattern1)),
                 arena.alloc(Located::new(0, 0, 6, 7, Int("1"))),
             )),
             newlines1.into_bump_slice(),
         );
         let def2 = SpaceAfter(
             arena.alloc(Body(
-                Located::new(2, 2, 0, 3, pattern2),
+                arena.alloc(Located::new(2, 2, 0, 3, pattern2)),
                 arena.alloc(Located::new(2, 2, 6, 10, Str("hi"))),
             )),
             newlines2.into_bump_slice(),
         );
         let def3 = SpaceAfter(
             arena.alloc(Body(
-                Located::new(3, 3, 0, 3, pattern3),
+                arena.alloc(Located::new(3, 3, 0, 3, pattern3)),
                 arena.alloc(Located::new(3, 3, 6, 13, Str("stuff"))),
             )),
             newlines3.into_bump_slice(),

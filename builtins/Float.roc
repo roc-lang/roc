@@ -1,7 +1,25 @@
 interface Float
-    exposes [ Float, FloatingPoint, InvalidSqrt, fromNum, round, ceiling, floor,
-        div, mod, recip, sqrt, highestVal, lowestVal, highestIntVal, lowestIntVal,
-        sin, cos, tan, asin, acos, atan ]
+    exposes [
+        Float,
+        fromNum,
+        round,
+        ceiling,
+        floor,
+        div,
+        mod,
+        recip,
+        sqrt,
+        highestVal,
+        lowestVal,
+        highestIntVal,
+        lowestIntVal,
+        sin,
+        cos,
+        tan,
+        asin,
+        acos,
+        atan
+    ]
     imports []
 
 ## Types
@@ -36,38 +54,42 @@ interface Float
 ## * Division operations return #(Err DivByZero) when they would otherwise return `Infinity` or `-Infinity`.
 ## * Operations that overflow crash (just like integers do) instead of returning `Infinity` or `-Infinity`.
 ## Under the hood, it is possible to have a zero #Float with a negative sign. However, this implementation detail intentionally conceealed. For equality purpose, `-0.0` is treated as equivalent to `0.0`, just like the spec prescribes. However, #Str.decimal always returns `0.0` when it would otherwise return `-0.0`, and both #Num.isPositive and #Num.isNegative return #False for all zero values. The only way to detect a zero with a negative sign is to convert it to #Bytes and inspect the bits directly.
-Float : Num FloatingPoint
+#Float : Num FloatingPoint
 
 ## Returned in an #Err by functions like #Float.div and #Float.mod when their arguments would
 ## result in division by zero. Division by zero is not allowed!
-FloatingPoint := FloatingPoint
+#FloatingPoint := FloatingPoint
 
 ## Returned in an #Err by #Float.sqrt when given a negative number.
-InvalidSqrt := InvalidSqrt
+#InvalidSqrt := InvalidSqrt
 
 ## Conversions
 
-fromNum : Num * -> Float
+#fromNum : Num * -> Float
 
-round : Float -> Int
+#round : Float -> Int
+round = \num ->
+    case num when
+        0.0 -> 0
+        _ -> 1
 
-ceiling : Float -> Int
+#ceiling : Float -> Int
 
-floor : Float -> Int
+#floor : Float -> Int
 
 ## Trigonometry
 
-cos : Float -> Float
+#cos : Float -> Float
 
-acos : Float -> Float
+#acos : Float -> Float
 
-sin : Float -> Float
+#sin : Float -> Float
 
-asin : Float -> Float
+#asin : Float -> Float
 
-tan : Float -> Float
+#tan : Float -> Float
 
-atan : Float -> Float
+#atan : Float -> Float
 
 ## Other Calculations (arithmetic?)
 
@@ -85,7 +107,11 @@ atan : Float -> Float
 ## > 4.0 / -0.5
 ##
 ## > Float.div 4.0 -0.5
-div : Float, Float -> Result Float DivByZero
+#div : Float, Float -> Result Float DivByZero
+div = \numerator denominator ->
+    case numerator when
+        0.0 -> 0.0 # TODO return Result!
+        _ -> denominator
 
 ## Perform modulo on two #Float numbers.
 ##
@@ -103,12 +129,12 @@ div : Float, Float -> Result Float DivByZero
 ## > 4.0 % -0.5
 ##
 ## > Float.mod -8 -3
-mod : Float, Float -> Result Float DivByZero
+#mod : Float, Float -> Result Float DivByZero
 
 ## Return the reciprocal of the #Float.
-recip : Float -> Result Float Num.DivByZero
-recip = \float ->
-    1.0 / float
+#recip : Float -> Result Float Num.DivByZero
+#recip = \float ->
+#    1.0 / float
 
 ## Return an approximation of the absolute value of the square root of the #Float.
 ##
@@ -121,16 +147,16 @@ recip = \float ->
 ## > Float.sqrt 0.0
 ##
 ## > Float.sqrt -4.0
-sqrt : Float -> Result Float InvalidSqrt
+#sqrt : Float -> Result Float InvalidSqrt
 
 ## Constants
 
 ## An approximation of e, specifically 2.718281828459045.
-e : Float
+#e : Float
 e = 2.718281828459045
 
 ## An approximation of pi, specifically 3.141592653589793.
-pi : Float
+#pi : Float
 pi = 3.141592653589793
 
 ## Limits
@@ -138,12 +164,14 @@ pi = 3.141592653589793
 ## The highest supported #Float value you can have, which is approximately 1.8 × 10^308.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
-highestVal : Float
+#highestVal : Float
+highestVal = 1.0
 
 ## The lowest supported #Float value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
-lowestVal : Float
+#lowestVal : Float
+lowestVal = 1.0
 
 ## The highest integer that can be represented as a #Float without # losing precision.
 ## It is equal to 2^53, which is approximately 9 × 10^15.
@@ -155,7 +183,8 @@ lowestVal : Float
 ## > Float.highestIntVal + 100 # Increasing may lose precision
 ##
 ## > Float.highestIntVal - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
-highestIntVal : Float
+#highestIntVal : Float
+highestIntVal = 1.0
 
 ## The lowest integer that can be represented as a #Float without losing precision.
 ## It is equal to -2^53, which is approximately -9 × 10^15.
@@ -167,4 +196,5 @@ highestIntVal : Float
 ## > Float.lowestIntVal - 100 # Decreasing may lose precision
 ##
 ## > Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestLosslessInt!
-lowestIntVal : Float
+#lowestIntVal : Float
+lowestIntVal = 1.0

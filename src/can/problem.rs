@@ -33,10 +33,9 @@ pub enum RuntimeError {
     InvalidHex(std::num::ParseIntError, Box<str>),
     InvalidOctal(std::num::ParseIntError, Box<str>),
     InvalidBinary(std::num::ParseIntError, Box<str>),
-    CircularAssignment(
+    CircularDef(
         Vec<Located<Ident>>,
         Vec<(Region /* pattern */, Region /* expr */)>,
-        Region,
     ),
 
     /// When the author specifies a type annotation but no implementation

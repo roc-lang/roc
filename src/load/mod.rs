@@ -1,7 +1,6 @@
-use crate::can::canonicalize_module_defs;
-use crate::can::expr::Expr;
-use crate::can::module::Module;
-use crate::can::pattern::Pattern;
+use crate::can::def::Def;
+use crate::can::module::{canonicalize_module_defs, Module};
+use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendSet};
 use crate::module::ModuleName;
@@ -10,9 +9,9 @@ use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
 use crate::subs::VarStore;
+use crate::types::Constraint;
 use bumpalo::Bump;
 use futures::future::join_all;
-use im::Vector;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,6 +38,7 @@ type LoadedDeps = Vec<LoadedModule>;
 type DepNames = SendSet<Box<str>>;
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum LoadedModule {
     Valid(Module),
     FileProblem {
@@ -78,9 +78,8 @@ pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf, loaded_deps: &mut Loa
         src_dir: src_dir.clone(),
     };
     let (tx, mut rx): (Sender<DepNames>, Receiver<DepNames>) = mpsc::channel(1024);
-    let arc_var_store = Arc::new(VarStore::new());
-
     let main_tx = tx.clone();
+    let arc_var_store = Arc::new(VarStore::new());
     let var_store = Arc::clone(&arc_var_store);
     let handle =
         tokio::spawn(async move { load_filename(&env, filename, main_tx, &var_store).await });
@@ -203,16 +202,18 @@ async fn load_filename(
                         tx.send(deps).await.unwrap();
                     });
 
-                    let defs = parse_and_canonicalize_defs(
+                    let (defs, constraint) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         declared_name.clone(),
-                        &mut scope,
+                        header.exposes.into_iter(),
+                        Scope::new(format!("{}.", declared_name).into(), ImMap::default()),
                         var_store,
                     );
                     let module = Module {
                         name: Some(declared_name),
                         defs,
+                        constraint,
                     };
 
                     LoadedModule::Valid(module)
@@ -239,14 +240,19 @@ async fn load_filename(
                     });
 
                     // The app module has no declared name. Pass it as "".
-                    let defs = parse_and_canonicalize_defs(
+                    let (defs, constraint) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         "".into(),
-                        &mut scope,
+                        std::iter::empty(),
+                        Scope::new(".".into(), ImMap::default()),
                         var_store,
                     );
-                    let module = Module { name: None, defs };
+                    let module = Module {
+                        name: None,
+                        defs,
+                        constraint,
+                    };
 
                     LoadedModule::Valid(module)
                 }
@@ -262,18 +268,22 @@ async fn load_filename(
     }
 }
 
-fn parse_and_canonicalize_defs(
-    arena: &Bump,
-    state: State<'_>,
+fn parse_and_canonicalize_defs<'a, I>(
+    arena: &'a Bump,
+    state: State<'a>,
     home: Box<str>,
-    scope: &mut ImMap<Box<str>, (Symbol, Region)>,
+    exposes: I,
+    scope: Scope,
     var_store: &VarStore,
-) -> Vector<(Located<Pattern>, Located<Expr>)> {
+) -> (Vec<Def>, Constraint)
+where
+    I: Iterator<Item = Located<ExposesEntry<'a>>>,
+{
     let (parsed_defs, _) = module_defs()
         .parse(arena, state)
         .expect("TODO gracefully handle parse error on module defs");
 
-    canonicalize_module_defs(arena, parsed_defs, home, scope, var_store)
+    canonicalize_module_defs(arena, parsed_defs, home, exposes, scope, var_store)
 }
 
 fn load_import(

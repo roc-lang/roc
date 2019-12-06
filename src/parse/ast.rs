@@ -184,17 +184,16 @@ pub enum Def<'a> {
     // annotation; if not, and if it's followed by a Body, then the annotation
     // applies to that expr! (TODO: verify that the pattern for both annotation and body match.)
     // No need to track that relationship in any data structure.
-    Body(Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
-    // TODO also in canonicalization, if there is a CustomType or TypeAlias
-    // inside an Expr, give an error like "hey you need to move this to the
-    // top level" - it'll parse fine, we just won't accept it there.
-    CustomType(Loc<TypeAnnotation<'a>>, Vec<'a, Loc<TypeAnnotation<'a>>>),
-    TypeAlias(Loc<TypeAnnotation<'a>>, Loc<TypeAnnotation<'a>>),
+    Body(&'a Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
+
+    /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
+    /// It lets us take a (&Def) and create a plain (Def) from it.
+    Nested(&'a Def<'a>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

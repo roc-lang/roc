@@ -1,11 +1,13 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
-use roc::can;
-use roc::can::expr::Expr;
+use roc::can::env::Env;
+use roc::can::expr::Output;
+use roc::can::expr::{canonicalize_expr, Expr};
+use roc::can::operator;
 use roc::can::problem::Problem;
+use roc::can::scope::Scope;
 use roc::can::symbol::Symbol;
-use roc::can::Output;
 use roc::collections::{ImMap, MutMap, SendSet};
 use roc::ident::Ident;
 use roc::parse;
@@ -14,9 +16,49 @@ use roc::parse::blankspace::space0_before;
 use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
 use roc::subs::{VarStore, Variable};
-use roc::types::{Expected, Type};
+use roc::types::{Constraint, Expected, Type};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+
+/// Used in the with_larger_debug_stack() function, for tests that otherwise
+/// run out of stack space in debug builds (but don't in --release builds)
+#[allow(dead_code)]
+const EXPANDED_STACK_SIZE: usize = 4 * 1024 * 1024;
+
+/// Without this, some tests pass in `cargo test --release` but fail without
+/// the --release flag because they run out of stack space. This increases
+/// stack size for debug builds only, while leaving the stack space at the default
+/// amount for release builds.
+#[allow(dead_code)]
+#[cfg(debug_assertions)]
+pub fn with_larger_debug_stack<F>(run_test: F)
+where
+    F: FnOnce() -> (),
+    F: Send,
+    F: 'static,
+{
+    std::thread::Builder::new()
+        .stack_size(EXPANDED_STACK_SIZE)
+        .spawn(run_test)
+        .expect("Error while spawning expanded dev stack size thread")
+        .join()
+        .expect("Error while joining expanded dev stack size thread")
+}
+
+/// In --release builds, don't increase the stack size. Run the test normally.
+/// This way, we find out if any of our tests are blowing the stack even after
+/// optimizations in release builds.
+#[allow(dead_code)]
+#[cfg(not(debug_assertions))]
+#[inline(always)]
+pub fn with_larger_debug_stack<F>(run_test: F)
+where
+    F: FnOnce() -> (),
+    F: Send,
+    F: 'static,
+{
+    run_test()
+}
 
 #[allow(dead_code)]
 pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
@@ -35,68 +77,56 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 }
 
 #[allow(dead_code)]
-pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, VarStore, Variable) {
-    can_expr_with(&Bump::new(), "blah", expr_str, &ImMap::default())
+pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, VarStore, Variable, Constraint) {
+    let (loc_expr, output, problems, var_store, var, constraint) =
+        can_expr_with(&Bump::new(), "blah", expr_str, &ImMap::default());
+
+    (loc_expr.value, output, problems, var_store, var, constraint)
 }
 
 #[allow(dead_code)]
 pub fn uniq_expr(
     expr_str: &str,
 ) -> (
-    roc::uniqueness::Output,
+    Output,
     Output,
     Vec<Problem>,
     VarStore,
     Variable,
     VarStore,
     Variable,
+    Constraint,
+    Constraint,
 ) {
-    uniq_expr_with(&Bump::new(), "blah", expr_str, &ImMap::default())
+    uniq_expr_with(&Bump::new(), expr_str, &ImMap::default())
 }
 
 #[allow(dead_code)]
 pub fn uniq_expr_with(
     arena: &Bump,
-    name: &str,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
 ) -> (
-    roc::uniqueness::Output,
+    Output,
     Output,
     Vec<Problem>,
     VarStore,
     Variable,
     VarStore,
     Variable,
+    Constraint,
+    Constraint,
 ) {
-    let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
-        panic!(
-            "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?}",
-            expr_str
-        )
-    });
-
-    let var_store1 = VarStore::new();
-    let variable = var_store1.fresh();
-    let expected = Expected::NoExpectation(Type::Variable(variable));
     let home = "Test";
-    let (loc_expr, output, problems) = can::canonicalize_declaration(
-        arena,
-        &var_store1,
-        home.into(),
-        name.into(),
-        Region::zero(),
-        loc_expr,
-        declared_idents,
-        expected,
-    );
+    let (loc_expr, output, problems, var_store1, variable, constraint1) =
+        can_expr_with(arena, home, expr_str, &ImMap::default());
 
     // double check
     let var_store2 = VarStore::new();
 
     let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
-    let output2 = roc::uniqueness::canonicalize_declaration(
+    let (output2, constraint2) = roc::uniqueness::canonicalize_declaration(
         &var_store2,
         Region::zero(),
         loc_expr,
@@ -105,7 +135,15 @@ pub fn uniq_expr_with(
     );
 
     (
-        output2, output, problems, var_store1, variable, var_store2, variable2,
+        output2,
+        output,
+        problems,
+        var_store1,
+        variable,
+        var_store2,
+        variable2,
+        constraint1,
+        constraint2,
     )
 }
 
@@ -115,7 +153,14 @@ pub fn can_expr_with(
     name: &str,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-) -> (Expr, Output, Vec<Problem>, VarStore, Variable) {
+) -> (
+    Located<Expr>,
+    Output,
+    Vec<Problem>,
+    VarStore,
+    Variable,
+    Constraint,
+) {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?}",
@@ -127,18 +172,39 @@ pub fn can_expr_with(
     let variable = var_store.fresh();
     let expected = Expected::NoExpectation(Type::Variable(variable));
     let home = "Test";
-    let (loc_expr, output, problems) = can::canonicalize_declaration(
-        arena,
+
+    // Desugar operators (convert them to Apply calls, taking into account
+    // operator precedence and associativity rules), before doing other canonicalization.
+    //
+    // If we did this *during* canonicalization, then each time we
+    // visited a BinOp node we'd recursively try to apply this to each of its nested
+    // operators, and then again on *their* nested operators, ultimately applying the
+    // rules multiple times unnecessarily.
+    let loc_expr = operator::desugar_expr(arena, &loc_expr);
+
+    // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
+    // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
+    let scope_prefix = format!("{}.{}$", home, name).into();
+    let mut scope = Scope::new(scope_prefix, declared_idents.clone());
+    let mut env = Env::new(home.into());
+    let (loc_expr, output, constraint) = canonicalize_expr(
+        &ImMap::default(),
+        &mut env,
         &var_store,
-        home.into(),
-        name.into(),
+        &mut scope,
         Region::zero(),
-        loc_expr,
-        declared_idents,
+        &loc_expr.value,
         expected,
     );
 
-    (loc_expr.value, output, problems, var_store, variable)
+    (
+        loc_expr,
+        output,
+        env.problems,
+        var_store,
+        variable,
+        constraint,
+    )
 }
 
 #[allow(dead_code)]

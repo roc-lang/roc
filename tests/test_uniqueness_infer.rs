@@ -18,13 +18,23 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (output2, output1, _, var_store1, variable1, var_store2, variable2) = uniq_expr(src);
+        let (
+            _output2,
+            _output1,
+            _,
+            var_store1,
+            variable1,
+            var_store2,
+            variable2,
+            constraint1,
+            constraint2,
+        ) = uniq_expr(src);
 
         let mut subs1 = Subs::new(var_store1.into());
         let mut subs2 = Subs::new(var_store2.into());
 
-        let content1 = infer_expr(&mut subs1, &output1.constraint, variable1);
-        let content2 = infer_expr(&mut subs2, &output2.constraint, variable2);
+        let content1 = infer_expr(&mut subs1, &constraint1, variable1);
+        let content2 = infer_expr(&mut subs2, &constraint2, variable2);
 
         name_all_type_vars(variable1, &mut subs1);
         name_all_type_vars(variable2, &mut subs2);
