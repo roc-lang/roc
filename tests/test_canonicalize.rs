@@ -25,25 +25,6 @@ mod test_canonicalize {
         Symbol::new("Test.Blah$", name)
     }
 
-    //     fn unqualified(string: &str) -> Ident {
-    //         Ident::Unqualified(string.to_string())
-    //     }
-
-    //     fn unqualifieds(strings: Vec<&str>) -> Vec<Ident> {
-    //         strings.into_iter().map(unqualified).collect()
-    //     }
-
-    //     fn loc_unqualifieds(strings: Vec<&str>) -> Vec<Located<Ident>> {
-    //         strings
-    //             .into_iter()
-    //             .map(|string| loc(unqualified(string)))
-    //             .collect()
-    //     }
-
-    // fn unused(string: &str) -> Problem {
-    //     Problem::UnusedAssignment(loc(unqualified(string)))
-    // }
-
     struct Out<'a> {
         locals: Vec<&'a str>,
         globals: Vec<&'a str>,
@@ -150,29 +131,6 @@ mod test_canonicalize {
             }
             .into()
         );
-
-        // assert_eq!(
-        //     procedures,
-        //     mut_map_from_pairs(vec![(
-        //         sym("func"),
-        //         Procedure {
-        //             name: Some("func".to_string()),
-        //             is_self_tail_recursive: false,
-        //             definition: Region::zero(),
-        //             args: vec![loc(Pattern::Identifier(sym("arg")))],
-        //             body: loc(Expr::BinOp(
-        //                 loc_box(Expr::Var(sym("arg"))),
-        //                 loc(BinOp::Plus),
-        //                 loc_box(Expr::Int(1))
-        //             )),
-        //             references: References {
-        //                 locals: vec_to_set(vec![]),
-        //                 globals: vec_to_set(vec![]),
-        //                 calls: vec_to_set(vec![]),
-        //             }
-        //         }
-        //     )])
-        // );
     }
 
     #[test]
