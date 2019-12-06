@@ -97,7 +97,7 @@ pub fn canonicalize_defs<'a>(
 }
 
 #[inline(always)]
-pub fn sort_can_defs<'a>(
+pub fn sort_can_defs(
     env: &mut Env,
     defs: CanDefs,
     mut output: Output,
