@@ -267,7 +267,21 @@ mod test_parse {
     }
 
     #[test]
-    fn ops_with_spaces() {
+    fn one_minus_two() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("1")),
+            Located::new(0, 0, 1, 2, Minus),
+            Located::new(0, 0, 2, 3, Int("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "1-2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn add_with_spaces() {
         let arena = Bump::new();
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Int("1")),
@@ -281,7 +295,58 @@ mod test_parse {
     }
 
     #[test]
-    fn newline_before_op() {
+    fn sub_with_spaces() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("1")),
+            Located::new(0, 0, 3, 4, Minus),
+            Located::new(0, 0, 7, 8, Int("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "1  -   2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn add_var_with_spaces() {
+        // This is a regression test! It used to break with subtraction and work
+        // with other arithmetic operatos.
+        //
+        // Subtraction is special when it comes to parsing, because of unary negation.
+
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(&[], "x")),
+            Located::new(0, 0, 2, 3, Plus),
+            Located::new(0, 0, 4, 5, Int("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x + 2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn sub_var_with_spaces() {
+        // This is a regression test! It used to break with subtraction and work
+        // with other arithmetic operatos.
+        //
+        // Subtraction is special when it comes to parsing, because of unary negation.
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(&[], "x")),
+            Located::new(0, 0, 2, 3, Minus),
+            Located::new(0, 0, 4, 5, Int("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x - 2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_before_add() {
         let arena = Bump::new();
         let spaced_int = Expr::SpaceAfter(
             arena.alloc(Int("3")),
@@ -299,7 +364,25 @@ mod test_parse {
     }
 
     #[test]
-    fn newline_after_op() {
+    fn newline_before_sub() {
+        let arena = Bump::new();
+        let spaced_int = Expr::SpaceAfter(
+            arena.alloc(Int("3")),
+            bumpalo::vec![in &arena; Newline].into_bump_slice(),
+        );
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, spaced_int),
+            Located::new(1, 1, 0, 1, Minus),
+            Located::new(1, 1, 2, 3, Int("4")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "3  \n- 4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_after_mul() {
         let arena = Bump::new();
         let spaced_int = arena
             .alloc(Int("4"))
@@ -311,6 +394,23 @@ mod test_parse {
         ));
         let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  *\n  4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_after_sub() {
+        let arena = Bump::new();
+        let spaced_int = arena
+            .alloc(Int("4"))
+            .before(bumpalo::vec![in &arena; Newline].into_bump_slice());
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("3")),
+            Located::new(0, 0, 3, 4, Minus),
+            Located::new(1, 1, 2, 3, spaced_int),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "3  -\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -446,6 +546,34 @@ mod test_parse {
         ));
         let expected = BinOp(outer);
         let actual = parse_with(&arena, "31*42+534");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn equals() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(&[], "x")),
+            Located::new(0, 0, 1, 3, Equals),
+            Located::new(0, 0, 3, 4, Var(&[], "y")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x==y");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn equals_with_spaces() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(&[], "x")),
+            Located::new(0, 0, 2, 4, Equals),
+            Located::new(0, 0, 5, 6, Var(&[], "y")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x == y");
 
         assert_eq!(Ok(expected), actual);
     }
