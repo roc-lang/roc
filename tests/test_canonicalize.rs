@@ -10,16 +10,15 @@ mod helpers;
 
 #[cfg(test)]
 mod test_canonicalize {
-    use crate::helpers::can_expr_with;
+    use crate::helpers::{can_expr_with, with_larger_debug_stack};
     use bumpalo::Bump;
     use roc::can::expr::Expr::{self, *};
+    use roc::can::expr::Output;
     use roc::can::expr::Recursive;
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
     use roc::can::symbol::Symbol;
-    use roc::can::Output;
     use roc::collections::{ImMap, ImSet};
-    use roc::types::Constraint;
     use std::{f64, i64};
 
     fn sym(name: &str) -> Symbol {
@@ -65,7 +64,6 @@ mod test_canonicalize {
             Output {
                 references,
                 tail_call,
-                constraint: Constraint::True,
             }
         }
     }
@@ -76,9 +74,9 @@ mod test_canonicalize {
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+        let (actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
 
-        assert_eq!(expected, actual);
+        assert_eq!(expected, actual.value);
     }
 
     // NUMBER LITERALS
@@ -137,13 +135,10 @@ mod test_canonicalize {
             func 2
         "#
         );
-        let (_actual, mut output, problems, _var_store, _vars) =
+        let (_actual, output, problems, _var_store, _vars, _constraint) =
             can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         assert_eq!(problems, vec![]);
-
-        // We don't care about constraint for this test.
-        output.constraint = Constraint::True;
 
         assert_eq!(
             output,
@@ -193,13 +188,10 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (_actual, mut output, problems, _var_store, _vars) =
+        let (_actual, output, problems, _var_store, _vars, _constraint) =
             can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         assert_eq!(problems, vec![]);
-
-        // We don't care about constraint for this test.
-        output.constraint = Constraint::True;
 
         assert_eq!(
             output,
@@ -215,7 +207,7 @@ mod test_canonicalize {
 
     fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
-            Defs(_, assignments, _) => match &assignments.get(i).map(|(_, loc)| &loc.value) {
+            Defs(_, assignments, _) => match &assignments.get(i).map(|def| &def.expr.value) {
                 Some(Closure(_, recursion, _, _)) => recursion.clone(),
                 Some(other @ _) => {
                     panic!("assignment at {} is not a closure, but a {:?}", i, other)
@@ -297,10 +289,10 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
+        let (actual, _output, _problems, _var_store, _vars, _constraint) =
             can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
+        let detected = get_closure(&actual.value, 0);
         assert_eq!(detected, Recursive::TailRecursive);
     }
 

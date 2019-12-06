@@ -18,9 +18,9 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, output, _, var_store, variable) = can_expr(src);
+        let (_, _output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
-        let content = infer_expr(&mut subs, &output.constraint, variable);
+        let content = infer_expr(&mut subs, &constraint, variable);
 
         name_all_type_vars(variable, &mut subs);
 

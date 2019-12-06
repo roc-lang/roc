@@ -91,7 +91,15 @@ mod test_load {
                 .map(|dep| dep.into_module().unwrap().name)
                 .collect();
 
-            assert_eq!(module_names, vec![Some("Map".into()), Some("Set".into()),]);
+            assert_eq!(
+                module_names,
+                vec![
+                    Some("Int".into()),
+                    Some("Map".into()),
+                    Some("Set".into()),
+                    Some("Float".into())
+                ]
+            );
         });
     }
 
@@ -117,8 +125,10 @@ mod test_load {
             assert_eq!(
                 module_names,
                 vec![
+                    Some("Int".into()),
                     Some("Map".into()),
                     Some("Set".into()),
+                    Some("Float".into()),
                     Some("Dep1".into()),
                     Some("Dep3.Blah".into()),
                     Some("Dep2".into())

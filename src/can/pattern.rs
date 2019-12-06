@@ -13,6 +13,7 @@ use crate::region::{Located, Region};
 use crate::subs::VarStore;
 use crate::subs::Variable;
 use crate::types::{Constraint, PExpected, PatternCategory, Type};
+use im_rc::Vector;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -73,7 +74,7 @@ pub fn canonicalize_pattern<'a>(
     expected: PExpected<Type>,
 ) -> Located<Pattern> {
     use self::PatternType::*;
-    use crate::can::ast::Pattern::*;
+    use crate::parse::ast::Pattern::*;
 
     let can_pattern = match &pattern {
         &Identifier(ref name) => {
@@ -345,5 +346,101 @@ fn add_constraints<'a>(
         | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
+    }
+}
+
+pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Region)>) {
+    use crate::parse::ast::Pattern::*;
+
+    match &pattern {
+        Identifier(name) => {
+            idents.remove(&(Ident::Unqualified(name.to_string())));
+        }
+        QualifiedIdentifier(_name) => {
+            panic!("TODO implement QualifiedIdentifier pattern in remove_idents.");
+        }
+        Apply(_, _) => {
+            panic!("TODO implement Apply pattern in remove_idents.");
+            // AppliedVariant(_, Some(loc_args)) => {
+            //     for loc_arg in loc_args {
+            //         remove_idents(loc_arg.value, idents);
+            //     }
+            // }
+        }
+        RecordDestructure(_) => {
+            panic!("TODO implement RecordDestructure pattern in remove_idents.");
+        }
+        RecordField(_, _) => {
+            panic!("TODO implement RecordField pattern in remove_idents.");
+        }
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
+            // Ignore the newline/comment info; it doesn't matter in canonicalization.
+            remove_idents(pattern, idents)
+        }
+        GlobalTag(_) | PrivateTag(_) | IntLiteral(_) | HexIntLiteral(_) | BinaryIntLiteral(_)
+        | OctalIntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | BlockStrLiteral(_)
+        | EmptyRecordLiteral | Malformed(_) | Underscore => {}
+    }
+}
+
+pub fn idents_from_patterns<'a, I>(
+    loc_patterns: I,
+    scope: &Scope,
+) -> Vector<(Ident, (Symbol, Region))>
+where
+    I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
+{
+    let mut answer = Vector::new();
+
+    for loc_pattern in loc_patterns {
+        add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, &mut answer);
+    }
+
+    answer
+}
+
+/// helper function for idents_from_patterns
+fn add_idents_from_pattern<'a>(
+    region: &'a Region,
+    pattern: &'a ast::Pattern<'a>,
+    scope: &'a Scope,
+    answer: &'a mut Vector<(Ident, (Symbol, Region))>,
+) {
+    use crate::parse::ast::Pattern::*;
+
+    match pattern {
+        Identifier(name) => {
+            let symbol = scope.symbol(&name);
+
+            answer.push_back((Ident::Unqualified(name.to_string()), (symbol, *region)));
+        }
+        QualifiedIdentifier(_name) => {
+            panic!("TODO implement QualifiedIdentifier pattern.");
+        }
+        Apply(_, _) => {
+            panic!("TODO implement Apply pattern.");
+            // &AppliedVariant(_, ref opt_loc_args) => match opt_loc_args {
+            // &None => (),
+            // &Some(ref loc_args) => {
+            //     for loc_arg in loc_args.iter() {
+            //         add_idents_from_pattern(loc_arg, scope, answer);
+            //     }
+            // }
+            // },
+        }
+
+        RecordDestructure(_) => {
+            panic!("TODO implement RecordDestructure pattern in add_idents_from_pattern.");
+        }
+        RecordField(_, _) => {
+            panic!("TODO implement RecordField pattern in add_idents_from_pattern.");
+        }
+        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
+            // Ignore the newline/comment info; it doesn't matter in canonicalization.
+            add_idents_from_pattern(region, pattern, scope, answer)
+        }
+        GlobalTag(_) | PrivateTag(_) | IntLiteral(_) | HexIntLiteral(_) | OctalIntLiteral(_)
+        | BinaryIntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | BlockStrLiteral(_)
+        | EmptyRecordLiteral | Malformed(_) | Underscore => (),
     }
 }
