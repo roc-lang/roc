@@ -35,7 +35,41 @@ where
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let mut desugared = bumpalo::collections::Vec::with_capacity_in(loc_defs.len(), arena);
+    let mut desugared =
+        bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + scope.idents.len(), arena);
+
+    // Exposed values are desugared as defs that appear before any others, e.g.
+    //
+    // imports [ Foo.{ bar, baz } ]
+    //
+    // ...desugars to these extra defs at the start of the module:
+    //
+    // bar = Foo.bar
+    // baz = Foo.baz
+    //
+    // This is the part where we add those defs to the beginning of the module.
+    for (ident, (symbol, region)) in scope.idents.iter() {
+        if ident.first_char().is_lowercase() {
+            let pattern = ast::Pattern::Identifier(arena.alloc(ident.clone().name()));
+            let expr = ast::Expr::RawVar(arena.alloc(symbol.clone().into_boxed_str()));
+            let loc_pattern = Located {
+                value: pattern,
+                region: region.clone(),
+            };
+            let loc_expr = Located {
+                value: expr,
+                region: region.clone(),
+            };
+            let value = ast::Def::Body(arena.alloc(loc_pattern), arena.alloc(loc_expr));
+
+            desugared.push(&*arena.alloc(Located {
+                value,
+                region: region.clone(),
+            }));
+        } else {
+            // TODO add type aliases to type alias dictionary, based on exposed types
+        }
+    }
 
     for loc_def in loc_defs {
         desugared.push(&*arena.alloc(Located {

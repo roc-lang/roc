@@ -40,6 +40,9 @@ pub fn fmt_expr<'a>(
 
             buf.push_str(name);
         }
+        RawVar(name) => {
+            buf.push_str(name);
+        }
         Apply(loc_expr, loc_args, _) => {
             if apply_needs_parens {
                 buf.push('(');
@@ -254,6 +257,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         | Access(_, _)
         | AccessorFunction(_)
         | Var(_, _)
+        | RawVar(_)
         | MalformedIdent(_)
         | MalformedClosure
         | GlobalTag(_)

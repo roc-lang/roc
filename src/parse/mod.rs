@@ -255,6 +255,9 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
                 }))
             }
         }
+        Expr::RawVar(_) => {
+            panic!("epxr_to_pattern was called on a RawVar. This should never happen!");
+        }
         Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
         Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
         Expr::Apply(loc_val, loc_args, _) => {
