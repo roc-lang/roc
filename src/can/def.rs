@@ -252,6 +252,7 @@ pub fn sort_can_defs(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn canonicalize_def<'a>(
     rigids: &Rigids,
     env: &mut Env,
@@ -557,6 +558,7 @@ where
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 pub fn can_defs_with_return<'a>(
     rigids: &Rigids,
     env: &mut Env,

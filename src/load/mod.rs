@@ -38,6 +38,7 @@ type LoadedDeps = Vec<LoadedModule>;
 type DepNames = SendSet<Box<str>>;
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum LoadedModule {
     Valid(Module),
     FileProblem {
