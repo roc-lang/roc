@@ -1,11 +1,13 @@
 use crate::can::def::Def;
 use crate::can::module::{canonicalize_module_defs, Module};
+use crate::subs::{Subs, Variable};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendSet};
 use crate::module::ModuleName;
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use crate::parse::module::{self, module_defs};
+use crate::ident::Ident;
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
 use crate::subs::VarStore;
@@ -182,7 +184,7 @@ async fn load_filename(
                     // TODO check to see if declared_name is consistent with filename.
                     // If it isn't, report a problem!
 
-                    let mut scope = ImMap::default();
+                    let mut scope_from_imports = ImMap::default();
                     let mut deps = SendSet::default();
 
                     for loc_entry in header.imports {
@@ -190,7 +192,7 @@ async fn load_filename(
                             env,
                             loc_entry.region,
                             &loc_entry.value,
-                            &mut scope,
+                            &mut scope_from_imports,
                         ));
                     }
 
@@ -202,12 +204,14 @@ async fn load_filename(
                         tx.send(deps).await.unwrap();
                     });
 
+                    let mut scope = Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
+
                     let (defs, constraint) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         declared_name.clone(),
                         header.exposes.into_iter(),
-                        Scope::new(format!("{}.", declared_name).into(), ImMap::default()),
+                        &mut scope,
                         var_store,
                     );
                     let module = Module {
@@ -219,7 +223,7 @@ async fn load_filename(
                     LoadedModule::Valid(module)
                 }
                 Ok((ast::Module::App { header }, state)) => {
-                    let mut scope = ImMap::default();
+                    let mut scope_from_imports = ImMap::default();
                     let mut deps = SendSet::default();
 
                     for loc_entry in header.imports {
@@ -227,7 +231,7 @@ async fn load_filename(
                             env,
                             loc_entry.region,
                             &loc_entry.value,
-                            &mut scope,
+                            &mut scope_from_imports,
                         ));
                     }
 
@@ -239,13 +243,15 @@ async fn load_filename(
                         tx.send(deps).await.unwrap();
                     });
 
+                    let mut scope = Scope::new(".".into(), scope_from_imports);
+
                     // The app module has no declared name. Pass it as "".
                     let (defs, constraint) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         "".into(),
                         std::iter::empty(),
-                        Scope::new(".".into(), ImMap::default()),
+                        &mut scope,
                         var_store,
                     );
                     let module = Module {
@@ -273,7 +279,7 @@ fn parse_and_canonicalize_defs<'a, I>(
     state: State<'a>,
     home: Box<str>,
     exposes: I,
-    scope: Scope,
+    scope: &mut Scope,
     var_store: &VarStore,
 ) -> (Vec<Def>, Constraint)
 where
@@ -290,7 +296,7 @@ fn load_import(
     env: &Env,
     region: Region,
     entry: &ImportsEntry<'_>,
-    scope: &mut ImMap<Box<str>, (Symbol, Region)>,
+    scope: &mut ImMap<Ident, (Symbol, Region)>,
 ) -> Box<str> {
     use crate::parse::ast::ImportsEntry::*;
 
@@ -299,7 +305,7 @@ fn load_import(
             for loc_entry in exposes {
                 let (key, value) = expose(*module_name, &loc_entry.value, loc_entry.region);
 
-                scope.insert(key, value);
+                scope.insert(Ident::Unqualified(key.into()), value);
             }
 
             module_name.as_str().into()

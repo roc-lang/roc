@@ -17,16 +17,16 @@ pub struct Module {
     pub constraint: Constraint,
 }
 
-pub fn canonicalize_module_defs<'a, Exposes>(
+pub fn canonicalize_module_defs<'a, I>(
     arena: &Bump,
     loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
     home: Box<str>,
-    _exposes: Exposes,
-    mut scope: Scope,
+    _exposes: I,
+    scope: &mut Scope,
     var_store: &VarStore,
 ) -> (Vec<Def>, Constraint)
 where
-    Exposes: Iterator<Item = Located<ExposesEntry<'a>>>,
+    I: Iterator<Item = Located<ExposesEntry<'a>>>,
 {
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -47,12 +47,11 @@ where
     let mut env = Env::new(home);
     let rigids = ImMap::default();
     let mut flex_info = Info::default();
-
     let defs = canonicalize_defs(
         &rigids,
         &mut env,
         var_store,
-        &mut scope,
+        scope,
         &desugared,
         &mut flex_info,
     );
