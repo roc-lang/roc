@@ -92,6 +92,54 @@ mod test_format {
     }
 
     #[test]
+    fn def_with_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            # This variable is for greeting
+            a = "Hello"
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn def_with_comment_and_extra_space() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            # This variable is for greeting
+
+
+
+
+            a = "Hello"
+            a
+            "#
+            ),
+            indoc!(
+                r#"
+            # This variable is for greeting
+
+            a = "Hello"
+            a
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn func_def() {
+        expr_formats_same(indoc!(
+            r#"
+                f = \x y ->
+                    x
+
+                f 4
+            "#
+        ));
+    }
+
+    #[test]
     fn basic_string() {
         expr_formats_same(indoc!(
             r#"
@@ -228,6 +276,90 @@ mod test_format {
             42
             "#
         ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+            x = 5
+
+
+            y = 10
+
+            42
+            "#
+            ),
+            indoc!(
+                r#"
+            x = 5
+
+            y = 10
+
+            42
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn comment_between_two_defs() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 5
+            # Hello
+            y = 10
+
+            42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 5
+            # Hello
+            # two comments
+            y = 10
+
+            42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 5
+            # Hello
+            # two comments
+            y = 10
+
+            # v-- This is the return value
+
+            42
+            "#
+        ));
+    }
+
+    #[test]
+    fn space_between_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            # 9
+
+            # A
+            # B
+
+            # C
+            9
+            "#
+        ));
+    }
+
+    #[test]
+    fn doesnt_detect_comment_in_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            # One Comment # Still one Comment
+            9
+            "#
+        ));
     }
 
     #[test]
@@ -235,6 +367,17 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             (UserId userId) = 5
+            y = 10
+
+            42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            # A
+            (UserId userId) = 5
+            # B
             y = 10
 
             42
@@ -270,6 +413,23 @@ mod test_format {
             r#"
             identity = \a -> a
 
+            identity 42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a ->
+                a
+
+            identity 42
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a -> a
+            # Hello
             identity 42
             "#
         ));
