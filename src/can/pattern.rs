@@ -1,8 +1,5 @@
 use crate::can::env::Env;
-use crate::can::num::{
-    finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
-    finish_parsing_oct,
-};
+use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
@@ -188,36 +185,20 @@ pub fn canonicalize_pattern<'a>(
             }
         },
 
-        &HexIntLiteral(string) => match pattern_type {
+        &NonBase10Literal {
+            string,
+            base,
+            is_negative,
+        } => match pattern_type {
             CaseBranch => {
-                let int = finish_parsing_hex(string)
-                    .unwrap_or_else(|_| panic!("TODO handle malformed hex int pattern"));
+                let int = finish_parsing_base(string, *base)
+                    .unwrap_or_else(|_| panic!("TODO handle malformed {:?} pattern", base));
 
-                Pattern::IntLiteral(int)
-            }
-            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
-                unsupported_pattern(env, ptype, region)
-            }
-        },
-
-        &OctalIntLiteral(string) => match pattern_type {
-            CaseBranch => {
-                let int = finish_parsing_oct(string)
-                    .unwrap_or_else(|_| panic!("TODO handle malformed octal int pattern"));
-
-                Pattern::IntLiteral(int)
-            }
-            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
-                unsupported_pattern(env, ptype, region)
-            }
-        },
-
-        &BinaryIntLiteral(string) => match pattern_type {
-            CaseBranch => {
-                let int = finish_parsing_bin(string)
-                    .unwrap_or_else(|_| panic!("TODO handle malformed binary int pattern"));
-
-                Pattern::IntLiteral(int)
+                if *is_negative {
+                    Pattern::IntLiteral(-int)
+                } else {
+                    Pattern::IntLiteral(int)
+                }
             }
             ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
@@ -298,7 +279,7 @@ fn add_constraints<'a>(
                 },
             );
         }
-        IntLiteral(_) | HexIntLiteral(_) | OctalIntLiteral(_) | BinaryIntLiteral(_) => {
+        IntLiteral(_) | NonBase10Literal { .. } => {
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Int,
@@ -377,9 +358,16 @@ pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, 
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             remove_idents(pattern, idents)
         }
-        GlobalTag(_) | PrivateTag(_) | IntLiteral(_) | HexIntLiteral(_) | BinaryIntLiteral(_)
-        | OctalIntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | BlockStrLiteral(_)
-        | EmptyRecordLiteral | Malformed(_) | Underscore => {}
+        GlobalTag(_)
+        | PrivateTag(_)
+        | IntLiteral(_)
+        | NonBase10Literal { .. }
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | BlockStrLiteral(_)
+        | EmptyRecordLiteral
+        | Malformed(_)
+        | Underscore => {}
     }
 }
 
@@ -439,8 +427,15 @@ fn add_idents_from_pattern<'a>(
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
             add_idents_from_pattern(region, pattern, scope, answer)
         }
-        GlobalTag(_) | PrivateTag(_) | IntLiteral(_) | HexIntLiteral(_) | OctalIntLiteral(_)
-        | BinaryIntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | BlockStrLiteral(_)
-        | EmptyRecordLiteral | Malformed(_) | Underscore => (),
+        GlobalTag(_)
+        | PrivateTag(_)
+        | IntLiteral(_)
+        | NonBase10Literal { .. }
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | BlockStrLiteral(_)
+        | EmptyRecordLiteral
+        | Malformed(_)
+        | Underscore => (),
     }
 }

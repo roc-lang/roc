@@ -1,4 +1,4 @@
-use crate::parse::ast::{Attempting, Expr};
+use crate::parse::ast::{Attempting, Base, Expr};
 use crate::parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use std::char;
 
@@ -39,27 +39,25 @@ where
     let mut typ = Int;
 
     // We already parsed 1 character (which may have been a minus sign).
-    let mut chars_parsed = 1;
+    let mut bytes_parsed = 1;
+    let mut prev_ch = first_ch;
+    let mut has_parsed_digits = first_ch.is_ascii_digit();
 
     for next_ch in chars {
         let err_unexpected = || {
             Err(unexpected(
                 next_ch,
-                chars_parsed,
+                bytes_parsed,
                 state.clone(),
                 Attempting::NumberLiteral,
             ))
         };
 
-        // Returns true iff so far we have parsed the given char and no other chars.
-        let so_far_parsed = |ch| chars_parsed == 1 && first_ch == ch;
+        let is_potentially_non_base10 = || {
+            (bytes_parsed == 1 && first_ch == '0')
+                || (bytes_parsed == 2 && first_ch == '-' && prev_ch == '0')
+        };
 
-        // We don't support negative escaped ints (e.g. 0x01 is supported but -0x01 is not).
-        // If you want that, do something like (negate 0x01).
-        //
-        // I'm open to changing this policy (that is, allowing support for
-        // negative escaped ints), but it'll complicate parsing logic and seems
-        // nonessential, so I'm leaving it out for now.
         if next_ch == '.' {
             if typ == Float {
                 // You only get one decimal point!
@@ -68,51 +66,80 @@ where
                 typ = Float;
             }
         } else if next_ch == 'x' {
-            if so_far_parsed('0') {
+            if is_potentially_non_base10() {
                 typ = Hex;
             } else {
                 return err_unexpected();
             }
-        } else if next_ch == 'b' {
-            if so_far_parsed('0') {
+        } else if next_ch == 'b' && typ == Int {
+            // We have to check for typ == Int because otherwise we get a false
+            // positive here when parsing a hex literal that happens to have
+            // a 'b' in it, e.g. 0xbbbb
+            if is_potentially_non_base10() {
                 typ = Binary;
             } else {
                 return err_unexpected();
             }
         } else if next_ch == 'o' {
-            if so_far_parsed('0') {
+            if is_potentially_non_base10() {
                 typ = Octal;
             } else {
                 return err_unexpected();
             }
-        } else if !next_ch.is_ascii_digit() && next_ch != '_' {
-            if so_far_parsed('-') {
-                // No digits! We likely parsed a minus sign that's actually an operator.
-                return err_unexpected();
-            } else {
+        } else if next_ch.is_ascii_digit() {
+            has_parsed_digits = true;
+        } else if next_ch != '_' &&
+            // ASCII alphabetic chars (like 'a' and 'f') are allowed in Hex int literals.
+            // We parse them in any int literal, so we can give a more helpful error
+            // in canonicalization (e.g. "the character 'f' is not allowed in Octal literals"
+            // or "the character 'g' is outside the range of valid Hex literals")
+            !next_ch.is_ascii_alphabetic()
+        {
+            if has_parsed_digits {
                 // We hit an invalid number literal character; we're done!
                 break;
+            } else {
+                // No digits! We likely parsed a minus sign that's actually an operator.
+                return err_unexpected();
             }
         }
 
-        chars_parsed += 1;
+        // Since we only consume characters in the ASCII range for number literals,
+        // this will always be exactly 1. There's no need to call next_ch.utf8_len().
+        bytes_parsed += 1;
+        prev_ch = next_ch;
     }
+
+    let from_base = |base| {
+        let is_negative = first_ch == '-';
+        let string = if is_negative {
+            &state.input[3..bytes_parsed]
+        } else {
+            &state.input[2..bytes_parsed]
+        };
+
+        Expr::NonBase10Int {
+            is_negative,
+            string,
+            base,
+        }
+    };
 
     // At this point we have a number, and will definitely succeed.
     // If the number is malformed (outside the supported range),
     // we'll succeed with an appropriate Expr which records that.
     let expr = match typ {
-        Int => Expr::Int(&state.input[0..chars_parsed]),
-        Float => Expr::Float(&state.input[0..chars_parsed]),
+        Int => Expr::Int(&state.input[0..bytes_parsed]),
+        Float => Expr::Float(&state.input[0..bytes_parsed]),
         // For these we trim off the 0x/0o/0b part
-        Hex => Expr::HexInt(&state.input[2..chars_parsed - 1]),
-        Binary => Expr::BinaryInt(&state.input[2..chars_parsed - 1]),
-        Octal => Expr::OctalInt(&state.input[2..chars_parsed - 1]),
+        Hex => from_base(Base::Hex),
+        Octal => from_base(Base::Octal),
+        Binary => from_base(Base::Binary),
     };
 
-    let next_state = state.advance_without_indenting(chars_parsed)?;
+    let next_state = state.advance_without_indenting(bytes_parsed)?;
 
-    Ok((expr, next_state))
+    Ok((dbg!(expr), next_state))
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -3,6 +3,7 @@ use crate::can::expr::Expr;
 use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError::*;
 use crate::constrain;
+use crate::parse::ast::Base;
 use crate::region::Region;
 use crate::subs::VarStore;
 use crate::types::Constraint::{self, *};
@@ -63,21 +64,15 @@ pub fn finish_parsing_int(raw: &str) -> Result<i64, &str> {
 }
 
 #[inline(always)]
-pub fn finish_parsing_hex(raw: &str) -> Result<i64, &str> {
-    // Ignore underscores.
-    i64::from_str_radix(raw.replace("_", "").as_str(), 16).map_err(|_| raw)
-}
+pub fn finish_parsing_base(raw: &str, base: Base) -> Result<i64, &str> {
+    let radix = match base {
+        Base::Hex => 16,
+        Base::Octal => 8,
+        Base::Binary => 2,
+    };
 
-#[inline(always)]
-pub fn finish_parsing_oct(raw: &str) -> Result<i64, &str> {
     // Ignore underscores.
-    i64::from_str_radix(raw.replace("_", "").as_str(), 8).map_err(|_| raw)
-}
-
-#[inline(always)]
-pub fn finish_parsing_bin(raw: &str) -> Result<i64, &str> {
-    // Ignore underscores.
-    i64::from_str_radix(raw.replace("_", "").as_str(), 2).map_err(|_| raw)
+    i64::from_str_radix(raw.replace("_", "").as_str(), radix).map_err(|_| raw)
 }
 
 #[inline(always)]

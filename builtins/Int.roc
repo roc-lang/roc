@@ -81,8 +81,7 @@ interface Int
 ## Note that this is smaller than the positive version of #Int.lowest,
 ## which means if you call #Num.abs on #Int.lowest, it will crash!
 #highest : Int
-#highest = 0x7fff_ffff_ffff_ffff # TODO parsing hex ints is broken!
-highest = 500
+highest = 0x7fff_ffff_ffff_ffff
 
 ## The lowest number that can be stored in an #Int without overflowing its
 ## available memory (64 bits total) and crashing.
@@ -91,4 +90,4 @@ highest = 500
 ## #Int.highest, which means if you call #Num.abs on #Int.lowest,
 ## it will crash!
 #lowest : Int
-#lowest = -0x8000_0000_0000_0000
+lowest = -0x8000_0000_0000_0000

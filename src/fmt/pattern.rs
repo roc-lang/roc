@@ -1,5 +1,5 @@
 use crate::fmt::spaces::fmt_spaces;
-use crate::parse::ast::Pattern;
+use crate::parse::ast::{Base, Pattern};
 use bumpalo::collections::String;
 
 pub fn fmt_pattern<'a>(
@@ -56,9 +56,25 @@ pub fn fmt_pattern<'a>(
         }
 
         IntLiteral(string) => buf.push_str(string),
-        HexIntLiteral(string) => buf.push_str(string),
-        OctalIntLiteral(string) => buf.push_str(string),
-        BinaryIntLiteral(string) => buf.push_str(string),
+        NonBase10Literal {
+            base,
+            string,
+            is_negative,
+        } => {
+            if *is_negative {
+                buf.push('-');
+            }
+
+            buf.push('0');
+
+            buf.push(match base {
+                Base::Hex => 'x',
+                Base::Octal => 'o',
+                Base::Binary => 'b',
+            });
+
+            buf.push_str(string);
+        }
         FloatLiteral(string) => buf.push_str(string),
         StrLiteral(string) => buf.push_str(string),
         BlockStrLiteral(lines) => {

@@ -1416,8 +1416,6 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
-    // TODO test hex/oct/binary parsing
-    //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
     //
     // TODO test for non-ASCII variables

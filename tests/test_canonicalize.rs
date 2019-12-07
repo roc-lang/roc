@@ -57,7 +57,7 @@ mod test_canonicalize {
         let arena = Bump::new();
         let (actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
 
-        assert_eq!(expected, actual.value);
+        assert_eq!(actual.value, expected);
     }
 
     // NUMBER LITERALS
@@ -100,6 +100,71 @@ mod test_canonicalize {
             &string.clone(),
             RuntimeError(RuntimeError::FloatOutsideRange(string.into())),
         );
+    }
+
+    #[test]
+    fn zero() {
+        assert_can("0", Int(0));
+    }
+
+    #[test]
+    fn minus_zero() {
+        assert_can("-0", Int(0));
+    }
+
+    #[test]
+    fn zero_point_zero() {
+        assert_can("0.0", Float(0.0));
+    }
+
+    #[test]
+    fn minus_zero_point_zero() {
+        assert_can("-0.0", Float(-0.0));
+    }
+
+    #[test]
+    fn hex_zero() {
+        assert_can("0x0", Int(0x0));
+    }
+
+    #[test]
+    fn hex_one_b() {
+        assert_can("0x1b", Int(0x1b));
+    }
+
+    #[test]
+    fn minus_hex_one_b() {
+        assert_can("-0x1b", Int(-0x1b));
+    }
+
+    #[test]
+    fn octal_zero() {
+        assert_can("0o0", Int(0o0));
+    }
+
+    #[test]
+    fn octal_one_two() {
+        assert_can("0o12", Int(0o12));
+    }
+
+    #[test]
+    fn minus_octal_one_two() {
+        assert_can("-0o12", Int(-0o12));
+    }
+
+    #[test]
+    fn binary_zero() {
+        assert_can("0b0", Int(0b0));
+    }
+
+    #[test]
+    fn binary_one_one() {
+        assert_can("0b11", Int(0b11));
+    }
+
+    #[test]
+    fn minus_binary_one_one() {
+        assert_can("-0b11", Int(-0b11));
     }
 
     // LOCALS

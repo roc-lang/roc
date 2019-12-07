@@ -1,7 +1,7 @@
 use crate::fmt::def::fmt_def;
 use crate::fmt::pattern::fmt_pattern;
 use crate::fmt::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, INDENT};
-use crate::parse::ast::{AssignedField, Expr, Pattern};
+use crate::parse::ast::{AssignedField, Base, Expr, Pattern};
 use crate::region::Located;
 use bumpalo::collections::{String, Vec};
 
@@ -66,19 +66,23 @@ pub fn fmt_expr<'a>(
         }
         Int(string) => buf.push_str(string),
         Float(string) => buf.push_str(string),
-        HexInt(string) => {
+        NonBase10Int {
+            base,
+            string,
+            is_negative,
+        } => {
+            if *is_negative {
+                buf.push('-');
+            }
+
             buf.push('0');
-            buf.push('x');
-            buf.push_str(string);
-        }
-        BinaryInt(string) => {
-            buf.push('0');
-            buf.push('b');
-            buf.push_str(string);
-        }
-        OctalInt(string) => {
-            buf.push('0');
-            buf.push('o');
+
+            buf.push(match base {
+                Base::Hex => 'x',
+                Base::Octal => 'o',
+                Base::Binary => 'b',
+            });
+
             buf.push_str(string);
         }
         Record(loc_fields) => {
@@ -247,9 +251,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         // These expressions never have newlines
         Float(_)
         | Int(_)
-        | HexInt(_)
-        | OctalInt(_)
-        | BinaryInt(_)
+        | NonBase10Int { .. }
         | Str(_)
         | Access(_, _)
         | AccessorFunction(_)

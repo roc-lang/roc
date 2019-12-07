@@ -115,9 +115,11 @@ pub enum Expr<'a> {
     // Number Literals
     Float(&'a str),
     Int(&'a str),
-    HexInt(&'a str),
-    OctalInt(&'a str),
-    BinaryInt(&'a str),
+    NonBase10Int {
+        string: &'a str,
+        base: Base,
+        is_negative: bool,
+    },
 
     // String Literals
     Str(&'a str),
@@ -283,9 +285,11 @@ pub enum Pattern<'a> {
 
     // Literal
     IntLiteral(&'a str),
-    HexIntLiteral(&'a str),
-    OctalIntLiteral(&'a str),
-    BinaryIntLiteral(&'a str),
+    NonBase10Literal {
+        string: &'a str,
+        base: Base,
+        is_negative: bool,
+    },
     FloatLiteral(&'a str),
     StrLiteral(&'a str),
     BlockStrLiteral(&'a [&'a str]),
@@ -299,6 +303,13 @@ pub enum Pattern<'a> {
     // Malformed
     Malformed(&'a str),
     QualifiedIdentifier(MaybeQualified<'a, &'a str>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Base {
+    Octal,
+    Binary,
+    Hex,
 }
 
 impl<'a> Pattern<'a> {
