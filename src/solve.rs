@@ -58,10 +58,8 @@ pub fn solve(vars_by_symbol: &Env, subs: &mut Subs, constraint: &Constraint) {
                     let mut new_vars_by_symbol = vars_by_symbol.clone();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
-                        // We must not overwrite existing symbols! If we do,
-                        // we will overwrite procedure entries, which were
-                        // inserted earlier in solving. (If we allowed
-                        // shadowing, we'd need to do something fancier here.)
+                        // No need to overwrite existing symbols; it would have no effect.
+                        // (If we allowed shadowing, we'd need to do something fancier here.)
                         if !new_vars_by_symbol.contains_key(&symbol) {
                             let var = type_to_var(subs, loc_type.value.clone());
 
