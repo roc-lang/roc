@@ -2,6 +2,8 @@
 // extern crate pretty_assertions;
 // #[macro_use]
 // extern crate indoc;
+#[macro_use]
+extern crate maplit;
 
 extern crate bumpalo;
 extern crate inkwell;
@@ -13,7 +15,9 @@ mod helpers;
 mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
     use roc::can::module::Module;
-    use roc::load::{load, Loaded, LoadedModule};
+    use roc::subs::Subs;
+    use roc::load::{load, Loaded, LoadedModule, solve_loaded};
+    use roc::pretty_print_types::{content_to_string, name_all_type_vars};
 
     fn test_async<F: std::future::Future>(future: F) -> F::Output {
         use tokio::runtime::Runtime;
@@ -134,6 +138,48 @@ mod test_load {
                     Some("Dep2".into())
                 ]
             );
+        });
+    }
+
+    #[test]
+    fn load_and_infer() {
+        test_async(async {
+            let mut deps = Vec::new();
+            let vars_created = load_builtins(&mut deps).await;
+            let src_dir = fixtures_dir().join("interface_with_deps");
+            let filename = src_dir.join("WithBuiltins.roc");
+            let loaded = load(src_dir, filename, &mut deps, vars_created).await;
+            let mut subs = Subs::new(loaded.vars_created);
+            let module = expect_module(loaded);
+
+            assert_eq!(module.name, Some("WithBuiltins".into()));
+
+            solve_loaded(&module, &mut subs, deps);
+
+            let expected_types = hashmap!{
+                "WithBuiltins.floatTest" => "Float",
+                "WithBuiltins.divisionFn" => "Float, Float -> Float",
+                "WithBuiltins.divisionTest" => "Float",
+                "WithBuiltins.intTest" => "Int",
+                "WithBuiltins.constantInt" => "Int",
+            };
+
+            assert_eq!(expected_types.len(), module.defs.len());
+
+            for def in module.defs {
+                for (symbol, var) in def.variables_by_symbol {
+                    let content = subs.get(var).content;
+
+                    name_all_type_vars(var, &mut subs);
+
+                    let actual_str = content_to_string(content, &mut subs);
+                    let expected_type = expected_types.get(&*symbol.clone().into_boxed_str()).unwrap_or_else(||
+                        panic!("Defs included an unexpected symbol: {:?}", symbol)
+                    );
+
+                    assert_eq!(expected_type, &actual_str);
+                }
+            }
         });
     }
 }
