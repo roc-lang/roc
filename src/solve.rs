@@ -19,10 +19,11 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
         }
         Lookup(symbol, expected_type, _region) => {
             // TODO use region?
-            let actual =
-                subs.copy_var(*env.get(&symbol).unwrap_or_else(|| {
-                    panic!("Could not find symbol {:?} in env {:?}", symbol, env)
-                }));
+            let actual = subs.copy_var(*env.get(&symbol).unwrap_or_else(|| {
+                // TODO Instead of panicking, solve this as True and record
+                // a Problem ("module Foo does not expose `bar`") for later.
+                panic!("Could not find symbol {:?} in env {:?}", symbol, env)
+            }));
             let expected = type_to_var(subs, expected_type.clone().get_type());
 
             unify(subs, actual, expected);

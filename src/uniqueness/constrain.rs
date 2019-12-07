@@ -6,7 +6,6 @@ use crate::types::Expected::{self, *};
 use crate::types::Type::{self, *};
 use crate::types::{self, LetConstraint, Reason};
 
-#[inline(always)]
 pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
     Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
@@ -17,9 +16,15 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
     }))
 }
 
-#[inline(always)]
+pub fn lift(var_store: &VarStore, typ: Type) -> Type {
+    let uniq_var = var_store.fresh();
+    let uniq_type = Variable(uniq_var);
+
+    attr_type(uniq_type, typ)
+}
+
 pub fn int_literal(var_store: &VarStore, expected: Expected<Type>, region: Region) -> Constraint {
-    let typ = number_literal_type("Int", "Integer");
+    let typ = lift(var_store, number_literal_type("Int", "Integer"));
     let reason = Reason::IntLiteral;
 
     num_literal(var_store, typ, reason, expected, region)
@@ -27,7 +32,7 @@ pub fn int_literal(var_store: &VarStore, expected: Expected<Type>, region: Regio
 
 #[inline(always)]
 pub fn float_literal(var_store: &VarStore, expected: Expected<Type>, region: Region) -> Constraint {
-    let typ = number_literal_type("Float", "FloatingPoint");
+    let typ = lift(var_store, number_literal_type("Float", "FloatingPoint"));
     let reason = Reason::FloatLiteral;
 
     num_literal(var_store, typ, reason, expected, region)
@@ -69,17 +74,30 @@ fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
     }
 }
 
-#[inline(always)]
 pub fn empty_list_type(var: Variable) -> Type {
     list_type(Type::Variable(var))
 }
 
-#[inline(always)]
 pub fn list_type(typ: Type) -> Type {
     builtin_type("List", "List", vec![typ])
 }
 
-#[inline(always)]
 pub fn str_type() -> Type {
     builtin_type("Str", "Str", Vec::new())
+}
+
+type Uniqueness = Type;
+
+pub fn attr_type(uniq: Uniqueness, typ: Type) -> Type {
+    builtin_type("Attr", "Attr", vec![uniq, typ])
+}
+
+pub fn shared_type() -> Uniqueness {
+    builtin_type("Attr", "Shared", Vec::new())
+}
+
+/// We usually just leave a type parameter unbound (written `*`) when it's unique
+#[allow(dead_code)]
+pub fn unique_type() -> Uniqueness {
+    builtin_type("Attr", "Unique", Vec::new())
 }

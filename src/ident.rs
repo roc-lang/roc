@@ -45,16 +45,16 @@ impl<'a> UnqualifiedIdent<'a> {
 /// Parameterized on a phantom marker for whether it has been canonicalized
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Ident {
-    Unqualified(String),
-    Qualified(String, String),
+    Unqualified(Box<str>),
+    Qualified(Box<str>, Box<str>),
 }
 
 impl Ident {
     pub fn new(module_parts: &[&str], name: &str) -> Self {
         if module_parts.is_empty() {
-            Ident::Unqualified(name.to_string())
+            Ident::Unqualified(name.into())
         } else {
-            Ident::Qualified(module_parts.to_vec().join("."), name.to_string())
+            Ident::Qualified(module_parts.to_vec().join(".").into(), name.into())
         }
     }
     pub fn is_qualified(&self) -> bool {
@@ -64,7 +64,7 @@ impl Ident {
         }
     }
 
-    pub fn name(self) -> String {
+    pub fn name(self) -> Box<str> {
         match self {
             Ident::Unqualified(name) => name,
             Ident::Qualified(_, name) => name,

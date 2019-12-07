@@ -1,8 +1,10 @@
-api Int provides Int, Integer, divFloor, modFloor
+interface Int
+    exposes [ Int ]
+    imports []
 
 ## Types
 
-Integer := Integer
+# Integer := Integer
 
 ## A 64-bit signed integer. All number literals without decimal points are #Int values.
 ##
@@ -15,9 +17,9 @@ Integer := Integer
 ##
 ## > 1_000_000
 ##
-## See #Int.highestSupported and #Int.lowestSupported for the highest and
+## See #Int.highest and #Int.lowest for the highest and
 ## lowest values that can be held in an #Int.
-Int : Num Integer
+#Int : Num Integer
 
 ## Arithmetic
 
@@ -38,7 +40,7 @@ Int : Num Integer
 ## > Int.divFloor -8 -3
 ##
 ## This is the same as the #// operator.
-divFloor : Int, Int -> Result DivByZero Int
+#divFloor : Int, Int -> Result DivByZero Int
 
 ## Perform flooring modulo on two integers.
 ##
@@ -60,30 +62,33 @@ divFloor : Int, Int -> Result DivByZero Int
 ## > -8 %% -3
 ##
 ## > Int.modFloor -8 -3
-modFloor : Int, Int -> Result DivByZero Int
+#modFloor : Int, Int -> Result DivByZero Int
 
 
 ## Bitwise
 
-bitwiseXor : Int -> Int -> Int
+#bitwiseXor : Int -> Int -> Int
 
-bitwiseAnd : Int -> Int -> Int
+#bitwiseAnd : Int -> Int -> Int
 
-bitwiseNot : Int -> Int
+#bitwiseNot : Int -> Int
 
 ## Limits
 
 ## The highest number that can be stored in an #Int without overflowing its
 ## available memory (64 bits total) and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.lowestSupported,
-## which means if you call #Num.abs on #Int.lowestSupported, it will crash!
-highestSupported : Int
+## Note that this is smaller than the positive version of #Int.lowest,
+## which means if you call #Num.abs on #Int.lowest, it will crash!
+#highest : Int
+#highest = 0x7fff_ffff_ffff_ffff # TODO parsing hex ints is broken!
+highest = 500
 
 ## The lowest number that can be stored in an #Int without overflowing its
 ## available memory (64 bits total) and crashing.
 ##
 ## Note that the positive version of this number is this is larger than
-## #Int.highestSupported, which means if you call #Num.abs on #Int.lowestSupported,
+## #Int.highest, which means if you call #Num.abs on #Int.lowest,
 ## it will crash!
-lowestSupported : Int
+#lowest : Int
+#lowest = -0x8000_0000_0000_0000

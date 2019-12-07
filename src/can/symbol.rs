@@ -48,6 +48,10 @@ impl Symbol {
         Symbol(format!("{}.{}", module_name.as_str(), ident.as_str()).into())
     }
 
+    pub fn from_qualified_ident(module_name: Box<str>, ident: Box<str>) -> Symbol {
+        Symbol(format!("{}.{}", module_name, ident).into())
+    }
+
     pub fn into_boxed_str(self) -> Box<str> {
         self.0
     }

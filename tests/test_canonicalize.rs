@@ -10,40 +10,20 @@ mod helpers;
 
 #[cfg(test)]
 mod test_canonicalize {
-    use crate::helpers::can_expr_with;
+    use crate::helpers::{can_expr_with, with_larger_debug_stack};
     use bumpalo::Bump;
     use roc::can::expr::Expr::{self, *};
+    use roc::can::expr::Output;
     use roc::can::expr::Recursive;
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
     use roc::can::symbol::Symbol;
-    use roc::can::Output;
     use roc::collections::{ImMap, ImSet};
-    use roc::types::Constraint;
     use std::{f64, i64};
 
     fn sym(name: &str) -> Symbol {
         Symbol::new("Test.Blah$", name)
     }
-
-    //     fn unqualified(string: &str) -> Ident {
-    //         Ident::Unqualified(string.to_string())
-    //     }
-
-    //     fn unqualifieds(strings: Vec<&str>) -> Vec<Ident> {
-    //         strings.into_iter().map(unqualified).collect()
-    //     }
-
-    //     fn loc_unqualifieds(strings: Vec<&str>) -> Vec<Located<Ident>> {
-    //         strings
-    //             .into_iter()
-    //             .map(|string| loc(unqualified(string)))
-    //             .collect()
-    //     }
-
-    // fn unused(string: &str) -> Problem {
-    //     Problem::UnusedAssignment(loc(unqualified(string)))
-    // }
 
     struct Out<'a> {
         locals: Vec<&'a str>,
@@ -65,7 +45,6 @@ mod test_canonicalize {
             Output {
                 references,
                 tail_call,
-                constraint: Constraint::True,
             }
         }
     }
@@ -76,9 +55,9 @@ mod test_canonicalize {
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+        let (actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
 
-        assert_eq!(expected, actual);
+        assert_eq!(expected, actual.value);
     }
 
     // NUMBER LITERALS
@@ -137,13 +116,10 @@ mod test_canonicalize {
             func 2
         "#
         );
-        let (_actual, mut output, problems, _var_store, _vars) =
+        let (_actual, output, problems, _var_store, _vars, _constraint) =
             can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         assert_eq!(problems, vec![]);
-
-        // We don't care about constraint for this test.
-        output.constraint = Constraint::True;
 
         assert_eq!(
             output,
@@ -155,29 +131,6 @@ mod test_canonicalize {
             }
             .into()
         );
-
-        // assert_eq!(
-        //     procedures,
-        //     mut_map_from_pairs(vec![(
-        //         sym("func"),
-        //         Procedure {
-        //             name: Some("func".to_string()),
-        //             is_self_tail_recursive: false,
-        //             definition: Region::zero(),
-        //             args: vec![loc(Pattern::Identifier(sym("arg")))],
-        //             body: loc(Expr::BinOp(
-        //                 loc_box(Expr::Var(sym("arg"))),
-        //                 loc(BinOp::Plus),
-        //                 loc_box(Expr::Int(1))
-        //             )),
-        //             references: References {
-        //                 locals: vec_to_set(vec![]),
-        //                 globals: vec_to_set(vec![]),
-        //                 calls: vec_to_set(vec![]),
-        //             }
-        //         }
-        //     )])
-        // );
     }
 
     #[test]
@@ -193,13 +146,10 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (_actual, mut output, problems, _var_store, _vars) =
+        let (_actual, output, problems, _var_store, _vars, _constraint) =
             can_expr_with(&arena, "Blah", src, &ImMap::default());
 
         assert_eq!(problems, vec![]);
-
-        // We don't care about constraint for this test.
-        output.constraint = Constraint::True;
 
         assert_eq!(
             output,
@@ -215,7 +165,7 @@ mod test_canonicalize {
 
     fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
-            Defs(_, assignments, _) => match &assignments.get(i).map(|(_, loc)| &loc.value) {
+            Defs(_, assignments, _) => match &assignments.get(i).map(|def| &def.expr.value) {
                 Some(Closure(_, recursion, _, _)) => recursion.clone(),
                 Some(other @ _) => {
                     panic!("assignment at {} is not a closure, but a {:?}", i, other)
@@ -228,8 +178,9 @@ mod test_canonicalize {
 
     #[test]
     fn recognize_tail_calls() {
-        let src = indoc!(
-            r#"
+        with_larger_debug_stack(|| {
+            let src = indoc!(
+                r#"
             g = \x -> 
                 case x when
                     0 -> 0
@@ -248,39 +199,42 @@ mod test_canonicalize {
 
             0
         "#
-        );
-        let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+            );
+            let arena = Bump::new();
+            let (actual, _output, _problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Recursive::TailRecursive);
+            let detected = get_closure(&actual.value, 0);
+            assert_eq!(detected, Recursive::TailRecursive);
 
-        let detected = get_closure(&actual, 1);
-        assert_eq!(detected, Recursive::NotRecursive);
+            let detected = get_closure(&actual.value, 1);
+            assert_eq!(detected, Recursive::NotRecursive);
 
-        let detected = get_closure(&actual, 2);
-        assert_eq!(detected, Recursive::TailRecursive);
+            let detected = get_closure(&actual.value, 2);
+            assert_eq!(detected, Recursive::TailRecursive);
+        });
     }
 
     #[test]
     fn case_tail_call() {
-        let src = indoc!(
-            r#"
-            g = \x -> 
-                case x when
-                    0 -> 0
-                    _ -> g (x - 1)
+        with_larger_debug_stack(|| {
+            let src = indoc!(
+                r#"
+                g = \x ->
+                    case x when
+                        0 -> 0
+                        _ -> g (x + 1)
 
-            0
-        "#
-        );
-        let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+                0
+            "#
+            );
+            let arena = Bump::new();
+            let (actual, _output, _problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Recursive::TailRecursive);
+            let detected = get_closure(&actual.value, 0);
+            assert_eq!(detected, Recursive::TailRecursive);
+        });
     }
 
     #[test]
@@ -293,10 +247,10 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
+        let (actual, _output, _problems, _var_store, _vars, _constraint) =
             can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
+        let detected = get_closure(&actual.value, 0);
         assert_eq!(detected, Recursive::TailRecursive);
     }
 
@@ -313,18 +267,19 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
+        let (actual, _output, _problems, _var_store, _vars, _constraint) =
             can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
+        let detected = get_closure(&actual.value, 0);
         assert_eq!(detected, Recursive::Recursive);
     }
 
     #[test]
     fn mutual_recursion() {
-        // TODO when a case witn no branches parses, remove the pattern wildcard here
-        let src = indoc!(
-            r#"
+        with_larger_debug_stack(|| {
+            // TODO when a case with no branches parses, remove the pattern wildcard here
+            let src = indoc!(
+                r#"
             q = \x -> 
                     case x when
                         0 -> 0
@@ -337,16 +292,17 @@ mod test_canonicalize {
 
             0
         "#
-        );
-        let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+            );
+            let arena = Bump::new();
+            let (actual, _output, _problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-        let detected = get_closure(&actual, 0);
-        assert_eq!(detected, Recursive::Recursive);
+            let detected = get_closure(&actual.value, 0);
+            assert_eq!(detected, Recursive::Recursive);
 
-        let detected = get_closure(&actual, 1);
-        assert_eq!(detected, Recursive::Recursive);
+            let detected = get_closure(&actual.value, 1);
+            assert_eq!(detected, Recursive::Recursive);
+        });
     }
 
     //#[test]
