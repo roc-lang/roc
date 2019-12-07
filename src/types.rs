@@ -1,5 +1,5 @@
 use crate::can::symbol::Symbol;
-use crate::collections::ImMap;
+use crate::collections::SendMap;
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
 use crate::region::Region;
@@ -225,7 +225,7 @@ pub enum PatternCategory {
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
-    pub def_types: ImMap<Symbol, Located<Type>>,
+    pub def_types: SendMap<Symbol, Located<Type>>,
     pub defs_constraint: Constraint,
     pub ret_constraint: Constraint,
 }

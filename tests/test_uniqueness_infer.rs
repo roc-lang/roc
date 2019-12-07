@@ -9,7 +9,7 @@ extern crate roc;
 mod helpers;
 
 #[cfg(test)]
-mod test_infer {
+mod test_infer_uniq {
     use crate::helpers::uniq_expr;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
@@ -18,37 +18,47 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (output2, output1, _, var_store1, variable1, var_store2, variable2) = uniq_expr(src);
+        let (
+            _output2,
+            _output1,
+            _,
+            var_store1,
+            variable1,
+            var_store2,
+            variable2,
+            constraint1,
+            constraint2,
+        ) = uniq_expr(src);
 
         let mut subs1 = Subs::new(var_store1.into());
         let mut subs2 = Subs::new(var_store2.into());
 
-        let content1 = infer_expr(&mut subs1, &output1.constraint, variable1);
-        let content2 = infer_expr(&mut subs2, &output2.constraint, variable2);
+        let content1 = infer_expr(&mut subs1, &constraint1, variable1);
+        let content2 = infer_expr(&mut subs2, &constraint2, variable2);
 
         name_all_type_vars(variable1, &mut subs1);
         name_all_type_vars(variable2, &mut subs2);
 
-        let actual_str = content_to_string(content1, &mut subs1);
+        let _actual_str = content_to_string(content1, &mut subs1);
         let uniq_actual_str = content_to_string(content2, &mut subs2);
 
-        assert_eq!(actual_str, expected.to_string());
-        assert_eq!(actual_str, uniq_actual_str);
+        // assert_eq!(actual_str, expected.to_string());
+        assert_eq!(expected.to_string(), uniq_actual_str);
     }
 
     #[test]
     fn empty_record() {
-        infer_eq("{}", "{}");
+        infer_eq("{}", "Attr.Attr * {}");
     }
 
     #[test]
     fn int_literal() {
-        infer_eq("5", "Int");
+        infer_eq("5", "Attr.Attr * Int");
     }
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "Float");
+        infer_eq("0.5", "Attr.Attr * Float");
     }
 
     #[test]
@@ -59,7 +69,7 @@ mod test_infer {
                 "type inference!"
             "#
             ),
-            "Str",
+            "Attr.Attr * Str",
         );
     }
 
@@ -71,7 +81,7 @@ mod test_infer {
                 ""
             "#
             ),
-            "Str",
+            "Attr.Attr * Str",
         );
     }
 
@@ -98,7 +108,7 @@ mod test_infer {
                 []
             "#
             ),
-            "List *",
+            "Attr.Attr * (List *)",
         );
     }
 
@@ -110,7 +120,7 @@ mod test_infer {
                 [[]]
             "#
             ),
-            "List (List *)",
+            "Attr.Attr * (List (Attr.Attr * (List *)))",
         );
     }
 
@@ -122,7 +132,7 @@ mod test_infer {
                 [[[]]]
             "#
             ),
-            "List (List (List *))",
+            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * (List *)))))",
         );
     }
 
@@ -134,7 +144,7 @@ mod test_infer {
                 [ [], [ [] ] ]
             "#
             ),
-            "List (List (List *))",
+            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * (List *)))))",
         );
     }
 
@@ -162,7 +172,7 @@ mod test_infer {
                 [42]
             "#
             ),
-            "List Int",
+            "Attr.Attr * (List (Attr.Attr * Int))",
         );
     }
 
@@ -174,7 +184,7 @@ mod test_infer {
                 [[[ 5 ]]]
             "#
             ),
-            "List (List (List Int))",
+            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * Int))))))",
         );
     }
 
@@ -186,7 +196,7 @@ mod test_infer {
                 [ 1, 2, 3 ]
             "#
             ),
-            "List Int",
+            "Attr.Attr * (List (Attr.Attr * Int))",
         );
     }
 
@@ -198,7 +208,7 @@ mod test_infer {
                 [ [ 1 ], [ 2, 3 ] ]
             "#
             ),
-            "List (List Int)",
+            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * Int))))",
         );
     }
 
@@ -210,7 +220,7 @@ mod test_infer {
                 [ "cowabunga" ]
             "#
             ),
-            "List Str",
+            "Attr.Attr * (List (Attr.Attr * Str))",
         );
     }
 
@@ -222,7 +232,7 @@ mod test_infer {
                 [[[ "foo" ]]]
             "#
             ),
-            "List (List (List Str))",
+            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * Str))))))",
         );
     }
 
@@ -234,7 +244,7 @@ mod test_infer {
                 [ "foo", "bar" ]
             "#
             ),
-            "List Str",
+            "Attr.Attr * (List (Attr.Attr * Str))",
         );
     }
 
@@ -264,7 +274,7 @@ mod test_infer {
                 [ "foo", 5 ]
             "#
             ),
-            "List <type mismatch>",
+            "Attr.Attr * (List (Attr.Attr * <type mismatch>))",
         );
     }
 
@@ -276,7 +286,7 @@ mod test_infer {
                 [ [ "foo", 5 ] ]
             "#
             ),
-            "List (List <type mismatch>)",
+            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * <type mismatch>))))",
         );
     }
 
@@ -288,7 +298,7 @@ mod test_infer {
                 [ [ 1 ], [ [] ] ]
             "#
             ),
-            "List (List <type mismatch>)",
+            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * <type mismatch>))))",
         );
     }
 
@@ -302,7 +312,7 @@ mod test_infer {
                 \_ -> {}
             "#
             ),
-            "* -> {}",
+            "Attr.Attr * (* -> Attr.Attr * {})",
         );
     }
 
@@ -314,7 +324,7 @@ mod test_infer {
                 \_ _ -> 42
             "#
             ),
-            "*, * -> Int",
+            "Attr.Attr * (*, * -> Attr.Attr * Int)",
         );
     }
 
@@ -326,7 +336,7 @@ mod test_infer {
                 \_ _ _ -> "test!"
             "#
             ),
-            "*, *, * -> Str",
+            "Attr.Attr * (*, *, * -> Attr.Attr * Str)",
         );
     }
 
@@ -342,7 +352,7 @@ mod test_infer {
                 foo
             "#
             ),
-            "{}",
+            "Attr.Attr * {}",
         );
     }
 
@@ -356,7 +366,7 @@ mod test_infer {
                 str
             "#
             ),
-            "Str",
+            "Attr.Attr * Str",
         );
     }
 
@@ -370,7 +380,7 @@ mod test_infer {
                 fn
             "#
             ),
-            "* -> {}",
+            "Attr.Attr * (* -> Attr.Attr * {})",
         );
     }
 
@@ -384,7 +394,7 @@ mod test_infer {
                 func
             "#
             ),
-            "*, * -> Int",
+            "Attr.Attr * (*, * -> Attr.Attr * Int)",
         );
     }
 
@@ -398,7 +408,7 @@ mod test_infer {
                 f
             "#
             ),
-            "*, *, * -> Str",
+            "Attr.Attr * (*, *, * -> Attr.Attr * Str)",
         );
     }
 
@@ -414,7 +424,7 @@ mod test_infer {
                 b
             "#
             ),
-            "*, *, * -> Str",
+            "Attr.Attr * (*, *, * -> Attr.Attr * Str)",
         );
     }
 
@@ -430,7 +440,7 @@ mod test_infer {
                 b
             "#
             ),
-            "Str",
+            "Attr.Attr * Str",
         );
     }
 
@@ -448,7 +458,7 @@ mod test_infer {
                 c
             "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -467,7 +477,8 @@ mod test_infer {
                 )
             "#
             ),
-            "a -> a",
+            // x is used 3 times, so must be shared
+            "Attr.Attr * (Attr.Attr Attr.Shared a -> Attr.Attr Attr.Shared a)",
         );
     }
 
@@ -483,7 +494,7 @@ mod test_infer {
                 alwaysFive "stuff"
                 "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -497,7 +508,7 @@ mod test_infer {
                 identity "hi"
                 "#
             ),
-            "Str",
+            "Attr.Attr * Str",
         );
     }
 
@@ -511,7 +522,7 @@ mod test_infer {
                 enlist 5
                 "#
             ),
-            "List Int",
+            "Attr.Attr * (List (Attr.Attr * Int))",
         );
     }
 
@@ -530,7 +541,7 @@ mod test_infer {
                     alwaysFoo 42
                 "#
             ),
-            "Str",
+            "Attr.Attr * Str",
         );
     }
 
@@ -542,7 +553,7 @@ mod test_infer {
                 1 |> (\a -> a)
                 "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -554,7 +565,7 @@ mod test_infer {
                 (\a -> a) 1
                 "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -568,7 +579,7 @@ mod test_infer {
                 1 |> always "foo"
                 "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -580,7 +591,7 @@ mod test_infer {
                     (\a -> a) 3.14
                 "#
             ),
-            "Float",
+            "Attr.Attr * Float",
         );
     }
 
@@ -592,7 +603,7 @@ mod test_infer {
                     (\val -> val) (\val -> val)
                 "#
             ),
-            "a -> a",
+            "Attr.Attr * (a -> a)",
         );
     }
 
@@ -619,7 +630,7 @@ mod test_infer {
                     \val -> val
                 "#
             ),
-            "a -> a",
+            "Attr.Attr * (a -> a)",
         );
     }
 
@@ -634,7 +645,7 @@ mod test_infer {
                     apply identity 5
                 "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -646,7 +657,7 @@ mod test_infer {
                     \f x -> f x
                 "#
             ),
-            "(a -> b), a -> b",
+            "Attr.Attr * (Attr.Attr * (a -> b), a -> b)",
         );
     }
 
@@ -675,7 +686,7 @@ mod test_infer {
                     \f -> (\a b -> f b a),
                 "#
             ),
-            "(a, b -> c) -> (b, a -> c)",
+            "Attr.Attr * (Attr.Attr * (a, b -> c) -> Attr.Attr * (b, a -> c))",
         );
     }
 
@@ -687,7 +698,7 @@ mod test_infer {
                     \val -> \_ -> val
                 "#
             ),
-            "a -> (* -> a)",
+            "Attr.Attr * (a -> Attr.Attr * (* -> a))",
         );
     }
 
@@ -699,7 +710,7 @@ mod test_infer {
                     \f -> f {}
                 "#
             ),
-            "({} -> a) -> a",
+            "Attr.Attr * (Attr.Attr * (Attr.Attr * {} -> a) -> a)",
         );
     }
 
@@ -798,7 +809,7 @@ mod test_infer {
                [ alwaysFive "foo", alwaysFive [] ]
            "#
             ),
-            "List Int",
+            "Attr.Attr * (List (Attr.Attr * Int))",
         );
     }
 
@@ -827,7 +838,7 @@ mod test_infer {
                  3 -> 4
             "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
     /*

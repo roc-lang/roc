@@ -23,9 +23,9 @@ mod test_gen {
 
     macro_rules! assert_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
-            let (expr, output, _problems, var_store, variable) = can_expr($src);
+            let (expr, _output, _problems, var_store, variable, constraint) = can_expr($src);
             let mut subs = Subs::new(var_store.into());
-            let content = infer_expr(&mut subs, &output.constraint, variable);
+            let content = infer_expr(&mut subs, &constraint, variable);
 
             let context = Context::create();
             let builder = context.create_builder();

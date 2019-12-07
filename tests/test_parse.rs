@@ -267,7 +267,21 @@ mod test_parse {
     }
 
     #[test]
-    fn ops_with_spaces() {
+    fn one_minus_two() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("1")),
+            Located::new(0, 0, 1, 2, Minus),
+            Located::new(0, 0, 2, 3, Int("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "1-2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn add_with_spaces() {
         let arena = Bump::new();
         let tuple = arena.alloc((
             Located::new(0, 0, 0, 1, Int("1")),
@@ -281,7 +295,58 @@ mod test_parse {
     }
 
     #[test]
-    fn newline_before_op() {
+    fn sub_with_spaces() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("1")),
+            Located::new(0, 0, 3, 4, Minus),
+            Located::new(0, 0, 7, 8, Int("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "1  -   2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn add_var_with_spaces() {
+        // This is a regression test! It used to break with subtraction and work
+        // with other arithmetic operatos.
+        //
+        // Subtraction is special when it comes to parsing, because of unary negation.
+
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(&[], "x")),
+            Located::new(0, 0, 2, 3, Plus),
+            Located::new(0, 0, 4, 5, Int("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x + 2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn sub_var_with_spaces() {
+        // This is a regression test! It used to break with subtraction and work
+        // with other arithmetic operatos.
+        //
+        // Subtraction is special when it comes to parsing, because of unary negation.
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(&[], "x")),
+            Located::new(0, 0, 2, 3, Minus),
+            Located::new(0, 0, 4, 5, Int("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x - 2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_before_add() {
         let arena = Bump::new();
         let spaced_int = Expr::SpaceAfter(
             arena.alloc(Int("3")),
@@ -299,7 +364,25 @@ mod test_parse {
     }
 
     #[test]
-    fn newline_after_op() {
+    fn newline_before_sub() {
+        let arena = Bump::new();
+        let spaced_int = Expr::SpaceAfter(
+            arena.alloc(Int("3")),
+            bumpalo::vec![in &arena; Newline].into_bump_slice(),
+        );
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, spaced_int),
+            Located::new(1, 1, 0, 1, Minus),
+            Located::new(1, 1, 2, 3, Int("4")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "3  \n- 4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_after_mul() {
         let arena = Bump::new();
         let spaced_int = arena
             .alloc(Int("4"))
@@ -311,6 +394,23 @@ mod test_parse {
         ));
         let expected = BinOp(tuple);
         let actual = parse_with(&arena, "3  *\n  4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_after_sub() {
+        let arena = Bump::new();
+        let spaced_int = arena
+            .alloc(Int("4"))
+            .before(bumpalo::vec![in &arena; Newline].into_bump_slice());
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Int("3")),
+            Located::new(0, 0, 3, 4, Minus),
+            Located::new(1, 1, 2, 3, spaced_int),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "3  -\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -446,6 +546,34 @@ mod test_parse {
         ));
         let expected = BinOp(outer);
         let actual = parse_with(&arena, "31*42+534");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn equals() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(&[], "x")),
+            Located::new(0, 0, 1, 3, Equals),
+            Located::new(0, 0, 3, 4, Var(&[], "y")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x==y");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn equals_with_spaces() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(0, 0, 0, 1, Var(&[], "x")),
+            Located::new(0, 0, 2, 4, Equals),
+            Located::new(0, 0, 5, 6, Var(&[], "y")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_with(&arena, "x == y");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -920,7 +1048,7 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::Body(
-            Located::new(1, 1, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 2, 3, Int("5"))),
         );
         let loc_def = &*arena.alloc(Located::new(1, 1, 0, 1, def));
@@ -950,7 +1078,7 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::Body(
-            Located::new(1, 1, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Int("5"))),
         );
         let loc_def = &*arena.alloc(Located::new(1, 1, 0, 1, def));
@@ -981,13 +1109,13 @@ mod test_parse {
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let newline = bumpalo::vec![in &arena; Newline];
         let def1 = Def::Body(
-            Located::new(1, 1, 0, 1, Identifier("x")),
+            arena.alloc(Located::new(1, 1, 0, 1, Identifier("x"))),
             arena.alloc(Located::new(1, 1, 4, 5, Int("5"))),
         );
         let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 1, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
-                Located::new(2, 2, 0, 1, Identifier("y")),
+                arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
                 arena.alloc(Located::new(2, 2, 4, 5, Int("6"))),
             )),
             newline.into_bump_slice(),
@@ -1028,13 +1156,13 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            Located::new(1, 1, 0, 8, RecordDestructure(fields)),
+            arena.alloc(Located::new(1, 1, 0, 8, RecordDestructure(fields))),
             arena.alloc(Located::new(1, 1, 11, 12, Int("5"))),
         );
         let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 8, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
-                Located::new(2, 2, 0, 1, Identifier("y")),
+                arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
                 arena.alloc(Located::new(2, 2, 4, 5, Int("6"))),
             )),
             newline.into_bump_slice(),
@@ -1248,21 +1376,21 @@ mod test_parse {
         let pattern3 = Identifier("baz");
         let def1 = SpaceAfter(
             arena.alloc(Body(
-                Located::new(0, 0, 0, 3, pattern1),
+                arena.alloc(Located::new(0, 0, 0, 3, pattern1)),
                 arena.alloc(Located::new(0, 0, 6, 7, Int("1"))),
             )),
             newlines1.into_bump_slice(),
         );
         let def2 = SpaceAfter(
             arena.alloc(Body(
-                Located::new(2, 2, 0, 3, pattern2),
+                arena.alloc(Located::new(2, 2, 0, 3, pattern2)),
                 arena.alloc(Located::new(2, 2, 6, 10, Str("hi"))),
             )),
             newlines2.into_bump_slice(),
         );
         let def3 = SpaceAfter(
             arena.alloc(Body(
-                Located::new(3, 3, 0, 3, pattern3),
+                arena.alloc(Located::new(3, 3, 0, 3, pattern3)),
                 arena.alloc(Located::new(3, 3, 6, 13, Str("stuff"))),
             )),
             newlines3.into_bump_slice(),

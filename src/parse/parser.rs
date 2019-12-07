@@ -228,8 +228,10 @@ where
     P: Parser<'a, Val>,
 {
     move |arena, state: State<'a>| {
+        let original_state = state.clone();
+
         parser.parse(arena, state).and_then(|(answer, state)| {
-            let original_state = state.clone();
+            let after_parse = state.clone();
 
             match by.parse(arena, state) {
                 Ok((_, state)) => Err((
@@ -239,7 +241,7 @@ where
                     },
                     original_state,
                 )),
-                Err(_) => Ok((answer, original_state)),
+                Err(_) => Ok((answer, after_parse)),
             }
         })
     }
