@@ -1,4 +1,4 @@
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::ImMap;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, Subs, Variable};
@@ -26,23 +26,63 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) {
             second_desc: subs.get(var2),
         };
 
-        unify_context(subs, &ctx)
+        unify_context(subs, ctx)
     }
 }
 
-fn unify_context(subs: &mut Subs, ctx: &Context) {
-    match ctx.first_desc.content {
-        FlexVar(ref opt_name) => unify_flex(subs, ctx, opt_name, &ctx.second_desc.content),
-        RigidVar(ref name) => unify_rigid(subs, ctx, name, &ctx.second_desc.content),
-        Structure(ref flat_type) => unify_structure(subs, ctx, flat_type, &ctx.second_desc.content),
-        Alias(_, _, _, _) => {
-            panic!("TODO unify Alias");
-            let x = 5;
-        }
-        Error(ref problem) => {
+fn unify_context(subs: &mut Subs, ctx: Context) {
+    match &ctx.first_desc.content {
+        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
+        RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
+        Structure(flat_type) => unify_structure(subs, &ctx, flat_type, &ctx.second_desc.content),
+        Alias(home, name, args, real_var) => unify_alias(subs, &ctx, home, name, args, real_var),
+        Error(problem) => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
-            merge(subs, ctx, Error(problem.clone()))
+            merge(subs, &ctx, Error(problem.clone()))
         }
+    }
+}
+
+#[inline(always)]
+fn unify_alias(
+    subs: &mut Subs,
+    ctx: &Context,
+    home: &ModuleName,
+    name: &Uppercase,
+    args: &Vec<(Lowercase, Variable)>,
+    real_var: &Variable,
+) {
+    let other_content = &ctx.second_desc.content;
+
+    match other_content {
+        FlexVar(_) => {
+            // Alias wins
+            merge(
+                subs,
+                &ctx,
+                Alias(home.clone(), name.clone(), args.clone(), *real_var),
+            )
+        }
+        RigidVar(_) => unify(subs, *real_var, ctx.second),
+        Alias(other_home, other_name, other_args, other_real_var) => {
+            if name == other_name && home == other_home {
+                if args.len() == other_args.len() {
+                    for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
+                        unify(subs, *l_var, *r_var);
+                    }
+
+                    merge(subs, &ctx, other_content.clone())
+                } else if args.len() > other_args.len() {
+                    merge(subs, &ctx, Error(Problem::ExtraArguments))
+                } else {
+                    merge(subs, &ctx, Error(Problem::MissingArguments))
+                }
+            } else {
+                unify(subs, *real_var, *other_real_var)
+            }
+        }
+        Structure(_) => unify(subs, *real_var, ctx.second),
+        Error(problem) => merge(subs, ctx, Error(problem.clone())),
     }
 }
 
@@ -51,7 +91,6 @@ fn unify_structure(subs: &mut Subs, ctx: &Context, flat_type: &FlatType, other: 
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
-            //
             merge(subs, ctx, Structure(flat_type.clone()))
         }
         RigidVar(_) => {
@@ -62,10 +101,7 @@ fn unify_structure(subs: &mut Subs, ctx: &Context, flat_type: &FlatType, other: 
             // Unify the two flat types
             unify_flat_type(subs, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, _, _) => {
-            panic!("TODO unify_structure Alias");
-            let x = 5;
-        }
+        Alias(_, _, _, real_var) => unify(subs, ctx.first, *real_var),
         Error(problem) => {
             // Error propagates.
             merge(subs, ctx, Error(problem.clone()))
