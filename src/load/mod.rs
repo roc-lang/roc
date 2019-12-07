@@ -2,7 +2,7 @@ use crate::can::def::Def;
 use crate::can::module::{canonicalize_module_defs, Module};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, SendSet, SendMap};
+use crate::collections::{ImMap, SendMap, SendSet};
 use crate::ident::Ident;
 use crate::module::ModuleName;
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
