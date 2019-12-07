@@ -82,7 +82,7 @@ where
 
             flex_info
                 .constraints
-                .push(Lookup(symbol.clone(), expected, region.clone()));
+                .push(Lookup(symbol.clone(), expected, *region));
         } else {
             // TODO add type aliases to type alias dictionary, based on exposed types
         }
