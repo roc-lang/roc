@@ -1,17 +1,17 @@
 use crate::can::def::Def;
 use crate::can::module::{canonicalize_module_defs, Module};
-use crate::solve::solve;
-use crate::subs::{Subs, Variable};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendSet};
+use crate::ident::Ident;
 use crate::module::ModuleName;
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use crate::parse::module::{self, module_defs};
-use crate::ident::Ident;
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
+use crate::solve::solve;
 use crate::subs::VarStore;
+use crate::subs::{Subs, Variable};
 use crate::types::Constraint;
 use bumpalo::Bump;
 use futures::future::join_all;
@@ -76,7 +76,12 @@ impl LoadedModule {
 /// The loaded_modules argument specifies which modules have already been loaded.
 /// It typically contains the standard modules, but is empty when loading the
 /// standard modules themselves.
-pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf, loaded_deps: &mut LoadedDeps, vars_created: usize) -> Loaded {
+pub async fn load<'a>(
+    src_dir: PathBuf,
+    filename: PathBuf,
+    loaded_deps: &mut LoadedDeps,
+    vars_created: usize,
+) -> Loaded {
     let env = Env {
         src_dir: src_dir.clone(),
     };
@@ -205,7 +210,8 @@ async fn load_filename(
                         tx.send(deps).await.unwrap();
                     });
 
-                    let mut scope = Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
+                    let mut scope =
+                        Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
 
                     let (defs, constraint) = parse_and_canonicalize_defs(
                         &arena,
@@ -353,7 +359,7 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     // unless the module actually exposes it!
     for loaded_dep in loaded_deps {
         match loaded_dep {
-            Valid(valid_dep)=> {
+            Valid(valid_dep) => {
                 constraints.push(valid_dep.constraint);
 
                 for def in valid_dep.defs {
@@ -363,10 +369,13 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
                 }
             }
 
-            broken @ FileProblem{ .. } => { panic!("TODO handle FileProblem with loaded dep: {:?}", broken); }
+            broken @ FileProblem { .. } => {
+                panic!("TODO handle FileProblem with loaded dep: {:?}", broken);
+            }
 
-
-            broken @ ParsingFailed{ .. } => { panic!("TODO handle ParsingFailed with loaded dep: {:?}", broken);}
+            broken @ ParsingFailed { .. } => {
+                panic!("TODO handle ParsingFailed with loaded dep: {:?}", broken);
+            }
         }
     }
 
