@@ -6,10 +6,14 @@ floatTest = Float.highest
 
 divisionFn = Float.div
 
-divisionTest = Float.highest / 2.0
+x = 5.0
+
+divisionTest = Float.highest / x
 
 intTest = Int.highest
 
 constantInt = 5
 
-divDep1ByDep2 = Dep1.three / 2.0
+fromDep2 = two
+
+divDep1ByDep2 = Dep1.three / fromDep2

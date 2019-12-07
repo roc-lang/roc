@@ -7,7 +7,7 @@ use crate::unify::unify;
 
 type Env = ImMap<Symbol, Variable>;
 
-pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
+pub fn solve(vars_by_symbol: &Env, subs: &mut Subs, constraint: &Constraint) {
     match constraint {
         True => (),
         Eq(typ, expected_type, _region) => {
@@ -19,10 +19,13 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
         }
         Lookup(symbol, expected_type, _region) => {
             // TODO use region?
-            let actual = subs.copy_var(*env.get(&symbol).unwrap_or_else(|| {
+            let actual = subs.copy_var(*vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
                 // a Problem ("module Foo does not expose `bar`") for later.
-                panic!("Could not find symbol {:?} in env {:?}", symbol, env)
+                panic!(
+                    "Could not find symbol {:?} in vars_by_symbol {:?}",
+                    symbol, vars_by_symbol
+                )
             }));
             let expected = type_to_var(subs, expected_type.clone().get_type());
 
@@ -30,7 +33,7 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
         }
         And(sub_constraints) => {
             for sub_constraint in sub_constraints.iter() {
-                solve(env, subs, sub_constraint);
+                solve(vars_by_symbol, subs, sub_constraint);
             }
         }
         Pattern(_region, _category, typ, expected) => {
@@ -45,30 +48,28 @@ pub fn solve(env: &Env, subs: &mut Subs, constraint: &Constraint) {
                 True => {
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
-                    solve(env, subs, &let_con.defs_constraint)
+                    solve(vars_by_symbol, subs, &let_con.defs_constraint)
                 }
                 ret_con => {
                     // Solve the assignments' constraints first.
-                    solve(env, subs, &let_con.defs_constraint);
+                    solve(vars_by_symbol, subs, &let_con.defs_constraint);
 
-                    // Add a variable for each assignment to the env.
-                    let mut new_env = env.clone();
+                    // Add a variable for each assignment to the vars_by_symbol.
+                    let mut new_vars_by_symbol = vars_by_symbol.clone();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
-                        // We must not overwrite existing symbols! If we do,
-                        // we will overwrite procedure entries, which were
-                        // inserted earlier in solving. (If we allowed
-                        // shadowing, we'd need to do something fancier here.)
-                        if !new_env.contains_key(&symbol) {
+                        // No need to overwrite existing symbols; it would have no effect.
+                        // (If we allowed shadowing, we'd need to do something fancier here.)
+                        if !new_vars_by_symbol.contains_key(&symbol) {
                             let var = type_to_var(subs, loc_type.value.clone());
 
-                            new_env.insert(symbol.clone(), var);
+                            new_vars_by_symbol.insert(symbol.clone(), var);
                         }
                     }
 
-                    // Now solve the body, using the new env which includes
+                    // Now solve the body, using the new vars_by_symbol which includes
                     // the assignments' name-to-variable mappings.
-                    solve(&new_env, subs, &ret_con);
+                    solve(&new_vars_by_symbol, subs, &ret_con);
 
                     // TODO do an occurs check for each of the assignments!
                 }
