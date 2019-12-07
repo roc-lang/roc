@@ -4,6 +4,6 @@ interface Dep2
 
 one = 1
 
-two = 2
+two = 2.0
 
 foo = "foo"

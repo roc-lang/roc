@@ -9,10 +9,10 @@ interface Float
         mod,
         recip,
         sqrt,
-        highestVal,
-        lowestVal,
-        highestIntVal,
-        lowestIntVal,
+        highest,
+        lowest,
+        highestInt,
+        lowestInt,
         sin,
         cos,
         tan,
@@ -45,7 +45,7 @@ interface Float
 ##
 ## It is possible to build fractional systems with different precision characteristics (for example, storing an #Int numerator and #Int denominator), but their basic arithmetic operations will be unavoidably slower than #Float.
 ##
-## See #Float.highestSupported and #Float.lowestSupported for the highest and
+## See #Float.highest and #Float.lowest for the highest and
 ## lowest values that can be held in a #Float.
 ##
 ## Note that although the IEEE-754 specification describes the values `Infinity`, `-Infinity`, `NaN`, and `-0.0`, Roc avoids these as follows:
@@ -164,27 +164,27 @@ pi = 3.141592653589793
 ## The highest supported #Float value you can have, which is approximately 1.8 × 10^308.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
-#highestVal : Float
-highestVal = 1.0
+#highest : Float
+highest = 1.0
 
 ## The lowest supported #Float value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
-#lowestVal : Float
-lowestVal = 1.0
+#lowest : Float
+lowest = 1.0
 
 ## The highest integer that can be represented as a #Float without # losing precision.
 ## It is equal to 2^53, which is approximately 9 × 10^15.
 ##
 ## Some integers higher than this can be represented, but they may lose precision. For example:
 ##
-## > Float.highestIntVal
+## > Float.highestInt
 ##
-## > Float.highestIntVal + 100 # Increasing may lose precision
+## > Float.highestInt + 100 # Increasing may lose precision
 ##
-## > Float.highestIntVal - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
-#highestIntVal : Float
-highestIntVal = 1.0
+## > Float.highestInt - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
+#highestInt : Float
+highestInt = 1.0
 
 ## The lowest integer that can be represented as a #Float without losing precision.
 ## It is equal to -2^53, which is approximately -9 × 10^15.
@@ -195,6 +195,6 @@ highestIntVal = 1.0
 ##
 ## > Float.lowestIntVal - 100 # Decreasing may lose precision
 ##
-## > Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestLosslessInt!
-#lowestIntVal : Float
-lowestIntVal = 1.0
+## > Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestInt!
+#lowestInt : Float
+lowestInt = 1.0

@@ -26,6 +26,20 @@ use crate::types::{LetConstraint, PExpected};
 use im_rc::Vector;
 use std::fmt::Debug;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Def {
+    pub pattern: Located<Pattern>,
+    pub expr: Located<Expr>,
+    pub variables_by_symbol: SendMap<Symbol, Variable>,
+}
+
+#[derive(Debug)]
+pub struct CanDefs {
+    pub refs_by_symbol: MutMap<Symbol, (Located<Ident>, References)>,
+    pub can_defs_by_symbol: MutMap<Symbol, Def>,
+    pub defined_idents: Vector<(Ident, (Symbol, Region))>,
+}
+
 #[derive(Default)]
 pub struct Info {
     pub vars: Vec<Variable>,
@@ -41,13 +55,6 @@ impl Info {
             def_types: SendMap::default(),
         }
     }
-}
-
-#[derive(Debug)]
-pub struct CanDefs {
-    pub refs_by_symbol: MutMap<Symbol, (Located<Ident>, References)>,
-    pub can_defs_by_symbol: MutMap<Symbol, Def>,
-    pub defined_idents: Vector<(Ident, (Symbol, Region))>,
 }
 
 #[inline(always)]
@@ -268,6 +275,7 @@ fn canonicalize_def<'a>(
     // Make types for the body expr, even if we won't end up having a body.
     let expr_var = var_store.fresh();
     let expr_type = Type::Variable(expr_var);
+    let mut variables_by_symbol = SendMap::default();
 
     // Each def gets to have all the idents in scope that are defined in this
     // block. Order of defs doesn't matter, thanks to referential transparency!
@@ -353,6 +361,7 @@ fn canonicalize_def<'a>(
             ) = (&loc_pattern.value, &loc_can_pattern.value)
             {
                 env.tailcallable_symbol = Some(defined_symbol.clone());
+                variables_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
 
             let (mut loc_can_expr, can_output, ret_constraint) = canonicalize_expr(
@@ -476,6 +485,7 @@ fn canonicalize_def<'a>(
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
                         },
+                        variables_by_symbol: im::HashMap::clone(&variables_by_symbol),
                     },
                 );
             }
@@ -501,12 +511,6 @@ fn canonicalize_def<'a>(
             panic!("Somehow a space in a Def was not removed before canonicalization!")
         }
     };
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Def {
-    pub pattern: Located<Pattern>,
-    pub expr: Located<Expr>,
 }
 
 /// When we get a list of cyclic idents, the first node listed is a matter of chance.

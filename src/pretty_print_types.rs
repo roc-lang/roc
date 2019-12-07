@@ -42,10 +42,8 @@ enum Appearances {
 /// function, generate a name of "a" for both its argument and return
 /// type variables.
 ///
-/// It's important that we track insertion order, which is why
-/// names_needed is a Vec. We also want to count how many times a root
-/// appears, because we should only generate a name for it if it appears
-/// more than once.
+/// We also want to count how many times a root appears, because we should
+/// only generate a name for it if it appears more than once.
 fn find_names_needed(
     variable: Variable,
     subs: &mut Subs,

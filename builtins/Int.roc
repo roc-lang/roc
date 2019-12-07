@@ -17,7 +17,7 @@ interface Int
 ##
 ## > 1_000_000
 ##
-## See #Int.highestSupported and #Int.lowestSupported for the highest and
+## See #Int.highest and #Int.lowest for the highest and
 ## lowest values that can be held in an #Int.
 #Int : Num Integer
 
@@ -78,16 +78,17 @@ interface Int
 ## The highest number that can be stored in an #Int without overflowing its
 ## available memory (64 bits total) and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.lowestSupported,
-## which means if you call #Num.abs on #Int.lowestSupported, it will crash!
-#highestSupported : Int
-hihgestSupported = 0x7fff_ffff_ffff_ffff
+## Note that this is smaller than the positive version of #Int.lowest,
+## which means if you call #Num.abs on #Int.lowest, it will crash!
+#highest : Int
+#highest = 0x7fff_ffff_ffff_ffff # TODO parsing hex ints is broken!
+highest = 500
 
 ## The lowest number that can be stored in an #Int without overflowing its
 ## available memory (64 bits total) and crashing.
 ##
 ## Note that the positive version of this number is this is larger than
-## #Int.highestSupported, which means if you call #Num.abs on #Int.lowestSupported,
+## #Int.highest, which means if you call #Num.abs on #Int.lowest,
 ## it will crash!
-#lowestSupported : Int
-lowestSupported = -0x8000_0000_0000_0000
+#lowest : Int
+#lowest = -0x8000_0000_0000_0000

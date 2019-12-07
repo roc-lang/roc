@@ -3,12 +3,15 @@ use crate::can::module::{canonicalize_module_defs, Module};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendSet};
+use crate::ident::Ident;
 use crate::module::ModuleName;
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
+use crate::solve::solve;
 use crate::subs::VarStore;
+use crate::subs::{Subs, Variable};
 use crate::types::Constraint;
 use bumpalo::Bump;
 use futures::future::join_all;
@@ -73,13 +76,18 @@ impl LoadedModule {
 /// The loaded_modules argument specifies which modules have already been loaded.
 /// It typically contains the standard modules, but is empty when loading the
 /// standard modules themselves.
-pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf, loaded_deps: &mut LoadedDeps) -> Loaded {
+pub async fn load<'a>(
+    src_dir: PathBuf,
+    filename: PathBuf,
+    loaded_deps: &mut LoadedDeps,
+    vars_created: usize,
+) -> Loaded {
     let env = Env {
         src_dir: src_dir.clone(),
     };
     let (tx, mut rx): (Sender<DepNames>, Receiver<DepNames>) = mpsc::channel(1024);
     let main_tx = tx.clone();
-    let arc_var_store = Arc::new(VarStore::new());
+    let arc_var_store = Arc::new(VarStore::new(vars_created));
     let var_store = Arc::clone(&arc_var_store);
     let handle =
         tokio::spawn(async move { load_filename(&env, filename, main_tx, &var_store).await });
@@ -182,7 +190,7 @@ async fn load_filename(
                     // TODO check to see if declared_name is consistent with filename.
                     // If it isn't, report a problem!
 
-                    let mut scope = ImMap::default();
+                    let mut scope_from_imports = ImMap::default();
                     let mut deps = SendSet::default();
 
                     for loc_entry in header.imports {
@@ -190,7 +198,7 @@ async fn load_filename(
                             env,
                             loc_entry.region,
                             &loc_entry.value,
-                            &mut scope,
+                            &mut scope_from_imports,
                         ));
                     }
 
@@ -202,12 +210,15 @@ async fn load_filename(
                         tx.send(deps).await.unwrap();
                     });
 
+                    let mut scope =
+                        Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
+
                     let (defs, constraint) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         declared_name.clone(),
                         header.exposes.into_iter(),
-                        Scope::new(format!("{}.", declared_name).into(), ImMap::default()),
+                        &mut scope,
                         var_store,
                     );
                     let module = Module {
@@ -219,7 +230,7 @@ async fn load_filename(
                     LoadedModule::Valid(module)
                 }
                 Ok((ast::Module::App { header }, state)) => {
-                    let mut scope = ImMap::default();
+                    let mut scope_from_imports = ImMap::default();
                     let mut deps = SendSet::default();
 
                     for loc_entry in header.imports {
@@ -227,7 +238,7 @@ async fn load_filename(
                             env,
                             loc_entry.region,
                             &loc_entry.value,
-                            &mut scope,
+                            &mut scope_from_imports,
                         ));
                     }
 
@@ -239,13 +250,15 @@ async fn load_filename(
                         tx.send(deps).await.unwrap();
                     });
 
+                    let mut scope = Scope::new(".".into(), scope_from_imports);
+
                     // The app module has no declared name. Pass it as "".
                     let (defs, constraint) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         "".into(),
                         std::iter::empty(),
-                        Scope::new(".".into(), ImMap::default()),
+                        &mut scope,
                         var_store,
                     );
                     let module = Module {
@@ -273,7 +286,7 @@ fn parse_and_canonicalize_defs<'a, I>(
     state: State<'a>,
     home: Box<str>,
     exposes: I,
-    scope: Scope,
+    scope: &mut Scope,
     var_store: &VarStore,
 ) -> (Vec<Def>, Constraint)
 where
@@ -290,7 +303,7 @@ fn load_import(
     env: &Env,
     region: Region,
     entry: &ImportsEntry<'_>,
-    scope: &mut ImMap<Box<str>, (Symbol, Region)>,
+    scope: &mut ImMap<Ident, (Symbol, Region)>,
 ) -> Box<str> {
     use crate::parse::ast::ImportsEntry::*;
 
@@ -299,7 +312,7 @@ fn load_import(
             for loc_entry in exposes {
                 let (key, value) = expose(*module_name, &loc_entry.value, loc_entry.region);
 
-                scope.insert(key, value);
+                scope.insert(Ident::Unqualified(key), value);
             }
 
             module_name.as_str().into()
@@ -331,4 +344,44 @@ fn expose(
             expose(module_name, *sub_entry, region)
         }
     }
+}
+
+pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
+    use LoadedModule::*;
+
+    let mut env: ImMap<Symbol, Variable> = ImMap::default();
+    let mut constraints = Vec::with_capacity(loaded_deps.len() + 1);
+
+    // Add each loaded module's top-level defs to the Env, so that when we go
+    // to solve, looking up qualified idents gets the correct answer.
+    //
+    // TODO filter these by what's actually exposed; don't add it to the Env
+    // unless the module actually exposes it!
+    for loaded_dep in loaded_deps {
+        match loaded_dep {
+            Valid(valid_dep) => {
+                constraints.push(valid_dep.constraint);
+
+                for def in valid_dep.defs {
+                    for (symbol, var) in def.variables_by_symbol {
+                        env.insert(symbol, var);
+                    }
+                }
+            }
+
+            broken @ FileProblem { .. } => {
+                panic!("TODO handle FileProblem with loaded dep: {:?}", broken);
+            }
+
+            broken @ ParsingFailed { .. } => {
+                panic!("TODO handle ParsingFailed with loaded dep: {:?}", broken);
+            }
+        }
+    }
+
+    for constraint in constraints {
+        solve(&env, subs, &constraint);
+    }
+
+    solve(&env, subs, &module.constraint);
 }

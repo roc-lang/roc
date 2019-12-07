@@ -2,8 +2,14 @@ interface WithBuiltins
     exposes [ blah ]
     imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar } ]
 
-blah = Int.highestSupported
+floatTest = Float.highest
 
-#two = Float.highestSupported
+divisionFn = Float.div
 
-#three = Float.highestSupported / 2.0
+divisionTest = Float.highest / 2.0
+
+intTest = Int.highest
+
+constantInt = 5
+
+divDep1ByDep2 = Dep1.three / 2.0

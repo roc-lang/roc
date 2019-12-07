@@ -1005,7 +1005,7 @@ fn resolve_ident<'a>(
         match ident {
             Ident::Unqualified(name) => {
                 // Try again, this time using the current module as the path.
-                let qualified = Ident::Qualified(env.home.clone().to_string(), name.clone());
+                let qualified = Ident::Qualified(env.home.clone(), name.clone());
 
                 if scope.idents.contains_key(&qualified) {
                     let symbol = Symbol::new(&env.home, &name);
@@ -1018,9 +1018,12 @@ fn resolve_ident<'a>(
                     Err(Ident::Unqualified(name))
                 }
             }
-            qualified @ Ident::Qualified(_, _) => {
-                // We couldn't find the qualified ident in scope. NAMING PROBLEM!
-                Err(qualified)
+            Ident::Qualified(module_name, name) => {
+                let symbol = Symbol::from_qualified_ident(module_name, name);
+
+                references.globals.insert(symbol.clone());
+
+                Ok(symbol)
             }
         }
     }
