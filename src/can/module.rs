@@ -76,15 +76,10 @@ where
             // anything references `baz` in this Foo module, it will resolve to Bar.baz.
             exposed_imports.insert(scope.symbol(&*ident.clone().name()), expr_var);
 
-            // Add the usual constraint info as if this were a normal def.
+            // Add the usual Lookup constraint as if this were a normal def.
             let expr_type = Type::Variable(expr_var);
             let expected = NoExpectation(expr_type.clone());
-            let loc_type = Located {
-                region: region.clone(),
-                value: expr_type,
-            };
 
-            flex_info.def_types.insert(symbol.clone(), loc_type);
             flex_info
                 .constraints
                 .push(Lookup(symbol.clone(), expected, region.clone()));
