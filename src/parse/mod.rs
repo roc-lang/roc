@@ -302,9 +302,15 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
 
         Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
         Expr::Int(string) => Ok(Pattern::IntLiteral(string)),
-        Expr::HexInt(string) => Ok(Pattern::HexIntLiteral(string)),
-        Expr::OctalInt(string) => Ok(Pattern::OctalIntLiteral(string)),
-        Expr::BinaryInt(string) => Ok(Pattern::BinaryIntLiteral(string)),
+        Expr::NonBase10Int {
+            string,
+            base,
+            is_negative,
+        } => Ok(Pattern::NonBase10Literal {
+            string,
+            base: *base,
+            is_negative: *is_negative,
+        }),
         Expr::Str(string) => Ok(Pattern::StrLiteral(string)),
         Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
 
