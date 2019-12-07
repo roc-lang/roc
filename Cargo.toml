@@ -9,9 +9,9 @@ log = "0.4.8"
 petgraph = { version = "0.4.5", optional = true }
 im = "14.0.0"    # im and im-rc should always have the same version!
 im-rc = "14.0.0" # im and im-rc should always have the same version!
-wyhash = "0.3.0"
+wyhash = "0.3"
 tokio = { version = "0.2", features = ["fs", "sync", "rt-threaded"] }
-bumpalo = "2.6.0"
+bumpalo = "2.6"
 # NOTE: Breaking API changes get pushed directly to this Inkwell branch, so be
 # very careful when running `cargo update` to get a new revision into Cargo.lock.
 #
@@ -19,7 +19,7 @@ bumpalo = "2.6.0"
 # `rev` works locally, it causes an error on GitHub Actions. (It's unclear why,
 # but after several hours of trying unsuccessfully to fix it, `branch` is it.)
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "llvm8-0" }
-futures = "0.3.1"
+futures = "0.3"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
