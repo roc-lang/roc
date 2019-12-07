@@ -97,13 +97,18 @@ where
         &mut flex_info,
     );
 
-    let (defs, _) = sort_can_defs(&mut env, defs, Output::default());
+    let defs = match sort_can_defs(&mut env, defs, Output::default()) {
+        (Ok(defs), _) => {
+            // TODO examine the patterns, extract toplevel identifiers from them,
+            // and verify that everything in the `exposes` list is actually present in
+            // that set of identifiers. You can't expose it if it wasn't defined!
 
-    let defs = defs.expect("TODO error canonicalizing module defs");
-
-    // TODO examine the patterns, extract toplevel identifiers from them,
-    // and verify that everything in the `exposes` list is actually present in
-    // that set of identifiers. You can't expose it if it wasn't defined!
+            defs
+        }
+        (Err(problem), _) => {
+            panic!("TODO problem canonicalizing module defs: {:?}", problem);
+        }
+    };
 
     // TODO incorporate rigids into here (possibly by making this be a Let instead
     // of an And)
