@@ -1005,7 +1005,7 @@ fn resolve_ident<'a>(
         match ident {
             Ident::Unqualified(name) => {
                 // Try again, this time using the current module as the path.
-                let qualified = Ident::Qualified(env.home.clone().into(), name.clone());
+                let qualified = Ident::Qualified(env.home.clone(), name.clone());
 
                 if scope.idents.contains_key(&qualified) {
                     let symbol = Symbol::new(&env.home, &name);

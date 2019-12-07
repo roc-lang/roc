@@ -312,7 +312,7 @@ fn load_import(
             for loc_entry in exposes {
                 let (key, value) = expose(*module_name, &loc_entry.value, loc_entry.region);
 
-                scope.insert(Ident::Unqualified(key.into()), value);
+                scope.insert(Ident::Unqualified(key), value);
             }
 
             module_name.as_str().into()

@@ -48,7 +48,7 @@ impl Symbol {
         Symbol(format!("{}.{}", module_name.as_str(), ident.as_str()).into())
     }
 
-    pub fn from_qualified_ident<'a>(module_name: Box<str>, ident: Box<str>) -> Symbol {
+    pub fn from_qualified_ident(module_name: Box<str>, ident: Box<str>) -> Symbol {
         Symbol(format!("{}.{}", module_name, ident).into())
     }
 

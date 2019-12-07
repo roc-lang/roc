@@ -105,7 +105,7 @@ pub fn canonicalize_pattern<'a>(
                 None => {
                     // Make sure we aren't shadowing something in the home module's scope.
                     let qualified_ident =
-                        Ident::Qualified(env.home.clone().into(), lowercase_ident.name());
+                        Ident::Qualified(env.home.clone(), lowercase_ident.name());
 
                     match scope.idents.get(&qualified_ident) {
                         Some((_, region)) => {
