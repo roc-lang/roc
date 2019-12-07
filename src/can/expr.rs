@@ -1018,9 +1018,12 @@ fn resolve_ident<'a>(
                     Err(Ident::Unqualified(name))
                 }
             }
-            qualified @ Ident::Qualified(_, _) => {
-                // We couldn't find the qualified ident in scope. NAMING PROBLEM!
-                Err(qualified)
+            Ident::Qualified(module_name, name) => {
+                let symbol = Symbol::from_qualified_ident(module_name, name);
+
+                references.globals.insert(symbol.clone());
+
+                Ok(symbol)
             }
         }
     }
