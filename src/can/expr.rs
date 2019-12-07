@@ -1,8 +1,8 @@
 use crate::can::def::{can_defs_with_return, Def, Info};
 use crate::can::env::Env;
 use crate::can::num::{
-    finish_parsing_bin, finish_parsing_float, finish_parsing_hex, finish_parsing_int,
-    finish_parsing_oct, float_expr_from_result, int_expr_from_result,
+    finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
+    int_expr_from_result,
 };
 use crate::can::pattern::PatternType::*;
 use crate::can::pattern::{canonicalize_pattern, remove_idents, Pattern};
@@ -28,6 +28,7 @@ use crate::types::{LetConstraint, PExpected, PReason, Reason};
 use im_rc::Vector;
 use std::fmt::Debug;
 use std::i64;
+use std::ops::Neg;
 
 /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
 /// for example `a` in the annotation `identity : a -> a`, we add it to this
@@ -673,19 +674,20 @@ pub fn canonicalize_expr(
 
             (answer.value, output, constraint)
         }
-        ast::Expr::BinaryInt(string) => {
+        ast::Expr::NonBase10Int {
+            string,
+            base,
+            is_negative,
+        } => {
+            let mut result = finish_parsing_base(string, *base);
+
+            if *is_negative {
+                result = result.map(i64::neg);
+            }
+
             let (constraint, answer) =
-                int_expr_from_result(var_store, finish_parsing_bin(string), env, expected, region);
-            (answer, Output::default(), constraint)
-        }
-        ast::Expr::HexInt(string) => {
-            let (constraint, answer) =
-                int_expr_from_result(var_store, finish_parsing_hex(string), env, expected, region);
-            (answer, Output::default(), constraint)
-        }
-        ast::Expr::OctalInt(string) => {
-            let (constraint, answer) =
-                int_expr_from_result(var_store, finish_parsing_oct(string), env, expected, region);
+                int_expr_from_result(var_store, result, env, expected, region);
+
             (answer, Output::default(), constraint)
         }
         // Below this point, we shouln't see any of these nodes anymore because

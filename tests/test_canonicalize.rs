@@ -57,7 +57,7 @@ mod test_canonicalize {
         let arena = Bump::new();
         let (actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
 
-        assert_eq!(expected, actual.value);
+        assert_eq!(actual.value, expected);
     }
 
     // NUMBER LITERALS
