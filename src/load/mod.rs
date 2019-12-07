@@ -351,18 +351,18 @@ fn expose(
 pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     use LoadedModule::*;
 
-    let mut env: ImMap<Symbol, Variable> = ImMap::default();
+    let mut vars_by_symbol: ImMap<Symbol, Variable> = ImMap::default();
     let mut constraints = Vec::with_capacity(loaded_deps.len() + 1);
 
-    // All the exposed imports should be available in the solver's env
+    // All the exposed imports should be available in the solver's vars_by_symbol
     for (symbol, var) in module.exposed_imports.iter() {
-        env.insert(symbol.clone(), var.clone());
+        vars_by_symbol.insert(symbol.clone(), var.clone());
     }
 
-    // All the top-level defs should also be available in env
+    // All the top-level defs should also be available in vars_by_symbol
     for def in module.defs.iter() {
-        for (symbol, var) in def.env.iter() {
-            env.insert(symbol.clone(), var.clone());
+        for (symbol, var) in def.variables_by_symbol.iter() {
+            vars_by_symbol.insert(symbol.clone(), var.clone());
         }
     }
 
@@ -374,15 +374,20 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     for loaded_dep in loaded_deps {
         match loaded_dep {
             Valid(valid_dep) => {
+                // All deps' exposed imports should also be available
+                // in the solver's vars_by_symbol. (The map's keys are
+                // fully qualified, so there won't be any collisions
+                // with the primary module's exposed imports!)
                 for (symbol, var) in valid_dep.exposed_imports {
-                    env.insert(symbol, var);
+                    vars_by_symbol.insert(symbol, var);
                 }
 
                 constraints.push(valid_dep.constraint);
 
+                // All its top-level defs should also be available in vars_by_symbol
                 for def in valid_dep.defs {
                     for (symbol, var) in def.variables_by_symbol {
-                        env.insert(symbol, var);
+                        vars_by_symbol.insert(symbol, var);
                     }
                 }
             }
@@ -398,8 +403,8 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     }
 
     for constraint in constraints {
-        solve(&env, subs, &constraint);
+        solve(&vars_by_symbol, subs, &constraint);
     }
 
-    solve(&env, subs, &module.constraint);
+    solve(&vars_by_symbol, subs, &module.constraint);
 }
