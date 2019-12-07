@@ -354,8 +354,16 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     let mut env: ImMap<Symbol, Variable> = ImMap::default();
     let mut constraints = Vec::with_capacity(loaded_deps.len() + 1);
 
+    // All the exposed imports should be available in the solver's env
     for (symbol, var) in module.exposed_imports.iter() {
         env.insert(symbol.clone(), var.clone());
+    }
+
+    // All the top-level defs should also be available in env
+    for def in module.defs.iter() {
+        for (symbol, var) in def.env.iter() {
+            env.insert(symbol.clone(), var.clone());
+        }
     }
 
     // Add each loaded module's top-level defs to the Env, so that when we go
