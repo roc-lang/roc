@@ -122,6 +122,34 @@ fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: T
 
             subs.fresh(Descriptor::from(content))
         }
+        Record(fields, ext) => {
+            let mut field_vars = ImMap::default();
+
+            for (field, field_type) in fields {
+                field_vars.insert(field, type_to_variable(subs, aliases, field_type));
+            }
+
+            let ext_var = type_to_variable(subs, aliases, *ext);
+            let content = Content::Structure(FlatType::Record(field_vars, ext_var));
+
+            subs.fresh(Descriptor::from(content))
+        }
+        Alias(home, name, args, alias_type) => {
+            let mut arg_vars = Vec::with_capacity(args.len());
+            let mut new_aliases = ImMap::default();
+
+            for (arg, arg_type) in args {
+                let arg_var = type_to_variable(subs, aliases, arg_type.clone());
+
+                arg_vars.push((arg.clone(), arg_var.clone()));
+                new_aliases.insert(arg.into(), arg_var);
+            }
+
+            let alias_var = type_to_variable(subs, &new_aliases, *alias_type);
+            let content = Content::Alias(home, name, arg_vars, alias_var);
+
+            subs.fresh(Descriptor::from(content))
+        }
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem));
 

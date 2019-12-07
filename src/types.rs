@@ -1,3 +1,4 @@
+use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
 use crate::operator::{ArgSide, BinOp};
@@ -26,6 +27,8 @@ pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
+    Record(SendMap<Lowercase, Type>, Box<Type>),
+    Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
         module_name: Box<str>,
@@ -81,6 +84,14 @@ impl fmt::Debug for Type {
                 problem.fmt(f)?;
 
                 write!(f, ")")
+            }
+            Type::Alias(_, _, _, _) => {
+                panic!("TODO fmt type aliases");
+                let x = 5;
+            }
+            Type::Record(_, _) => {
+                panic!("TODO fmt record types");
+                let x = 5;
             }
         }
     }

@@ -1,3 +1,5 @@
+use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::collections::ImMap;
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types::Problem;
 use std::fmt;
@@ -206,6 +208,7 @@ pub enum Content {
     /// name given in a user-written annotation
     RigidVar(Box<str>),
     Structure(FlatType),
+    Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Variable),
     Error(Problem),
 }
 
@@ -217,6 +220,7 @@ pub enum FlatType {
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
+    Record(ImMap<Lowercase, Variable>, Variable),
     Erroneous(Problem),
     EmptyRecord,
 }
