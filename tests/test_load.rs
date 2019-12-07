@@ -61,9 +61,7 @@ mod test_load {
             let module = expect_module(load(src_dir, filename, &mut deps, 0).await);
 
             assert_eq!(module.name, Some("Primary".into()));
-
-            // This should be the sum of explicit defs vs desugared ones from exposed imports
-            assert_eq!(module.defs.len(), 8);
+            assert_eq!(module.defs.len(), 6);
 
             let module_names: Vec<Option<Box<str>>> = deps
                 .into_iter()
@@ -121,9 +119,7 @@ mod test_load {
             let module = expect_module(load(src_dir, filename, &mut deps, vars_created).await);
 
             assert_eq!(module.name, Some("Primary".into()));
-
-            // This should be the sum of explicit defs vs desugared ones from exposed imports
-            assert_eq!(module.defs.len(), 8);
+            assert_eq!(module.defs.len(), 6);
 
             let module_names: Vec<Option<Box<str>>> = deps
                 .into_iter()

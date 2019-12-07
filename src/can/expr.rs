@@ -308,12 +308,6 @@ pub fn canonicalize_expr(
 
             (expr, output, constraint)
         }
-        ast::Expr::ExposedImport(name) => {
-            let symbol = scope.symbol(name);
-            let ident = Ident::new(&[], name);
-
-            canonicalize_lookup(env, scope, ident, symbol, region, expected, var_store)
-        }
         ast::Expr::Var(module_parts, name) => {
             let symbol = if module_parts.is_empty() {
                 scope.symbol(name)

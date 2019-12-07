@@ -70,8 +70,6 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         | Nested(AccessorFunction(_))
         | Var(_, _)
         | Nested(Var(_, _))
-        | ExposedImport(_)
-        | Nested(ExposedImport(_))
         | MalformedIdent(_)
         | Nested(MalformedIdent(_))
         | MalformedClosure

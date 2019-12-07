@@ -2,7 +2,7 @@ use crate::can::def::Def;
 use crate::can::module::{canonicalize_module_defs, Module};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, SendSet};
+use crate::collections::{ImMap, SendSet, SendMap};
 use crate::ident::Ident;
 use crate::module::ModuleName;
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
@@ -213,7 +213,7 @@ async fn load_filename(
                     let mut scope =
                         Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
 
-                    let (defs, constraint) = parse_and_canonicalize_defs(
+                    let (defs, exposed_imports, constraint) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         declared_name.clone(),
@@ -224,6 +224,7 @@ async fn load_filename(
                     let module = Module {
                         name: Some(declared_name),
                         defs,
+                        exposed_imports,
                         constraint,
                     };
 
@@ -253,7 +254,7 @@ async fn load_filename(
                     let mut scope = Scope::new(".".into(), scope_from_imports);
 
                     // The app module has no declared name. Pass it as "".
-                    let (defs, constraint) = parse_and_canonicalize_defs(
+                    let (defs, exposed_imports, constraint) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         "".into(),
@@ -264,6 +265,7 @@ async fn load_filename(
                     let module = Module {
                         name: None,
                         defs,
+                        exposed_imports,
                         constraint,
                     };
 
@@ -288,7 +290,7 @@ fn parse_and_canonicalize_defs<'a, I>(
     exposes: I,
     scope: &mut Scope,
     var_store: &VarStore,
-) -> (Vec<Def>, Constraint)
+) -> (Vec<Def>, SendMap<Symbol, Variable>, Constraint)
 where
     I: Iterator<Item = Located<ExposesEntry<'a>>>,
 {
@@ -352,6 +354,10 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     let mut env: ImMap<Symbol, Variable> = ImMap::default();
     let mut constraints = Vec::with_capacity(loaded_deps.len() + 1);
 
+    for (symbol, var) in module.exposed_imports.iter() {
+        env.insert(symbol.clone(), var.clone());
+    }
+
     // Add each loaded module's top-level defs to the Env, so that when we go
     // to solve, looking up qualified idents gets the correct answer.
     //
@@ -360,6 +366,10 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     for loaded_dep in loaded_deps {
         match loaded_dep {
             Valid(valid_dep) => {
+                for (symbol, var) in valid_dep.exposed_imports {
+                    env.insert(symbol, var);
+                }
+
                 constraints.push(valid_dep.constraint);
 
                 for def in valid_dep.defs {
