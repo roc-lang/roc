@@ -133,10 +133,9 @@ pub enum Expr<'a> {
 
     // Lookups
     Var(&'a [&'a str], &'a str),
-    /// A var, possibly qualified, but with the module parts already joined
-    /// to the name. This was originally added for use with desugaring
-    /// exposed values (e.g. `bar` in `imports [ Foo.{ bar } ]` into Defs)
-    RawVar(&'a str),
+    /// A lookup added to the top of a module's AST because of an exposed import
+    /// (e.g. `bar` in `imports [ Foo.{ bar } ]`)
+    ExposedImport(&'a str),
 
     // Tags
     GlobalTag(&'a str),

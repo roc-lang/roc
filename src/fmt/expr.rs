@@ -40,7 +40,7 @@ pub fn fmt_expr<'a>(
 
             buf.push_str(name);
         }
-        RawVar(name) => {
+        ExposedImport(name) => {
             buf.push_str(name);
         }
         Apply(loc_expr, loc_args, _) => {
@@ -257,7 +257,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         | Access(_, _)
         | AccessorFunction(_)
         | Var(_, _)
-        | RawVar(_)
+        | ExposedImport(_)
         | MalformedIdent(_)
         | MalformedClosure
         | GlobalTag(_)

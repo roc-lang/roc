@@ -50,8 +50,15 @@ where
     // This is the part where we add those defs to the beginning of the module.
     for (ident, (symbol, region)) in scope.idents.iter() {
         if ident.first_char().is_lowercase() {
+            // TODO eventually, we should get rid of Expr::ExposedImport and instead:
+            //
+            // 1. Move this logic to right before the call to canonicalize_defs()
+            // 2. Change it to canonicalize the imports directly (since we can skip a bunch of
+            //    unnecessary scope-checking work that canonicalize_def has to do)
+            // 3. If there's an error, give a message about exposed imports as opposed to
+            //    something confusing referring to a (generaetd) def the author never wrote.
             let pattern = ast::Pattern::Identifier(arena.alloc(ident.clone().name()));
-            let expr = ast::Expr::RawVar(arena.alloc(symbol.clone().into_boxed_str()));
+            let expr = ast::Expr::ExposedImport(arena.alloc(symbol.clone().into_boxed_str()));
             let loc_pattern = Located {
                 value: pattern,
                 region: region.clone(),

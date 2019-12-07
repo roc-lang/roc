@@ -308,7 +308,7 @@ pub fn canonicalize_expr(
 
             (expr, output, constraint)
         }
-        ast::Expr::RawVar(name) => {
+        ast::Expr::ExposedImport(name) => {
             let symbol = scope.symbol(name);
             let ident = Ident::new(&[], name);
 
