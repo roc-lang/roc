@@ -162,6 +162,7 @@ mod test_load {
                 "WithBuiltins.divisionTest" => "Float",
                 "WithBuiltins.intTest" => "Int",
                 "WithBuiltins.constantInt" => "Int",
+                "WithBuiltins.divDep1ByDep2" => "Float",
             };
 
             assert_eq!(expected_types.len(), module.defs.len());
@@ -179,7 +180,7 @@ mod test_load {
                             panic!("Defs included an unexpected symbol: {:?}", symbol)
                         });
 
-                    assert_eq!(expected_type, &actual_str);
+                    assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
                 }
             }
         });
