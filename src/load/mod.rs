@@ -75,13 +75,13 @@ impl LoadedModule {
 /// The loaded_modules argument specifies which modules have already been loaded.
 /// It typically contains the standard modules, but is empty when loading the
 /// standard modules themselves.
-pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf, loaded_deps: &mut LoadedDeps) -> Loaded {
+pub async fn load<'a>(src_dir: PathBuf, filename: PathBuf, loaded_deps: &mut LoadedDeps, vars_created: usize) -> Loaded {
     let env = Env {
         src_dir: src_dir.clone(),
     };
     let (tx, mut rx): (Sender<DepNames>, Receiver<DepNames>) = mpsc::channel(1024);
     let main_tx = tx.clone();
-    let arc_var_store = Arc::new(VarStore::new());
+    let arc_var_store = Arc::new(VarStore::new(vars_created));
     let var_store = Arc::clone(&arc_var_store);
     let handle =
         tokio::spawn(async move { load_filename(&env, filename, main_tx, &var_store).await });

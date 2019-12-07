@@ -53,9 +53,9 @@ pub struct VarStore {
 }
 
 impl VarStore {
-    pub fn new() -> Self {
+    pub fn new(vars_already_created: usize) -> Self {
         VarStore {
-            next: AtomicUsize::new(0),
+            next: AtomicUsize::new(vars_already_created),
         }
     }
 

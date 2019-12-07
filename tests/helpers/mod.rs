@@ -122,7 +122,7 @@ pub fn uniq_expr_with(
         can_expr_with(arena, home, expr_str, &ImMap::default());
 
     // double check
-    let var_store2 = VarStore::new();
+    let var_store2 = VarStore::default();
 
     let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
@@ -168,7 +168,7 @@ pub fn can_expr_with(
         )
     });
 
-    let var_store = VarStore::new();
+    let var_store = VarStore::default();
     let variable = var_store.fresh();
     let expected = Expected::NoExpectation(Type::Variable(variable));
     let home = "Test";
