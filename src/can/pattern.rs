@@ -78,7 +78,7 @@ pub fn canonicalize_pattern<'a>(
 
     let can_pattern = match &pattern {
         &Identifier(ref name) => {
-            let lowercase_ident = Ident::Unqualified(name.to_string());
+            let lowercase_ident = Ident::Unqualified((*name).into());
 
             // We use shadowable_idents for this, and not scope, because for assignments
             // they are different. When canonicalizing a particular assignment, that new
@@ -105,7 +105,7 @@ pub fn canonicalize_pattern<'a>(
                 None => {
                     // Make sure we aren't shadowing something in the home module's scope.
                     let qualified_ident =
-                        Ident::Qualified(env.home.to_string(), lowercase_ident.name());
+                        Ident::Qualified(env.home.clone().into(), lowercase_ident.name());
 
                     match scope.idents.get(&qualified_ident) {
                         Some((_, region)) => {
@@ -354,7 +354,7 @@ pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, 
 
     match &pattern {
         Identifier(name) => {
-            idents.remove(&(Ident::Unqualified(name.to_string())));
+            idents.remove(&(Ident::Unqualified((*name).into())));
         }
         QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern in remove_idents.");
@@ -412,7 +412,7 @@ fn add_idents_from_pattern<'a>(
         Identifier(name) => {
             let symbol = scope.symbol(&name);
 
-            answer.push_back((Ident::Unqualified(name.to_string()), (symbol, *region)));
+            answer.push_back((Ident::Unqualified((*name).into()), (symbol, *region)));
         }
         QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern.");
