@@ -7,7 +7,7 @@ use crate::collections::ImMap;
 use crate::parse::ast::{self, ExposesEntry};
 use crate::region::Located;
 use crate::subs::VarStore;
-use crate::types::Constraint;
+use crate::types::Constraint::{self, *};
 use bumpalo::Bump;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +59,13 @@ where
     let (defs, _) = sort_can_defs(&mut env, defs, Output::default());
 
     let defs = defs.expect("TODO error canonicalizing module defs");
-    let constraint = Constraint::True; // TODO generate combined constraint from defs
 
-    (defs, constraint)
+    // TODO examine the patterns, extract toplevel identifiers from them,
+    // and verify that everything in the `exposes` list is actually present in
+    // that set of identifiers. You can't expose it if it wasn't defined!
+
+    // TODO incorporate rigids into here (possibly by making this be a Let instead
+    // of an And)
+
+    (defs, And(flex_info.constraints))
 }
