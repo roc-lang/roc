@@ -1,5 +1,6 @@
 use crate::can::def::Def;
 use crate::can::module::{canonicalize_module_defs, Module};
+use crate::solve::solve;
 use crate::subs::{Subs, Variable};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
@@ -337,4 +338,41 @@ fn expose(
             expose(module_name, *sub_entry, region)
         }
     }
+}
+
+pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
+    use LoadedModule::*;
+
+    let mut env: ImMap<Symbol, Variable> = ImMap::default();
+    let mut constraints = Vec::with_capacity(loaded_deps.len() + 1);
+
+    // Add each loaded module's top-level defs to the Env, so that when we go
+    // to solve, looking up qualified idents gets the correct answer.
+    //
+    // TODO filter these by what's actually exposed; don't add it to the Env
+    // unless the module actually exposes it!
+    for loaded_dep in loaded_deps {
+        match loaded_dep {
+            Valid(valid_dep)=> {
+                constraints.push(valid_dep.constraint);
+
+                for def in valid_dep.defs {
+                    for (symbol, var) in def.variables_by_symbol {
+                        env.insert(symbol, var);
+                    }
+                }
+            }
+
+            broken @ FileProblem{ .. } => { panic!("TODO handle FileProblem with loaded dep: {:?}", broken); }
+
+
+            broken @ ParsingFailed{ .. } => { panic!("TODO handle ParsingFailed with loaded dep: {:?}", broken);}
+        }
+    }
+
+    for constraint in constraints {
+        solve(&env, subs, &constraint);
+    }
+
+    solve(&env, subs, &module.constraint);
 }
