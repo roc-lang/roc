@@ -12,4 +12,6 @@ intTest = Int.highest
 
 constantInt = 5
 
-divDep1ByDep2 = Dep1.three / 2.0
+divDep1ByDep2 = Dep1.three / fromDep2
+
+fromDep2 = one

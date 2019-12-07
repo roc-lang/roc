@@ -163,6 +163,7 @@ mod test_load {
                 "WithBuiltins.intTest" => "Int",
                 "WithBuiltins.constantInt" => "Int",
                 "WithBuiltins.divDep1ByDep2" => "Float",
+                "WithBuiltins.fromDep2" => "Float",
             };
 
             assert_eq!(expected_types.len(), module.defs.len());
