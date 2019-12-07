@@ -315,27 +315,9 @@ pub fn canonicalize_expr(
                 Symbol::from_parts(module_parts, name)
             };
 
-            let mut output = Output::default();
             let ident = Ident::new(module_parts, name);
-            let (constraint, can_expr) =
-                match resolve_ident(&env, &scope, ident, &mut output.references) {
-                    Ok(sub_symbol) => (
-                        Lookup(symbol, expected, region),
-                        Var(var_store.fresh(), sub_symbol),
-                    ),
-                    Err(ident) => {
-                        let loc_ident = Located {
-                            region,
-                            value: ident,
-                        };
 
-                        env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
-
-                        (True, RuntimeError(UnrecognizedConstant(loc_ident)))
-                    }
-                };
-
-            (can_expr, output, constraint)
+            canonicalize_lookup(env, scope, ident, symbol, region, expected, var_store)
         }
 
         //ast::Expr::InterpolatedStr(pairs, suffix) => {
@@ -737,6 +719,39 @@ pub fn canonicalize_expr(
         output,
         constraint,
     )
+}
+
+#[inline(always)]
+fn canonicalize_lookup(
+    env: &mut Env,
+    scope: &Scope,
+    ident: Ident,
+    symbol: Symbol,
+    region: Region,
+    expected: Expected<Type>,
+    var_store: &VarStore,
+) -> (Expr, Output, Constraint) {
+    use self::Expr::*;
+
+    let mut output = Output::default();
+    let (constraint, can_expr) = match resolve_ident(&env, &scope, ident, &mut output.references) {
+        Ok(sub_symbol) => (
+            Lookup(symbol, expected, region),
+            Var(var_store.fresh(), sub_symbol),
+        ),
+        Err(ident) => {
+            let loc_ident = Located {
+                region,
+                value: ident,
+            };
+
+            env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
+
+            (True, RuntimeError(UnrecognizedConstant(loc_ident)))
+        }
+    };
+
+    (can_expr, output, constraint)
 }
 
 // TODO trim down these arguments

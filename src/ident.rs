@@ -51,12 +51,15 @@ pub enum Ident {
 
 impl Ident {
     pub fn new(module_parts: &[&str], name: &str) -> Self {
+        debug_assert!(!name.is_empty());
+
         if module_parts.is_empty() {
             Ident::Unqualified(name.into())
         } else {
             Ident::Qualified(module_parts.to_vec().join(".").into(), name.into())
         }
     }
+
     pub fn is_qualified(&self) -> bool {
         match self {
             Ident::Unqualified(_) => false,
@@ -69,6 +72,16 @@ impl Ident {
             Ident::Unqualified(name) => name,
             Ident::Qualified(_, name) => name,
         }
+    }
+
+    pub fn first_char(&self) -> char {
+        let opt_first = match self {
+            Ident::Unqualified(name) => name.chars().next(),
+            Ident::Qualified(_, name) => name.chars().next(),
+        };
+
+        opt_first
+            .unwrap_or_else(|| panic!("Attempted to get the first character of an empty Ident"))
     }
 }
 

@@ -161,8 +161,10 @@ mod test_load {
                 "WithBuiltins.divisionFn" => "Float, Float -> Float",
                 "WithBuiltins.divisionTest" => "Float",
                 "WithBuiltins.intTest" => "Int",
+                "WithBuiltins.x" => "Float",
                 "WithBuiltins.constantInt" => "Int",
                 "WithBuiltins.divDep1ByDep2" => "Float",
+                "WithBuiltins.fromDep2" => "Float",
             };
 
             assert_eq!(expected_types.len(), module.defs.len());
