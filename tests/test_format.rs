@@ -104,8 +104,9 @@ mod test_format {
 
     #[test]
     fn def_with_comment_and_extra_space() {
-        expr_formats_to(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
             # This variable is for greeting
 
 
@@ -114,37 +115,17 @@ mod test_format {
             a = "Hello"
             a
             "#
-        ), indoc!(
-            r#"
+            ),
+            indoc!(
+                r#"
             # This variable is for greeting
 
             a = "Hello"
             a
             "#
-        ));
+            ),
+        );
     }
-
-//    Tests fail! Comment disappears
-//
-//    #[test]
-//    fn string_with_comment_behind() {
-//        expr_formats_same(indoc!(
-//            r#"
-//            "a" # b
-//            "#
-//        ));
-//    }
-//
-//    #[test]
-//    fn string_with_comment_underneath() {
-//        expr_formats_same(
-//            indoc!(
-//            r#"
-//            "a"
-//            # b
-//            "#
-//        ));
-//    }
 
     #[test]
     fn func_def() {
@@ -157,26 +138,6 @@ mod test_format {
             "#
         ));
     }
-
-
-
-//    #[test]
-//    fn func_def_inserts_line() {
-//        expr_formats_to(indoc!(
-//            r#"
-//                f = \x y ->
-//                    x
-//                f 4
-//            "#
-//        ), indoc!(
-//            r#"
-//                f = \x y ->
-//                    x
-//
-//                f 4
-//            "#
-//        ));
-//    }
 
     #[test]
     fn basic_string() {
@@ -303,50 +264,6 @@ mod test_format {
             42
             "#
         ));
-
-//      None of these work! Rust panics.
-//
-//        expr_formats_same(indoc!(
-//            r#"
-//            x =
-//                5
-//
-//            42
-//            "#
-//        ));
-//
-//        expr_formats_same(indoc!(
-//            r#"
-//            x =
-//                # This is 5
-//                5
-//
-//            42
-//            "#
-//        ));
-//
-//        expr_formats_to(
-//            indoc!(
-//                r#"
-//                x =
-//
-//
-//                    # This is 5
-//                    5
-//
-//                42
-//                "#
-//            ),indoc!(
-//                r#"
-//                x =
-//
-//                    # This is 5
-//                    5
-//
-//                42
-//                "#
-//            )
-//        );
     }
 
     #[test]
@@ -360,8 +277,9 @@ mod test_format {
             "#
         ));
 
-        expr_formats_to(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
             x = 5
 
 
@@ -369,15 +287,17 @@ mod test_format {
 
             42
             "#
-        ),indoc!(
-            r#"
+            ),
+            indoc!(
+                r#"
             x = 5
 
             y = 10
 
             42
             "#
-        ));
+            ),
+        );
     }
 
     #[test]
@@ -513,17 +433,6 @@ mod test_format {
             identity 42
             "#
         ));
-
-//        Test fails! Parses into syntactically invalid Roc
-//
-//        expr_formats_same(indoc!(
-//            r#"
-//            identity = \a
-//                # Hello
-//                -> a
-//            identity 42
-//            "#
-//        ));
     }
 
     // RECORD LITERALS
@@ -574,30 +483,6 @@ mod test_format {
                 "#
             ),
         );
-
-//        Test fails on parse error
-//
-//        expr_formats_to(
-//            indoc!(
-//                r#"
-//                x = { x: 4
-//                    , y: 42
-//                }
-//
-//                x
-//                "#
-//            ),
-//            indoc!(
-//                r#"
-//                x = {
-//                    x: 4,
-//                    y: 42
-//                }
-//
-//                x
-//                "#
-//            ),
-//        );
     }
 
     #[test]
@@ -627,55 +512,6 @@ mod test_format {
         "#
         ));
     }
-
-//    Test Fails!
-//
-//    #[test]
-//    fn comment_in_f_forces_multiline() {
-//        expr_formats_to(
-//            indoc!(
-//                r#"
-//                if # Hello
-//                    foo (a b c) then a b c else d e f
-//                "#
-//            ), indoc!(
-//                r#"
-//                if
-//                    # Hello
-//                    foo (a b c)
-//                then
-//                    a b c
-//
-//                else
-//                    d e f
-//                "#
-//            ))
-//    }
-
-//    Test Fails!
-//
-//    #[test]
-//    fn multi_line_if() {
-//        expr_formats_same(indoc!(
-//            r#"
-//            if foo bar then
-//                a b c
-//
-//            else
-//                d e f
-//            "#
-//        ));
-//
-//        expr_formats_same(indoc!(
-//            r#"
-//            if foo (a b c) then
-//                a b c
-//
-//            else
-//                d e f
-//            "#
-//        ));
-//    }
 
     // CASE
 
