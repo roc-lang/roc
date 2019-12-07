@@ -31,11 +31,11 @@ impl Mark {
 impl fmt::Debug for Mark {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self == &Mark::none() {
-            write!(f, "Mark::none")
+            write!(f, "none")
         } else if self == &Mark::occurs() {
-            write!(f, "Mark::occurs")
+            write!(f, "occurs")
         } else if self == &Mark::get_var_names() {
-            write!(f, "Mark::get_var_names")
+            write!(f, "get_var_names")
         } else {
             write!(f, "Mark({})", self.0)
         }
