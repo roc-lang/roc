@@ -130,6 +130,10 @@ impl Subs {
         self.utable.new_key(value)
     }
 
+    pub fn fresh_unnamed_flex_var(&mut self) -> Variable {
+        self.fresh(unnamed_flex_var().into())
+    }
+
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
         let l_root = self.utable.get_root_key(left);
