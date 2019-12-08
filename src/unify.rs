@@ -16,15 +16,11 @@ struct RecordStructure {
     ext: Variable,
 }
 
-type UnifyResult = Result<(), Problem>;
-
-type Problems = Vec<Problem>;
+pub type Problems = Vec<Problem>;
 
 #[inline(always)]
-pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> UnifyResult {
-    if subs.equivalent(var1, var2) {
-        Ok(())
-    } else {
+pub fn unify(subs: &mut Subs, problems: &mut Problems, var1: Variable, var2: Variable) {
+    if !subs.equivalent(var1, var2) {
         let ctx = Context {
             first: var1,
             first_desc: subs.get(var1),
@@ -32,21 +28,24 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> UnifyResult {
             second_desc: subs.get(var2),
         };
 
-        unify_context(subs, ctx)
+        unify_context(subs, problems, ctx)
     }
 }
 
-fn unify_context(subs: &mut Subs, ctx: Context) -> UnifyResult {
+fn unify_context(subs: &mut Subs, problems: &mut Problems, ctx: Context) {
     match &ctx.first_desc.content {
-        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
-        RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
-        Structure(flat_type) => unify_structure(subs, &ctx, flat_type, &ctx.second_desc.content),
-        Alias(home, name, args, real_var) => unify_alias(subs, &ctx, home, name, args, real_var),
+        FlexVar(opt_name) => unify_flex(subs, problems, &ctx, opt_name, &ctx.second_desc.content),
+        RigidVar(name) => unify_rigid(subs, problems, &ctx, name, &ctx.second_desc.content),
+        Structure(flat_type) => {
+            unify_structure(subs, problems, &ctx, flat_type, &ctx.second_desc.content)
+        }
+        Alias(home, name, args, real_var) => {
+            unify_alias(subs, problems, &ctx, home, name, args, real_var)
+        }
         Error(problem) => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error(problem.clone()));
-
-            Err(problem.clone())
+            problems.push(problem.clone());
         }
     }
 }
@@ -54,12 +53,13 @@ fn unify_context(subs: &mut Subs, ctx: Context) -> UnifyResult {
 #[inline(always)]
 fn unify_alias(
     subs: &mut Subs,
+    problems: &mut Problems,
     ctx: &Context,
     home: &ModuleName,
     name: &Uppercase,
     args: &Vec<(Lowercase, Variable)>,
     real_var: &Variable,
-) -> UnifyResult {
+) {
     let other_content = &ctx.second_desc.content;
 
     match other_content {
@@ -70,46 +70,35 @@ fn unify_alias(
                 &ctx,
                 Alias(home.clone(), name.clone(), args.clone(), *real_var),
             );
-
-            Ok(())
         }
-        RigidVar(_) => unify(subs, *real_var, ctx.second),
+        RigidVar(_) => unify(subs, problems, *real_var, ctx.second),
         Alias(other_home, other_name, other_args, other_real_var) => {
             if name == other_name && home == other_home {
                 if args.len() == other_args.len() {
-                    let mut answer = Ok(());
-
                     for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
-                        let result = unify(subs, *l_var, *r_var);
-
-                        answer = answer.and_then(|()| result);
+                        unify(subs, problems, *l_var, *r_var);
                     }
 
                     merge(subs, &ctx, other_content.clone());
-
-                    answer
                 } else if args.len() > other_args.len() {
                     let problem = Problem::ExtraArguments;
 
                     merge(subs, &ctx, Error(problem.clone()));
-
-                    Err(problem)
+                    problems.push(problem.clone());
                 } else {
                     let problem = Problem::MissingArguments;
 
                     merge(subs, &ctx, Error(problem.clone()));
-
-                    Err(problem)
+                    problems.push(problem.clone());
                 }
             } else {
-                unify(subs, *real_var, *other_real_var)
+                unify(subs, problems, *real_var, *other_real_var)
             }
         }
-        Structure(_) => unify(subs, *real_var, ctx.second),
+        Structure(_) => unify(subs, problems, *real_var, ctx.second),
         Error(problem) => {
             merge(subs, ctx, Error(problem.clone()));
-
-            Err(problem.clone())
+            problems.push(problem.clone());
         }
     }
 }
@@ -117,44 +106,42 @@ fn unify_alias(
 #[inline(always)]
 fn unify_structure(
     subs: &mut Subs,
+    problems: &mut Problems,
     ctx: &Context,
     flat_type: &FlatType,
     other: &Content,
-) -> UnifyResult {
+) {
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
             merge(subs, ctx, Structure(flat_type.clone()));
-
-            Ok(())
         }
         RigidVar(_) => {
             let problem = Problem::GenericMismatch;
             // Type mismatch! Rigid can only unify with flex.
             merge(subs, ctx, Error(problem.clone()));
-
-            Err(problem)
+            problems.push(problem.clone());
         }
         Structure(ref other_flat_type) => {
             // Unify the two flat types
-            unify_flat_type(subs, ctx, flat_type, other_flat_type)
+            unify_flat_type(subs, problems, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, _, real_var) => unify(subs, ctx.first, *real_var),
+        Alias(_, _, _, real_var) => unify(subs, problems, ctx.first, *real_var),
         Error(problem) => {
             // Error propagates.
             merge(subs, ctx, Error(problem.clone()));
-
-            Err(problem.clone())
+            problems.push(problem.clone());
         }
     }
 }
 
 fn unify_record(
     subs: &mut Subs,
+    problems: &mut Problems,
     ctx: &Context,
     rec1: RecordStructure,
     rec2: RecordStructure,
-) -> UnifyResult {
+) {
     let fields1 = rec1.fields;
     let fields2 = rec2.fields;
     let shared_fields = fields1
@@ -165,8 +152,15 @@ fn unify_record(
 
     if unique_fields1.is_empty() {
         if unique_fields2.is_empty() {
-            unify(subs, rec1.ext, rec2.ext);
-            unify_shared_fields(subs, ctx, shared_fields, ImMap::default(), rec1.ext)
+            unify(subs, problems, rec1.ext, rec2.ext);
+            unify_shared_fields(
+                subs,
+                problems,
+                ctx,
+                shared_fields,
+                ImMap::default(),
+                rec1.ext,
+            )
         } else {
             // subRecord <- fresh context (Structure (Record1 uniqueFields2 ext2))
             // subUnify ext1 subRecord
@@ -193,18 +187,23 @@ fn unify_record(
 
 fn unify_shared_fields(
     subs: &mut Subs,
+    problems: &mut Problems,
     ctx: &Context,
     shared_fields: ImMap<Lowercase, (Variable, Variable)>,
     other_fields: ImMap<Lowercase, Variable>,
     ext: Variable,
-) -> UnifyResult {
+) {
     let mut matching_fields = ImMap::default();
     let num_shared_fields = shared_fields.len();
 
     for (name, (actual, expected)) in shared_fields {
+        let prev_problem_count = problems.len();
+
         // TODO another way to do this might be to pass around a problems vec
         // and check to see if its length increased after doing this unification.
-        if unify(subs, actual, expected).is_ok() {
+        unify(subs, problems, actual, expected);
+
+        if problems.len() == prev_problem_count {
             matching_fields.insert(name, actual);
         }
     }
@@ -213,43 +212,43 @@ fn unify_shared_fields(
         let flat_type = FlatType::Record(matching_fields.union(other_fields), ext);
 
         merge(subs, ctx, Structure(flat_type));
-
-        Ok(())
     } else {
         let problem = Problem::GenericMismatch;
 
         // Type mismatch! Rigid can only unify with flex.
         merge(subs, ctx, Error(problem.clone()));
-
-        Err(problem)
+        problems.push(problem.clone());
     }
 }
 
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
+    problems: &mut Problems,
     ctx: &Context,
     left: &FlatType,
     right: &FlatType,
-) -> UnifyResult {
+) {
     use crate::subs::FlatType::*;
 
     match (left, right) {
         (EmptyRecord, EmptyRecord) => {
             merge(subs, ctx, Structure(left.clone()));
-
-            Ok(())
         }
 
-        (Record(fields, ext), EmptyRecord) if fields.is_empty() => unify(subs, *ext, ctx.second),
+        (Record(fields, ext), EmptyRecord) if fields.is_empty() => {
+            unify(subs, problems, *ext, ctx.second)
+        }
 
-        (EmptyRecord, Record(fields, ext)) if fields.is_empty() => unify(subs, ctx.first, *ext),
+        (EmptyRecord, Record(fields, ext)) if fields.is_empty() => {
+            unify(subs, problems, ctx.first, *ext)
+        }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
-            let rec1 = gather_fields(subs, fields1.clone(), *ext1);
-            let rec2 = gather_fields(subs, fields2.clone(), *ext2);
+            let rec1 = gather_fields(subs, problems, fields1.clone(), *ext1);
+            let rec2 = gather_fields(subs, problems, fields2.clone(), *ext2);
 
-            unify_record(subs, ctx, rec1, rec2)
+            unify_record(subs, problems, ctx, rec1, rec2)
         }
         (
             Apply {
@@ -263,7 +262,7 @@ fn unify_flat_type(
                 args: r_args,
             },
         ) if l_module_name == r_module_name && l_type_name == r_type_name => {
-            unify_zip(subs, l_args.iter(), r_args.iter());
+            unify_zip(subs, problems, l_args.iter(), r_args.iter());
 
             merge(
                 subs,
@@ -274,72 +273,61 @@ fn unify_flat_type(
                     args: (*r_args).clone(),
                 }),
             );
-
-            Ok(())
         }
         (Func(l_args, l_ret), Func(r_args, r_ret)) => {
             if l_args.len() == r_args.len() {
-                unify_zip(subs, l_args.iter(), r_args.iter());
-                let answer = unify(subs, *l_ret, *r_ret);
-
+                unify_zip(subs, problems, l_args.iter(), r_args.iter());
+                unify(subs, problems, *l_ret, *r_ret);
                 merge(subs, ctx, Structure(Func((*r_args).clone(), *r_ret)));
-
-                answer
             } else if l_args.len() > r_args.len() {
                 merge(subs, ctx, Error(Problem::ExtraArguments));
-
-                Ok(())
             } else {
                 merge(subs, ctx, Error(Problem::MissingArguments));
-
-                Ok(())
             }
         }
         _ => {
             let problem = Problem::GenericMismatch;
 
             merge(subs, ctx, Error(problem.clone()));
-
-            Err(problem)
+            problems.push(problem.clone());
         }
     }
 }
 
-fn unify_zip<'a, I>(subs: &mut Subs, left_iter: I, right_iter: I)
+fn unify_zip<'a, I>(subs: &mut Subs, problems: &mut Problems, left_iter: I, right_iter: I)
 where
     I: Iterator<Item = &'a Variable>,
 {
     for (&l_var, &r_var) in left_iter.zip(right_iter) {
-        unify(subs, l_var, r_var);
+        unify(subs, problems, l_var, r_var);
     }
 }
 
 #[inline(always)]
-fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &str, other: &Content) -> UnifyResult {
+fn unify_rigid(
+    subs: &mut Subs,
+    problems: &mut Problems,
+    ctx: &Context,
+    name: &str,
+    other: &Content,
+) {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
             merge(subs, ctx, RigidVar(name.into()));
-
-            Ok(())
         }
         RigidVar(_) | Structure(_) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             merge(subs, ctx, Error(Problem::GenericMismatch));
-
-            Ok(())
         }
         Alias(_, _, _, _) => {
             panic!("TODO unify_rigid Alias");
-
-            Ok(())
         }
         Error(problem) => {
             // Error propagates.
             merge(subs, ctx, Error(problem.clone()));
-
-            Err(problem.clone())
+            problems.push(problem.clone());
         }
     }
 }
@@ -347,34 +335,31 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &str, other: &Content) -> U
 #[inline(always)]
 fn unify_flex(
     subs: &mut Subs,
+    problems: &mut Problems,
     ctx: &Context,
     opt_name: &Option<Box<str>>,
     other: &Content,
-) -> UnifyResult {
+) {
     match other {
         FlexVar(None) => {
             // If both are flex, and only left has a name, keep the name around.
             merge(subs, ctx, FlexVar(opt_name.clone()));
-
-            Ok(())
         }
         FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _, _) => {
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
             merge(subs, ctx, other.clone());
-
-            Ok(())
         }
         Error(problem) => {
             merge(subs, ctx, Error(problem.clone()));
-
-            Err(problem.clone())
+            problems.push(problem.clone());
         }
     }
 }
 
 fn gather_fields(
     subs: &mut Subs,
+    problems: &mut Problems,
     fields: ImMap<Lowercase, Variable>,
     var: Variable,
 ) -> RecordStructure {
@@ -382,12 +367,12 @@ fn gather_fields(
 
     match subs.get(var).content {
         Structure(Record(sub_fields, sub_ext)) => {
-            gather_fields(subs, fields.union(sub_fields), sub_ext)
+            gather_fields(subs, problems, fields.union(sub_fields), sub_ext)
         }
 
         Alias(_, _, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
-            gather_fields(subs, fields, var)
+            gather_fields(subs, problems, fields, var)
         }
 
         _ => RecordStructure { fields, ext: var },
