@@ -2,6 +2,7 @@
 pub mod parser;
 pub mod ast;
 pub mod blankspace;
+pub mod desugared;
 pub mod ident;
 pub mod keyword;
 pub mod module;
