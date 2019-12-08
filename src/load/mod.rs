@@ -13,6 +13,7 @@ use crate::solve::solve;
 use crate::subs::VarStore;
 use crate::subs::{Subs, Variable};
 use crate::types::Constraint;
+use crate::unify::Problems;
 use bumpalo::Bump;
 use futures::future::join_all;
 use std::io;
@@ -348,7 +349,12 @@ fn expose(
     }
 }
 
-pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
+pub fn solve_loaded(
+    module: &Module,
+    problems: &mut Problems,
+    subs: &mut Subs,
+    loaded_deps: LoadedDeps,
+) {
     use LoadedModule::*;
 
     let mut vars_by_symbol: ImMap<Symbol, Variable> = ImMap::default();
@@ -403,8 +409,8 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     }
 
     for constraint in constraints {
-        solve(&vars_by_symbol, subs, &constraint);
+        solve(&vars_by_symbol, problems, subs, &constraint);
     }
 
-    solve(&vars_by_symbol, subs, &module.constraint);
+    solve(&vars_by_symbol, problems, subs, &module.constraint);
 }

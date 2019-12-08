@@ -1,5 +1,6 @@
 use crate::can::def::{can_defs_with_return, Def, Info};
 use crate::can::env::Env;
+use crate::can::ident::Lowercase;
 use crate::can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
@@ -637,8 +638,37 @@ pub fn canonicalize_expr(
 
             (expr, output, And(constraints))
         }
-        ast::Expr::Access(_, _)
-        | ast::Expr::AccessorFunction(_)
+        ast::Expr::Access(record_expr, field) => {
+            let ext_var = var_store.fresh();
+            let field_var = var_store.fresh();
+            let ext_type = Type::Variable(ext_var);
+            let field_type = Type::Variable(field_var);
+
+            let mut rec_field_types = SendMap::default();
+
+            rec_field_types.insert(Lowercase::from_unqualified_ident(field), field_type.clone());
+
+            let record_type = Type::Record(rec_field_types, Box::new(ext_type));
+            let record_expected = Expected::NoExpectation(record_type);
+
+            let (loc_expr, output, mut constraint) = canonicalize_expr(
+                &ImMap::default(),
+                env,
+                var_store,
+                scope,
+                region,
+                record_expr,
+                record_expected,
+            );
+
+            constraint = exists(
+                vec![field_var, ext_var],
+                And(vec![constraint, Eq(field_type, expected, region)]),
+            );
+
+            (loc_expr.value, output, constraint)
+        }
+        ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)
         | ast::Expr::GlobalTag(_)
         | ast::Expr::PrivateTag(_)
