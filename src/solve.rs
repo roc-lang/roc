@@ -146,7 +146,7 @@ fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: T
             for (arg, arg_type) in args {
                 let arg_var = type_to_variable(subs, aliases, arg_type.clone());
 
-                arg_vars.push((arg.clone(), arg_var.clone()));
+                arg_vars.push((arg.clone(), arg_var));
                 new_aliases.insert(arg.into(), arg_var);
             }
 
