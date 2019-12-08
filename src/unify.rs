@@ -162,26 +162,46 @@ fn unify_record(
                 rec1.ext,
             )
         } else {
-            // subRecord <- fresh context (Structure (Record1 uniqueFields2 ext2))
-            // subUnify ext1 subRecord
-            // unifySharedFields context sharedFields Map.empty subRecord
-            panic!("TODO 1");
+            let flat_type = FlatType::Record(unique_fields2, rec2.ext);
+            let sub_record = subs.fresh(Structure(flat_type).into());
+
+            unify(subs, problems, rec1.ext, sub_record);
+
+            unify_shared_fields(
+                subs,
+                problems,
+                ctx,
+                shared_fields,
+                ImMap::default(),
+                sub_record,
+            );
         }
     } else if unique_fields2.is_empty() {
-        // subRecord <- fresh context (Structure (Record1 uniqueFields1 ext1))
-        // subUnify subRecord ext2
-        // unifySharedFields context sharedFields Map.empty subRecord
-        panic!("TODO 2");
+        let flat_type = FlatType::Record(unique_fields1, rec1.ext);
+        let sub_record = subs.fresh(Structure(flat_type).into());
+
+        unify(subs, problems, sub_record, rec2.ext);
+
+        unify_shared_fields(
+            subs,
+            problems,
+            ctx,
+            shared_fields,
+            ImMap::default(),
+            sub_record,
+        );
     } else {
-        // let otherFields = Map.union uniqueFields1 uniqueFields2
-        // ext <- fresh context Type.unnamedFlexVar
-        // sub1 <- fresh context (Structure (Record1 uniqueFields1 ext))
-        // sub2 <- fresh context (Structure (Record1 uniqueFields2 ext))
-        // subUnify ext1 sub2
-        // subUnify sub1 ext2
-        // unifySharedFields context sharedFields otherFields ext
-        //
-        panic!("TODO 3");
+        let other_fields = unique_fields1.clone().union(unique_fields2.clone());
+        let ext = subs.fresh_unnamed_flex_var();
+        let flat_type1 = FlatType::Record(unique_fields1, rec1.ext);
+        let sub1 = subs.fresh(Structure(flat_type1).into());
+        let flat_type2 = FlatType::Record(unique_fields2, rec2.ext);
+        let sub2 = subs.fresh(Structure(flat_type2).into());
+
+        unify(subs, problems, rec1.ext, sub2);
+        unify(subs, problems, sub1, rec2.ext);
+
+        unify_shared_fields(subs, problems, ctx, shared_fields, other_fields, ext);
     }
 }
 

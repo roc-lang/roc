@@ -87,11 +87,9 @@ impl fmt::Debug for Type {
             }
             Type::Alias(_, _, _, _) => {
                 panic!("TODO fmt type aliases");
-                let x = 5;
             }
             Type::Record(_, _) => {
                 panic!("TODO fmt record types");
-                let x = 5;
             }
         }
     }

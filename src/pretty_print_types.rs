@@ -91,7 +91,6 @@ fn find_names_needed(
         }
         Structure(Record(_, _)) => {
             panic!("TODO find_names_needed Record");
-            let x = 5;
         }
         RigidVar(name) => {
             // User-defined names are already taken.
@@ -100,7 +99,6 @@ fn find_names_needed(
         }
         Alias(_, _, _, _) => {
             panic!("TODO find_names_needed Alias");
-            let x = 5;
         }
         Error(_) | Structure(Erroneous(_)) | Structure(EmptyRecord) => {
             // Errors and empty records don't need names.
@@ -183,7 +181,6 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
         Structure(flat_type) => write_flat_type(flat_type, subs, buf, parens),
         Alias(_, _, _, _) => {
             panic!("TODO write_content Alias");
-            let x = 5;
         }
         Error(_) => buf.push_str("<type mismatch>"),
     }
@@ -209,7 +206,6 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
         Func(args, ret) => write_fn(args, ret, subs, buf, parens),
         Record(_, _) => {
             panic!("TODO write_flat_type Record");
-            let x = 5;
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
