@@ -233,10 +233,14 @@ pub enum TypeAnnotation<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssignedField<'a, Val> {
     // Both a label and a value, e.g. `{ name: "blah" }`
-    LabeledValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+    LabeledValue(
+        Loc<UnqualifiedIdent<'a>>,
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<Val>,
+    ),
 
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-    LabelOnly(Loc<&'a str>),
+    LabelOnly(Loc<UnqualifiedIdent<'a>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
@@ -244,10 +248,6 @@ pub enum AssignedField<'a, Val> {
 
     /// A malformed assigned field, which will code gen to a runtime error
     Malformed(&'a str),
-}
-
-pub enum AstExtras<'a> {
-    a,
 }
 
 #[derive(Debug, PartialEq)]
