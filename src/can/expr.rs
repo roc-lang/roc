@@ -80,7 +80,7 @@ pub enum Expr {
     Closure(Symbol, Recursive, Vec<Located<Pattern>>, Box<Located<Expr>>),
 
     // Product Types
-    Record(Variable, Vec<Located<(Box<str>, Located<Expr>)>>),
+    Record(Variable, SendMap<Lowercase, Located<Expr>>),
     EmptyRecord,
 
     // Compiles, but will crash if reached
@@ -129,7 +129,27 @@ pub fn canonicalize_expr(
 
                 (EmptyRecord, Output::default(), constraint)
             } else {
-                panic!("TODO canonicalize nonempty record");
+                // let branch_var = var_store.fresh();
+                // let branch_type = Variable(branch_var);
+                // let mut branch_cons = Vec::with_capacity(branches.len());
+                let mut field_map = SendMap::default();
+                let mut output = Output::default();
+
+                for loc_field in fields.iter() {
+                    let (label, field_expr, field_out, field_con) = canonicalize_field(
+                        rigids,
+                        env,
+                        var_store,
+                        scope,
+                        field_map,
+                        &loc_field.value,
+                        loc_field.region,
+                    );
+
+                    output.references = output.references.union(field_out);
+                }
+
+                (Record(record_var, field_map), output, constraint)
             }
         }
         ast::Expr::Str(string) => {
@@ -1072,6 +1092,48 @@ fn resolve_ident<'a>(
 
                 Ok(symbol)
             }
+        }
+    }
+}
+
+fn canonicalize_field<'a>(
+    rigids: &Rigids,
+    env: &mut Env,
+    var_store: &VarStore,
+    scope: &mut Scope,
+    field_map: SendMap<Lowercase, Expr>,
+    field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
+    region: Region,
+) -> (Lowercase, Located<Expr>, Output, Constraint) {
+    use crate::parse::ast::AssignedField::*;
+
+    match field {
+        // Both a label and a value, e.g. `{ name: "blah" }`
+        LabeledValue(label, _, loc_expr) => {
+            let (loc_can_expr, output, constraint) = canonicalize_expr(
+                rigids,
+                env,
+                var_store,
+                scope,
+                loc_expr.region,
+                &loc_expr.value,
+                expected,
+            );
+
+            (label, loc_can_expr, output, constraint)
+        }
+
+        // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
+        LabelOnly(loc_label) => {
+            panic!("Somehow a LabelOnly record field was not desugared!");
+        }
+
+        SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
+            canonicalize_field(rigids, env, var_store, scope, field_map, sub_field, region)
+        }
+
+        Malformed(string) => {
+            panic!("TODO canonicalize malformed record field");
         }
     }
 }
