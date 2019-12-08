@@ -1,6 +1,7 @@
 use crate::can::def::Def;
 use crate::can::module::{canonicalize_module_defs, Module};
 use crate::can::scope::Scope;
+use crate::unify::Problems;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap, SendSet};
 use crate::ident::Ident;
@@ -348,7 +349,7 @@ fn expose(
     }
 }
 
-pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
+pub fn solve_loaded(module: &Module, problems: &mut Problems, subs: &mut Subs, loaded_deps: LoadedDeps) {
     use LoadedModule::*;
 
     let mut vars_by_symbol: ImMap<Symbol, Variable> = ImMap::default();
@@ -403,8 +404,8 @@ pub fn solve_loaded(module: &Module, subs: &mut Subs, loaded_deps: LoadedDeps) {
     }
 
     for constraint in constraints {
-        solve(&vars_by_symbol, subs, &constraint);
+        solve(&vars_by_symbol, problems, subs, &constraint);
     }
 
-    solve(&vars_by_symbol, subs, &module.constraint);
+    solve(&vars_by_symbol, problems, subs, &module.constraint);
 }
