@@ -31,11 +31,6 @@ mod test_infer {
     }
 
     #[test]
-    fn empty_record() {
-        infer_eq("{}", "{}");
-    }
-
-    #[test]
     fn int_literal() {
         infer_eq("5", "Int");
     }
@@ -811,5 +806,17 @@ mod test_infer {
             ),
             "Int",
         );
+    }
+
+    // RECORDS
+
+    #[test]
+    fn empty_record() {
+        infer_eq("{}", "{}");
+    }
+
+    #[test]
+    fn one_field_record() {
+        infer_eq("{ x: 5 }", "{ x : Int}");
     }
 }
