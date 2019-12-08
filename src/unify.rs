@@ -40,7 +40,7 @@ fn unify_context(subs: &mut Subs, problems: &mut Problems, ctx: Context) {
             unify_structure(subs, problems, &ctx, flat_type, &ctx.second_desc.content)
         }
         Alias(home, name, args, real_var) => {
-            unify_alias(subs, problems, &ctx, home, name, args, real_var)
+            unify_alias(subs, problems, &ctx, home, name, args, *real_var)
         }
         Error(problem) => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
@@ -57,8 +57,8 @@ fn unify_alias(
     ctx: &Context,
     home: &ModuleName,
     name: &Uppercase,
-    args: &Vec<(Lowercase, Variable)>,
-    real_var: &Variable,
+    args: &[(Lowercase, Variable)],
+    real_var: Variable,
 ) {
     let other_content = &ctx.second_desc.content;
 
@@ -68,10 +68,10 @@ fn unify_alias(
             merge(
                 subs,
                 &ctx,
-                Alias(home.clone(), name.clone(), args.clone(), *real_var),
+                Alias(home.clone(), name.clone(), args.to_owned(), real_var),
             );
         }
-        RigidVar(_) => unify(subs, problems, *real_var, ctx.second),
+        RigidVar(_) => unify(subs, problems, real_var, ctx.second),
         Alias(other_home, other_name, other_args, other_real_var) => {
             if name == other_name && home == other_home {
                 if args.len() == other_args.len() {
@@ -92,10 +92,10 @@ fn unify_alias(
                     problems.push(problem.clone());
                 }
             } else {
-                unify(subs, problems, *real_var, *other_real_var)
+                unify(subs, problems, real_var, *other_real_var)
             }
         }
-        Structure(_) => unify(subs, problems, *real_var, ctx.second),
+        Structure(_) => unify(subs, problems, real_var, ctx.second),
         Error(problem) => {
             merge(subs, ctx, Error(problem.clone()));
             problems.push(problem.clone());
