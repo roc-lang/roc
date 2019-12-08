@@ -80,7 +80,7 @@ pub enum Expr {
     Closure(Symbol, Recursive, Vec<Located<Pattern>>, Box<Located<Expr>>),
 
     // Product Types
-    Record(Variable, Vec<Located<(Box<str>, Located<Expr>)>>),
+    Record(Variable, SendMap<Located<Lowercase>, Located<Expr>>),
     EmptyRecord,
 
     // Compiles, but will crash if reached
@@ -129,7 +129,21 @@ pub fn canonicalize_expr(
 
                 (EmptyRecord, Output::default(), constraint)
             } else {
-                panic!("TODO canonicalize nonempty record");
+                // let branch_var = var_store.fresh();
+                // let branch_type = Variable(branch_var);
+                // let mut branch_cons = Vec::with_capacity(branches.len());
+                let mut field_map = SendMap::default();
+                let mut output = Output::default();
+
+                for field in fields.into_iter() {
+                    let field_references = canonicalize_field(
+                        rigids, env, var_store, scope, region, expr, field_map, field,
+                    );
+
+                    output.references = output.references.union(field_references);
+                }
+
+                (Record(record_var, field_map), output, constraint)
             }
         }
         ast::Expr::Str(string) => {
@@ -1074,4 +1088,16 @@ fn resolve_ident<'a>(
             }
         }
     }
+}
+
+fn canonicalize_field<'a>(
+    rigids: &Rigids,
+    env: &mut Env,
+    var_store: &VarStore,
+    scope: &mut Scope,
+    region: Region,
+    expr: &'a ast::Expr<'a>,
+    field_map: SendMap<Lowercase, Expr>,
+    field: ast::AssignedField<'a, ast::Expr<'a>>,
+) -> Output {
 }

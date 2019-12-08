@@ -246,6 +246,10 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
+pub enum AstExtras<'a> {
+    a,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum CommentOrNewline<'a> {
     Newline,
