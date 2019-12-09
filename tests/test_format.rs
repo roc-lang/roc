@@ -144,16 +144,18 @@ mod test_format {
 
     #[test]
     fn new_line_above_return() {
-        expr_formats_to(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
                 f = \x y ->
                     y = 4
                     z = 8
                     x
                 "string"
             "#
-        ), indoc!(
-            r#"
+            ),
+            indoc!(
+                r#"
                 f = \x y ->
                     y = 4
                     z = 8
@@ -162,7 +164,8 @@ mod test_format {
 
                 "string"
             "#
-        ));
+            ),
+        );
 
         expr_formats_same(indoc!(
             r#"
@@ -317,7 +320,7 @@ mod test_format {
 
         expr_formats_to(
             indoc!(
-            r#"
+                r#"
             x = 5
 
 
@@ -327,7 +330,7 @@ mod test_format {
             "#
             ),
             indoc!(
-             r#"
+                r#"
             x = 5
 
             y = 10
@@ -338,29 +341,29 @@ mod test_format {
         );
     }
 
-//    #[test]
-//    fn defs_with_defs() {
-//        expr_formats_to(indoc!(
-//            r#"
-//            x =
-//                y = 4
-//                z = 8
-//                w
-//
-//            x
-//            "#
-//        ), indoc!(
-//            r#"
-//            x =
-//                y = 4
-//                z = 8
-//
-//                w
-//
-//            x
-//            "#
-//        ));
-//    }
+    //    #[test]
+    //    fn defs_with_defs() {
+    //        expr_formats_to(indoc!(
+    //            r#"
+    //            x =
+    //                y = 4
+    //                z = 8
+    //                w
+    //
+    //            x
+    //            "#
+    //        ), indoc!(
+    //            r#"
+    //            x =
+    //                y = 4
+    //                z = 8
+    //
+    //                w
+    //
+    //            x
+    //            "#
+    //        ));
+    //    }
 
     #[test]
     fn comment_between_two_defs() {

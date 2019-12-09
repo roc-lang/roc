@@ -1,7 +1,7 @@
 use crate::fmt::def::fmt_def;
 use crate::fmt::pattern::fmt_pattern;
 use crate::fmt::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, INDENT};
-use crate::parse::ast::{AssignedField, Base, Expr, Pattern, CommentOrNewline};
+use crate::parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern};
 use crate::region::Located;
 use bumpalo::collections::{String, Vec};
 
@@ -248,25 +248,22 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 
     match expr {
         SpaceBefore(_, spaces) => {
-            let number_of_newlines = spaces.iter().fold(0, |acc, comment_or_newline| {
-                match comment_or_newline {
-                    CommentOrNewline::Newline => {
-                        acc + 1
-                    },
-                    CommentOrNewline::LineComment(_) => {
-                        acc
-                    },
-                }
-            });
+            let number_of_newlines =
+                spaces
+                    .iter()
+                    .fold(0, |acc, comment_or_newline| match comment_or_newline {
+                        CommentOrNewline::Newline => acc + 1,
+                        CommentOrNewline::LineComment(_) => acc,
+                    });
 
             let enough_newlines = number_of_newlines > 1;
 
             enough_newlines
-        },
+        }
 
         Nested(nested_expr) => empty_line_before_expr(nested_expr),
 
-        _ => false
+        _ => false,
     }
 }
 
