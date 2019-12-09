@@ -317,7 +317,7 @@ mod test_format {
 
         expr_formats_to(
             indoc!(
-                r#"
+            r#"
             x = 5
 
 
@@ -327,7 +327,7 @@ mod test_format {
             "#
             ),
             indoc!(
-                r#"
+             r#"
             x = 5
 
             y = 10
@@ -337,6 +337,30 @@ mod test_format {
             ),
         );
     }
+
+//    #[test]
+//    fn defs_with_defs() {
+//        expr_formats_to(indoc!(
+//            r#"
+//            x =
+//                y = 4
+//                z = 8
+//                w
+//
+//            x
+//            "#
+//        ), indoc!(
+//            r#"
+//            x =
+//                y = 4
+//                z = 8
+//
+//                w
+//
+//            x
+//            "#
+//        ));
+//    }
 
     #[test]
     fn comment_between_two_defs() {
