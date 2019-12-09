@@ -89,10 +89,16 @@ fn find_names_needed(
 
             find_names_needed(ret_var, subs, roots, root_appearances, names_taken);
         }
+        Structure(Record(_, _)) => {
+            panic!("TODO find_names_needed Record");
+        }
         RigidVar(name) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
             names_taken.insert(name.to_string());
+        }
+        Alias(_, _, _, _) => {
+            panic!("TODO find_names_needed Alias");
         }
         Error(_) | Structure(Erroneous(_)) | Structure(EmptyRecord) => {
             // Errors and empty records don't need names.
@@ -173,6 +179,9 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
         FlexVar(None) => buf.push_str(WILDCARD),
         RigidVar(name) => buf.push_str(&name),
         Structure(flat_type) => write_flat_type(flat_type, subs, buf, parens),
+        Alias(_, _, _, _) => {
+            panic!("TODO write_content Alias");
+        }
         Error(_) => buf.push_str("<type mismatch>"),
     }
 }
@@ -195,6 +204,9 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         Func(args, ret) => write_fn(args, ret, subs, buf, parens),
+        Record(_, _) => {
+            panic!("TODO write_flat_type Record");
+        }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }
