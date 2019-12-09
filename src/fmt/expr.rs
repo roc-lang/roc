@@ -248,7 +248,7 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 
     match expr {
         SpaceBefore(_, spaces) => {
-            let number_of_newline = spaces.iter().fold(0, |acc, comment_or_newline| {
+            let number_of_newlines = spaces.iter().fold(0, |acc, comment_or_newline| {
                 match comment_or_newline {
                     CommentOrNewline::Newline => {
                         acc + 1
@@ -259,7 +259,7 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
                 }
             });
 
-            let enough_newlines = number_of_newline > 1;
+            let enough_newlines = number_of_newlines > 1;
 
             enough_newlines
         },
