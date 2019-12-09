@@ -97,6 +97,7 @@ mod test_format {
             r#"
             # This variable is for greeting
             a = "Hello"
+
             a
             "#
         ));
@@ -113,6 +114,7 @@ mod test_format {
 
 
             a = "Hello"
+
             a
             "#
             ),
@@ -121,6 +123,7 @@ mod test_format {
             # This variable is for greeting
 
             a = "Hello"
+
             a
             "#
             ),
@@ -135,6 +138,41 @@ mod test_format {
                     x
 
                 f 4
+            "#
+        ));
+    }
+
+    #[test]
+    fn new_line_above_return() {
+        expr_formats_to(indoc!(
+            r#"
+                f = \x y ->
+                    y = 4
+                    z = 8
+                    x
+                "string"
+            "#
+        ), indoc!(
+            r#"
+                f = \x y ->
+                    y = 4
+                    z = 8
+
+                    x
+
+                "string"
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                f = \x y ->
+                    a = 3
+                    b = 6
+
+                    c
+
+                "string"
             "#
         ));
     }
@@ -390,6 +428,7 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             { x, y } = 5
+
             { x: 5 } = { x: 5 }
 
             42
@@ -429,6 +468,7 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             identity = \a -> a
+
             # Hello
             identity 42
             "#
