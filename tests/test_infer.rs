@@ -20,7 +20,8 @@ mod test_infer {
     fn infer_eq(src: &str, expected: &str) {
         let (_, _output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
-        let content = infer_expr(&mut subs, &constraint, variable);
+        let mut unify_problems = Vec::new();
+        let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
 
         name_all_type_vars(variable, &mut subs);
 

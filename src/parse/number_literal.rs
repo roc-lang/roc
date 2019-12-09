@@ -139,7 +139,7 @@ where
 
     let next_state = state.advance_without_indenting(bytes_parsed)?;
 
-    Ok((dbg!(expr), next_state))
+    Ok((expr, next_state))
 }
 
 #[derive(Debug, PartialEq, Eq)]

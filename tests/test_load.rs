@@ -154,7 +154,8 @@ mod test_load {
 
             assert_eq!(module.name, Some("WithBuiltins".into()));
 
-            solve_loaded(&module, &mut subs, deps);
+            let mut unify_problems = Vec::new();
+            solve_loaded(&module, &mut unify_problems, &mut subs, deps);
 
             let expected_types = hashmap! {
                 "WithBuiltins.floatTest" => "Float",

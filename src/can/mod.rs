@@ -1,6 +1,7 @@
 pub mod def;
 pub mod env;
 pub mod expr;
+pub mod ident;
 pub mod module;
 pub mod num;
 pub mod operator;
