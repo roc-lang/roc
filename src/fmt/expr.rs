@@ -256,9 +256,7 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
                         CommentOrNewline::LineComment(_) => acc,
                     });
 
-            let enough_newlines = number_of_newlines > 1;
-
-            enough_newlines
+            number_of_newlines > 1
         }
 
         Nested(nested_expr) => empty_line_before_expr(nested_expr),
