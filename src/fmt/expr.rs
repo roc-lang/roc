@@ -248,15 +248,22 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 
     match expr {
         SpaceBefore(_, spaces) => {
-            let number_of_newlines =
-                spaces
-                    .iter()
-                    .fold(0, |acc, comment_or_newline| match comment_or_newline {
-                        CommentOrNewline::Newline => acc + 1,
-                        CommentOrNewline::LineComment(_) => acc,
-                    });
+            let mut has_at_least_one_newline = false;
 
-            number_of_newlines > 1
+            for comment_or_newline in spaces.iter() {
+                match comment_or_newline {
+                    CommentOrNewline::Newline => {
+                        if has_at_least_one_newline {
+                            return true;
+                        } else {
+                            has_at_least_one_newline = true;
+                        }
+                    }
+                    CommentOrNewline::LineComment(_) => {}
+                }
+            }
+
+            false
         }
 
         Nested(nested_expr) => empty_line_before_expr(nested_expr),
