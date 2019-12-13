@@ -1193,6 +1193,52 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn type_signature_def() {
+        let arena = Bump::new();
+        let newline = bumpalo::vec![in &arena; Newline];
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let signature = Def::Annotation(
+            Located::new(0, 0, 0, 3, Identifier("foo")),
+            Located::new(
+                0,
+                0,
+                6,
+                9,
+                roc::parse::ast::TypeAnnotation::Apply(&[], "Int", &[]),
+            ),
+        );
+        let def = Def::Body(
+            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+            arena.alloc(Located::new(1, 1, 6, 7, Int("4"))),
+        );
+        let loc_def = &*arena.alloc(Located::new(
+            1,
+            1,
+            0,
+            7,
+            Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice()),
+        ));
+
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                foo : Int
+                foo = 4
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
     // CASE
 
     #[test]
