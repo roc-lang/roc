@@ -201,7 +201,7 @@ pub enum Def<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
     /// A function. The types of its arguments, then the type of its return value.
-    Function(&'a [TypeAnnotation<'a>], &'a TypeAnnotation<'a>),
+    Function(&'a [Loc<TypeAnnotation<'a>>], &'a Loc<TypeAnnotation<'a>>),
 
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(&'a [&'a str], &'a str, &'a [Loc<TypeAnnotation<'a>>]),
