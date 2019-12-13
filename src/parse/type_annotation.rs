@@ -100,7 +100,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
 
         let (is_function, state) = optional(string("->")).parse(arena, state)?;
 
-        if let Some(_) = is_function {
+        if is_function.is_some() {
             let (return_type, state) =
                 space0_before(term(min_indent), min_indent).parse(arena, state)?;
 
@@ -111,7 +111,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
             let output = arena.alloc(arguments);
 
             let result = Located {
-                region: return_type.region.clone(),
+                region: return_type.region,
                 value: TypeAnnotation::Function(output, arena.alloc(return_type)),
             };
             Ok((result, state))
