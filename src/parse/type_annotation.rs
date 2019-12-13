@@ -31,7 +31,7 @@ fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAn
     between!(
         char('('),
         space0_around(
-            move |arena, state| term(min_indent).parse(arena, state),
+            move |arena, state| expression(min_indent).parse(arena, state),
             min_indent,
         ),
         char(')')
