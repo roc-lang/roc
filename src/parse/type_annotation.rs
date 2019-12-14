@@ -90,15 +90,19 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
 }
 
 fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    use crate::parse::blankspace::space0;
     move |arena, state: State<'a>| {
-        let (first, state) = space0_around(term(min_indent), min_indent).parse(arena, state)?;
+        let (first, state) = space0_before(term(min_indent), min_indent).parse(arena, state)?;
         let (rest, state) = zero_or_more!(skip_first!(
             char(','),
             space0_around(term(min_indent), min_indent)
         ))
         .parse(arena, state)?;
 
-        let (is_function, state) = optional(string("->")).parse(arena, state)?;
+        // TODO this space0 is dropped, so newlines just before the function arrow when there
+        // is only one argument are not seen by the formatter. Can we do better?
+        let (is_function, state) =
+            optional(skip_first!(space0(min_indent), string("->"))).parse(arena, state)?;
 
         if is_function.is_some() {
             let (return_type, state) =
