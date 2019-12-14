@@ -13,7 +13,7 @@ use crate::can::problem::RuntimeError::*;
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImSet, MutMap, MutSet, SendMap};
+use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::graph::{strongly_connected_component, topological_sort};
 use crate::ident::Ident;
 use crate::parse::ast;
@@ -339,7 +339,21 @@ pub fn sort_can_defs(
     }
 }
 
-fn canonicalize_annotation(annotation: &crate::parse::ast::TypeAnnotation) -> crate::types::Type {
+fn canonicalize_annotation(
+    annotation: &crate::parse::ast::TypeAnnotation,
+    var_store: &VarStore,
+) -> (Rigids, crate::types::Type) {
+    let mut ftv = ImMap::default();
+    let result = can_annotation_help(annotation, var_store, &mut ftv);
+
+    (ftv, result)
+}
+
+fn can_annotation_help(
+    annotation: &crate::parse::ast::TypeAnnotation,
+    var_store: &VarStore,
+    ftv: &mut Rigids,
+) -> (crate::types::Type) {
     use crate::parse::ast::TypeAnnotation::*;
 
     match annotation {
@@ -347,17 +361,17 @@ fn canonicalize_annotation(annotation: &crate::parse::ast::TypeAnnotation) -> cr
             let mut args = Vec::new();
 
             for arg in *argument_types {
-                args.push(canonicalize_annotation(&arg.value));
+                args.push(can_annotation_help(&arg.value, var_store, ftv));
             }
 
-            let ret = canonicalize_annotation(&return_type.value);
+            let ret = can_annotation_help(&return_type.value, var_store, ftv);
             Type::Function(args, Box::new(ret))
         }
         Apply(module_name, name, type_arguments) => {
             let mut args = Vec::new();
 
             for arg in *type_arguments {
-                args.push(canonicalize_annotation(&arg.value));
+                args.push(can_annotation_help(&arg.value, var_store, ftv));
             }
 
             Type::Apply {
@@ -365,6 +379,12 @@ fn canonicalize_annotation(annotation: &crate::parse::ast::TypeAnnotation) -> cr
                 name: (*name).into(),
                 args,
             }
+        }
+        BoundVariable(v) => {
+            // TODO register rigid var here
+            let var = var_store.fresh();
+            ftv.insert((*v).into(), Type::Variable(var));
+            Type::Variable(var)
         }
         _ => panic!("TODO implement canonicalize annotation"),
     }
@@ -466,6 +486,11 @@ fn canonicalize_def<'a>(
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
             let outer_identifier = env.tailcallable_symbol.clone();
 
+            // TODO ensure TypedDef has a pattern identifier?
+            // e.g. in elm, you can't type
+            //
+            // (foo, bar) : (Int, Bool)
+            // implicitly, that is the case here too
             let mut fname = "invalid name".to_string();
 
             if let (
@@ -478,15 +503,25 @@ fn canonicalize_def<'a>(
                 variables_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
 
-            let annotation_expected = FromAnnotation(
-                fname,
-                0,
-                AnnotationSource::TypedBody,
-                canonicalize_annotation(&loc_annotation.value),
-            );
+            let (ftv, can_annotation) = canonicalize_annotation(&loc_annotation.value, var_store);
+
+            // remove the known type variables (TODO can clone be prevented?)
+            let new_rigids = ftv.difference(rigids.clone());
+
+            let new_rtv = rigids.clone().union(new_rigids);
+
+            let arity = if let crate::types::Type::Function(args, _) = &can_annotation {
+                args.len()
+            } else {
+                0
+            };
+
+            let annotation_expected =
+                FromAnnotation(fname, arity, AnnotationSource::TypedBody, can_annotation);
 
             let (mut loc_can_expr, can_output, ret_constraint) = canonicalize_expr(
-                rigids,
+                // rigids,
+                &new_rtv,
                 env,
                 var_store,
                 scope,
@@ -495,9 +530,12 @@ fn canonicalize_def<'a>(
                 annotation_expected.clone(),
             );
 
+            /*
+            // ensure expected type unifies with annotated type
             state
                 .constraints
                 .push(Eq(expr_type.clone(), annotation_expected, loc_def.region));
+            */
 
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;

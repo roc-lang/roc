@@ -848,21 +848,35 @@ mod test_infer {
     }
 
     #[test]
+    fn infer_most_general_type() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo = \x -> x
+
+            x = foo 1
+            y = foo "lol"
+
+            foo
+            "#
+            ),
+            "a -> a",
+        );
+    }
+
+    #[test]
     fn using_type_signature() {
         infer_eq(
             indoc!(
                 r#"
             foo = \x -> x
-            bar : Int -> Int
+            bar : thing -> thing
             bar = foo 
-
-            baz : Bool -> Bool
-            baz = foo
 
             bar 
             "#
             ),
-            "Int -> Int",
+            "thing -> thing",
         );
     }
 }
