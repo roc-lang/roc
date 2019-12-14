@@ -161,10 +161,10 @@ pub fn can_expr_with(
     Variable,
     Constraint,
 ) {
-    let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|_| {
+    let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
         panic!(
-            "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?}",
-            expr_str
+            "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
+            expr_str, e
         )
     });
 
