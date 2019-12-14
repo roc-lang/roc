@@ -91,7 +91,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
 
 fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     move |arena, state: State<'a>| {
-        let (first, state) = term(min_indent).parse(arena, state)?;
+        let (first, state) = space0_around(term(min_indent), min_indent).parse(arena, state)?;
         let (rest, state) = zero_or_more!(skip_first!(
             char(','),
             space0_around(term(min_indent), min_indent)
