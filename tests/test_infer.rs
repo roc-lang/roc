@@ -846,4 +846,23 @@ mod test_infer {
             "{ x : a }b -> { x : a }b",
         );
     }
+
+    #[test]
+    fn using_type_signature() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo = \x -> x
+            bar : Int -> Int
+            bar = foo 
+
+            baz : Bool -> Bool
+            baz = foo
+
+            bar 
+            "#
+            ),
+            "Int -> Int",
+        );
+    }
 }

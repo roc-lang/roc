@@ -14,6 +14,9 @@ pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
             buf.push_str(" = ");
             fmt_expr(buf, &loc_expr.value, indent, false);
         }
+        TypedDef(_loc_pattern, _loc_annotation, _loc_expr) => {
+            panic!("TODO support Annotation in TypedDef");
+        }
         SpaceBefore(sub_def, spaces) => {
             fmt_spaces(buf, spaces.iter(), indent);
             fmt_def(buf, sub_def, indent);

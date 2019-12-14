@@ -38,6 +38,12 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Body(loc_pattern, loc_expr) | Nested(Body(loc_pattern, loc_expr)) => {
             Body(loc_pattern, desugar_expr(arena, loc_expr))
         }
+        TypedDef(loc_pattern, loc_annotation, loc_expr)
+        | Nested(TypedDef(loc_pattern, loc_annotation, loc_expr)) => TypedDef(
+            loc_pattern.clone(),
+            loc_annotation.clone(),
+            desugar_expr(arena, loc_expr),
+        ),
         SpaceBefore(def, _)
         | SpaceAfter(def, _)
         | Nested(SpaceBefore(def, _))
