@@ -322,7 +322,12 @@ fn write_apply(
             buf.push_str("(");
         }
 
-        buf.push_str(&format!("{}.{}", module_name, type_name));
+        if module_name.is_empty() {
+            dbg!(&module_name, &type_name);
+            buf.push_str(&type_name);
+        } else {
+            buf.push_str(&format!("{}.{}", module_name, type_name));
+        }
 
         for arg in args {
             buf.push_str(" ");
