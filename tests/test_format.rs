@@ -500,6 +500,15 @@ mod test_format {
             identity 42
             "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a
+                -> a
+
+            identity 42
+            "#
+        ));
     }
 
     // RECORD LITERALS
