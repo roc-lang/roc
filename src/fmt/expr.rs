@@ -290,7 +290,7 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 pub fn denest_pattern<'a>(pattern: &'a Pattern<'a>) -> &Pattern {
     match pattern {
         Pattern::SpaceBefore(unwrapped_pattern, _)
-        | Pattern::SpaceAfter(unwrapped_pattern, _) => unwrapped_pattern,
+        | Pattern::SpaceAfter(unwrapped_pattern, _) => denest_pattern(unwrapped_pattern),
         Pattern::Nested(nested_pattern) => denest_pattern(nested_pattern),
         Pattern::Identifier(_)
         | Pattern::GlobalTag(_)
