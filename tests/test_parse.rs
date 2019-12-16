@@ -1193,6 +1193,119 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn type_signature_def() {
+        let arena = Bump::new();
+        let newline = bumpalo::vec![in &arena; Newline];
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let signature = Def::Annotation(
+            Located::new(0, 0, 0, 3, Identifier("foo")),
+            Located::new(
+                0,
+                0,
+                6,
+                9,
+                roc::parse::ast::TypeAnnotation::Apply(&[], "Int", &[]),
+            ),
+        );
+        let def = Def::Body(
+            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+            arena.alloc(Located::new(1, 1, 6, 7, Int("4"))),
+        );
+        let loc_def = &*arena.alloc(Located::new(
+            1,
+            1,
+            0,
+            7,
+            Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice()),
+        ));
+
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                foo : Int
+                foo = 4
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn type_signature_function_def() {
+        use roc::parse::ast::TypeAnnotation;
+        let arena = Bump::new();
+        let newline = bumpalo::vec![in &arena; Newline];
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+
+        let int_type = TypeAnnotation::Apply(&[], "Int", &[]);
+        let float_type = TypeAnnotation::Apply(&[], "Float", &[]);
+        let bool_type = TypeAnnotation::Apply(&[], "Bool", &[]);
+
+        let arguments = bumpalo::vec![in &arena;
+            Located::new(0, 0, 6, 9, int_type),
+            Located::new(0, 0, 11, 16, float_type)
+        ];
+        let return_type = Located::new(0, 0, 20, 24, bool_type);
+
+        let signature = Def::Annotation(
+            Located::new(0, 0, 0, 3, Identifier("foo")),
+            Located::new(
+                0,
+                0,
+                20,
+                24,
+                TypeAnnotation::Function(&arguments, &return_type),
+            ),
+        );
+
+        let args = bumpalo::vec![in &arena;
+        Located::new(1,1,7,8, Identifier("x")),
+        Located::new(1,1,9,10, Underscore)
+        ];
+        let body = Located::new(1, 1, 14, 16, Int("42"));
+
+        let closure = Expr::Closure(&args, &body);
+
+        let def = Def::Body(
+            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+            arena.alloc(Located::new(1, 1, 6, 16, closure)),
+        );
+        let loc_def = &*arena.alloc(Located::new(
+            1,
+            1,
+            0,
+            16,
+            Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice()),
+        ));
+
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                foo : Int, Float -> Bool
+                foo = \x _ -> 42
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
     // CASE
 
     #[test]
