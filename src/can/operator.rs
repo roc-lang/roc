@@ -295,7 +295,7 @@ fn desugar_field<'a>(
         LabelOnly(loc_str) => {
             // Desugar { x } into { x: x }
             let loc_expr = Located {
-                value: Var(&[], loc_str.value.as_str()),
+                value: Var(&[], loc_str.value),
                 region: loc_str.region,
             };
 

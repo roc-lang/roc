@@ -1,4 +1,3 @@
-use crate::ident::UnqualifiedIdent;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -12,15 +11,15 @@ pub struct Lowercase(Box<str>);
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(Box<str>);
 
-impl Lowercase {
-    pub fn from_unqualified_ident(ident: &UnqualifiedIdent<'_>) -> Self {
-        Self(ident.as_str().into())
-    }
-}
-
 impl Into<Box<str>> for Lowercase {
     fn into(self) -> Box<str> {
         self.0
+    }
+}
+
+impl<'a> From<&'a str> for Lowercase {
+    fn from(string: &'a str) -> Self {
+        Self(string.into())
     }
 }
 

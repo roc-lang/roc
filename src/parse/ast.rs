@@ -1,4 +1,3 @@
-use crate::ident::UnqualifiedIdent;
 use crate::module::ModuleName;
 use crate::operator::CalledVia;
 use crate::operator::{BinOp, UnaryOp};
@@ -40,7 +39,7 @@ pub struct AppHeader<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExposesEntry<'a> {
     /// e.g. `Task`
-    Ident(UnqualifiedIdent<'a>),
+    Ident(&'a str),
 
     // Spaces
     SpaceBefore(&'a ExposesEntry<'a>, &'a [CommentOrNewline<'a>]),
@@ -125,9 +124,9 @@ pub enum Expr<'a> {
     Str(&'a str),
     BlockStr(&'a [&'a str]),
     /// Look up exactly one field on a record, e.g. (expr).foo.
-    Access(&'a Expr<'a>, UnqualifiedIdent<'a>),
+    Access(&'a Expr<'a>, &'a str),
     /// e.g. `.foo`
-    AccessorFunction(UnqualifiedIdent<'a>),
+    AccessorFunction(&'a str),
 
     // Collection Literals
     List(Vec<'a, &'a Loc<Expr<'a>>>),
@@ -233,14 +232,10 @@ pub enum TypeAnnotation<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssignedField<'a, Val> {
     // Both a label and a value, e.g. `{ name: "blah" }`
-    LabeledValue(
-        Loc<UnqualifiedIdent<'a>>,
-        &'a [CommentOrNewline<'a>],
-        &'a Loc<Val>,
-    ),
+    LabeledValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-    LabelOnly(Loc<UnqualifiedIdent<'a>>),
+    LabelOnly(Loc<&'a str>),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),

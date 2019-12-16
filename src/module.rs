@@ -1,4 +1,3 @@
-use crate::ident::UnqualifiedIdent;
 use crate::parse::ast::CommentOrNewline;
 use crate::region::Loc;
 use bumpalo::collections::Vec;
@@ -48,7 +47,7 @@ pub struct AppHeader<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Exposes<'a> {
     /// e.g. `Task`
-    Ident(UnqualifiedIdent<'a>),
+    Ident(&'a str),
 
     // Spaces
     SpaceBefore(&'a Exposes<'a>, &'a [CommentOrNewline<'a>]),
@@ -58,7 +57,7 @@ pub enum Exposes<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Imports<'a> {
     /// e.g. `Task` or `Task.{ Task, after }`
-    Ident(UnqualifiedIdent<'a>, Vec<'a, UnqualifiedIdent<'a>>),
+    Ident(&'a str, Vec<'a, &'a str>),
 
     // Spaces
     SpaceBefore(&'a Imports<'a>, &'a [CommentOrNewline<'a>]),

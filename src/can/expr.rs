@@ -668,7 +668,7 @@ pub fn canonicalize_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            rec_field_types.insert(Lowercase::from_unqualified_ident(field), field_type.clone());
+            rec_field_types.insert(Lowercase::from(*field), field_type.clone());
 
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);

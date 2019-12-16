@@ -1,5 +1,4 @@
 use crate::collections::arena_join;
-use crate::ident::UnqualifiedIdent;
 use crate::parse::ast::{Attempting, MaybeQualified};
 use crate::parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use bumpalo::collections::string::String;
@@ -378,9 +377,6 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
     global_tag_or_ident(|first_char| first_char.is_lowercase())
 }
 
-pub fn unqualified_ident<'a>() -> impl Parser<'a, UnqualifiedIdent<'a>> {
-    map!(
-        global_tag_or_ident(|first_char| first_char.is_alphabetic()),
-        UnqualifiedIdent::new
-    )
+pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
+    global_tag_or_ident(|first_char| first_char.is_alphabetic())
 }

@@ -338,9 +338,9 @@ fn expose(
     match entry {
         Ident(ident) => {
             // Since this value is exposed, add it to our module's default scope.
-            let symbol = Symbol::from_module(&module_name, &ident);
+            let symbol = Symbol::from_module(&module_name, ident);
 
-            (ident.as_str().into(), (symbol, region))
+            ((*ident).into(), (symbol, region))
         }
         SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => {
             // Ignore spaces.
