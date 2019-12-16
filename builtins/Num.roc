@@ -19,10 +19,7 @@ api Num provides Num, DivByZero..., negate, abs, add, sub, mul, isOdd, isEven, i
 ## The type #Int is defined to be an alias for `Num Integer`, so `2 : Num Integer` is the same answer as `2 : Int`.
 ##
 ## In this way, the `Num` type makes it possible to have `1 + 1` return `2 : Int` and `1.5 + 1.5` return `3.0 : Float`.
-Num range := Num range
-
-## Returned by division operations (#Float.div, #Float.mod, #Int.divFloor, #Int.divMod, and #Float.recip) when they attempt to divide by zero.
-DivByZero := DivByZero
+Num range : @Num range
 
 ## Convert
 
@@ -86,13 +83,14 @@ isOdd : Num * -> Bool
 ##
 ## `a + b` is shorthand for `Num.add a b`.
 ##
-## > 5 + 7
+## >>> 5 + 7
 ##
-## > Num.add 5 7
+## >>> Num.add 5 7
 ##
-## > 3.0 + -0.5
+## `Num.add` can be convenient in pipelines.
 ##
-## > Num.add 3.0 -0.5
+## >>> Float.pi
+## >>>     |> Num.add 1.0
 add : Num range, Num range -> Num range
 
 ## Subtract two numbers of the same type.
@@ -101,13 +99,14 @@ add : Num range, Num range -> Num range
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
 ##
-## > 7 - 5
+## >>> 7 - 5
 ##
-## > Num.sub 7 5
+## >>> Num.sub 7 5
 ##
-## > 3.0 - -0.5
+## `Num.sub` can be convenient in pipelines.
 ##
-## > Num.sub 3.0 -0.5
+## >>> Float.pi
+## >>>     |> Num.sub 2.0
 sub : Num range, Num range -> Num range
 
 ## Multiply two numbers of the same type.
@@ -116,11 +115,12 @@ sub : Num range, Num range -> Num range
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
 ##
-## > 5 * 7
+## >>> 5 * 7
 ##
-## > Num.mul 5 7
+## >>> Num.mul 5 7
 ##
-## > 4.0 * -0.5
+## `Num.mul` can be convenient in pipelines.
 ##
-## > Num.mul 4.0 -0.5
+## >>> Float.pi
+## >>>     |> Num.mul 2.0
 mul : Num range, Num range -> Num range
