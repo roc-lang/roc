@@ -91,7 +91,9 @@ pub fn fmt_expr<'a>(
         Closure(loc_patterns, loc_ret) => {
             buf.push('\\');
 
-            let arguments_are_multiline = loc_patterns.iter().any(|loc_pattern| is_multiline_pattern(&loc_pattern.value));
+            let arguments_are_multiline = loc_patterns
+                .iter()
+                .any(|loc_pattern| is_multiline_pattern(&loc_pattern.value));
 
             // If the arguments are multiline, go down a line and indent.
             let indent = if arguments_are_multiline {
@@ -120,7 +122,6 @@ pub fn fmt_expr<'a>(
             } else {
                 indent
             };
-
 
             let newline_is_next = match &loc_ret.value {
                 SpaceBefore(_, _) => true,
@@ -288,10 +289,8 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 
 pub fn denest_pattern<'a>(pattern: &'a Pattern<'a>) -> &Pattern {
     match pattern {
-        Pattern::SpaceBefore(unwrapped_pattern, _) | Pattern::SpaceAfter(unwrapped_pattern, _) => {
-            return unwrapped_pattern;
-        }
-
+        Pattern::SpaceBefore(unwrapped_pattern, _)
+        | Pattern::SpaceAfter(unwrapped_pattern, _) => unwrapped_pattern,
         Pattern::Nested(nested_pattern) => denest_pattern(nested_pattern),
         Pattern::Identifier(_)
         | Pattern::GlobalTag(_)
@@ -306,7 +305,6 @@ pub fn denest_pattern<'a>(pattern: &'a Pattern<'a>) -> &Pattern {
         | Pattern::BlockStrLiteral(_)
         | Pattern::EmptyRecordLiteral
         | Pattern::Underscore
-
         | Pattern::Malformed(_)
         | Pattern::QualifiedIdentifier(_) => pattern,
     }
@@ -332,7 +330,6 @@ pub fn is_multiline_pattern<'a>(pattern: &'a Pattern<'a>) -> bool {
         | Pattern::BlockStrLiteral(_)
         | Pattern::EmptyRecordLiteral
         | Pattern::Underscore
-
         | Pattern::Malformed(_)
         | Pattern::QualifiedIdentifier(_) => false,
     }
