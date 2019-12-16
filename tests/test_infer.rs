@@ -496,6 +496,39 @@ mod test_infer {
     }
 
     #[test]
+    fn identity_infers_principal_type() {
+        infer_eq(
+            indoc!(
+                r#"
+                identity = \a -> a
+
+                x = identity 5
+
+                identity
+                "#
+            ),
+            "a -> a",
+        );
+    }
+
+    #[test]
+    fn identity_works_on_incompatible_types() {
+        infer_eq(
+            indoc!(
+                r#"
+                identity = \a -> a
+
+                x = identity 5
+                y = identity "hi"
+
+                x
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
     fn call_returns_list() {
         infer_eq(
             indoc!(
