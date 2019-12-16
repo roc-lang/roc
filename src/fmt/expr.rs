@@ -103,11 +103,9 @@ pub fn fmt_expr<'a>(
             };
 
             for loc_pattern in loc_patterns.iter() {
-                fmt_pattern(buf, denest_pattern(&loc_pattern.value), indent, true);
+                fmt_pattern(buf, &loc_pattern.value, indent, true);
 
-                if arguments_are_multiline {
-                    newline(buf, indent);
-                } else {
+                if !arguments_are_multiline {
                     buf.push(' ');
                 }
             }
@@ -284,29 +282,6 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
         Nested(nested_expr) => empty_line_before_expr(nested_expr),
 
         _ => false,
-    }
-}
-
-pub fn denest_pattern<'a>(pattern: &'a Pattern<'a>) -> &Pattern {
-    match pattern {
-        Pattern::SpaceBefore(unwrapped_pattern, _)
-        | Pattern::SpaceAfter(unwrapped_pattern, _) => denest_pattern(unwrapped_pattern),
-        Pattern::Nested(nested_pattern) => denest_pattern(nested_pattern),
-        Pattern::Identifier(_)
-        | Pattern::GlobalTag(_)
-        | Pattern::PrivateTag(_)
-        | Pattern::Apply(_, _)
-        | Pattern::RecordDestructure(_)
-        | Pattern::RecordField(_, _)
-        | Pattern::IntLiteral(_)
-        | Pattern::NonBase10Literal { .. }
-        | Pattern::FloatLiteral(_)
-        | Pattern::StrLiteral(_)
-        | Pattern::BlockStrLiteral(_)
-        | Pattern::EmptyRecordLiteral
-        | Pattern::Underscore
-        | Pattern::Malformed(_)
-        | Pattern::QualifiedIdentifier(_) => pattern,
     }
 }
 

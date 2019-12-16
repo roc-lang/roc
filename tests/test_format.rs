@@ -519,6 +519,17 @@ mod test_format {
             identity 43
             "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a
+                b
+                # its b!!
+                -> a
+
+            identity 43
+            "#
+        ));
     }
 
     // RECORD LITERALS
