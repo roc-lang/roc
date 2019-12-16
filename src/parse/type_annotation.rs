@@ -105,7 +105,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 space0_before(term(min_indent), min_indent).parse(arena, state)?;
 
             // prepare arguments
-            let mut arguments = Vec::new_in(&arena);
+            let mut arguments = Vec::with_capacity_in(rest.len() + 1, &arena);
             arguments.push(first);
             arguments.extend(rest);
             let output = arena.alloc(arguments);
