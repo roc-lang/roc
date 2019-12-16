@@ -532,6 +532,7 @@ mod test_format {
             identity = \a
                 b
                 # its b!!
+                c
                 -> a
 
             identity 43
