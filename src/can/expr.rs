@@ -134,6 +134,8 @@ pub fn canonicalize_expr(
                 // let mut branch_cons = Vec::with_capacity(branches.len());
                 let mut field_map = SendMap::default();
                 let mut output = Output::default();
+                let record_var = panic!("TODO record_var");
+                let constraint = panic!("TODO constraint");
 
                 for loc_field in fields.iter() {
                     let (label, field_expr, field_out, field_con) = canonicalize_field(
@@ -146,7 +148,7 @@ pub fn canonicalize_expr(
                         loc_field.region,
                     );
 
-                    output.references = output.references.union(field_out);
+                    output.references = output.references.union(field_out.references);
                 }
 
                 (Record(record_var, field_map), output, constraint)
@@ -1101,7 +1103,7 @@ fn canonicalize_field<'a>(
     env: &mut Env,
     var_store: &VarStore,
     scope: &mut Scope,
-    field_map: SendMap<Lowercase, Expr>,
+    field_map: SendMap<Lowercase, Located<Expr>>,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
     region: Region,
 ) -> (Lowercase, Located<Expr>, Output, Constraint) {
@@ -1110,6 +1112,8 @@ fn canonicalize_field<'a>(
     match field {
         // Both a label and a value, e.g. `{ name: "blah" }`
         LabeledValue(label, _, loc_expr) => {
+            let expected = panic!("TODO expected");
+            let label = panic!("TODO label");
             let (loc_can_expr, output, constraint) = canonicalize_expr(
                 rigids,
                 env,

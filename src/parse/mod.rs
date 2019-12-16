@@ -346,15 +346,15 @@ pub fn assigned_field_to_pattern<'a>(
                 value: pattern,
             });
             if spaces.is_empty() {
-                Pattern::RecordField(name.value, result)
+                Pattern::RecordField(name.value.into(), result)
             } else {
                 Pattern::SpaceAfter(
-                    arena.alloc(Pattern::RecordField(name.value, result)),
+                    arena.alloc(Pattern::RecordField(name.value.into(), result)),
                     spaces,
                 )
             }
         }
-        AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
+        AssignedField::LabelOnly(name) => Pattern::Identifier(name.value.into()),
         AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
             arena.alloc(assigned_field_to_pattern(arena, nested)?),
             spaces,

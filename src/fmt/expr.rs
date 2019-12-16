@@ -227,7 +227,7 @@ pub fn fmt_field<'a>(
                 newline(buf, indent);
             }
 
-            buf.push_str(name.value);
+            buf.push_str(name.value.into());
 
             if !spaces.is_empty() {
                 fmt_spaces(buf, spaces.iter(), indent);
@@ -242,7 +242,7 @@ pub fn fmt_field<'a>(
                 newline(buf, indent);
             }
 
-            buf.push_str(name.value);
+            buf.push_str(name.value.into());
         }
         AssignedField::SpaceBefore(sub_expr, spaces) => {
             fmt_comments_only(buf, spaces.iter(), indent);

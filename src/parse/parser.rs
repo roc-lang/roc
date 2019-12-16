@@ -827,9 +827,11 @@ macro_rules! record_field {
             'a,
             $crate::parse::ast::AssignedField<'a, _>,
         > {
+            use $crate::ident::UnqualifiedIdent;
             use $crate::parse::ast::AssignedField::*;
             use $crate::parse::blankspace::{space0, space0_before};
             use $crate::parse::ident::lowercase_ident;
+            use $crate::region::Located;
 
             // You must have a field name, e.g. "email"
             let (loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
@@ -843,14 +845,30 @@ macro_rules! record_field {
             .parse(arena, state)?;
 
             let answer = match opt_loc_val {
-                Some(loc_val) => LabeledValue(loc_label, spaces, arena.alloc(loc_val)),
+                Some(loc_val) => LabeledValue(
+                    Located {
+                        value: UnqualifiedIdent::new(loc_label.value),
+                        region: loc_label.region,
+                    },
+                    spaces,
+                    arena.alloc(loc_val),
+                ),
                 // If no value was provided, record it as a Var.
                 // Canonicalize will know what to do with a Var later.
                 None => {
                     if !spaces.is_empty() {
-                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                        SpaceAfter(
+                            arena.alloc(LabelOnly(Located {
+                                value: UnqualifiedIdent::new(loc_label.value),
+                                region: loc_label.region,
+                            })),
+                            spaces,
+                        )
                     } else {
-                        LabelOnly(loc_label)
+                        LabelOnly(Located {
+                            value: UnqualifiedIdent::new(loc_label.value),
+                            region: loc_label.region,
+                        })
                     }
                 }
             };
