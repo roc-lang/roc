@@ -526,6 +526,81 @@ fn parse_def_expr<'a>(
     }
 }
 
+fn parse_def_signature<'a>(
+    min_indent: u16,
+    colon_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+    loc_first_pattern: Located<Pattern<'a>>,
+) -> ParseResult<'a, Expr<'a>> {
+    let original_indent = state.indent_col;
+
+    if original_indent < min_indent {
+        Err((
+            Fail {
+                attempting: state.attempting,
+                reason: FailReason::OutdentedTooFar,
+            },
+            state,
+        ))
+    // `<` because ':' should be same indent or greater
+    } else if colon_indent < original_indent {
+        panic!("TODO the : in this declaration seems outdented");
+    } else {
+        // Indented more beyond the original indent.
+        let indented_more = original_indent + 1;
+
+        then(
+            attempt!(
+                Attempting::Def,
+                and!(
+                    // Parse the body of the first def. It doesn't need any spaces
+                    // around it parsed, because both the subsquent defs and the
+                    // final body will have space1_before on them.
+                    //
+                    // It should be indented more than the original, and it will
+                    // end when outdented again.
+                    type_annotation::located(indented_more),
+                    and!(
+                        // Optionally parse additional defs.
+                        zero_or_more!(allocated(space1_before(
+                            loc!(def(original_indent)),
+                            original_indent,
+                        ))),
+                        // Parse the final expression that will be returned.
+                        // It should be indented the same amount as the original.
+                        space1_before(
+                            loc!(move |arena, state: State<'a>| {
+                                parse_expr(original_indent, arena, state)
+                            }),
+                            original_indent,
+                        )
+                    )
+                )
+            ),
+            move |arena, state, (loc_first_annotation, (mut defs, loc_ret))| {
+                let pat: Located<Pattern<'a>> = loc_first_pattern.clone();
+                let ann: Located<ast::TypeAnnotation<'a>> = loc_first_annotation;
+                let first_def: Def<'a> =
+                    // TODO is there some way to eliminate this .clone() here?
+                    Def::Annotation(pat, ann);
+
+                let loc_first_def = Located {
+                    value: first_def,
+                    region: loc_first_pattern.region,
+                };
+
+                // contrary to defs with an expression body, we must ensure the annotation comes just before its
+                // corresponding definition (the one with the body).
+                defs.insert(0, arena.alloc(loc_first_def));
+
+                Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
+            },
+        )
+        .parse(arena, state)
+    }
+}
+
 fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
     skip_first!(
         // If this is a reserved keyword ("if", "then", "case, "when"), then
@@ -930,7 +1005,10 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 // If there aren't any args, there may be a '=' or ':' after it.
                 // (It's a syntax error to write e.g. `foo bar =` - so if there
                 // were any args, there is definitely no need to parse '=' or ':'!)
-                and!(space0(min_indent), either!(equals_with_indent(), char(':')))
+                and!(
+                    space0(min_indent),
+                    either!(equals_with_indent(), colon_with_indent())
+                )
             ))
         ),
         move |arena, state, (loc_ident, opt_extras)| {
@@ -974,8 +1052,26 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
                     Ok((answer, state))
                 }
-                Some(Either::Second((_space_list, Either::Second(())))) => {
-                    panic!("TODO handle annotation, making sure not to drop comments!");
+                Some(Either::Second((spaces_before_colon, Either::Second(colon_indent)))) => {
+                    let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
+                    let value = if spaces_before_colon.is_empty() {
+                        pattern
+                    } else {
+                        Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_colon)
+                    };
+                    let region = loc_ident.region;
+                    let loc_pattern = Located { region, value };
+                    let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
+                    let (parsed_expr, state) =
+                        parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)?;
+
+                    let answer = if spaces_after_equals.is_empty() {
+                        parsed_expr
+                    } else {
+                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
+                    };
+
+                    Ok((answer, state))
                 }
                 None => {
                     let ident = loc_ident.value.clone();
@@ -1004,6 +1100,31 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
                     // The '=' must not be followed by another `=` or `>`
                     // (See equals_for_def() for explanation)
                     Some(next_ch) if next_ch != &'=' && next_ch != &'>' => {
+                        Ok((state.indent_col, state.advance_without_indenting(1)?))
+                    }
+                    Some(next_ch) => Err(unexpected(*next_ch, 0, state, Attempting::Def)),
+                    None => Err(unexpected_eof(
+                        1,
+                        Attempting::Def,
+                        state.advance_without_indenting(1)?,
+                    )),
+                }
+            }
+            Some(ch) => Err(unexpected(ch, 0, state, Attempting::Def)),
+            None => Err(unexpected_eof(0, Attempting::Def, state)),
+        }
+    }
+}
+
+pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
+    move |_arena, state: State<'a>| {
+        let mut iter = state.input.chars();
+
+        match iter.next() {
+            Some(ch) if ch == ':' => {
+                match iter.peekable().peek() {
+                    // The ':' must not be followed by `=`
+                    Some(next_ch) if next_ch != &':' && next_ch != &'=' => {
                         Ok((state.indent_col, state.advance_without_indenting(1)?))
                     }
                     Some(next_ch) => Err(unexpected(*next_ch, 0, state, Attempting::Def)),

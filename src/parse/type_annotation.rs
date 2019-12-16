@@ -1,6 +1,6 @@
 use crate::collections::arena_join;
 use crate::parse::ast::{Attempting, TypeAnnotation};
-use crate::parse::blankspace::{space0_around, space1_before};
+use crate::parse::blankspace::{space0_around, space0_before, space1_before};
 use crate::parse::parser::{
     char, optional, string, unexpected, unexpected_eof, ParseResult, Parser, State,
 };
@@ -10,6 +10,10 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
 pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    expression(min_indent)
+}
+
+pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     one_of!(
         // The `*` type variable, e.g. in (List *) Wildcard,
         map!(loc!(char('*')), |loc_val: Located<()>| {
@@ -27,7 +31,7 @@ fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAn
     between!(
         char('('),
         space0_around(
-            move |arena, state| located(min_indent).parse(arena, state),
+            move |arena, state| expression(min_indent).parse(arena, state),
             min_indent,
         ),
         char(')')
@@ -41,13 +45,13 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     map_with_arena!(
         and!(
             record!(
-                move |arena, state| located(min_indent).parse(arena, state),
+                move |arena, state| term(min_indent).parse(arena, state),
                 min_indent
             ),
             optional(skip_first!(
                 // This could be a record fragment, e.g. `{ name: String }...r`
                 string("..."),
-                move |arena, state| located(min_indent).parse(arena, state)
+                move |arena, state| term(min_indent).parse(arena, state)
             ))
         ),
         |arena: &'a Bump, (rec, opt_bound_var)| match opt_bound_var {
@@ -64,7 +68,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
             zero_or_more!(space1_before(
-                move |arena, state| located(min_indent).parse(arena, state),
+                move |arena, state| term(min_indent).parse(arena, state),
                 min_indent,
             ))
         ),
@@ -83,6 +87,44 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
             }
         }
     )
+}
+
+fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    move |arena, state: State<'a>| {
+        let (first, state) = term(min_indent).parse(arena, state)?;
+        let (rest, state) = zero_or_more!(skip_first!(
+            char(','),
+            space0_around(term(min_indent), min_indent)
+        ))
+        .parse(arena, state)?;
+
+        let (is_function, state) = optional(string("->")).parse(arena, state)?;
+
+        if is_function.is_some() {
+            let (return_type, state) =
+                space0_before(term(min_indent), min_indent).parse(arena, state)?;
+
+            // prepare arguments
+            let mut arguments = Vec::with_capacity_in(rest.len() + 1, &arena);
+            arguments.push(first);
+            arguments.extend(rest);
+            let output = arena.alloc(arguments);
+
+            let result = Located {
+                region: return_type.region,
+                value: TypeAnnotation::Function(output, arena.alloc(return_type)),
+            };
+            Ok((result, state))
+        } else {
+            // if there is no function arrow, there cannot be more than 1 "argument"
+            if rest.is_empty() {
+                Ok((first, state))
+            } else {
+                // e.g. `Int,Int` without an arrow and return type
+                panic!("Invalid function signature")
+            }
+        }
+    }
 }
 
 /// Parse a basic type annotation that's a combination of variables

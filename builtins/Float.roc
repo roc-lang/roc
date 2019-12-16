@@ -100,13 +100,14 @@ round = \num ->
 ##
 ## `a / b` is shorthand for `Float.div a b`.
 ##
-## > 5.0 / 7.0
+## >>> 5.0 / 7.0
 ##
-## > Float.div 5 7
+## >>> Float.div 5 7
 ##
-## > 4.0 / -0.5
+## `Float.div` can be convenient in pipelines.
 ##
-## > Float.div 4.0 -0.5
+## >>> Float.pi
+## >>>     |> Float.div 2.0
 #div : Float, Float -> Result Float DivByZero
 div = \numerator denominator ->
     case numerator when
@@ -122,17 +123,18 @@ div = \numerator denominator ->
 ##
 ## `a % b` is shorthand for `Float.mod a b`.
 ##
-## > 5.0 % 7.0
+## >>> 5.0 % 7.0
 ##
-## > Float.mod 5 7
+## >>> Float.mod 5 7
 ##
-## > 4.0 % -0.5
+## `Float.mod` can be convenient in pipelines.
 ##
-## > Float.mod -8 -3
+## >>> Float.pi
+## >>>     |> Float.mod 2.0
 #mod : Float, Float -> Result Float DivByZero
 
 ## Return the reciprocal of the #Float.
-#recip : Float -> Result Float Num.DivByZero
+#recip : Float -> Result Float [ DivByZero ]*
 #recip = \float ->
 #    1.0 / float
 
