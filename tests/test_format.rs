@@ -501,21 +501,21 @@ mod test_format {
             "#
         ));
 
-//        expr_formats_to(indoc!(
-//            r#"
-//            identity = \a
-//                -> a
-//
-//            identity 41
-//            "#
-//        ), indoc!(
-//            r#"
-//            identity = \a ->
-//                a
-//
-//            identity 41
-//            "#
-//        ));
+        //        expr_formats_to(indoc!(
+        //            r#"
+        //            identity = \a
+        //                -> a
+        //
+        //            identity 41
+        //            "#
+        //        ), indoc!(
+        //            r#"
+        //            identity = \a ->
+        //                a
+        //
+        //            identity 41
+        //            "#
+        //        ));
 
         expr_formats_same(indoc!(
             r#"
