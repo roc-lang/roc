@@ -817,6 +817,11 @@ mod test_infer {
 
     #[test]
     fn one_field_record() {
-        infer_eq("{ x: 5 }", "{ x : Int}");
+        infer_eq("{ x: 5 }", "{ x : Int }");
+    }
+
+    #[test]
+    fn two_field_record() {
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Int, y : Float }");
     }
 }
