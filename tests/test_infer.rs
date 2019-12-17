@@ -824,4 +824,26 @@ mod test_infer {
     fn two_field_record() {
         infer_eq("{ x: 5, y : 3.14 }", "{ x : Int, y : Float }");
     }
+
+    #[test]
+    fn record_arg() {
+        infer_eq("\\rec -> rec.x", "{ x : a }* -> a");
+    }
+
+    #[test]
+    fn record_with_bound_var() {
+        infer_eq(
+            indoc!(
+                r#"
+                fn = \rec ->
+                    x = rec.x
+
+                    rec
+
+                fn
+            "#
+            ),
+            "{ x : a }b -> { x : a }b",
+        );
+    }
 }
