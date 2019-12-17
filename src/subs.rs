@@ -156,6 +156,18 @@ impl Subs {
         self.utable.update_value(l_key, |node| node.value = r_value);
     }
 
+    pub fn set_rank(&mut self, key: Variable, rank: Rank) {
+        let l_key = self.utable.get_root_key(key);
+
+        self.utable.update_value(l_key, |node| {
+            let mut new_desc = node.value.clone();
+
+            new_desc.rank = rank;
+
+            node.value = new_desc;
+        });
+    }
+
     pub fn copy_var(&mut self, var: Variable) -> Variable {
         // TODO understand the purpose of using a "deep copy" approach here,
         // and perform it if necessary. (Seems to be about setting maxRank?)
