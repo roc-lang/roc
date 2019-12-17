@@ -177,10 +177,39 @@ fn unnamed_flex_var() -> Content {
     Content::FlexVar(None)
 }
 
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Rank(u8);
+
+impl Rank {
+    pub fn none() -> Self {
+        Rank(0)
+    }
+
+    pub fn outermost() -> Self {
+        Rank(1)
+    }
+
+    pub fn next(&self) -> Self {
+        Rank(self.0 + 1)
+    }
+}
+
+impl Into<u8> for Rank {
+    fn into(self) -> u8 {
+        self.0
+    }
+}
+
+impl Into<usize> for Rank {
+    fn into(self) -> usize {
+        self.0 as usize
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Descriptor {
     pub content: Content,
-    pub rank: u8,
+    pub rank: Rank,
     pub mark: Mark,
     pub copy: Option<Variable>,
 }
@@ -195,7 +224,7 @@ impl From<Content> for Descriptor {
     fn from(content: Content) -> Descriptor {
         Descriptor {
             content,
-            rank: 0,
+            rank: Rank::none(),
             mark: Mark::none(),
             copy: None,
         }
