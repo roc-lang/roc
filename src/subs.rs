@@ -1,5 +1,5 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
-use crate::collections::ImMap;
+use crate::collections::{ImMap, ImSet};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types::Problem;
 use std::fmt;
@@ -177,6 +177,10 @@ impl Subs {
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
         self.utable.unioned(left, right)
     }
+
+    pub fn occurs(&mut self, var: Variable) -> bool {
+        occurs(self, &ImSet::default(), var)
+    }
 }
 
 #[inline(always)]
@@ -276,4 +280,46 @@ pub enum Builtin {
     Int,
     Float,
     EmptyRecord,
+}
+
+fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
+    use self::Content::*;
+    use self::FlatType::*;
+
+    if seen.contains(&var) {
+        true
+    } else {
+        match subs.get(var).content {
+            FlexVar(_) | RigidVar(_) | Error(_) => false,
+
+            Structure(flat_type) => {
+                let mut new_seen = seen.clone();
+
+                new_seen.insert(var);
+
+                match flat_type {
+                    Apply { args, .. } => args.into_iter().any(|var| occurs(subs, &new_seen, var)),
+                    Func(arg_vars, ret_var) => {
+                        occurs(subs, &new_seen, ret_var)
+                            || arg_vars.into_iter().any(|var| occurs(subs, &new_seen, var))
+                    }
+                    Record(vars_by_field, ext_var) => {
+                        occurs(subs, &new_seen, ext_var)
+                            || vars_by_field
+                                .into_iter()
+                                .any(|(_, var)| occurs(subs, &new_seen, var))
+                    }
+                    EmptyRecord | Erroneous(_) => false,
+                }
+            }
+            Alias(_, _, args, _) => {
+                let mut new_seen = seen.clone();
+
+                new_seen.insert(var);
+
+                args.into_iter()
+                    .any(|(_, var)| occurs(subs, &new_seen, var))
+            }
+        }
+    }
 }
