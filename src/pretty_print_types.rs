@@ -214,18 +214,27 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
             } else {
                 buf.push_str("{ ");
 
-                let mut any_written_yet = false;
+                // Sort the fields so they always end up in the same order.
+                let mut sorted_fields = Vec::with_capacity(fields.len());
 
                 for (label, field_var) in fields {
-                    buf.push_str(&label.into_str());
-                    buf.push_str(" : ");
-                    write_content(subs.get(field_var).content, subs, buf, parens);
+                    sorted_fields.push((label.into_str(), field_var));
+                }
 
+                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+                let mut any_written_yet = false;
+
+                for (label, field_var) in sorted_fields {
                     if any_written_yet {
                         buf.push_str(", ");
                     } else {
                         any_written_yet = true;
                     }
+
+                    buf.push_str(&label);
+                    buf.push_str(" : ");
+                    write_content(subs.get(field_var).content, subs, buf, parens);
                 }
 
                 buf.push_str(" }");
