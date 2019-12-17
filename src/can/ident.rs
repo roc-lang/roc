@@ -11,6 +11,12 @@ pub struct Lowercase(Box<str>);
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(Box<str>);
 
+impl Lowercase {
+    pub fn into_str(self) -> Box<str> {
+        self.0
+    }
+}
+
 impl Into<Box<str>> for Lowercase {
     fn into(self) -> Box<str> {
         self.0
@@ -36,6 +42,12 @@ impl fmt::Debug for Lowercase {
     }
 }
 
+impl fmt::Display for Lowercase {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// Rather than displaying as this:
 ///
 /// Uppercase("Foo")
@@ -46,5 +58,11 @@ impl fmt::Debug for Lowercase {
 impl fmt::Debug for Uppercase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "'{}'", self.0)
+    }
+}
+
+impl fmt::Display for Uppercase {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }

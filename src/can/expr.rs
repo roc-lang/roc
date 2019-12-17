@@ -129,29 +129,48 @@ pub fn canonicalize_expr(
 
                 (EmptyRecord, Output::default(), constraint)
             } else {
-                // let branch_var = var_store.fresh();
-                // let branch_type = Variable(branch_var);
-                // let mut branch_cons = Vec::with_capacity(branches.len());
-                let mut field_map = SendMap::default();
+                let mut field_exprs = SendMap::default();
+                let mut field_types = SendMap::default();
+                let mut field_vars = Vec::with_capacity(fields.len());
+
+                // Constraints need capacity for each field + 1 for the record itself.
+                let mut constraints = Vec::with_capacity(1 + fields.len());
                 let mut output = Output::default();
-                let record_var = panic!("TODO record_var");
-                let constraint = panic!("TODO constraint");
 
                 for loc_field in fields.iter() {
-                    let (label, field_expr, field_out, field_con) = canonicalize_field(
-                        rigids,
-                        env,
-                        var_store,
-                        scope,
-                        field_map,
-                        &loc_field.value,
-                        loc_field.region,
-                    );
+                    let (label, field_expr, field_out, field_var, field_type, field_con) =
+                        canonicalize_field(
+                            rigids,
+                            env,
+                            var_store,
+                            scope,
+                            &loc_field.value,
+                            loc_field.region,
+                        );
 
+                    field_vars.push(field_var);
+                    field_exprs.insert(label.clone(), field_expr);
+                    field_types.insert(label, field_type);
+
+                    constraints.push(field_con);
                     output.references = output.references.union(field_out.references);
                 }
 
-                (Record(record_var, field_map), output, constraint)
+                let record_var = var_store.fresh();
+                let record_type = Type::Record(
+                    field_types,
+                    // TODO can we avoid doing Box::new on every single one of these?
+                    // For example, could we have a single lazy_static global Box they
+                    // could all share?
+                    Box::new(Type::EmptyRec),
+                );
+                let record_con = Eq(record_type, expected, region);
+
+                constraints.push(record_con);
+
+                let constraint = exists(field_vars, And(constraints));
+
+                (Record(record_var, field_exprs), output, constraint)
             }
         }
         ast::Expr::Str(string) => {
@@ -1103,17 +1122,17 @@ fn canonicalize_field<'a>(
     env: &mut Env,
     var_store: &VarStore,
     scope: &mut Scope,
-    field_map: SendMap<Lowercase, Located<Expr>>,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
     region: Region,
-) -> (Lowercase, Located<Expr>, Output, Constraint) {
+) -> (Lowercase, Located<Expr>, Output, Variable, Type, Constraint) {
     use crate::parse::ast::AssignedField::*;
 
     match field {
         // Both a label and a value, e.g. `{ name: "blah" }`
         LabeledValue(label, _, loc_expr) => {
-            let expected = panic!("TODO expected");
-            let label = panic!("TODO label");
+            let field_var = var_store.fresh();
+            let field_type = Variable(field_var);
+            let field_expected = NoExpectation(field_type.clone());
             let (loc_can_expr, output, constraint) = canonicalize_expr(
                 rigids,
                 env,
@@ -1121,22 +1140,29 @@ fn canonicalize_field<'a>(
                 scope,
                 loc_expr.region,
                 &loc_expr.value,
-                expected,
+                field_expected,
             );
 
-            (label, loc_can_expr, output, constraint)
+            (
+                Lowercase::from(label.value),
+                loc_can_expr,
+                output,
+                field_var,
+                field_type,
+                constraint,
+            )
         }
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-        LabelOnly(loc_label) => {
+        LabelOnly(_) => {
             panic!("Somehow a LabelOnly record field was not desugared!");
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
-            canonicalize_field(rigids, env, var_store, scope, field_map, sub_field, region)
+            canonicalize_field(rigids, env, var_store, scope, sub_field, region)
         }
 
-        Malformed(string) => {
+        Malformed(_string) => {
             panic!("TODO canonicalize malformed record field");
         }
     }
