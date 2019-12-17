@@ -63,13 +63,9 @@ pub fn solve(
                     let mut new_vars_by_symbol = vars_by_symbol.clone();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
-                        // No need to overwrite existing symbols; it would have no effect.
-                        // (If we allowed shadowing, we'd need to do something fancier here.)
-                        if !new_vars_by_symbol.contains_key(&symbol) {
-                            let var = type_to_var(subs, loc_type.value.clone());
+                        let var = type_to_var(subs, loc_type.value.clone());
 
-                            new_vars_by_symbol.insert(symbol.clone(), var);
-                        }
+                        new_vars_by_symbol.insert(symbol.clone(), var);
                     }
 
                     // Now solve the body, using the new vars_by_symbol which includes
