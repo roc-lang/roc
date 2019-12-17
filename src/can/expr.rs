@@ -80,7 +80,7 @@ pub enum Expr {
     Closure(Symbol, Recursive, Vec<Located<Pattern>>, Box<Located<Expr>>),
 
     // Product Types
-    Record(Variable, Vec<Located<(Box<str>, Located<Expr>)>>),
+    Record(Variable, SendMap<Lowercase, Located<Expr>>),
     EmptyRecord,
 
     // Compiles, but will crash if reached
@@ -129,7 +129,48 @@ pub fn canonicalize_expr(
 
                 (EmptyRecord, Output::default(), constraint)
             } else {
-                panic!("TODO canonicalize nonempty record");
+                let mut field_exprs = SendMap::default();
+                let mut field_types = SendMap::default();
+                let mut field_vars = Vec::with_capacity(fields.len());
+
+                // Constraints need capacity for each field + 1 for the record itself.
+                let mut constraints = Vec::with_capacity(1 + fields.len());
+                let mut output = Output::default();
+
+                for loc_field in fields.iter() {
+                    let (label, field_expr, field_out, field_var, field_type, field_con) =
+                        canonicalize_field(
+                            rigids,
+                            env,
+                            var_store,
+                            scope,
+                            &loc_field.value,
+                            loc_field.region,
+                        );
+
+                    field_vars.push(field_var);
+                    field_exprs.insert(label.clone(), field_expr);
+                    field_types.insert(label, field_type);
+
+                    constraints.push(field_con);
+                    output.references = output.references.union(field_out.references);
+                }
+
+                let record_var = var_store.fresh();
+                let record_type = Type::Record(
+                    field_types,
+                    // TODO can we avoid doing Box::new on every single one of these?
+                    // For example, could we have a single lazy_static global Box they
+                    // could all share?
+                    Box::new(Type::EmptyRec),
+                );
+                let record_con = Eq(record_type, expected, region);
+
+                constraints.push(record_con);
+
+                let constraint = exists(field_vars, And(constraints));
+
+                (Record(record_var, field_exprs), output, constraint)
             }
         }
         ast::Expr::Str(string) => {
@@ -646,7 +687,7 @@ pub fn canonicalize_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            rec_field_types.insert(Lowercase::from_unqualified_ident(field), field_type.clone());
+            rec_field_types.insert(Lowercase::from(*field), field_type.clone());
 
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
@@ -1072,6 +1113,57 @@ fn resolve_ident<'a>(
 
                 Ok(symbol)
             }
+        }
+    }
+}
+
+fn canonicalize_field<'a>(
+    rigids: &Rigids,
+    env: &mut Env,
+    var_store: &VarStore,
+    scope: &mut Scope,
+    field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
+    region: Region,
+) -> (Lowercase, Located<Expr>, Output, Variable, Type, Constraint) {
+    use crate::parse::ast::AssignedField::*;
+
+    match field {
+        // Both a label and a value, e.g. `{ name: "blah" }`
+        LabeledValue(label, _, loc_expr) => {
+            let field_var = var_store.fresh();
+            let field_type = Variable(field_var);
+            let field_expected = NoExpectation(field_type.clone());
+            let (loc_can_expr, output, constraint) = canonicalize_expr(
+                rigids,
+                env,
+                var_store,
+                scope,
+                loc_expr.region,
+                &loc_expr.value,
+                field_expected,
+            );
+
+            (
+                Lowercase::from(label.value),
+                loc_can_expr,
+                output,
+                field_var,
+                field_type,
+                constraint,
+            )
+        }
+
+        // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
+        LabelOnly(_) => {
+            panic!("Somehow a LabelOnly record field was not desugared!");
+        }
+
+        SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
+            canonicalize_field(rigids, env, var_store, scope, sub_field, region)
+        }
+
+        Malformed(_string) => {
+            panic!("TODO canonicalize malformed record field");
         }
     }
 }

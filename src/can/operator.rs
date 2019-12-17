@@ -83,10 +83,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 region,
                 value: Nested(sub_expr),
             };
-            let value = Access(
-                &desugar_expr(arena, arena.alloc(loc_sub_expr)).value,
-                paths.clone(),
-            );
+            let value = Access(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
 
             arena.alloc(Located { region, value })
         }
@@ -292,10 +289,22 @@ fn desugar_field<'a>(
             spaces,
             desugar_expr(arena, loc_expr),
         ),
-        LabelOnly(loc_str) => LabelOnly(Located {
-            value: loc_str.value,
-            region: loc_str.region,
-        }),
+        LabelOnly(loc_str) => {
+            // Desugar { x } into { x: x }
+            let loc_expr = Located {
+                value: Var(&[], loc_str.value),
+                region: loc_str.region,
+            };
+
+            AssignedField::LabeledValue(
+                Located {
+                    value: loc_str.value,
+                    region: loc_str.region,
+                },
+                &[],
+                desugar_expr(arena, arena.alloc(loc_expr)),
+            )
+        }
         SpaceBefore(field, spaces) => SpaceBefore(arena.alloc(desugar_field(arena, field)), spaces),
         SpaceAfter(field, spaces) => SpaceAfter(arena.alloc(desugar_field(arena, field)), spaces),
 

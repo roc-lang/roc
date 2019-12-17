@@ -10,7 +10,6 @@ pub mod problems;
 pub mod string_literal;
 pub mod type_annotation;
 
-use crate::ident::UnqualifiedIdent;
 use crate::operator::{BinOp, CalledVia, UnaryOp};
 use crate::parse::ast::{AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable};
 use crate::parse::blankspace::{
@@ -224,7 +223,7 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
                         // Wrap the previous answer in the new one, so we end up
                         // with a nested Expr. That way, `foo.bar.baz` gets represented
                         // in the AST as if it had been written (foo.bar).baz all along.
-                        value = Expr::Access(arena.alloc(value), UnqualifiedIdent::new(field));
+                        value = Expr::Access(arena.alloc(value), field);
                     }
 
                     Ok((
@@ -1171,12 +1170,12 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented
                 // in the AST as if it had been written (foo.bar).baz all along.
-                answer = Expr::Access(arena.alloc(answer), UnqualifiedIdent::new(field));
+                answer = Expr::Access(arena.alloc(answer), field);
             }
 
             answer
         }
-        Ident::AccessorFunction(string) => Expr::AccessorFunction(UnqualifiedIdent::new(string)),
+        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
         Ident::Malformed(string) => Expr::MalformedIdent(string),
     }
 }

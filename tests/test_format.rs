@@ -531,7 +531,7 @@ mod test_format {
             r#"
             identity = \a
                 b
-                # its b!!
+                # it's c!!
                 c
                 -> a
 

@@ -31,11 +31,6 @@ mod test_infer {
     }
 
     #[test]
-    fn empty_record() {
-        infer_eq("{}", "{}");
-    }
-
-    #[test]
     fn int_literal() {
         infer_eq("5", "Int");
     }
@@ -810,6 +805,45 @@ mod test_infer {
             "#
             ),
             "Int",
+        );
+    }
+
+    // RECORDS
+
+    #[test]
+    fn empty_record() {
+        infer_eq("{}", "{}");
+    }
+
+    #[test]
+    fn one_field_record() {
+        infer_eq("{ x: 5 }", "{ x : Int }");
+    }
+
+    #[test]
+    fn two_field_record() {
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Int, y : Float }");
+    }
+
+    #[test]
+    fn record_arg() {
+        infer_eq("\\rec -> rec.x", "{ x : a }* -> a");
+    }
+
+    #[test]
+    fn record_with_bound_var() {
+        infer_eq(
+            indoc!(
+                r#"
+                fn = \rec ->
+                    x = rec.x
+
+                    rec
+
+                fn
+            "#
+            ),
+            "{ x : a }b -> { x : a }b",
         );
     }
 }

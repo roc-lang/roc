@@ -89,8 +89,12 @@ fn find_names_needed(
 
             find_names_needed(ret_var, subs, roots, root_appearances, names_taken);
         }
-        Structure(Record(_, _)) => {
-            panic!("TODO find_names_needed Record");
+        Structure(Record(fields, ext_var)) => {
+            for (_, var) in fields {
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
+
+            find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         RigidVar(name) => {
             // User-defined names are already taken.
@@ -204,8 +208,51 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         Func(args, ret) => write_fn(args, ret, subs, buf, parens),
-        Record(_, _) => {
-            panic!("TODO write_flat_type Record");
+        Record(fields, ext_var) => {
+            if fields.is_empty() {
+                buf.push_str(EMPTY_RECORD)
+            } else {
+                buf.push_str("{ ");
+
+                // Sort the fields so they always end up in the same order.
+                let mut sorted_fields = Vec::with_capacity(fields.len());
+
+                for (label, field_var) in fields {
+                    sorted_fields.push((label.into_str(), field_var));
+                }
+
+                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+                let mut any_written_yet = false;
+
+                for (label, field_var) in sorted_fields {
+                    if any_written_yet {
+                        buf.push_str(", ");
+                    } else {
+                        any_written_yet = true;
+                    }
+
+                    buf.push_str(&label);
+                    buf.push_str(" : ");
+                    write_content(subs.get(field_var).content, subs, buf, parens);
+                }
+
+                buf.push_str(" }");
+            }
+
+            match subs.get(ext_var).content {
+                Content::Structure(EmptyRecord) => {
+                    // This is a closed record. We're done!
+                }
+                content => {
+                    // This is an open record, so print the variable
+                    // right after the '}'
+                    //
+                    // e.g. the "*" at the end of `{ x: Int }*`
+                    // or the "r" at the end of `{ x: Int }r`
+                    write_content(content, subs, buf, parens)
+                }
+            }
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));

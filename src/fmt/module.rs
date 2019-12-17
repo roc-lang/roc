@@ -130,7 +130,7 @@ fn fmt_exposes_entry<'a>(buf: &mut String<'a>, entry: &'a ExposesEntry<'a>, inde
     use crate::parse::ast::ExposesEntry::*;
 
     match entry {
-        Ident(ident) => buf.push_str(ident.as_str()),
+        Ident(ident) => buf.push_str(ident),
 
         SpaceBefore(sub_entry, spaces) => {
             fmt_spaces(buf, spaces.iter(), indent);

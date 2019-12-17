@@ -1,4 +1,3 @@
-use crate::ident::UnqualifiedIdent;
 use crate::module::ModuleName;
 use std::fmt;
 
@@ -41,11 +40,8 @@ impl Symbol {
         Symbol(format!("{}.{}", home, tag_name).into())
     }
 
-    pub fn from_module<'a>(
-        module_name: &'a ModuleName<'a>,
-        ident: &'a UnqualifiedIdent<'a>,
-    ) -> Symbol {
-        Symbol(format!("{}.{}", module_name.as_str(), ident.as_str()).into())
+    pub fn from_module<'a>(module_name: &'a ModuleName<'a>, ident: &'a &'a str) -> Symbol {
+        Symbol(format!("{}.{}", module_name.as_str(), ident).into())
     }
 
     pub fn from_qualified_ident(module_name: Box<str>, ident: Box<str>) -> Symbol {

@@ -88,8 +88,45 @@ impl fmt::Debug for Type {
             Type::Alias(_, _, _, _) => {
                 panic!("TODO fmt type aliases");
             }
-            Type::Record(_, _) => {
-                panic!("TODO fmt record types");
+            Type::Record(fields, ext) => {
+                write!(f, "{{")?;
+
+                if !fields.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                let mut any_written_yet = false;
+
+                for (label, field_type) in fields {
+                    write!(f, "{} : {:?}", label, field_type)?;
+
+                    if any_written_yet {
+                        write!(f, ", ")?;
+                    } else {
+                        any_written_yet = true;
+                    }
+                }
+
+                if !fields.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                write!(f, "}}")?;
+
+                match *ext.clone() {
+                    Type::EmptyRec => {
+                        // This is a closed record. We're done!
+                        Ok(())
+                    }
+                    other => {
+                        // This is an open record, so print the variable
+                        // right after the '}'
+                        //
+                        // e.g. the "*" at the end of `{ x: Int }*`
+                        // or the "r" at the end of `{ x: Int }r`
+                        other.fmt(f)
+                    }
+                }
             }
         }
     }
