@@ -83,10 +83,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 region,
                 value: Nested(sub_expr),
             };
-            let value = Access(
-                &desugar_expr(arena, arena.alloc(loc_sub_expr)).value,
-                paths.clone(),
-            );
+            let value = Access(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
 
             arena.alloc(Located { region, value })
         }
