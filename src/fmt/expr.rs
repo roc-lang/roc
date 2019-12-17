@@ -91,11 +91,26 @@ pub fn fmt_expr<'a>(
         Closure(loc_patterns, loc_ret) => {
             buf.push('\\');
 
+            let arguments_are_multiline = loc_patterns
+                .iter()
+                .any(|loc_pattern| is_multiline_pattern(&loc_pattern.value));
+
+            // If the arguments are multiline, go down a line and indent.
+            let indent = if arguments_are_multiline {
+                indent + INDENT
+            } else {
+                indent
+            };
+
             for loc_pattern in loc_patterns.iter() {
                 fmt_pattern(buf, &loc_pattern.value, indent, true);
 
-                buf.push(' ');
+                if !arguments_are_multiline {
+                    buf.push(' ');
+                }
             }
+
+            buf.push_str("->");
 
             let is_multiline = is_multiline_expr(&loc_ret.value);
 
@@ -105,8 +120,6 @@ pub fn fmt_expr<'a>(
             } else {
                 indent
             };
-
-            buf.push_str("->");
 
             let newline_is_next = match &loc_ret.value {
                 SpaceBefore(_, _) => true,
@@ -272,6 +285,31 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
     }
 }
 
+pub fn is_multiline_pattern<'a>(pattern: &'a Pattern<'a>) -> bool {
+    match pattern {
+        Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
+            spaces.iter().any(|space| space.contains_newline())
+        }
+
+        Pattern::Nested(nested_pat) => is_multiline_pattern(nested_pat),
+        Pattern::Identifier(_)
+        | Pattern::GlobalTag(_)
+        | Pattern::PrivateTag(_)
+        | Pattern::Apply(_, _)
+        | Pattern::RecordDestructure(_)
+        | Pattern::RecordField(_, _)
+        | Pattern::IntLiteral(_)
+        | Pattern::NonBase10Literal { .. }
+        | Pattern::FloatLiteral(_)
+        | Pattern::StrLiteral(_)
+        | Pattern::BlockStrLiteral(_)
+        | Pattern::EmptyRecordLiteral
+        | Pattern::Underscore
+        | Pattern::Malformed(_)
+        | Pattern::QualifiedIdentifier(_) => false,
+    }
+}
+
 pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
     use crate::parse::ast::Expr::*;
     // TODO cache these answers using a Map<Pointer, bool>, so
@@ -348,10 +386,6 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
         Malformed(text) => text.chars().any(|c| c == '\n'),
     }
-}
-
-pub fn is_multiline_pattern<'a>(_pattern: &'a Pattern<'a>) -> bool {
-    panic!("TODO return iff there are any newlines")
 }
 
 pub fn fmt_record<'a>(

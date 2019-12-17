@@ -488,7 +488,7 @@ mod test_format {
             identity = \a ->
                 a
 
-            identity 42
+            identity 44
             "#
         ));
 
@@ -497,7 +497,45 @@ mod test_format {
             identity = \a -> a
 
             # Hello
-            identity 42
+            identity 40
+            "#
+        ));
+
+        //        expr_formats_to(indoc!(
+        //            r#"
+        //            identity = \a
+        //                -> a
+        //
+        //            identity 41
+        //            "#
+        //        ), indoc!(
+        //            r#"
+        //            identity = \a ->
+        //                a
+        //
+        //            identity 41
+        //            "#
+        //        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a
+                b
+                -> a
+
+            identity 43
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a
+                b
+                # its b!!
+                c
+                -> a
+
+            identity 43
             "#
         ));
     }
