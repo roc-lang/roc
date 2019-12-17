@@ -56,23 +56,27 @@ pub fn solve(
                     solve(vars_by_symbol, problems, subs, &let_con.defs_constraint)
                 }
                 ret_con => {
-                    // Solve the assignments' constraints first.
-                    solve(vars_by_symbol, problems, subs, &let_con.defs_constraint);
-
                     // Add a variable for each assignment to the vars_by_symbol.
-                    let mut new_vars_by_symbol = vars_by_symbol.clone();
+                    let mut locals = vars_by_symbol.clone();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let var = type_to_var(subs, loc_type.value.clone());
 
-                        new_vars_by_symbol.insert(symbol.clone(), var);
+                        locals.insert(symbol.clone(), var);
                     }
+
+                    // Solve the assignments' constraints first.
+                    solve(vars_by_symbol, problems, subs, &let_con.defs_constraint);
+
+                    let new_vars_by_symbol = vars_by_symbol.clone().union(locals.clone());
 
                     // Now solve the body, using the new vars_by_symbol which includes
                     // the assignments' name-to-variable mappings.
                     solve(&new_vars_by_symbol, problems, subs, &ret_con);
 
-                    // TODO do an occurs check for each of the assignments!
+                    for (_, var) in locals {
+                        check_occurs(subs, problems, var);
+                    }
                 }
             }
         }
@@ -156,5 +160,11 @@ fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: T
 
             subs.fresh(Descriptor::from(content))
         }
+    }
+}
+
+fn check_occurs(subs: &mut Subs, problems: &mut Problems, var: Variable) {
+    if subs.occurs(var) {
+        panic!("TODO record Infinite Type error in problems");
     }
 }
