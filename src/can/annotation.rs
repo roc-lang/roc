@@ -1,15 +1,14 @@
-use crate::can::expr::Rigids;
 use crate::can::ident::Lowercase;
-use crate::collections::{ImMap, SendMap};
+use crate::collections::SendMap;
 use crate::parse::ast::{AssignedField, TypeAnnotation};
-use crate::subs::VarStore;
+use crate::subs::{VarStore, Variable};
 use crate::types::Type;
 
 pub fn canonicalize_annotation(
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
-) -> (Rigids, crate::types::Type) {
-    let mut ftv = ImMap::default();
+) -> (SendMap<Lowercase, Variable>, crate::types::Type) {
+    let mut ftv = SendMap::default();
     let result = can_annotation_help(annotation, var_store, &mut ftv);
 
     (ftv, result)
@@ -18,7 +17,7 @@ pub fn canonicalize_annotation(
 fn can_annotation_help(
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
-    ftv: &mut Rigids,
+    ftv: &mut SendMap<Lowercase, Variable>,
 ) -> (crate::types::Type) {
     use crate::parse::ast::TypeAnnotation::*;
 
@@ -47,9 +46,9 @@ fn can_annotation_help(
             }
         }
         BoundVariable(v) => {
-            // TODO register rigid var here
             let var = var_store.fresh();
-            ftv.insert((*v).into(), Type::Variable(var));
+            let name = Lowercase::from(*v);
+            ftv.insert(name, var);
             Type::Variable(var)
         }
         Record(fields) => {
@@ -87,7 +86,7 @@ fn can_annotation_help(
 fn can_assigned_field<'a>(
     field: &AssignedField<'a, TypeAnnotation<'a>>,
     var_store: &VarStore,
-    ftv: &mut Rigids,
+    ftv: &mut SendMap<Lowercase, Variable>,
     field_types: &mut SendMap<Lowercase, Type>,
 ) {
     use crate::parse::ast::AssignedField::*;
@@ -99,10 +98,10 @@ fn can_assigned_field<'a>(
         }
         LabelOnly(field_name) => {
             // Interpret { a, b } as { a : a, b : b }
-            // TODO register rigid
             let field_var = var_store.fresh();
             let field_type = Type::Variable(field_var);
 
+            ftv.insert(Lowercase::from(field_name.value), field_var);
             field_types.insert(Lowercase::from(field_name.value), field_type);
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
