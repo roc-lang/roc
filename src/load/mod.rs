@@ -91,8 +91,10 @@ pub async fn load<'a>(
     let main_tx = tx.clone();
     let arc_var_store = Arc::new(VarStore::new(vars_created));
     let var_store = Arc::clone(&arc_var_store);
-    let handle = tokio::spawn(async move { load_filename(&env, filename, main_tx, &var_store) });
 
+    // Use spawn_blocking here so that we can proceed to the recv() loop
+    // while this is doing blocking work like reading and parsing the file.
+    let handle = spawn_blocking(move || load_filename(&env, filename, main_tx, &var_store));
     let requested_module = handle
         .await
         .unwrap_or_else(|err| panic!("Unable to load requested module: {:?}", err));
