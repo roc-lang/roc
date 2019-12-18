@@ -40,6 +40,7 @@ pub type Rigids = ImMap<Box<str>, Type>;
 pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
+    pub rigids: SendMap<Variable, Lowercase>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

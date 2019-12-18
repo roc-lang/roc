@@ -88,8 +88,11 @@ where
         }
     }
 
+    let mut found_rigids = SendMap::default();
+
     let defs = canonicalize_defs(
         &rigids,
+        &mut found_rigids,
         &mut env,
         var_store,
         scope,

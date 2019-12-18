@@ -5,6 +5,7 @@ use crate::can::expr::{
     canonicalize_expr, local_successors, references_from_call, references_from_local, union_pairs,
     Output, Recursive, Rigids,
 };
+use crate::can::ident::Lowercase;
 use crate::can::pattern::PatternType::*;
 use crate::can::pattern::{canonicalize_pattern, idents_from_patterns, Pattern};
 use crate::can::pattern::{remove_idents, PatternState};
@@ -61,6 +62,7 @@ impl Info {
 #[inline(always)]
 pub fn canonicalize_defs<'a>(
     rigids: &Rigids,
+    found_rigids: &mut SendMap<Variable, Lowercase>,
     env: &mut Env,
     var_store: &VarStore,
     scope: &mut Scope,
@@ -94,6 +96,7 @@ pub fn canonicalize_defs<'a>(
                     let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
                     canonicalize_def(
                         rigids,
+                        found_rigids,
                         env,
                         Located {
                             region: loc_def.region,
@@ -109,6 +112,7 @@ pub fn canonicalize_defs<'a>(
                 _ => {
                     canonicalize_def(
                         rigids,
+                        found_rigids,
                         env,
                         Located {
                             region: loc_def.region,
@@ -130,6 +134,7 @@ pub fn canonicalize_defs<'a>(
                     let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
                     canonicalize_def(
                         rigids,
+                        found_rigids,
                         env,
                         Located {
                             region: loc_def.region,
@@ -145,6 +150,7 @@ pub fn canonicalize_defs<'a>(
                 _ => {
                     canonicalize_def(
                         rigids,
+                        found_rigids,
                         env,
                         Located {
                             region: loc_def.region,
@@ -162,6 +168,7 @@ pub fn canonicalize_defs<'a>(
             _ => {
                 canonicalize_def(
                     rigids,
+                    found_rigids,
                     env,
                     Located {
                         region: loc_def.region,
@@ -343,6 +350,7 @@ pub fn sort_can_defs(
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_def<'a>(
     rigids: &Rigids,
+    found_rigids: &mut SendMap<Variable, Lowercase>,
     env: &mut Env,
     loc_def: Located<&'a ast::Def<'a>>,
     scope: &mut Scope,
@@ -456,10 +464,10 @@ fn canonicalize_def<'a>(
             let (ftv_sendmap, can_annotation) =
                 canonicalize_annotation(&loc_annotation.value, var_store);
 
-            let mut ftv = ImMap::default();
+            let mut ftv: Rigids = ImMap::default();
 
-            for (k, v) in ftv_sendmap {
-                ftv.insert(k.into(), Type::Variable(v));
+            for (var, name) in ftv_sendmap.clone() {
+                ftv.insert(name.into(), Type::Variable(var));
             }
 
             // remove the known type variables (TODO can clone be prevented?)
@@ -476,7 +484,7 @@ fn canonicalize_def<'a>(
             let annotation_expected =
                 FromAnnotation(fname, arity, AnnotationSource::TypedBody, can_annotation);
 
-            let (mut loc_can_expr, can_output, ret_constraint) = canonicalize_expr(
+            let (mut loc_can_expr, mut can_output, ret_constraint) = canonicalize_expr(
                 // rigids,
                 &new_rtv,
                 env,
@@ -486,6 +494,9 @@ fn canonicalize_def<'a>(
                 &loc_expr.value,
                 annotation_expected.clone(),
             );
+
+            *found_rigids = found_rigids.clone().union(ftv_sendmap.clone());
+            can_output.rigids = ftv_sendmap;
 
             // ensure expected type unifies with annotated type
             state
@@ -796,6 +807,7 @@ fn canonicalize_def<'a>(
         Nested(value) => {
             return canonicalize_def(
                 rigids,
+                found_rigids,
                 env,
                 Located {
                     value,
@@ -875,7 +887,16 @@ pub fn can_defs_with_return<'a>(
     rigid_info: Info,
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output, Constraint) {
-    let unsorted = canonicalize_defs(rigids, env, var_store, &mut scope, loc_defs, &mut flex_info);
+    let mut found_rigids = SendMap::default();
+    let unsorted = canonicalize_defs(
+        rigids,
+        &mut found_rigids,
+        env,
+        var_store,
+        &mut scope,
+        loc_defs,
+        &mut flex_info,
+    );
 
     // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
@@ -889,7 +910,9 @@ pub fn can_defs_with_return<'a>(
         expected,
     );
 
-    let (can_defs, output) = sort_can_defs(env, unsorted, output);
+    let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
+
+    output.rigids = output.rigids.union(found_rigids);
 
     // Rigid constraint for the def expr as a whole
     let constraint = Let(Box::new(LetConstraint {
