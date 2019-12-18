@@ -453,7 +453,14 @@ fn canonicalize_def<'a>(
                 variables_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
 
-            let (ftv, can_annotation) = canonicalize_annotation(&loc_annotation.value, var_store);
+            let (ftv_sendmap, can_annotation) =
+                canonicalize_annotation(&loc_annotation.value, var_store);
+
+            let mut ftv = ImMap::default();
+
+            for (k, v) in ftv_sendmap {
+                ftv.insert(k.into(), Type::Variable(v));
+            }
 
             // remove the known type variables (TODO can clone be prevented?)
             let new_rigids = ftv.difference(rigids.clone());
