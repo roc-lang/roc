@@ -1,5 +1,5 @@
 use crate::can::ident::Lowercase;
-use crate::collections::SendMap;
+use crate::collections::{ImMap, SendMap};
 use crate::parse::ast::{AssignedField, TypeAnnotation};
 use crate::subs::{VarStore, Variable};
 use crate::types::Type;
@@ -7,9 +7,25 @@ use crate::types::Type;
 pub fn canonicalize_annotation(
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
-) -> (SendMap<Lowercase, Variable>, crate::types::Type) {
+) -> (SendMap<Variable, Lowercase>, crate::types::Type) {
+    // NOTE on rigids
+    //
+    // Rigids must be unique within a type annoation.
+    // E.g. in `identity : a -> a`, there should only be one
+    // variable (a rigid one, with name "a").
+    // Hence `rigids : ImMap<Lowercase, Variable>`
+    //
+    // But then between annotations, the same name can occur multiple times,
+    // but a variable can only have one name. Therefore
+    // `ftv : SendMap<Variable, Lowercase>`.
+    let mut rigids = ImMap::default();
+    let result = can_annotation_help(annotation, var_store, &mut rigids);
+
     let mut ftv = SendMap::default();
-    let result = can_annotation_help(annotation, var_store, &mut ftv);
+
+    for (k, v) in rigids {
+        ftv.insert(v, k);
+    }
 
     (ftv, result)
 }
@@ -17,7 +33,7 @@ pub fn canonicalize_annotation(
 fn can_annotation_help(
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
-    ftv: &mut SendMap<Lowercase, Variable>,
+    rigids: &mut ImMap<Lowercase, Variable>,
 ) -> (crate::types::Type) {
     use crate::parse::ast::TypeAnnotation::*;
 
@@ -26,17 +42,17 @@ fn can_annotation_help(
             let mut args = Vec::new();
 
             for arg in *argument_types {
-                args.push(can_annotation_help(&arg.value, var_store, ftv));
+                args.push(can_annotation_help(&arg.value, var_store, rigids));
             }
 
-            let ret = can_annotation_help(&return_type.value, var_store, ftv);
+            let ret = can_annotation_help(&return_type.value, var_store, rigids);
             Type::Function(args, Box::new(ret))
         }
         Apply(module_name, name, type_arguments) => {
             let mut args = Vec::new();
 
             for arg in *type_arguments {
-                args.push(can_annotation_help(&arg.value, var_store, ftv));
+                args.push(can_annotation_help(&arg.value, var_store, rigids));
             }
 
             Type::Apply {
@@ -46,15 +62,20 @@ fn can_annotation_help(
             }
         }
         BoundVariable(v) => {
-            let var = var_store.fresh();
             let name = Lowercase::from(*v);
-            ftv.insert(name, var);
-            Type::Variable(var)
+
+            if let Some(var) = rigids.get(&name) {
+                Type::Variable(*var)
+            } else {
+                let var = var_store.fresh();
+                rigids.insert(name, var);
+                Type::Variable(var)
+            }
         }
         Record(fields) => {
             let mut field_types = SendMap::default();
             for field in fields {
-                can_assigned_field(&field.value, var_store, ftv, &mut field_types);
+                can_assigned_field(&field.value, var_store, rigids, &mut field_types);
             }
 
             // fragment variable is free in this case
@@ -66,15 +87,15 @@ fn can_annotation_help(
         RecordFragment(fields, fragment) => {
             let mut field_types = SendMap::default();
             for field in fields {
-                can_assigned_field(&field.value, var_store, ftv, &mut field_types);
+                can_assigned_field(&field.value, var_store, rigids, &mut field_types);
             }
 
-            let fragment_type = can_annotation_help(&fragment.value, var_store, ftv);
+            let fragment_type = can_annotation_help(&fragment.value, var_store, rigids);
 
             Type::Record(field_types, Box::new(fragment_type))
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            can_annotation_help(nested, var_store, ftv)
+            can_annotation_help(nested, var_store, rigids)
         }
         Wildcard | Malformed(_) => {
             let var = var_store.fresh();
@@ -86,26 +107,32 @@ fn can_annotation_help(
 fn can_assigned_field<'a>(
     field: &AssignedField<'a, TypeAnnotation<'a>>,
     var_store: &VarStore,
-    ftv: &mut SendMap<Lowercase, Variable>,
+    rigids: &mut ImMap<Lowercase, Variable>,
     field_types: &mut SendMap<Lowercase, Type>,
 ) {
     use crate::parse::ast::AssignedField::*;
 
     match field {
         LabeledValue(field_name, _, annotation) => {
-            let field_type = can_annotation_help(&annotation.value, var_store, ftv);
+            let field_type = can_annotation_help(&annotation.value, var_store, rigids);
             field_types.insert(Lowercase::from(field_name.value), field_type);
         }
-        LabelOnly(field_name) => {
+        LabelOnly(loc_field_name) => {
             // Interpret { a, b } as { a : a, b : b }
-            let field_var = var_store.fresh();
-            let field_type = Type::Variable(field_var);
-
-            ftv.insert(Lowercase::from(field_name.value), field_var);
-            field_types.insert(Lowercase::from(field_name.value), field_type);
+            let field_name = Lowercase::from(loc_field_name.value);
+            let field_type = {
+                if let Some(var) = rigids.get(&field_name) {
+                    Type::Variable(*var)
+                } else {
+                    let field_var = var_store.fresh();
+                    rigids.insert(field_name.clone(), field_var);
+                    Type::Variable(field_var)
+                }
+            };
+            field_types.insert(field_name, field_type);
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            can_assigned_field(nested, var_store, ftv, field_types)
+            can_assigned_field(nested, var_store, rigids, field_types)
         }
         Malformed(_) => {}
     }
