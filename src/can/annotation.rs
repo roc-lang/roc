@@ -97,7 +97,14 @@ fn can_assigned_field<'a>(
             let field_type = can_annotation_help(&annotation.value, var_store, ftv);
             field_types.insert(Lowercase::from(field_name.value), field_type);
         }
-        LabelOnly(_) => panic!("Illegal at the type level?"),
+        LabelOnly(field_name) => {
+            // Interpret { a, b } as { a : a, b : b }
+            // TODO register rigid
+            let field_var = var_store.fresh();
+            let field_type = Type::Variable(field_var);
+
+            field_types.insert(Lowercase::from(field_name.value), field_type);
+        }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
             can_assigned_field(nested, var_store, ftv, field_types)
         }
