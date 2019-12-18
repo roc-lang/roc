@@ -1,7 +1,10 @@
+use crate::can::ident::Lowercase;
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
+use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Subs, Variable};
 use crate::types::Constraint::{self, *};
+use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Problems};
 
@@ -57,25 +60,35 @@ pub fn solve(
                 }
                 ret_con => {
                     // Add a variable for each assignment to the vars_by_symbol.
-                    let mut locals = vars_by_symbol.clone();
+                    let mut locals = ImMap::default();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let var = type_to_var(subs, loc_type.value.clone());
 
-                        locals.insert(symbol.clone(), var);
+                        locals.insert(
+                            symbol.clone(),
+                            Located {
+                                value: var,
+                                region: loc_type.region,
+                            },
+                        );
                     }
 
                     // Solve the assignments' constraints first.
                     solve(vars_by_symbol, problems, subs, &let_con.defs_constraint);
 
-                    let new_vars_by_symbol = vars_by_symbol.clone().union(locals.clone());
+                    let mut new_vars_by_symbol = vars_by_symbol.clone();
+
+                    for (symbol, loc_var) in locals.iter() {
+                        new_vars_by_symbol.insert(symbol.clone(), loc_var.value);
+                    }
 
                     // Now solve the body, using the new vars_by_symbol which includes
                     // the assignments' name-to-variable mappings.
                     solve(&new_vars_by_symbol, problems, subs, &ret_con);
 
-                    for (_, var) in locals {
-                        check_occurs(subs, problems, var);
+                    for (symbol, loc_var) in locals {
+                        check_for_infinite_type(subs, problems, symbol, loc_var);
                     }
                 }
             }
@@ -87,7 +100,7 @@ fn type_to_var(subs: &mut Subs, typ: Type) -> Variable {
     type_to_variable(subs, &ImMap::default(), typ)
 }
 
-fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: Type) -> Variable {
+fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Lowercase, Variable>, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
         Apply {
@@ -163,8 +176,20 @@ fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: T
     }
 }
 
-fn check_occurs(subs: &mut Subs, problems: &mut Problems, var: Variable) {
+fn check_for_infinite_type(
+    subs: &mut Subs,
+    problems: &mut Problems,
+    symbol: Symbol,
+    loc_var: Located<Variable>,
+) {
+    let var = loc_var.value;
+
     if subs.occurs(var) {
-        panic!("TODO record Infinite Type error in problems");
+        let error_type = subs.to_error_type(var);
+        let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+
+        subs.set_content(var, Content::Error(problem.clone()));
+
+        problems.push(problem);
     }
 }

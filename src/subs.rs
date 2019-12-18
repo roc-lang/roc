@@ -1,12 +1,12 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
-use crate::collections::{ImMap, ImSet};
+use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
-use crate::types::Problem;
+use crate::types::{name_type_var, ErrorType, Problem, RecordExt};
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub struct Mark(u8);
+pub struct Mark(i32);
 
 impl Mark {
     #[inline(always)]
@@ -42,6 +42,12 @@ impl fmt::Debug for Mark {
             write!(f, "Mark({})", self.0)
         }
     }
+}
+
+#[derive(Default)]
+struct NameState {
+    taken: MutSet<Lowercase>,
+    normals: u32,
 }
 
 #[derive(Debug, Default)]
@@ -168,6 +174,30 @@ impl Subs {
         });
     }
 
+    pub fn set_mark(&mut self, key: Variable, mark: Mark) {
+        let l_key = self.utable.get_root_key(key);
+
+        self.utable.update_value(l_key, |node| {
+            let mut new_desc = node.value.clone();
+
+            new_desc.mark = mark;
+
+            node.value = new_desc;
+        });
+    }
+
+    pub fn set_content(&mut self, key: Variable, content: Content) {
+        let l_key = self.utable.get_root_key(key);
+
+        self.utable.update_value(l_key, |node| {
+            let mut new_desc = node.value.clone();
+
+            new_desc.content = content;
+
+            node.value = new_desc;
+        });
+    }
+
     pub fn copy_var(&mut self, var: Variable) -> Variable {
         // TODO understand the purpose of using a "deep copy" approach here,
         // and perform it if necessary. (Seems to be about setting maxRank?)
@@ -180,6 +210,19 @@ impl Subs {
 
     pub fn occurs(&mut self, var: Variable) -> bool {
         occurs(self, &ImSet::default(), var)
+    }
+
+    pub fn to_error_type(&mut self, var: Variable) -> ErrorType {
+        let names = get_var_names(self, var, ImMap::default());
+        let mut taken = MutSet::default();
+
+        for (name, _) in names {
+            taken.insert(name);
+        }
+
+        let mut state = NameState { taken, normals: 0 };
+
+        var_to_err_type(self, &mut state, var)
     }
 }
 
@@ -253,9 +296,11 @@ pub enum Content {
     ///
     /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
     /// change the Option in here from None to Some.
-    FlexVar(Option<Box<str>> /* name - e.g. in pattern matching */),
+    FlexVar(
+        Option<Lowercase>, /* name - e.g. in pattern matching, or a named type var */
+    ),
     /// name given in a user-written annotation
-    RigidVar(Box<str>),
+    RigidVar(Lowercase),
     Structure(FlatType),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Variable),
     Error(Problem),
@@ -264,8 +309,8 @@ pub enum Content {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
     Apply {
-        module_name: Box<str>,
-        name: Box<str>,
+        module_name: ModuleName,
+        name: Uppercase,
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
@@ -322,4 +367,233 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
             }
         }
     }
+}
+
+fn get_var_names(
+    subs: &mut Subs,
+    var: Variable,
+    taken_names: ImMap<Lowercase, Variable>,
+) -> ImMap<Lowercase, Variable> {
+    use self::Content::*;
+    let desc = subs.get(var);
+
+    if desc.mark == Mark::get_var_names() {
+        taken_names
+    } else {
+        subs.set_mark(var, Mark::get_var_names());
+
+        match desc.content {
+            Error(_) | FlexVar(None) => taken_names,
+            FlexVar(Some(name)) => {
+                add_name(subs, 0, name, var, |name| FlexVar(Some(name)), taken_names)
+            }
+
+            RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
+
+            Alias(_, _, args, _) => args.into_iter().fold(taken_names, |answer, (_, arg_var)| {
+                get_var_names(subs, arg_var, answer)
+            }),
+            Structure(flat_type) => match flat_type {
+                FlatType::Apply { args, .. } => {
+                    args.into_iter().fold(taken_names, |answer, arg_var| {
+                        get_var_names(subs, arg_var, answer)
+                    })
+                }
+
+                FlatType::Func(arg_vars, ret_var) => {
+                    let taken_names = get_var_names(subs, ret_var, taken_names);
+
+                    arg_vars.into_iter().fold(taken_names, |answer, arg_var| {
+                        get_var_names(subs, arg_var, answer)
+                    })
+                }
+
+                FlatType::EmptyRecord | FlatType::Erroneous(_) => taken_names,
+
+                FlatType::Record(vars_by_field, ext_var) => {
+                    let taken_names = get_var_names(subs, ext_var, taken_names);
+
+                    vars_by_field
+                        .into_iter()
+                        .fold(taken_names, |answer, (_, arg_var)| {
+                            get_var_names(subs, arg_var, answer)
+                        })
+                }
+            },
+        }
+    }
+}
+
+fn add_name<F>(
+    subs: &mut Subs,
+    index: usize,
+    given_name: Lowercase,
+    var: Variable,
+    content_from_name: F,
+    taken_names: ImMap<Lowercase, Variable>,
+) -> ImMap<Lowercase, Variable>
+where
+    F: FnOnce(Lowercase) -> Content,
+{
+    let indexed_name = if index == 0 {
+        given_name.clone()
+    } else {
+        // TODO is this the proper use of index here, or should we be
+        // doing something else like turning it into an ASCII letter?
+        Lowercase::from(format!("{}{}", given_name, index))
+    };
+
+    match taken_names.get(&indexed_name) {
+        None => {
+            if indexed_name != given_name {
+                subs.set_content(var, content_from_name(indexed_name.clone()));
+            }
+
+            let mut answer = taken_names.clone();
+
+            answer.insert(indexed_name, var);
+
+            taken_names
+        }
+        Some(&other_var) => {
+            if subs.equivalent(var, other_var) {
+                taken_names
+            } else {
+                add_name(
+                    subs,
+                    index + 1,
+                    given_name,
+                    var,
+                    content_from_name,
+                    taken_names,
+                )
+            }
+        }
+    }
+}
+
+fn var_to_err_type(subs: &mut Subs, state: &mut NameState, var: Variable) -> ErrorType {
+    let desc = subs.get(var);
+
+    if desc.mark == Mark::occurs() {
+        ErrorType::Infinite
+    } else {
+        subs.set_mark(var, Mark::occurs());
+
+        let err_type = content_to_err_type(subs, state, var, desc.content);
+
+        subs.set_mark(var, desc.mark);
+
+        err_type
+    }
+}
+
+fn content_to_err_type(
+    subs: &mut Subs,
+    state: &mut NameState,
+    var: Variable,
+    content: Content,
+) -> ErrorType {
+    use self::Content::*;
+
+    match content {
+        Structure(flat_type) => flat_type_to_err_type(subs, state, flat_type),
+
+        FlexVar(Some(name)) => ErrorType::FlexVar(name),
+
+        FlexVar(opt_name) => {
+            let name = match opt_name {
+                Some(name) => name,
+                None => {
+                    let name = get_fresh_var_name(state);
+
+                    subs.set_content(var, FlexVar(Some(name.clone())));
+
+                    name
+                }
+            };
+
+            ErrorType::FlexVar(name)
+        }
+
+        RigidVar(name) => ErrorType::RigidVar(name),
+
+        Alias(module_name, name, args, aliased_to) => {
+            let err_args = args
+                .into_iter()
+                .map(|(name, var)| (name, var_to_err_type(subs, state, var)))
+                .collect();
+            let err_type = var_to_err_type(subs, state, aliased_to);
+
+            ErrorType::Alias(module_name, name, err_args, Box::new(err_type))
+        }
+
+        Error(_) => ErrorType::Error,
+    }
+}
+
+fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: FlatType) -> ErrorType {
+    use self::FlatType::*;
+
+    match flat_type {
+        Apply {
+            module_name,
+            name,
+            args,
+        } => {
+            let arg_types = args
+                .into_iter()
+                .map(|var| var_to_err_type(subs, state, var))
+                .collect();
+
+            ErrorType::Type(module_name.into(), name.into(), arg_types)
+        }
+
+        Func(arg_vars, ret_var) => {
+            let args = arg_vars
+                .into_iter()
+                .map(|arg_var| var_to_err_type(subs, state, arg_var))
+                .collect();
+            let ret = var_to_err_type(subs, state, ret_var);
+
+            ErrorType::Function(args, Box::new(ret))
+        }
+
+        EmptyRecord => ErrorType::Record(SendMap::default(), RecordExt::Closed),
+
+        Record(vars_by_field, ext_var) => {
+            let mut err_fields = SendMap::default();
+
+            for (field, var) in vars_by_field.into_iter() {
+                err_fields.insert(field, var_to_err_type(subs, state, var));
+            }
+
+            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+                ErrorType::Record(sub_fields, sub_ext) => {
+                    ErrorType::Record(sub_fields.union(err_fields), sub_ext)
+                }
+
+                ErrorType::FlexVar(var) => {
+                    ErrorType::Record(err_fields, RecordExt::FlexOpen(var))
+                }
+
+                ErrorType::RigidVar(var) => {
+                    ErrorType::Record(err_fields, RecordExt::RigidOpen(var))
+                }
+
+                other =>
+                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
+            }
+        }
+
+        Erroneous(_) => ErrorType::Error,
+    }
+}
+
+fn get_fresh_var_name(state: &mut NameState) -> Lowercase {
+    let (name, new_index) = name_type_var(state.normals, &mut state.taken);
+
+    state.normals = new_index;
+
+    name
 }

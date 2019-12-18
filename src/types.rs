@@ -1,6 +1,6 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::symbol::Symbol;
-use crate::collections::SendMap;
+use crate::collections::{MutSet, SendMap};
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
 use crate::region::Region;
@@ -31,8 +31,8 @@ pub enum Type {
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
-        module_name: Box<str>,
-        name: Box<str>,
+        module_name: ModuleName,
+        name: Uppercase,
         args: Vec<Type>,
     },
     Variable(Variable),
@@ -64,6 +64,8 @@ impl fmt::Debug for Type {
                 name,
                 args,
             } => {
+                let module_name = module_name.as_str();
+
                 write!(f, "(")?;
 
                 if !module_name.is_empty() {
@@ -284,6 +286,64 @@ pub enum Problem {
     IfConditionNotBool,
     InconsistentIfElse,
     InconsistentCaseBranches,
-    CircularType,
+    CircularType(Symbol, ErrorType, Region),
     CanonicalizationProblem,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum ErrorType {
+    Infinite,
+    Type(ModuleName, Uppercase, Vec<ErrorType>),
+    FlexVar(Lowercase),
+    RigidVar(Lowercase),
+    Record(SendMap<Lowercase, ErrorType>, RecordExt),
+    Function(Vec<ErrorType>, Box<ErrorType>),
+    Alias(
+        ModuleName,
+        Uppercase,
+        Vec<(Lowercase, ErrorType)>,
+        Box<ErrorType>,
+    ),
+    Error,
+}
+
+impl ErrorType {
+    pub fn unwrap_alias(self) -> ErrorType {
+        match self {
+            ErrorType::Alias(_, _, _, real) => real.unwrap_alias(),
+            real => real,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum RecordExt {
+    Closed,
+    FlexOpen(Lowercase),
+    RigidOpen(Lowercase),
+}
+
+static THE_LETTER_A: u32 = 'a' as u32;
+
+pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lowercase, u32) {
+    // TODO we should arena-allocate this String,
+    // so all the strings in the entire pass only require ~1 allocation.
+    let generated_name = if letters_used < 26 {
+        // This should generate "a", then "b", etc.
+        std::char::from_u32(THE_LETTER_A + letters_used)
+            .unwrap_or_else(|| panic!("Tried to convert {} to a char", THE_LETTER_A + letters_used))
+            .to_string()
+            .into()
+    } else {
+        panic!("TODO generate aa, ab, ac, ...");
+    };
+
+    if taken.contains(&generated_name) {
+        // If the generated name is already taken, try again.
+        name_type_var(letters_used + 1, taken)
+    } else {
+        taken.insert(generated_name.clone());
+
+        (generated_name, letters_used + 1)
+    }
 }
