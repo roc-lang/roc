@@ -16,11 +16,12 @@ use crate::types::Constraint;
 use crate::unify::Problems;
 use bumpalo::Bump;
 use futures::future::join_all;
+use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::fs::read_to_string;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::task::spawn_blocking;
 
 #[derive(Debug)]
 pub struct Loaded {
@@ -90,8 +91,7 @@ pub async fn load<'a>(
     let main_tx = tx.clone();
     let arc_var_store = Arc::new(VarStore::new(vars_created));
     let var_store = Arc::clone(&arc_var_store);
-    let handle =
-        tokio::spawn(async move { load_filename(&env, filename, main_tx, &var_store).await });
+    let handle = tokio::spawn(async move { load_filename(&env, filename, main_tx, &var_store) });
 
     let requested_module = handle
         .await
@@ -118,7 +118,10 @@ pub async fn load<'a>(
             let tx = tx.clone();
             let var_store = Arc::clone(&arc_var_store);
 
-            tokio::spawn(async move { load_module(&env, dep, tx, &var_store).await })
+            // Use spawn_blocking here because we're canonicalizing these in
+            // parallel, and canonicalization can potentially block the
+            // executor for awhile.
+            spawn_blocking(move || load_module(&env, dep, tx, &var_store))
         }))
         .await;
 
@@ -142,7 +145,7 @@ pub async fn load<'a>(
     }
 }
 
-async fn load_module(
+fn load_module(
     env: &Env,
     module_name: Box<str>,
     tx: Sender<DepNames>,
@@ -160,16 +163,16 @@ async fn load_module(
     // End with .roc
     filename.set_extension("roc");
 
-    load_filename(env, filename, tx, var_store).await
+    load_filename(env, filename, tx, var_store)
 }
 
-async fn load_filename(
+fn load_filename(
     env: &Env,
     filename: PathBuf,
     tx: Sender<DepNames>,
     var_store: &VarStore,
 ) -> LoadedModule {
-    match read_to_string(&filename).await {
+    match read_to_string(&filename) {
         Ok(src) => {
             let arena = Bump::new();
             // TODO instead of env.arena.alloc(src), we should create a new buffer
