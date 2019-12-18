@@ -121,7 +121,7 @@ pub async fn load<'a>(
             // Use spawn_blocking here because we're canonicalizing these in
             // parallel, and canonicalization can potentially block the
             // executor for awhile.
-            spawn_blocking(move || load_module(&env, dep, tx, &var_store))
+            spawn_blocking(move || load_module(&env, &dep, tx, &var_store))
         }))
         .await;
 
@@ -147,7 +147,7 @@ pub async fn load<'a>(
 
 fn load_module(
     env: &Env,
-    module_name: Box<str>,
+    module_name: &str,
     tx: Sender<DepNames>,
     var_store: &VarStore,
 ) -> LoadedModule {
