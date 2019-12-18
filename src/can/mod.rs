@@ -1,3 +1,4 @@
+pub mod annotation;
 pub mod def;
 pub mod env;
 pub mod expr;
