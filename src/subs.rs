@@ -212,7 +212,7 @@ impl Subs {
         occurs(self, &ImSet::default(), var)
     }
 
-    pub fn to_error_type(&mut self, var: Variable) -> ErrorType {
+    pub fn var_to_error_type(&mut self, var: Variable) -> ErrorType {
         let names = get_var_names(self, var, ImMap::default());
         let mut taken = MutSet::default();
 
@@ -248,7 +248,7 @@ impl Rank {
         Rank(1)
     }
 
-    pub fn next(&self) -> Self {
+    pub fn next(self) -> Self {
         Rank(self.0 + 1)
     }
 }
@@ -546,7 +546,7 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
                 .map(|var| var_to_err_type(subs, state, var))
                 .collect();
 
-            ErrorType::Type(module_name.into(), name.into(), arg_types)
+            ErrorType::Type(module_name, name, arg_types)
         }
 
         Func(arg_vars, ret_var) => {

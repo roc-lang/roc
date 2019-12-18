@@ -160,7 +160,7 @@ fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Lowercase, Variable>, typ: 
                 let arg_var = type_to_variable(subs, aliases, arg_type.clone());
 
                 arg_vars.push((arg.clone(), arg_var));
-                new_aliases.insert(arg.into(), arg_var);
+                new_aliases.insert(arg, arg_var);
             }
 
             let alias_var = type_to_variable(subs, &new_aliases, *alias_type);
@@ -185,7 +185,7 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     if subs.occurs(var) {
-        let error_type = subs.to_error_type(var);
+        let error_type = subs.var_to_error_type(var);
         let problem = Problem::CircularType(symbol, error_type, loc_var.region);
 
         subs.set_content(var, Content::Error(problem.clone()));
