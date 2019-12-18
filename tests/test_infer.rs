@@ -19,8 +19,14 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, _output, _, var_store, variable, constraint) = can_expr(src);
+        let (_, output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
+
+        dbg!(&output.rigids);
+        for (var, name) in output.rigids {
+            subs.rigid_var(var, name);
+        }
+
         let mut unify_problems = Vec::new();
         let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
 
@@ -855,14 +861,13 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            # bar : thing -> thing
-            bar : a -> a
+            bar : custom -> custom
             bar = \x -> x
 
-            bar 
+            bar
             "#
             ),
-            "thing -> thing",
+            "custom -> custom",
         );
     }
 }
