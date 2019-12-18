@@ -1,3 +1,4 @@
+use crate::can::annotation::canonicalize_annotation;
 use crate::can::env::Env;
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::{
@@ -339,57 +340,6 @@ pub fn sort_can_defs(
     }
 }
 
-fn canonicalize_annotation(
-    annotation: &crate::parse::ast::TypeAnnotation,
-    var_store: &VarStore,
-) -> (Rigids, crate::types::Type) {
-    let mut ftv = ImMap::default();
-    let result = can_annotation_help(annotation, var_store, &mut ftv);
-
-    (ftv, result)
-}
-
-fn can_annotation_help(
-    annotation: &crate::parse::ast::TypeAnnotation,
-    var_store: &VarStore,
-    ftv: &mut Rigids,
-) -> (crate::types::Type) {
-    use crate::parse::ast::TypeAnnotation::*;
-
-    match annotation {
-        Function(argument_types, return_type) => {
-            let mut args = Vec::new();
-
-            for arg in *argument_types {
-                args.push(can_annotation_help(&arg.value, var_store, ftv));
-            }
-
-            let ret = can_annotation_help(&return_type.value, var_store, ftv);
-            Type::Function(args, Box::new(ret))
-        }
-        Apply(module_name, name, type_arguments) => {
-            let mut args = Vec::new();
-
-            for arg in *type_arguments {
-                args.push(can_annotation_help(&arg.value, var_store, ftv));
-            }
-
-            Type::Apply {
-                module_name: module_name.join(".").into(),
-                name: (*name).into(),
-                args,
-            }
-        }
-        BoundVariable(v) => {
-            // TODO register rigid var here
-            let var = var_store.fresh();
-            ftv.insert((*v).into(), Type::Variable(var));
-            Type::Variable(var)
-        }
-        _ => panic!("TODO implement canonicalize annotation"),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_def<'a>(
     rigids: &Rigids,
@@ -530,12 +480,10 @@ fn canonicalize_def<'a>(
                 annotation_expected.clone(),
             );
 
-            /*
             // ensure expected type unifies with annotated type
             state
                 .constraints
                 .push(Eq(expr_type.clone(), annotation_expected, loc_def.region));
-            */
 
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
