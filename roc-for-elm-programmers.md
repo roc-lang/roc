@@ -188,13 +188,13 @@ This makes unbound type variables easier to talk about out loud. Rather than say
 Roc's pattern matching conditionals work about the same as how they do in Elm.
 Here are two differences:
 
-* Roc uses the syntax `case`...`when` instead of `case`...`of`
+* Roc uses the syntax `when`...`is` instead of `case`...`of`
 * In Roc, you can use `|` to handle multiple patterns in the same way
 
 For example:
 
 ```elm
-case color when
+when color is
     Blue -> 1
     Green | Red | Yellow -> 2
     Purple -> 3
@@ -249,7 +249,7 @@ they use `Foo` with different arities - and also with different types within the
 Now let's say I do a pattern match with no type annotations.
 
 ```elm
-case foo when
+when foo is
     MyInt num -> num + 1
     MyFloat float -> Float.round float
 ```
@@ -259,9 +259,9 @@ based on its usage.
 
 > As with OCaml's polymorphic variants, exhaustiveness checking is still in full effect here.
 > It's based on usage; if any code pathways led to `foo` being set to the tag `Blah`,
-> I'd get an exhaustiveness error because this `case` does not have a `Blah` branch.
+> I'd get an exhaustiveness error because this `when` does not have a `Blah` branch.
 
-There's an important interaction here between the inferred type of a *case-expression* and
+There's an important interaction here between the inferred type of a *when-expression* and
 the inferred type of a tag value. Note which types have a `*` and which do not.
 
 ```elm
@@ -273,7 +273,7 @@ y = Bar 3.14
 
 toInt : [ Foo, Bar Float ] -> Int
 toInt = \tag ->
-    case tag when
+    when tag is
         Foo -> 1
         Bar float -> Float.round float
 ```
@@ -288,13 +288,13 @@ any closed tag union which contains its tags (in this case, the `Foo` tag). You 
 pass `y` to `toInt` for the same reason.
 
 In general, when you make a tag value, you'll get an open tag union (with a `*`).
-When you use `case`, you *can* get a closed union (without a `*`) but that's not
-always what happens. Here's a `case` where the inferred type is an open tag union:
+Using `when` *can* get you a closed union (a union without a `*`) but that's not
+always what happens. Here's a `when` in which the inferred type is an open tag union:
 
 ```elm
 alwaysFoo : [ Foo Int ]* -> [ Foo Int ]*
 alwaysFoo = \tag ->
-    case tag when
+    when tag is
         Foo num -> Foo (num + 1)
         _ -> Foo 0
 ```
@@ -302,7 +302,7 @@ alwaysFoo = \tag ->
 The return value is an open tag union because all branches return something
 tagged with `Foo`.
 
-The argument is also an open tag union, because this *case-expression* has
+The argument is also an open tag union, because this *when-expression* has
 a default branch; that argument is compatible with any tag union. This means you
 can pass the function some totally nonsensical tag, and it will still compile.
 
@@ -326,7 +326,7 @@ alwaysFoo : [ Foo Int, Bar Str ] -> [ Foo Int ]*
 out your own annotations, you can get the same level of restriction you get with
 traditional algebraic data types (which, after all, come with the requirement that
 you write out their annotations). Using annotations, you can restrict even
-*case-expressions* with default branches to accept only the values you define to be valid.
+*when-expressions* with default branches to accept only the values you define to be valid.
 
 In fact, if you want a traditional algebraic data type in Roc, you can get about the same
 functionality by making (and then using) a type alias for a closed tag union.
@@ -771,7 +771,7 @@ test "it works"
     \_ -> ...
 ```
 
-You don't need parens or an operator to pass an anonymous function, `case`, or `if` as arguments. Here's another example:
+You don't need parens or an operator to pass an anonymous function, `when`, or `if` as arguments. Here's another example:
 
 ```elixir
 foo 1 2 if something then 3 else 4
