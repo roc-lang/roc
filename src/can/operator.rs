@@ -40,7 +40,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         }
         TypedDef(loc_pattern, loc_annotation, loc_expr)
         | Nested(TypedDef(loc_pattern, loc_annotation, loc_expr)) => TypedDef(
-            loc_pattern.clone(),
+            loc_pattern,
             loc_annotation.clone(),
             desugar_expr(arena, loc_expr),
         ),
