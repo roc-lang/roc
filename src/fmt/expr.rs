@@ -89,61 +89,7 @@ pub fn fmt_expr<'a>(
             fmt_record(buf, loc_fields, indent, apply_needs_parens);
         }
         Closure(loc_patterns, loc_ret) => {
-            buf.push('\\');
-
-            let arguments_are_multiline = loc_patterns
-                .iter()
-                .any(|loc_pattern| is_multiline_pattern(&loc_pattern.value));
-
-            // If the arguments are multiline, go down a line and indent.
-            let indent = if arguments_are_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            let mut any_args_printed = false;
-
-            for loc_pattern in loc_patterns.iter() {
-                if any_args_printed {
-                    buf.push(',');
-
-                    if !arguments_are_multiline {
-                        buf.push(' ');
-                    }
-                } else {
-                    any_args_printed = true;
-                }
-
-                fmt_pattern(buf, &loc_pattern.value, indent, true);
-            }
-
-            if !arguments_are_multiline {
-                buf.push(' ');
-            }
-
-            buf.push_str("->");
-
-            let is_multiline = is_multiline_expr(&loc_ret.value);
-
-            // If the body is multiline, go down a line and indent.
-            let indent = if is_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            let newline_is_next = match &loc_ret.value {
-                SpaceBefore(_, _) => true,
-                _ => false,
-            };
-
-            if !newline_is_next {
-                // Push a space after the "->" preceding this.
-                buf.push(' ');
-            }
-
-            fmt_expr(buf, &loc_ret.value, indent, false);
+            fmt_closure(buf, loc_patterns, loc_ret, indent);
         }
         Defs(defs, ret) => {
             // It should theoretically be impossible to *parse* an empty defs list.
@@ -398,6 +344,71 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
         Malformed(text) => text.chars().any(|c| c == '\n'),
     }
+}
+
+pub fn fmt_closure<'a>(
+    buf: &mut String<'a>,
+    loc_patterns: &'a Vec<'a, Located<Pattern<'a>>>,
+    loc_ret: &'a Located<Expr<'a>>,
+    indent: u16,
+) {
+    use self::Expr::*;
+
+    buf.push('\\');
+
+    let arguments_are_multiline = loc_patterns
+        .iter()
+        .any(|loc_pattern| is_multiline_pattern(&loc_pattern.value));
+
+    // If the arguments are multiline, go down a line and indent.
+    let indent = if arguments_are_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    let mut any_args_printed = false;
+
+    for loc_pattern in loc_patterns.iter() {
+        if any_args_printed {
+            buf.push(',');
+
+            if !arguments_are_multiline {
+                buf.push(' ');
+            }
+        } else {
+            any_args_printed = true;
+        }
+
+        fmt_pattern(buf, &loc_pattern.value, indent, true);
+    }
+
+    if !arguments_are_multiline {
+        buf.push(' ');
+    }
+
+    buf.push_str("->");
+
+    let is_multiline = is_multiline_expr(&loc_ret.value);
+
+    // If the body is multiline, go down a line and indent.
+    let indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    let newline_is_next = match &loc_ret.value {
+        SpaceBefore(_, _) => true,
+        _ => false,
+    };
+
+    if !newline_is_next {
+        // Push a space after the "->" preceding this.
+        buf.push(' ');
+    }
+
+    fmt_expr(buf, &loc_ret.value, indent, false);
 }
 
 pub fn fmt_record<'a>(
