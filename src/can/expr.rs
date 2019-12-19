@@ -651,7 +651,7 @@ pub fn canonicalize_expr(
                         vec![cond_var],
                         And(vec![
                             // Record the original conditional expression's constraint.
-                            expr_con.clone(),
+                            expr_con,
                             // Each branch's pattern must have the same type
                             // as the condition expression did.
                             And(branch_cons),
@@ -708,7 +708,11 @@ pub fn canonicalize_expr(
                 And(vec![constraint, Eq(field_type, expected, region)]),
             );
 
-            (loc_expr.value, output, constraint)
+            (
+                Access(Box::new(loc_expr), Lowercase::from(*field).into()),
+                output,
+                constraint,
+            )
         }
         ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)

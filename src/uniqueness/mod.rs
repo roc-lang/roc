@@ -73,7 +73,7 @@ fn canonicalize_pattern(
                 symbol.clone(),
                 Located {
                     region: pattern.region,
-                    value: expected.clone().get_type(),
+                    value: expected.get_type(),
                 },
             );
         }
@@ -279,7 +279,7 @@ pub fn canonicalize_expr(
                 var_usage,
                 region,
                 &body.value,
-                Expected::NoExpectation(ret_type.clone()),
+                Expected::NoExpectation(ret_type),
             );
 
             // remove identifiers bound in the arguments from VarUsage
@@ -500,7 +500,7 @@ pub fn canonicalize_expr(
                         vec![cond_var],
                         And(vec![
                             // Record the original conditional expression's constraint.
-                            expr_con.clone(),
+                            expr_con,
                             // Each branch's pattern must have the same type
                             // as the condition expression did.
                             And(branch_cons),

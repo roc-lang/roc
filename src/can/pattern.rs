@@ -136,7 +136,7 @@ pub fn canonicalize_pattern<'a>(
                             scope
                                 .idents
                                 .insert(new_ident.clone(), symbol_and_region.clone());
-                            shadowable_idents.insert(new_ident, symbol_and_region.clone());
+                            shadowable_idents.insert(new_ident, symbol_and_region);
 
                             Pattern::Identifier(var_store.fresh(), symbol)
                         }

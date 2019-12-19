@@ -1240,7 +1240,23 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         move |arena, state, (loc_assigned_fields, opt_def)| match opt_def {
             None => {
                 // This is a record literal, not a destructure.
-                Ok((Expr::Record(loc_assigned_fields.value), state))
+                let mut value = Expr::Record(loc_assigned_fields.value);
+
+                // there can be field access, e.g. `{ x : 4 }.x`
+                let (accesses, state) =
+                    optional(one_or_more!(skip_first!(char('.'), lowercase_ident())))
+                        .parse(arena, state)?;
+
+                if let Some(fields) = accesses {
+                    for field in fields {
+                        // Wrap the previous answer in the new one, so we end up
+                        // with a nested Expr. That way, `foo.bar.baz` gets represented
+                        // in the AST as if it had been written (foo.bar).baz all along.
+                        value = Expr::Access(arena.alloc(value), field);
+                    }
+                }
+
+                Ok((value, state))
             }
             Some((spaces_before_equals, equals_indent)) => {
                 // This is a record destructure def.
