@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::dbg_macro)]
+
 pub mod can;
 pub mod collections;
 pub mod graph;
