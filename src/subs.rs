@@ -231,6 +231,21 @@ impl Subs {
 
         var_to_err_type(self, &mut state, var)
     }
+
+    pub fn introduce(&mut self, rank: Rank, pools: &mut Vec<Vec<Variable>>, vars: &Vec<Variable>) {
+        let pool: &mut Vec<Variable> = pools.get_mut(rank.into_usize()).unwrap_or_else(|| {
+            panic!(
+                "Compiler bug: tried to access nonexistant pool with rank {}",
+                rank
+            )
+        });
+
+        for var in vars.iter() {
+            self.set_rank(var.clone(), rank);
+        }
+
+        pool.extend(vars);
+    }
 }
 
 #[inline(always)]
