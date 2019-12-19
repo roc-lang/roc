@@ -989,13 +989,13 @@ mod test_parse {
     fn two_arg_closure() {
         let arena = Bump::new();
         let arg1 = Located::new(0, 0, 1, 2, Identifier("a"));
-        let arg2 = Located::new(0, 0, 3, 4, Identifier("b"));
+        let arg2 = Located::new(0, 0, 4, 5, Identifier("b"));
         let patterns = bumpalo::vec![in &arena; arg1, arg2];
         let expected = Closure(
             arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 8, 10, Int("42"))),
+            arena.alloc(Located::new(0, 0, 9, 11, Int("42"))),
         );
-        let actual = parse_with(&arena, "\\a b -> 42");
+        let actual = parse_with(&arena, "\\a, b -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1004,14 +1004,14 @@ mod test_parse {
     fn three_arg_closure() {
         let arena = Bump::new();
         let arg1 = Located::new(0, 0, 1, 2, Identifier("a"));
-        let arg2 = Located::new(0, 0, 3, 4, Identifier("b"));
-        let arg3 = Located::new(0, 0, 5, 6, Identifier("c"));
+        let arg2 = Located::new(0, 0, 4, 5, Identifier("b"));
+        let arg3 = Located::new(0, 0, 7, 8, Identifier("c"));
         let patterns = bumpalo::vec![in &arena; arg1, arg2, arg3];
         let expected = Closure(
             arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 10, 12, Int("42"))),
+            arena.alloc(Located::new(0, 0, 12, 14, Int("42"))),
         );
-        let actual = parse_with(&arena, "\\a b c -> 42");
+        let actual = parse_with(&arena, "\\a, b, c -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1020,13 +1020,13 @@ mod test_parse {
     fn closure_with_underscores() {
         let arena = Bump::new();
         let underscore1 = Located::new(0, 0, 1, 2, Underscore);
-        let underscore2 = Located::new(0, 0, 3, 4, Underscore);
+        let underscore2 = Located::new(0, 0, 4, 5, Underscore);
         let patterns = bumpalo::vec![in &arena; underscore1, underscore2];
         let expected = Closure(
             arena.alloc(patterns),
-            arena.alloc(Located::new(0, 0, 8, 10, Int("42"))),
+            arena.alloc(Located::new(0, 0, 9, 11, Int("42"))),
         );
-        let actual = parse_with(&arena, "\\_ _ -> 42");
+        let actual = parse_with(&arena, "\\_, _ -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1259,21 +1259,21 @@ mod test_parse {
 
         let args = bumpalo::vec![in &arena;
         Located::new(1,1,7,8, Identifier("x")),
-        Located::new(1,1,9,10, Underscore)
+        Located::new(1,1,10,11, Underscore)
         ];
-        let body = Located::new(1, 1, 14, 16, Int("42"));
+        let body = Located::new(1, 1, 15, 17, Int("42"));
 
         let closure = Expr::Closure(&args, &body);
 
         let def = Def::Body(
             arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-            arena.alloc(Located::new(1, 1, 6, 16, closure)),
+            arena.alloc(Located::new(1, 1, 6, 17, closure)),
         );
         let loc_def = &*arena.alloc(Located::new(
             1,
             1,
             0,
-            16,
+            17,
             Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice()),
         ));
 
@@ -1287,7 +1287,7 @@ mod test_parse {
             indoc!(
                 r#"
                 foo : Int, Float -> Bool
-                foo = \x _ -> 42
+                foo = \x, _ -> 42
 
                 42
                 "#

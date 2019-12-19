@@ -102,12 +102,24 @@ pub fn fmt_expr<'a>(
                 indent
             };
 
-            for loc_pattern in loc_patterns.iter() {
-                fmt_pattern(buf, &loc_pattern.value, indent, true);
+            let mut any_args_printed = false;
 
-                if !arguments_are_multiline {
-                    buf.push(' ');
+            for loc_pattern in loc_patterns.iter() {
+                if any_args_printed {
+                    buf.push(',');
+
+                    if !arguments_are_multiline {
+                        buf.push(' ');
+                    }
+                } else {
+                    any_args_printed = true;
                 }
+
+                fmt_pattern(buf, &loc_pattern.value, indent, true);
+            }
+
+            if !arguments_are_multiline {
+                buf.push(' ');
             }
 
             buf.push_str("->");

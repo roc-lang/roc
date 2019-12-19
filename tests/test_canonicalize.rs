@@ -205,7 +205,7 @@ mod test_canonicalize {
         // This function will get passed in as a pointer.
         let src = indoc!(
             r#"
-            apply = \f x -> f x
+            apply = \f, x -> f x
 
             identity = \a -> a
 

@@ -28,5 +28,5 @@ eq : val, val -> Bool
 ##
 ## This is the same as the #=/= operator.
 notEq : val, val -> Bool
-notEq = \left right ->
+notEq = \left, right ->
     not (equal left right)

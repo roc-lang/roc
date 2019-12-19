@@ -305,7 +305,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                \_ _ -> 42
+                \_, _ -> 42
             "#
             ),
             "*, * -> Int",
@@ -317,7 +317,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                \_ _ _ -> "test!"
+                \_, _, _ -> "test!"
             "#
             ),
             "*, *, * -> Str",
@@ -373,7 +373,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                func = \_ _ -> 42
+                func = \_, _ -> 42
 
                 func
             "#
@@ -387,7 +387,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                f = \_ _ _ -> "test!"
+                f = \_, _, _ -> "test!"
 
                 f
             "#
@@ -401,7 +401,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                a = \_ _ _ -> "test!"
+                a = \_, _, _ -> "test!"
 
                 b = a
 
@@ -545,7 +545,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                always = \a b -> a
+                always = \a, b -> a
 
                 1 |> always "foo"
                 "#
@@ -610,7 +610,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                    apply = \f x -> f x
+                    apply = \f, x -> f x
                     identity = \a -> a
 
                     apply identity 5
@@ -625,7 +625,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                    \f x -> f x
+                    \f, x -> f x
                 "#
             ),
             "(a -> b), a -> b",
@@ -654,7 +654,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                    \f -> (\a b -> f b a),
+                    \f -> (\a, b -> f b a),
                 "#
             ),
             "(a, b -> c) -> (b, a -> c)",
