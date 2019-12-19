@@ -708,7 +708,11 @@ pub fn canonicalize_expr(
                 And(vec![constraint, Eq(field_type, expected, region)]),
             );
 
-            (loc_expr.value, output, constraint)
+            (
+                Access(Box::new(loc_expr), Lowercase::from(*field).into()),
+                output,
+                constraint,
+            )
         }
         ast::Expr::AccessorFunction(_)
         | ast::Expr::If(_)
