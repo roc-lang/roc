@@ -89,8 +89,11 @@ pub fn canonicalize_defs<'a>(
 
     while let Some(loc_def) = it.next() {
         match &loc_def.value {
-            Annotation(pattern, annotation) => match it.peek().map(|v| v.value.clone()) {
-                Some(Body(body_pattern, body_expr)) if pattern == body_pattern => {
+            Annotation(pattern, annotation) => match it.peek() {
+                Some(Located {
+                    value: Body(body_pattern, body_expr),
+                    ..
+                }) if &pattern == body_pattern => {
                     it.next();
 
                     let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
