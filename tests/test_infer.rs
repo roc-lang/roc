@@ -831,6 +831,11 @@ mod test_infer {
     }
 
     #[test]
+    fn record_literal_accessor() {
+        infer_eq("{ x: 5, y : 3.14 }.x", "Int");
+    }
+
+    #[test]
     fn record_arg() {
         infer_eq("\\rec -> rec.x", "{ x : a }* -> a");
     }
