@@ -94,10 +94,30 @@ Like `let`...`in` in Elm, this is indentation-sensitive. Each of the definitions
 
 ## Function definitions
 
-Roc only has one syntax for defining functions, and it looks like Elm's anonymous
-functions.
+Roc only has one syntax for defining functions, and it looks almost exactly
+like Elm's anonymous functions. The one difference is that multiple arguments
+are separated by commas.
 
-So where in Elm you might write `foo a b =` in Roc you'd write `foo = \a b ->` instead.
+So where in Elm you might write `foo a b =` in Roc you'd write `foo = \a, b ->` instead.
+
+One minor benefit of the comma is that you don't need to use parens to
+destructure arguments inline. For example, in Elm, you always need to use parentheses
+to destructure variants inline in function declarations, like in these two examples:
+
+```
+\(UserId id1) (UserId id2) ->
+\(UserId id) ->
+```
+
+Without the parentheses, it wouldn't be clear where one argument ended and the next one began.
+
+In Roc, the commas make argument boundaries unambiguous, so no parens are needed.
+You can rewrite the above like so:
+
+```
+\UserId id1, UserId id2 ->
+\UserId id ->
+```
 
 ## Function equality
 
@@ -412,7 +432,7 @@ fromInt = \int ->
     @UserId int
 
 toInt : UserId -> Int
-toInt = \(@UserId int) ->
+toInt = \@UserId int ->
     int
 ```
 I can now expose the `UserId` type alias, which other modules can use as an opaque type.

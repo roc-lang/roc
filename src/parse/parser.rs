@@ -462,6 +462,60 @@ where
     }
 }
 
+/// Parse one or more values separated by a delimiter (e.g. a comma) whose
+/// values are discarded
+pub fn sep_by1<'a, P, D, Val>(delimiter: D, parser: P) -> impl Parser<'a, Vec<'a, Val>>
+where
+    D: Parser<'a, ()>,
+    P: Parser<'a, Val>,
+{
+    move |arena, state: State<'a>| {
+        let original_attempting = state.attempting;
+
+        match parser.parse(arena, state) {
+            Ok((first_output, next_state)) => {
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
+
+                buf.push(first_output);
+
+                loop {
+                    match delimiter.parse(arena, state) {
+                        Ok(((), next_state)) => {
+                            // If the delimiter passed, check the element parser.
+                            match parser.parse(arena, next_state) {
+                                Ok((next_output, next_state)) => {
+                                    state = next_state;
+                                    buf.push(next_output);
+                                }
+                                Err((fail, state)) => {
+                                    // If the delimiter parsed, but the following
+                                    // element did not, that's a fatal error.
+                                    return Err((
+                                        Fail {
+                                            attempting: original_attempting,
+                                            ..fail
+                                        },
+                                        state,
+                                    ));
+                                }
+                            }
+                        }
+                        Err((_, old_state)) => return Ok((buf, old_state)),
+                    }
+                }
+            }
+            Err((fail, new_state)) => Err((
+                Fail {
+                    attempting: original_attempting,
+                    ..fail
+                },
+                new_state,
+            )),
+        }
+    }
+}
+
 pub fn satisfies<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
 where
     P: Parser<'a, A>,

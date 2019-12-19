@@ -109,7 +109,7 @@ round = \num ->
 ## >>> Float.pi
 ## >>>     |> Float.div 2.0
 #div : Float, Float -> Result Float DivByZero
-div = \numerator denominator ->
+div = \numerator, denominator ->
     case numerator when
         0.0 -> 0.0 # TODO return Result!
         _ -> denominator

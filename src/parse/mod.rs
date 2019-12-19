@@ -13,14 +13,13 @@ pub mod type_annotation;
 use crate::operator::{BinOp, CalledVia, UnaryOp};
 use crate::parse::ast::{AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable};
 use crate::parse::blankspace::{
-    space0, space0_after, space0_around, space0_before, space1, space1_after, space1_around,
-    space1_before,
+    space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
 };
 use crate::parse::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::parse::number_literal::number_literal;
 use crate::parse::parser::{
-    allocated, char, not, not_followed_by, optional, string, then, unexpected, unexpected_eof,
-    Either, Fail, FailReason, ParseResult, Parser, State,
+    allocated, char, not, not_followed_by, optional, sep_by1, string, then, unexpected,
+    unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
 };
 use crate::region::{Located, Region};
 use bumpalo::collections::Vec;
@@ -409,7 +408,6 @@ fn equals_for_def<'a>() -> impl Parser<'a, ()> {
 
 /// A definition, consisting of one of these:
 ///
-/// * A custom type definition using (`:=`)
 /// * A type alias using `:`
 /// * A pattern followed by '=' and then an expression
 /// * A type annotation
@@ -653,13 +651,11 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 // Parse the params
                 attempt!(
                     Attempting::ClosureParams,
-                    // Note: because this is parse1_after, you *must* have
-                    // a space before the "->" in a closure declaration.
-                    //
-                    // We could make this significantly more complicated in
-                    // order to support e.g. (\x-> 5) with no space before
-                    // the "->" but that does not seem worthwhile.
-                    one_or_more!(space1_after(loc_closure_param(min_indent), min_indent))
+                    // Params are comma-separated
+                    sep_by1(
+                        char(','),
+                        space0_around(loc_closure_param(min_indent), min_indent)
+                    )
                 ),
                 skip_first!(
                     // Parse the -> which separates params from body

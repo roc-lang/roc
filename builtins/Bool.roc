@@ -1,7 +1,9 @@
-api Bool provides Bool.*, not, equal, notEqual
+interface Bool
+    exposes [ Bool, not, equal, notEqual ]
+    imports []
 
 ## Either #True or #False.
-Bool := False, True
+Bool : [ False, True ]
 
 ## Returns #False when given #True, and vice versa.
 not : Bool -> Bool
@@ -28,5 +30,5 @@ eq : val, val -> Bool
 ##
 ## This is the same as the #=/= operator.
 notEq : val, val -> Bool
-notEq = \left right ->
+notEq = \left, right ->
     not (equal left right)

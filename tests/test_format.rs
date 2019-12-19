@@ -134,7 +134,7 @@ mod test_format {
     fn func_def() {
         expr_formats_same(indoc!(
             r#"
-                f = \x y ->
+                f = \x, y ->
                     x
 
                 f 4
@@ -147,7 +147,7 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-                f = \x y ->
+                f = \x, y ->
                     y = 4
                     z = 8
                     x
@@ -156,7 +156,7 @@ mod test_format {
             ),
             indoc!(
                 r#"
-                f = \x y ->
+                f = \x, y ->
                     y = 4
                     z = 8
 
@@ -169,7 +169,7 @@ mod test_format {
 
         expr_formats_same(indoc!(
             r#"
-                f = \x y ->
+                f = \x, y ->
                     a = 3
                     b = 6
 
@@ -289,7 +289,7 @@ mod test_format {
     fn multi_arg_closure() {
         expr_formats_same(indoc!(
             r#"
-            \a b c -> a b c
+            \a, b, c -> a b c
             "#
         ));
     }
@@ -467,7 +467,7 @@ mod test_format {
     // fn record_field_destructuring() {
     //     expr_formats_same(indoc!(
     //         r#"
-    //         case foo of
+    //         case foo when
     //             { x: 5 } -> 42
     //         "#
     //     ));
@@ -519,7 +519,7 @@ mod test_format {
 
         expr_formats_same(indoc!(
             r#"
-            identity = \a
+            identity = \a,
                 b
                 -> a
 
@@ -529,8 +529,8 @@ mod test_format {
 
         expr_formats_same(indoc!(
             r#"
-            identity = \a
-                b
+            identity = \a,
+                b,
                 # it's c!!
                 c
                 -> a
