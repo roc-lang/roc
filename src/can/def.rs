@@ -1,9 +1,11 @@
+use crate::can::annotation::canonicalize_annotation;
 use crate::can::env::Env;
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::{
     canonicalize_expr, local_successors, references_from_call, references_from_local, union_pairs,
     Output, Recursive, Rigids,
 };
+use crate::can::ident::Lowercase;
 use crate::can::pattern::PatternType::*;
 use crate::can::pattern::{canonicalize_pattern, idents_from_patterns, Pattern};
 use crate::can::pattern::{remove_idents, PatternState};
@@ -13,7 +15,7 @@ use crate::can::problem::RuntimeError::*;
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImSet, MutMap, MutSet, SendMap};
+use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::graph::{strongly_connected_component, topological_sort};
 use crate::ident::Ident;
 use crate::parse::ast;
@@ -60,12 +62,15 @@ impl Info {
 #[inline(always)]
 pub fn canonicalize_defs<'a>(
     rigids: &Rigids,
+    found_rigids: &mut SendMap<Variable, Lowercase>,
     env: &mut Env,
     var_store: &VarStore,
     scope: &mut Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     flex_info: &mut Info,
 ) -> CanDefs {
+    use crate::parse::ast::Def::*;
+
     let mut refs_by_symbol = MutMap::default();
     let mut can_defs_by_symbol = MutMap::default();
 
@@ -80,20 +85,109 @@ pub fn canonicalize_defs<'a>(
 
     scope.idents = union_pairs(scope.idents.clone(), defined_idents.iter());
 
-    for loc_def in loc_defs {
-        canonicalize_def(
-            rigids,
-            env,
-            Located {
-                region: loc_def.region,
-                value: &loc_def.value,
+    let mut it = loc_defs.iter().peekable();
+
+    while let Some(loc_def) = it.next() {
+        match &loc_def.value {
+            Annotation(pattern, annotation) => match it.peek() {
+                Some(Located {
+                    value: Body(body_pattern, body_expr),
+                    ..
+                }) if &pattern == body_pattern => {
+                    it.next();
+
+                    let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
+                    canonicalize_def(
+                        rigids,
+                        found_rigids,
+                        env,
+                        Located {
+                            region: loc_def.region,
+                            value: &typed,
+                        },
+                        scope,
+                        &mut can_defs_by_symbol,
+                        flex_info,
+                        var_store,
+                        &mut refs_by_symbol,
+                    );
+                }
+                _ => {
+                    canonicalize_def(
+                        rigids,
+                        found_rigids,
+                        env,
+                        Located {
+                            region: loc_def.region,
+                            value: &loc_def.value,
+                        },
+                        scope,
+                        &mut can_defs_by_symbol,
+                        flex_info,
+                        var_store,
+                        &mut refs_by_symbol,
+                    );
+                }
             },
-            scope,
-            &mut can_defs_by_symbol,
-            flex_info,
-            var_store,
-            &mut refs_by_symbol,
-        );
+
+            Nested(Annotation(pattern, annotation)) => match it.peek() {
+                Some(Located {
+                    value: Body(body_pattern, body_expr),
+                    ..
+                }) if pattern.value == body_pattern.value => {
+                    it.next();
+
+                    let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
+                    canonicalize_def(
+                        rigids,
+                        found_rigids,
+                        env,
+                        Located {
+                            region: loc_def.region,
+                            value: &typed,
+                        },
+                        scope,
+                        &mut can_defs_by_symbol,
+                        flex_info,
+                        var_store,
+                        &mut refs_by_symbol,
+                    );
+                }
+                _ => {
+                    canonicalize_def(
+                        rigids,
+                        found_rigids,
+                        env,
+                        Located {
+                            region: loc_def.region,
+                            value: &loc_def.value,
+                        },
+                        scope,
+                        &mut can_defs_by_symbol,
+                        flex_info,
+                        var_store,
+                        &mut refs_by_symbol,
+                    );
+                }
+            },
+
+            _ => {
+                canonicalize_def(
+                    rigids,
+                    found_rigids,
+                    env,
+                    Located {
+                        region: loc_def.region,
+                        value: &loc_def.value,
+                    },
+                    scope,
+                    &mut can_defs_by_symbol,
+                    flex_info,
+                    var_store,
+                    &mut refs_by_symbol,
+                );
+            }
+        }
     }
 
     CanDefs {
@@ -262,6 +356,7 @@ pub fn sort_can_defs(
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_def<'a>(
     rigids: &Rigids,
+    found_rigids: &mut SendMap<Variable, Lowercase>,
     env: &mut Env,
     loc_def: Located<&'a ast::Def<'a>>,
     scope: &mut Scope,
@@ -271,6 +366,7 @@ fn canonicalize_def<'a>(
     refs_by_symbol: &mut MutMap<Symbol, (Located<Ident>, References)>,
 ) {
     use crate::parse::ast::Def::*;
+    use crate::types::AnnotationSource;
 
     // Make types for the body expr, even if we won't end up having a body.
     let expr_var = var_store.fresh();
@@ -308,6 +404,228 @@ fn canonicalize_def<'a>(
             };
 
             (None, (loc_expr, Output::default()))
+        }
+
+        TypedDef(loc_pattern, loc_annotation, loc_expr) => {
+            // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+            // (However, still include it in scope, because you *can* recursively refer to yourself.)
+            let mut shadowable_idents = scope.idents.clone();
+            remove_idents(&loc_pattern.value, &mut shadowable_idents);
+
+            let pattern_var = var_store.fresh();
+            let pattern_type = Type::Variable(pattern_var);
+            let pattern_expected = PExpected::NoExpectation(pattern_type);
+
+            let mut state = PatternState {
+                headers: SendMap::default(),
+                vars: Vec::with_capacity(1),
+                constraints: Vec::with_capacity(1),
+            };
+
+            let loc_can_pattern = canonicalize_pattern(
+                env,
+                &mut state,
+                var_store,
+                scope,
+                Assignment,
+                &loc_pattern.value,
+                loc_pattern.region,
+                &mut shadowable_idents,
+                pattern_expected,
+            );
+
+            flex_info.vars.push(pattern_var);
+
+            // Any time there's a lookup on this symbol in the outer Let,
+            // it should result in this expression's type. After all, this
+            // is the type to which this symbol is defined!
+            add_pattern_to_lookup_types(
+                &scope,
+                &loc_pattern,
+                &mut flex_info.def_types,
+                expr_type.clone(),
+            );
+
+            // bookkeeping for tail-call detection. If we're assigning to an
+            // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
+            let outer_identifier = env.tailcallable_symbol.clone();
+
+            // TODO ensure TypedDef has a pattern identifier?
+            // e.g. in elm, you can't type
+            //
+            // (foo, bar) : (Int, Bool)
+            // implicitly, that is the case here too
+            let mut fname = "invalid name".to_string();
+
+            if let (
+                &ast::Pattern::Identifier(ref name),
+                &Pattern::Identifier(_, ref defined_symbol),
+            ) = (&loc_pattern.value, &loc_can_pattern.value)
+            {
+                fname = name.to_string();
+                env.tailcallable_symbol = Some(defined_symbol.clone());
+                variables_by_symbol.insert(defined_symbol.clone(), expr_var);
+            };
+
+            let (ftv_sendmap, can_annotation) =
+                canonicalize_annotation(&loc_annotation.value, var_store);
+
+            let mut ftv: Rigids = ImMap::default();
+
+            for (var, name) in ftv_sendmap.clone() {
+                ftv.insert(name.into(), Type::Variable(var));
+            }
+
+            // remove the known type variables (TODO can clone be prevented?)
+            let new_rigids = ftv.difference(rigids.clone());
+
+            let new_rtv = rigids.clone().union(new_rigids);
+
+            let arity = if let crate::types::Type::Function(args, _) = &can_annotation {
+                args.len()
+            } else {
+                0
+            };
+
+            let annotation_expected =
+                FromAnnotation(fname, arity, AnnotationSource::TypedBody, can_annotation);
+
+            let (mut loc_can_expr, mut can_output, ret_constraint) = canonicalize_expr(
+                // rigids,
+                &new_rtv,
+                env,
+                var_store,
+                scope,
+                loc_expr.region,
+                &loc_expr.value,
+                annotation_expected.clone(),
+            );
+
+            *found_rigids = found_rigids.clone().union(ftv_sendmap.clone());
+            can_output.rigids = ftv_sendmap;
+
+            // ensure expected type unifies with annotated type
+            state
+                .constraints
+                .push(Eq(expr_type.clone(), annotation_expected, loc_def.region));
+
+            // reset the tailcallable_symbol
+            env.tailcallable_symbol = outer_identifier;
+
+            flex_info.constraints.push(Let(Box::new(LetConstraint {
+                rigid_vars: Vec::new(),
+                flex_vars: state.vars,
+                def_types: state.headers,
+                defs_constraint: And(state.constraints),
+                ret_constraint,
+            })));
+
+            // see below: a closure needs a fresh References!
+            let mut is_closure = false;
+
+            // First, make sure we are actually assigning an identifier instead of (for example) a tag.
+            //
+            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
+            // which also implies it's not a self tail call!
+            //
+            // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
+            if let (
+                &ast::Pattern::Identifier(ref _name),
+                &Pattern::Identifier(_, ref defined_symbol),
+                &Closure(ref symbol, _, ref arguments, ref body),
+            ) = (
+                &loc_pattern.value,
+                &loc_can_pattern.value,
+                &loc_can_expr.value.clone(),
+            ) {
+                is_closure = true;
+
+                // Since everywhere in the code it'll be referred to by its defined name,
+                // remove its generated name from the closure map. (We'll re-insert it later.)
+                let references = env.closures.remove(&symbol).unwrap_or_else(|| {
+                    panic!(
+                        "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
+                        symbol, env.closures
+                    )
+                });
+
+                // Re-insert the closure into the map, under its defined name.
+                // closures don't have a name, and therefore pick a fresh symbol. But in this
+                // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
+                // and we want to reference it by that name.
+                env.closures.insert(defined_symbol.clone(), references);
+
+                // The closure is self tail recursive iff it tail calls itself (by defined name).
+                let is_recursive = match can_output.tail_call {
+                    Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
+                    _ => Recursive::NotRecursive,
+                };
+
+                // Recursion doesn't count as referencing. (If it did, all recursive functions
+                // would result in circular def errors!)
+                refs_by_symbol
+                    .entry(defined_symbol.clone())
+                    .and_modify(|(_, refs)| {
+                        refs.locals = refs.locals.without(defined_symbol);
+                    });
+
+                // renamed_closure_def = Some(&defined_symbol);
+                loc_can_expr.value = Closure(
+                    symbol.clone(),
+                    is_recursive,
+                    arguments.clone(),
+                    body.clone(),
+                );
+            }
+
+            let mut defined_symbols = Vec::new();
+
+            // Store the referenced locals in the refs_by_symbol map, so we can later figure out
+            // which defined names reference each other.
+            for (ident, (symbol, region)) in
+                idents_from_patterns(std::iter::once(*loc_pattern), &scope)
+            {
+                let refs =
+                    // Functions' references don't count in defs.
+                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                    // parent commit for the bug this fixed!
+                    if is_closure {
+                        References::new()
+                    } else {
+                        can_output.references.clone()
+                    };
+
+                refs_by_symbol.insert(
+                    symbol.clone(),
+                    (
+                        Located {
+                            value: ident,
+                            region,
+                        },
+                        refs,
+                    ),
+                );
+
+                defined_symbols.push(symbol.clone());
+            }
+
+            for symbol in defined_symbols {
+                can_defs_by_symbol.insert(
+                    symbol,
+                    Def {
+                        // TODO try to remove this .clone()!
+                        pattern: loc_can_pattern.clone(),
+                        expr: Located {
+                            region: loc_can_expr.region,
+                            // TODO try to remove this .clone()!
+                            value: loc_can_expr.value.clone(),
+                        },
+                        variables_by_symbol: im::HashMap::clone(&variables_by_symbol),
+                    },
+                );
+            }
+
+            (Some(loc_pattern), (loc_can_expr, can_output))
         }
         // If we have a pattern, then the def has a body (that is, it's not a
         // standalone annotation), so we need to canonicalize the pattern and expr.
@@ -495,6 +813,7 @@ fn canonicalize_def<'a>(
         Nested(value) => {
             return canonicalize_def(
                 rigids,
+                found_rigids,
                 env,
                 Located {
                     value,
@@ -574,7 +893,16 @@ pub fn can_defs_with_return<'a>(
     rigid_info: Info,
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output, Constraint) {
-    let unsorted = canonicalize_defs(rigids, env, var_store, &mut scope, loc_defs, &mut flex_info);
+    let mut found_rigids = SendMap::default();
+    let unsorted = canonicalize_defs(
+        rigids,
+        &mut found_rigids,
+        env,
+        var_store,
+        &mut scope,
+        loc_defs,
+        &mut flex_info,
+    );
 
     // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
@@ -588,7 +916,9 @@ pub fn can_defs_with_return<'a>(
         expected,
     );
 
-    let (can_defs, output) = sort_can_defs(env, unsorted, output);
+    let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
+
+    output.rigids = output.rigids.union(found_rigids);
 
     // Rigid constraint for the def expr as a whole
     let constraint = Let(Box::new(LetConstraint {
@@ -663,6 +993,7 @@ fn pattern_from_def<'a>(def: &'a ast::Def<'a>) -> Option<&'a Located<ast::Patter
     match def {
         Annotation(_, _) => None,
         Body(ref loc_pattern, _) => Some(loc_pattern),
+        TypedDef(ref loc_pattern, _, _) => Some(loc_pattern),
         SpaceBefore(def, _) | SpaceAfter(def, _) | Nested(def) => pattern_from_def(def),
     }
 }

@@ -18,7 +18,7 @@ mod test_canonicalize {
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
     use roc::can::symbol::Symbol;
-    use roc::collections::{ImMap, ImSet};
+    use roc::collections::{ImMap, ImSet, SendMap};
     use std::{f64, i64};
 
     fn sym(name: &str) -> Symbol {
@@ -41,10 +41,12 @@ mod test_canonicalize {
             };
 
             let tail_call = self.tail_call.map(sym);
+            let rigids = SendMap::default();
 
             Output {
                 references,
                 tail_call,
+                rigids,
             }
         }
     }

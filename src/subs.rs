@@ -140,6 +140,13 @@ impl Subs {
         self.fresh(unnamed_flex_var().into())
     }
 
+    pub fn rigid_var(&mut self, var: Variable, name: Lowercase) {
+        let content = Content::RigidVar(name);
+        let desc = Descriptor::from(content);
+
+        self.set(var, desc);
+    }
+
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
         let l_root = self.utable.get_root_key(left);
