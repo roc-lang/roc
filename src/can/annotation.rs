@@ -34,7 +34,7 @@ fn can_annotation_help(
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-) -> (crate::types::Type) {
+) -> crate::types::Type {
     use crate::parse::ast::TypeAnnotation::*;
 
     match annotation {
