@@ -130,8 +130,11 @@ pub fn canonicalize_defs<'a>(
                 }
             },
 
-            Nested(Annotation(pattern, annotation)) => match it.peek().map(|v| v.value.clone()) {
-                Some(Body(body_pattern, body_expr)) if pattern.value == body_pattern.value => {
+            Nested(Annotation(pattern, annotation)) => match it.peek() {
+                Some(Located {
+                    value: Body(body_pattern, body_expr),
+                    ..
+                }) if pattern.value == body_pattern.value => {
                     it.next();
 
                     let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
