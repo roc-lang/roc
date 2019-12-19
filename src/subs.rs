@@ -83,7 +83,7 @@ impl Into<usize> for VarStore {
     }
 }
 
-#[derive(Copy, PartialEq, Eq, Clone, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Variable(usize);
 
 impl Variable {
