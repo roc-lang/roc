@@ -21,7 +21,6 @@ mod test_infer {
         let (_, output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
-        dbg!(&output.rigids);
         for (var, name) in output.rigids {
             subs.rigid_var(var, name);
         }

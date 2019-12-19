@@ -309,7 +309,6 @@ fn write_apply(
         }
 
         if module_name.is_empty() {
-            dbg!(&module_name, &type_name);
             buf.push_str(&type_name);
         } else {
             buf.push_str(&format!("{}.{}", module_name, type_name));
