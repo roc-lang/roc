@@ -244,7 +244,7 @@ fn unnamed_flex_var() -> Content {
 }
 
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Rank(u8);
+pub struct Rank(usize);
 
 impl Rank {
     pub fn none() -> Self {
@@ -258,17 +258,21 @@ impl Rank {
     pub fn next(self) -> Self {
         Rank(self.0 + 1)
     }
+
+    pub fn into_usize(self) -> usize {
+        self.0
+    }
 }
 
-impl Into<u8> for Rank {
-    fn into(self) -> u8 {
-        self.0
+impl fmt::Display for Rank {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
 impl Into<usize> for Rank {
     fn into(self) -> usize {
-        self.0 as usize
+        self.0
     }
 }
 
