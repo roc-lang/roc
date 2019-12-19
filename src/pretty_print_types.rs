@@ -1,10 +1,10 @@
+use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{MutMap, MutSet};
 use crate::subs::{Content, FlatType, Subs, Variable};
-use crate::types;
+use crate::types::{self, name_type_var};
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
-static THE_LETTER_A: u32 = 'a' as u32;
 
 /// Rerquirements for parentheses.
 ///
@@ -49,7 +49,7 @@ fn find_names_needed(
     subs: &mut Subs,
     roots: &mut Vec<Variable>,
     root_appearances: &mut MutMap<Variable, Appearances>,
-    names_taken: &mut MutSet<String>,
+    names_taken: &mut MutSet<Lowercase>,
 ) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
@@ -99,7 +99,7 @@ fn find_names_needed(
         RigidVar(name) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
-            names_taken.insert(name.to_string());
+            names_taken.insert(name);
         }
         Alias(_, _, _, _) => {
             panic!("TODO find_names_needed Alias");
@@ -121,41 +121,32 @@ pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
 
     for root in roots {
         if let Some(Appearances::Multiple) = appearances.get(&root) {
-            letters_used = name_root(letters_used, root, subs, &taken);
+            letters_used = name_root(letters_used, root, subs, &mut taken);
         }
     }
 }
 
-fn name_root(letters_used: u32, root: Variable, subs: &mut Subs, taken: &MutSet<String>) -> u32 {
-    // TODO we should arena-allocate this String,
-    // so all the strings in the entire pass only require ~1 allocation.
-    let generated_name = if letters_used < 26 {
-        // This should generate "a", then "b", etc.
-        std::char::from_u32(THE_LETTER_A + letters_used)
-            .unwrap_or_else(|| panic!("Tried to convert {} to a char", THE_LETTER_A + letters_used))
-            .to_string()
-    } else {
-        panic!("TODO generate aa, ab, ac, ...");
-    };
+fn name_root(
+    letters_used: u32,
+    root: Variable,
+    subs: &mut Subs,
+    taken: &mut MutSet<Lowercase>,
+) -> u32 {
+    let (generated_name, new_letters_used) = name_type_var(letters_used, taken);
 
-    if taken.contains(&generated_name) {
-        // If the generated name is already taken, try again.
-        name_root(letters_used + 1, root, subs, taken)
-    } else {
-        set_root_name(root, &generated_name, subs);
+    set_root_name(root, &generated_name, subs);
 
-        letters_used + 1
-    }
+    new_letters_used
 }
 
-fn set_root_name(root: Variable, name: &str, subs: &mut Subs) {
+fn set_root_name(root: Variable, name: &Lowercase, subs: &mut Subs) {
     use crate::subs::Content::*;
 
     let mut descriptor = subs.get(root);
 
     match descriptor.content {
         FlexVar(None) => {
-            descriptor.content = FlexVar(Some(name.into()));
+            descriptor.content = FlexVar(Some(name.clone()));
 
             // TODO is this necessary, or was mutating descriptor in place sufficient?
             subs.set(root, descriptor);
@@ -179,9 +170,9 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
     use crate::subs::Content::*;
 
     match content {
-        FlexVar(Some(name)) => buf.push_str(&name),
+        FlexVar(Some(name)) => buf.push_str(&name.into_str()),
         FlexVar(None) => buf.push_str(WILDCARD),
-        RigidVar(name) => buf.push_str(&name),
+        RigidVar(name) => buf.push_str(&name.into_str()),
         Structure(flat_type) => write_flat_type(flat_type, subs, buf, parens),
         Alias(_, _, _, _) => {
             panic!("TODO write_content Alias");
@@ -198,14 +189,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
             module_name,
             name,
             args,
-        } => write_apply(
-            module_name.to_string(),
-            name.to_string(),
-            args,
-            subs,
-            buf,
-            parens,
-        ),
+        } => write_apply(module_name, name, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         Func(args, ret) => write_fn(args, ret, subs, buf, parens),
         Record(fields, ext_var) => {
@@ -261,14 +245,16 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
 }
 
 fn write_apply(
-    module_name: String,
-    type_name: String,
+    module_name: ModuleName,
+    type_name: Uppercase,
     args: Vec<Variable>,
     subs: &mut Subs,
     buf: &mut String,
     parens: Parens,
 ) {
     let write_parens = parens == Parens::InTypeParam && !args.is_empty();
+    let module_name = module_name.as_str();
+    let type_name = type_name.as_str();
 
     // Hardcoded type aliases
     if module_name == "Str" && type_name == "Str" {

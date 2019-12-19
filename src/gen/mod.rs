@@ -46,6 +46,9 @@ pub fn content_to_basic_type<'ctx>(
                 name,
                 args,
             } => {
+                let module_name = module_name.into_str();
+                let name = name.into_str();
+
                 if &*module_name == types::MOD_NUM && &*name == types::TYPE_NUM {
                     num_to_basic_type(subs.get(*args.iter().next().unwrap()).content, context)
                 } else {
@@ -69,6 +72,9 @@ pub fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTyp
                 name,
                 args,
             } => {
+                let module_name = module_name.into_str();
+                let name = name.into_str();
+
                 if &*module_name == types::MOD_FLOAT && &*name == types::TYPE_FLOATINGPOINT && args.is_empty() {
                     debug_assert!(args.is_empty());
                     Ok(BasicTypeEnum::FloatType(context.f64_type()))

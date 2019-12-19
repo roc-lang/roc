@@ -10,8 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use crate::helpers::can_expr;
-    use crate::helpers::with_larger_debug_stack;
+    use crate::helpers::{can_expr, with_larger_debug_stack};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;

@@ -1,4 +1,3 @@
-use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::solve::solve;
 use crate::subs::{Content, Subs, Variable};
@@ -11,9 +10,7 @@ pub fn infer_expr(
     constraint: &Constraint,
     expr_var: Variable,
 ) -> Content {
-    let env: ImMap<Symbol, Variable> = ImMap::default();
-
-    solve(&env, problems, subs, constraint);
+    solve(&ImMap::default(), problems, subs, constraint);
 
     subs.get(expr_var).content
 }

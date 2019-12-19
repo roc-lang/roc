@@ -1,7 +1,10 @@
+use crate::can::ident::Lowercase;
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
+use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Subs, Variable};
 use crate::types::Constraint::{self, *};
+use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Problems};
 
@@ -56,27 +59,37 @@ pub fn solve(
                     solve(vars_by_symbol, problems, subs, &let_con.defs_constraint)
                 }
                 ret_con => {
+                    // Add a variable for each assignment to the vars_by_symbol.
+                    let mut locals = ImMap::default();
+
+                    for (symbol, loc_type) in let_con.def_types.iter() {
+                        let var = type_to_var(subs, loc_type.value.clone());
+
+                        locals.insert(
+                            symbol.clone(),
+                            Located {
+                                value: var,
+                                region: loc_type.region,
+                            },
+                        );
+                    }
+
                     // Solve the assignments' constraints first.
                     solve(vars_by_symbol, problems, subs, &let_con.defs_constraint);
 
-                    // Add a variable for each assignment to the vars_by_symbol.
                     let mut new_vars_by_symbol = vars_by_symbol.clone();
 
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        // No need to overwrite existing symbols; it would have no effect.
-                        // (If we allowed shadowing, we'd need to do something fancier here.)
-                        if !new_vars_by_symbol.contains_key(&symbol) {
-                            let var = type_to_var(subs, loc_type.value.clone());
-
-                            new_vars_by_symbol.insert(symbol.clone(), var);
-                        }
+                    for (symbol, loc_var) in locals.iter() {
+                        new_vars_by_symbol.insert(symbol.clone(), loc_var.value);
                     }
 
                     // Now solve the body, using the new vars_by_symbol which includes
                     // the assignments' name-to-variable mappings.
                     solve(&new_vars_by_symbol, problems, subs, &ret_con);
 
-                    // TODO do an occurs check for each of the assignments!
+                    for (symbol, loc_var) in locals {
+                        check_for_infinite_type(subs, problems, symbol, loc_var);
+                    }
                 }
             }
         }
@@ -87,7 +100,7 @@ fn type_to_var(subs: &mut Subs, typ: Type) -> Variable {
     type_to_variable(subs, &ImMap::default(), typ)
 }
 
-fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: Type) -> Variable {
+fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Lowercase, Variable>, typ: Type) -> Variable {
     match typ {
         Variable(var) => var,
         Apply {
@@ -147,7 +160,7 @@ fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: T
                 let arg_var = type_to_variable(subs, aliases, arg_type.clone());
 
                 arg_vars.push((arg.clone(), arg_var));
-                new_aliases.insert(arg.into(), arg_var);
+                new_aliases.insert(arg, arg_var);
             }
 
             let alias_var = type_to_variable(subs, &new_aliases, *alias_type);
@@ -160,5 +173,23 @@ fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Box<str>, Variable>, typ: T
 
             subs.fresh(Descriptor::from(content))
         }
+    }
+}
+
+fn check_for_infinite_type(
+    subs: &mut Subs,
+    problems: &mut Problems,
+    symbol: Symbol,
+    loc_var: Located<Variable>,
+) {
+    let var = loc_var.value;
+
+    if subs.occurs(var) {
+        let error_type = subs.var_to_error_type(var);
+        let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+
+        subs.set_content(var, Content::Error(problem.clone()));
+
+        problems.push(problem);
     }
 }
