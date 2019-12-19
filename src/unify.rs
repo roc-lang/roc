@@ -3,6 +3,7 @@ use crate::collections::ImMap;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, Subs, Variable};
 use crate::types::Problem;
+use std::cmp::Ordering;
 
 struct Context {
     first: Variable,
@@ -74,22 +75,25 @@ fn unify_alias(
         RigidVar(_) => unify(subs, problems, real_var, ctx.second),
         Alias(other_home, other_name, other_args, other_real_var) => {
             if name == other_name && home == other_home {
-                if args.len() == other_args.len() {
-                    for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
-                        unify(subs, problems, *l_var, *r_var);
+                match args.len().cmp(&other_args.len()) {
+                    Ordering::Greater => {
+                        let problem = Problem::ExtraArguments;
+
+                        merge(subs, &ctx, Error(problem.clone()));
+                        problems.push(problem);
                     }
+                    Ordering::Less => {
+                        let problem = Problem::MissingArguments;
 
-                    merge(subs, &ctx, other_content.clone());
-                } else if args.len() > other_args.len() {
-                    let problem = Problem::ExtraArguments;
-
-                    merge(subs, &ctx, Error(problem.clone()));
-                    problems.push(problem.clone());
-                } else {
-                    let problem = Problem::MissingArguments;
-
-                    merge(subs, &ctx, Error(problem.clone()));
-                    problems.push(problem.clone());
+                        merge(subs, &ctx, Error(problem.clone()));
+                        problems.push(problem);
+                    }
+                    Ordering::Equal => {
+                        for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
+                            unify(subs, problems, *l_var, *r_var);
+                        }
+                        merge(subs, &ctx, other_content.clone());
+                    }
                 }
             } else {
                 unify(subs, problems, real_var, *other_real_var)
@@ -120,7 +124,7 @@ fn unify_structure(
             let problem = Problem::GenericMismatch;
             // Type mismatch! Rigid can only unify with flex.
             merge(subs, ctx, Error(problem.clone()));
-            problems.push(problem.clone());
+            problems.push(problem);
         }
         Structure(ref other_flat_type) => {
             // Unify the two flat types
@@ -237,7 +241,7 @@ fn unify_shared_fields(
 
         // Type mismatch! Rigid can only unify with flex.
         merge(subs, ctx, Error(problem.clone()));
-        problems.push(problem.clone());
+        problems.push(problem);
     }
 }
 
@@ -294,22 +298,20 @@ fn unify_flat_type(
                 }),
             );
         }
-        (Func(l_args, l_ret), Func(r_args, r_ret)) => {
-            if l_args.len() == r_args.len() {
+        (Func(l_args, l_ret), Func(r_args, r_ret)) => match l_args.len().cmp(&r_args.len()) {
+            Ordering::Greater => merge(subs, ctx, Error(Problem::ExtraArguments)),
+            Ordering::Less => merge(subs, ctx, Error(Problem::MissingArguments)),
+            Ordering::Equal => {
                 unify_zip(subs, problems, l_args.iter(), r_args.iter());
                 unify(subs, problems, *l_ret, *r_ret);
                 merge(subs, ctx, Structure(Func((*r_args).clone(), *r_ret)));
-            } else if l_args.len() > r_args.len() {
-                merge(subs, ctx, Error(Problem::ExtraArguments));
-            } else {
-                merge(subs, ctx, Error(Problem::MissingArguments));
             }
-        }
+        },
         _ => {
             let problem = Problem::GenericMismatch;
 
             merge(subs, ctx, Error(problem.clone()));
-            problems.push(problem.clone());
+            problems.push(problem);
         }
     }
 }

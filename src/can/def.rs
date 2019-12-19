@@ -462,7 +462,7 @@ fn canonicalize_def<'a>(
                 &Pattern::Identifier(_, ref defined_symbol),
             ) = (&loc_pattern.value, &loc_can_pattern.value)
             {
-                fname = name.to_string();
+                fname = (*name).to_string();
                 env.tailcallable_symbol = Some(defined_symbol.clone());
                 variables_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
@@ -507,7 +507,7 @@ fn canonicalize_def<'a>(
             // ensure expected type unifies with annotated type
             state
                 .constraints
-                .push(Eq(expr_type.clone(), annotation_expected, loc_def.region));
+                .push(Eq(expr_type, annotation_expected, loc_def.region));
 
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
@@ -689,7 +689,7 @@ fn canonicalize_def<'a>(
                 scope,
                 loc_expr.region,
                 &loc_expr.value,
-                NoExpectation(expr_type.clone()),
+                NoExpectation(expr_type),
             );
 
             // reset the tailcallable_symbol
