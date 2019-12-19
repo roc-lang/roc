@@ -328,13 +328,13 @@ fn unify_rigid(
     subs: &mut Subs,
     problems: &mut Problems,
     ctx: &Context,
-    name: &str,
+    name: &Lowercase,
     other: &Content,
 ) {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            merge(subs, ctx, RigidVar(name.into()));
+            merge(subs, ctx, RigidVar(name.clone()));
         }
         RigidVar(_) | Structure(_) => {
             // Type mismatch! Rigid can only unify with flex, even if the
@@ -357,7 +357,7 @@ fn unify_flex(
     subs: &mut Subs,
     problems: &mut Problems,
     ctx: &Context,
-    opt_name: &Option<Box<str>>,
+    opt_name: &Option<Lowercase>,
     other: &Content,
 ) {
     match other {

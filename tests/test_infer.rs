@@ -10,7 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use crate::helpers::can_expr;
+    use crate::helpers::{can_expr, with_larger_debug_stack};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -832,9 +832,10 @@ mod test_infer {
 
     #[test]
     fn record_with_bound_var() {
-        infer_eq(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            infer_eq(
+                indoc!(
+                    r#"
                 fn = \rec ->
                     x = rec.x
 
@@ -842,8 +843,9 @@ mod test_infer {
 
                 fn
             "#
-            ),
-            "{ x : a }b -> { x : a }b",
-        );
+                ),
+                "{ x : a }b -> { x : a }b",
+            );
+        });
     }
 }

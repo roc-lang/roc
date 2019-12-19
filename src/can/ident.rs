@@ -11,9 +11,71 @@ pub struct Lowercase(Box<str>);
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(Box<str>);
 
-impl Lowercase {
+impl Into<Box<str>> for ModuleName {
+    fn into(self) -> Box<str> {
+        self.0
+    }
+}
+
+impl ModuleName {
     pub fn into_str(self) -> Box<str> {
         self.0
+    }
+
+    pub fn as_str(&self) -> &str {
+        &*self.0
+    }
+}
+
+impl<'a> From<&'a str> for ModuleName {
+    fn from(string: &'a str) -> Self {
+        Self(string.into())
+    }
+}
+
+impl<'a> From<String> for ModuleName {
+    fn from(string: String) -> Self {
+        Self(string.into())
+    }
+}
+
+impl<'a> From<Box<str>> for ModuleName {
+    fn from(string: Box<str>) -> Self {
+        Self(string)
+    }
+}
+
+impl Into<Box<str>> for Uppercase {
+    fn into(self) -> Box<str> {
+        self.0
+    }
+}
+
+impl Uppercase {
+    pub fn into_str(self) -> Box<str> {
+        self.0
+    }
+
+    pub fn as_str(&self) -> &str {
+        &*self.0
+    }
+}
+
+impl<'a> From<&'a str> for Uppercase {
+    fn from(string: &'a str) -> Self {
+        Self(string.into())
+    }
+}
+
+impl<'a> From<String> for Uppercase {
+    fn from(string: String) -> Self {
+        Self(string.into())
+    }
+}
+
+impl<'a> From<Box<str>> for Uppercase {
+    fn from(string: Box<str>) -> Self {
+        Self(string)
     }
 }
 
@@ -23,9 +85,31 @@ impl Into<Box<str>> for Lowercase {
     }
 }
 
+impl Lowercase {
+    pub fn into_str(self) -> Box<str> {
+        self.0
+    }
+
+    pub fn as_str(&self) -> &str {
+        &*self.0
+    }
+}
+
 impl<'a> From<&'a str> for Lowercase {
     fn from(string: &'a str) -> Self {
         Self(string.into())
+    }
+}
+
+impl<'a> From<String> for Lowercase {
+    fn from(string: String) -> Self {
+        Self(string.into())
+    }
+}
+
+impl<'a> From<Box<str>> for Lowercase {
+    fn from(string: Box<str>) -> Self {
+        Self(string)
     }
 }
 
