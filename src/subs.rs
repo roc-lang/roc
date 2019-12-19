@@ -11,7 +11,7 @@ pub struct Mark(i32);
 impl Mark {
     #[inline(always)]
     pub fn none() -> Mark {
-        Mark(0)
+        Mark(2)
     }
 
     #[inline(always)]
@@ -21,12 +21,12 @@ impl Mark {
 
     #[inline(always)]
     pub fn get_var_names() -> Mark {
-        Mark(2)
+        Mark(0)
     }
 
     #[inline(always)]
     pub fn next(self) -> Mark {
-        Mark(self.0 - 1)
+        Mark(self.0 + 1)
     }
 }
 
@@ -215,6 +215,10 @@ impl Subs {
         self.utable.unioned(left, right)
     }
 
+    pub fn redundant(&mut self, var: Variable) -> bool {
+        self.utable.is_redirect(var)
+    }
+
     pub fn occurs(&mut self, var: Variable) -> bool {
         occurs(self, &ImSet::default(), var)
     }
@@ -230,21 +234,6 @@ impl Subs {
         let mut state = NameState { taken, normals: 0 };
 
         var_to_err_type(self, &mut state, var)
-    }
-
-    pub fn introduce(&mut self, rank: Rank, pools: &mut Vec<Vec<Variable>>, vars: &Vec<Variable>) {
-        let pool: &mut Vec<Variable> = pools.get_mut(rank.into_usize()).unwrap_or_else(|| {
-            panic!(
-                "Compiler bug: tried to access nonexistant pool with rank {}",
-                rank
-            )
-        });
-
-        for var in vars.iter() {
-            self.set_rank(var.clone(), rank);
-        }
-
-        pool.extend(vars);
     }
 }
 
@@ -288,6 +277,12 @@ impl fmt::Display for Rank {
 impl Into<usize> for Rank {
     fn into(self) -> usize {
         self.0
+    }
+}
+
+impl From<usize> for Rank {
+    fn from(index: usize) -> Self {
+        Rank(index)
     }
 }
 

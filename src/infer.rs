@@ -1,5 +1,5 @@
 use crate::collections::ImMap;
-use crate::solve::solve;
+use crate::solve;
 use crate::subs::{Content, Subs, Variable};
 use crate::types::Constraint;
 use crate::unify::Problems;
@@ -10,7 +10,7 @@ pub fn infer_expr(
     constraint: &Constraint,
     expr_var: Variable,
 ) -> Content {
-    solve(&ImMap::default(), problems, subs, constraint);
+    solve::run(&ImMap::default(), problems, subs, constraint);
 
     subs.get(expr_var).content
 }

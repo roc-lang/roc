@@ -170,6 +170,10 @@ impl<K: UnifyKey> VarValue<K> {
         self.if_not_self(self.parent, self_key)
     }
 
+    fn raw_parent(&self) -> K {
+        self.parent
+    }
+
     fn if_not_self(&self, key: K, self_key: K) -> Option<K> {
         if key == self_key {
             None
@@ -281,6 +285,10 @@ impl<S: UnificationStore> UnificationTable<S> {
         }
 
         root_key
+    }
+
+    pub fn is_redirect(&mut self, vid: S::Key) -> bool {
+        self.value(vid).raw_parent() != vid
     }
 
     pub fn update_value<OP>(&mut self, key: S::Key, op: OP)
