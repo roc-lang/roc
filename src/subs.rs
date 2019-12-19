@@ -141,7 +141,7 @@ impl Subs {
     }
 
     pub fn rigid_var(&mut self, var: Variable, name: Lowercase) {
-        let content = Content::RigidVar(name.into());
+        let content = Content::RigidVar(name);
         let desc = Descriptor::from(content);
 
         self.set(var, desc);
