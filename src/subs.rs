@@ -11,7 +11,7 @@ pub struct Mark(i32);
 impl Mark {
     #[inline(always)]
     pub fn none() -> Mark {
-        Mark(0)
+        Mark(2)
     }
 
     #[inline(always)]
@@ -21,12 +21,12 @@ impl Mark {
 
     #[inline(always)]
     pub fn get_var_names() -> Mark {
-        Mark(2)
+        Mark(0)
     }
 
     #[inline(always)]
     pub fn next(self) -> Mark {
-        Mark(self.0 - 1)
+        Mark(self.0 + 1)
     }
 }
 
@@ -83,7 +83,7 @@ impl Into<usize> for VarStore {
     }
 }
 
-#[derive(Copy, PartialEq, Eq, Clone, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Variable(usize);
 
 impl Variable {
@@ -159,6 +159,10 @@ impl Subs {
         self.utable.probe_value(key)
     }
 
+    pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
+        self.utable.probe_value_without_compacting(key)
+    }
+
     pub fn get_root_key(&mut self, key: Variable) -> Variable {
         self.utable.get_root_key(key)
     }
@@ -215,6 +219,10 @@ impl Subs {
         self.utable.unioned(left, right)
     }
 
+    pub fn redundant(&mut self, var: Variable) -> bool {
+        self.utable.is_redirect(var)
+    }
+
     pub fn occurs(&mut self, var: Variable) -> bool {
         occurs(self, &ImSet::default(), var)
     }
@@ -244,7 +252,7 @@ fn unnamed_flex_var() -> Content {
 }
 
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Rank(u8);
+pub struct Rank(usize);
 
 impl Rank {
     pub fn none() -> Self {
@@ -258,17 +266,27 @@ impl Rank {
     pub fn next(self) -> Self {
         Rank(self.0 + 1)
     }
+
+    pub fn into_usize(self) -> usize {
+        self.0
+    }
 }
 
-impl Into<u8> for Rank {
-    fn into(self) -> u8 {
-        self.0
+impl fmt::Display for Rank {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
 impl Into<usize> for Rank {
     fn into(self) -> usize {
-        self.0 as usize
+        self.0
+    }
+}
+
+impl From<usize> for Rank {
+    fn from(index: usize) -> Self {
+        Rank(index)
     }
 }
 

@@ -527,10 +527,6 @@ mod test_infer_uniq {
         );
     }
 
-    // TODO type annotations
-    // TODO BoundTypeVariables
-    // TODO conditionals
-
     #[test]
     fn indirect_always() {
         infer_eq(

@@ -9,7 +9,7 @@ use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
-use crate::solve::solve;
+use crate::solve;
 use crate::subs::VarStore;
 use crate::subs::{Subs, Variable};
 use crate::types::Constraint;
@@ -414,8 +414,8 @@ pub fn solve_loaded(
     }
 
     for constraint in constraints {
-        solve(&vars_by_symbol, problems, subs, &constraint);
+        solve::run(&vars_by_symbol, problems, subs, &constraint);
     }
 
-    solve(&vars_by_symbol, problems, subs, &module.constraint);
+    solve::run(&vars_by_symbol, problems, subs, &module.constraint);
 }

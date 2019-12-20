@@ -18,9 +18,25 @@ struct RecordStructure {
 }
 
 pub type Problems = Vec<Problem>;
+pub type Pool = Vec<Variable>;
 
 #[inline(always)]
-pub fn unify(subs: &mut Subs, problems: &mut Problems, var1: Variable, var2: Variable) {
+pub fn unify(subs: &mut Subs, problems: &mut Problems, var1: Variable, var2: Variable) -> Pool {
+    let mut pool = Vec::new();
+
+    unify_pool(subs, &mut pool, problems, var1, var2);
+
+    pool
+}
+
+#[inline(always)]
+pub fn unify_pool(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    problems: &mut Problems,
+    var1: Variable,
+    var2: Variable,
+) {
     if !subs.equivalent(var1, var2) {
         let ctx = Context {
             first: var1,
@@ -29,19 +45,24 @@ pub fn unify(subs: &mut Subs, problems: &mut Problems, var1: Variable, var2: Var
             second_desc: subs.get(var2),
         };
 
-        unify_context(subs, problems, ctx)
+        unify_context(subs, pool, problems, ctx);
     }
 }
 
-fn unify_context(subs: &mut Subs, problems: &mut Problems, ctx: Context) {
+fn unify_context(subs: &mut Subs, pool: &mut Pool, problems: &mut Problems, ctx: Context) {
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, problems, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, problems, &ctx, name, &ctx.second_desc.content),
-        Structure(flat_type) => {
-            unify_structure(subs, problems, &ctx, flat_type, &ctx.second_desc.content)
-        }
+        Structure(flat_type) => unify_structure(
+            subs,
+            pool,
+            problems,
+            &ctx,
+            flat_type,
+            &ctx.second_desc.content,
+        ),
         Alias(home, name, args, real_var) => {
-            unify_alias(subs, problems, &ctx, home, name, args, *real_var)
+            unify_alias(subs, pool, problems, &ctx, home, name, args, *real_var)
         }
         Error(problem) => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
@@ -51,9 +72,12 @@ fn unify_context(subs: &mut Subs, problems: &mut Problems, ctx: Context) {
     }
 }
 
+// TODO trim down this arg list
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn unify_alias(
     subs: &mut Subs,
+    pool: &mut Pool,
     problems: &mut Problems,
     ctx: &Context,
     home: &ModuleName,
@@ -72,7 +96,7 @@ fn unify_alias(
                 Alias(home.clone(), name.clone(), args.to_owned(), real_var),
             );
         }
-        RigidVar(_) => unify(subs, problems, real_var, ctx.second),
+        RigidVar(_) => unify_pool(subs, pool, problems, real_var, ctx.second),
         Alias(other_home, other_name, other_args, other_real_var) => {
             if name == other_name && home == other_home {
                 match args.len().cmp(&other_args.len()) {
@@ -90,16 +114,16 @@ fn unify_alias(
                     }
                     Ordering::Equal => {
                         for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
-                            unify(subs, problems, *l_var, *r_var);
+                            unify_pool(subs, pool, problems, *l_var, *r_var);
                         }
                         merge(subs, &ctx, other_content.clone());
                     }
                 }
             } else {
-                unify(subs, problems, real_var, *other_real_var)
+                unify_pool(subs, pool, problems, real_var, *other_real_var)
             }
         }
-        Structure(_) => unify(subs, problems, real_var, ctx.second),
+        Structure(_) => unify_pool(subs, pool, problems, real_var, ctx.second),
         Error(problem) => {
             merge(subs, ctx, Error(problem.clone()));
             problems.push(problem.clone());
@@ -110,6 +134,7 @@ fn unify_alias(
 #[inline(always)]
 fn unify_structure(
     subs: &mut Subs,
+    pool: &mut Pool,
     problems: &mut Problems,
     ctx: &Context,
     flat_type: &FlatType,
@@ -128,9 +153,9 @@ fn unify_structure(
         }
         Structure(ref other_flat_type) => {
             // Unify the two flat types
-            unify_flat_type(subs, problems, ctx, flat_type, other_flat_type)
+            unify_flat_type(subs, pool, problems, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, _, real_var) => unify(subs, problems, ctx.first, *real_var),
+        Alias(_, _, _, real_var) => unify_pool(subs, pool, problems, ctx.first, *real_var),
         Error(problem) => {
             // Error propagates.
             merge(subs, ctx, Error(problem.clone()));
@@ -141,6 +166,7 @@ fn unify_structure(
 
 fn unify_record(
     subs: &mut Subs,
+    pool: &mut Pool,
     problems: &mut Problems,
     ctx: &Context,
     rec1: RecordStructure,
@@ -156,9 +182,10 @@ fn unify_record(
 
     if unique_fields1.is_empty() {
         if unique_fields2.is_empty() {
-            unify(subs, problems, rec1.ext, rec2.ext);
+            unify_pool(subs, pool, problems, rec1.ext, rec2.ext);
             unify_shared_fields(
                 subs,
+                pool,
                 problems,
                 ctx,
                 shared_fields,
@@ -167,12 +194,13 @@ fn unify_record(
             )
         } else {
             let flat_type = FlatType::Record(unique_fields2, rec2.ext);
-            let sub_record = subs.fresh(Structure(flat_type).into());
+            let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
 
-            unify(subs, problems, rec1.ext, sub_record);
+            unify_pool(subs, pool, problems, rec1.ext, sub_record);
 
             unify_shared_fields(
                 subs,
+                pool,
                 problems,
                 ctx,
                 shared_fields,
@@ -182,12 +210,13 @@ fn unify_record(
         }
     } else if unique_fields2.is_empty() {
         let flat_type = FlatType::Record(unique_fields1, rec1.ext);
-        let sub_record = subs.fresh(Structure(flat_type).into());
+        let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
 
-        unify(subs, problems, sub_record, rec2.ext);
+        unify_pool(subs, pool, problems, sub_record, rec2.ext);
 
         unify_shared_fields(
             subs,
+            pool,
             problems,
             ctx,
             shared_fields,
@@ -196,21 +225,22 @@ fn unify_record(
         );
     } else {
         let other_fields = unique_fields1.clone().union(unique_fields2.clone());
-        let ext = subs.fresh_unnamed_flex_var();
+        let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
         let flat_type1 = FlatType::Record(unique_fields1, rec1.ext);
-        let sub1 = subs.fresh(Structure(flat_type1).into());
+        let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let flat_type2 = FlatType::Record(unique_fields2, rec2.ext);
-        let sub2 = subs.fresh(Structure(flat_type2).into());
+        let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
-        unify(subs, problems, rec1.ext, sub2);
-        unify(subs, problems, sub1, rec2.ext);
+        unify_pool(subs, pool, problems, rec1.ext, sub2);
+        unify_pool(subs, pool, problems, sub1, rec2.ext);
 
-        unify_shared_fields(subs, problems, ctx, shared_fields, other_fields, ext);
+        unify_shared_fields(subs, pool, problems, ctx, shared_fields, other_fields, ext);
     }
 }
 
 fn unify_shared_fields(
     subs: &mut Subs,
+    pool: &mut Pool,
     problems: &mut Problems,
     ctx: &Context,
     shared_fields: ImMap<Lowercase, (Variable, Variable)>,
@@ -225,7 +255,7 @@ fn unify_shared_fields(
 
         // TODO another way to do this might be to pass around a problems vec
         // and check to see if its length increased after doing this unification.
-        unify(subs, problems, actual, expected);
+        unify_pool(subs, pool, problems, actual, expected);
 
         if problems.len() == prev_problem_count {
             matching_fields.insert(name, actual);
@@ -248,6 +278,7 @@ fn unify_shared_fields(
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
+    pool: &mut Pool,
     problems: &mut Problems,
     ctx: &Context,
     left: &FlatType,
@@ -261,18 +292,18 @@ fn unify_flat_type(
         }
 
         (Record(fields, ext), EmptyRecord) if fields.is_empty() => {
-            unify(subs, problems, *ext, ctx.second)
+            unify_pool(subs, pool, problems, *ext, ctx.second)
         }
 
         (EmptyRecord, Record(fields, ext)) if fields.is_empty() => {
-            unify(subs, problems, ctx.first, *ext)
+            unify_pool(subs, pool, problems, ctx.first, *ext)
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
             let rec1 = gather_fields(subs, problems, fields1.clone(), *ext1);
             let rec2 = gather_fields(subs, problems, fields2.clone(), *ext2);
 
-            unify_record(subs, problems, ctx, rec1, rec2)
+            unify_record(subs, pool, problems, ctx, rec1, rec2)
         }
         (
             Apply {
@@ -286,7 +317,7 @@ fn unify_flat_type(
                 args: r_args,
             },
         ) if l_module_name == r_module_name && l_type_name == r_type_name => {
-            unify_zip(subs, problems, l_args.iter(), r_args.iter());
+            unify_zip(subs, pool, problems, l_args.iter(), r_args.iter());
 
             merge(
                 subs,
@@ -302,8 +333,8 @@ fn unify_flat_type(
             Ordering::Greater => merge(subs, ctx, Error(Problem::ExtraArguments)),
             Ordering::Less => merge(subs, ctx, Error(Problem::MissingArguments)),
             Ordering::Equal => {
-                unify_zip(subs, problems, l_args.iter(), r_args.iter());
-                unify(subs, problems, *l_ret, *r_ret);
+                unify_zip(subs, pool, problems, l_args.iter(), r_args.iter());
+                unify_pool(subs, pool, problems, *l_ret, *r_ret);
                 merge(subs, ctx, Structure(Func((*r_args).clone(), *r_ret)));
             }
         },
@@ -316,12 +347,17 @@ fn unify_flat_type(
     }
 }
 
-fn unify_zip<'a, I>(subs: &mut Subs, problems: &mut Problems, left_iter: I, right_iter: I)
-where
+fn unify_zip<'a, I>(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    problems: &mut Problems,
+    left_iter: I,
+    right_iter: I,
+) where
     I: Iterator<Item = &'a Variable>,
 {
     for (&l_var, &r_var) in left_iter.zip(right_iter) {
-        unify(subs, problems, l_var, r_var);
+        unify_pool(subs, pool, problems, l_var, r_var);
     }
 }
 
@@ -411,4 +447,25 @@ fn merge(subs: &mut Subs, ctx: &Context, content: Content) {
     };
 
     subs.union(ctx.first, ctx.second, desc);
+}
+
+fn register(subs: &mut Subs, desc: Descriptor, pool: &mut Pool) -> Variable {
+    let var = subs.fresh(desc);
+
+    pool.push(var);
+
+    var
+}
+
+fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> Variable {
+    register(
+        subs,
+        Descriptor {
+            content,
+            rank: ctx.first_desc.rank.min(ctx.second_desc.rank),
+            mark: Mark::none(),
+            copy: None,
+        },
+        pool,
+    )
 }

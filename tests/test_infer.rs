@@ -509,10 +509,6 @@ mod test_infer {
         );
     }
 
-    // TODO type annotations
-    // TODO BoundTypeVariables
-    // TODO conditionals
-
     #[test]
     fn indirect_always() {
         infer_eq(
