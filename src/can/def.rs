@@ -353,6 +353,45 @@ pub fn sort_can_defs(
     }
 }
 
+fn canonicalize_def_pattern(
+    env: &mut Env,
+    loc_pattern: &Located<ast::Pattern>,
+    scope: &mut Scope,
+    flex_info: &mut Info,
+    var_store: &VarStore,
+) -> (PatternState, Located<Pattern>) {
+    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+    // (However, still include it in scope, because you *can* recursively refer to yourself.)
+    let mut shadowable_idents = scope.idents.clone();
+    remove_idents(&loc_pattern.value, &mut shadowable_idents);
+
+    let pattern_var = var_store.fresh();
+    let pattern_type = Type::Variable(pattern_var);
+    let pattern_expected = PExpected::NoExpectation(pattern_type);
+
+    let mut state = PatternState {
+        headers: SendMap::default(),
+        vars: Vec::with_capacity(1),
+        constraints: Vec::with_capacity(1),
+    };
+
+    let loc_can_pattern = canonicalize_pattern(
+        env,
+        &mut state,
+        var_store,
+        scope,
+        Assignment,
+        &loc_pattern.value,
+        loc_pattern.region,
+        &mut shadowable_idents,
+        pattern_expected,
+    );
+
+    flex_info.vars.push(pattern_var);
+
+    (state, loc_can_pattern)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_def<'a>(
     rigids: &Rigids,
@@ -397,34 +436,8 @@ fn canonicalize_def<'a>(
             // immediately, then canonicalize it to get its Variable, then use that
             // Variable to generate the extra constraints.
 
-            // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-            // (However, still include it in scope, because you *can* recursively refer to yourself.)
-            let mut shadowable_idents = scope.idents.clone();
-            remove_idents(&loc_pattern.value, &mut shadowable_idents);
-
-            let pattern_var = var_store.fresh();
-            let pattern_type = Type::Variable(pattern_var);
-            let pattern_expected = PExpected::NoExpectation(pattern_type);
-
-            let mut state = PatternState {
-                headers: SendMap::default(),
-                vars: Vec::with_capacity(1),
-                constraints: Vec::with_capacity(1),
-            };
-
-            let loc_can_pattern = canonicalize_pattern(
-                env,
-                &mut state,
-                var_store,
-                scope,
-                Assignment,
-                &loc_pattern.value,
-                loc_pattern.region,
-                &mut shadowable_idents,
-                pattern_expected,
-            );
-
-            flex_info.vars.push(pattern_var);
+            let (_state, loc_can_pattern) =
+                canonicalize_def_pattern(env, loc_pattern, scope, flex_info, var_store);
 
             // Any time there's a lookup on this symbol in the outer Let,
             // it should result in this expression's type. After all, this
@@ -472,34 +485,8 @@ fn canonicalize_def<'a>(
         }
 
         TypedDef(loc_pattern, loc_annotation, loc_expr) => {
-            // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-            // (However, still include it in scope, because you *can* recursively refer to yourself.)
-            let mut shadowable_idents = scope.idents.clone();
-            remove_idents(&loc_pattern.value, &mut shadowable_idents);
-
-            let pattern_var = var_store.fresh();
-            let pattern_type = Type::Variable(pattern_var);
-            let pattern_expected = PExpected::NoExpectation(pattern_type);
-
-            let mut state = PatternState {
-                headers: SendMap::default(),
-                vars: Vec::with_capacity(1),
-                constraints: Vec::with_capacity(1),
-            };
-
-            let loc_can_pattern = canonicalize_pattern(
-                env,
-                &mut state,
-                var_store,
-                scope,
-                Assignment,
-                &loc_pattern.value,
-                loc_pattern.region,
-                &mut shadowable_idents,
-                pattern_expected,
-            );
-
-            flex_info.vars.push(pattern_var);
+            let (state, loc_can_pattern) =
+                canonicalize_def_pattern(env, loc_pattern, scope, flex_info, var_store);
 
             // Any time there's a lookup on this symbol in the outer Let,
             // it should result in this expression's type. After all, this
@@ -568,7 +555,7 @@ fn canonicalize_def<'a>(
             can_output.rigids = ftv_sendmap;
 
             // ensure expected type unifies with annotated type
-            state
+            flex_info
                 .constraints
                 .push(Eq(expr_type, annotation_expected, loc_def.region));
 
@@ -693,34 +680,8 @@ fn canonicalize_def<'a>(
         // If we have a pattern, then the def has a body (that is, it's not a
         // standalone annotation), so we need to canonicalize the pattern and expr.
         Body(loc_pattern, loc_expr) => {
-            // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-            // (However, still include it in scope, because you *can* recursively refer to yourself.)
-            let mut shadowable_idents = scope.idents.clone();
-            remove_idents(&loc_pattern.value, &mut shadowable_idents);
-
-            let pattern_var = var_store.fresh();
-            let pattern_type = Type::Variable(pattern_var);
-            let pattern_expected = PExpected::NoExpectation(pattern_type);
-
-            let mut state = PatternState {
-                headers: SendMap::default(),
-                vars: Vec::with_capacity(1),
-                constraints: Vec::with_capacity(1),
-            };
-
-            let loc_can_pattern = canonicalize_pattern(
-                env,
-                &mut state,
-                var_store,
-                scope,
-                Assignment,
-                &loc_pattern.value,
-                loc_pattern.region,
-                &mut shadowable_idents,
-                pattern_expected,
-            );
-
-            flex_info.vars.push(pattern_var);
+            let (state, loc_can_pattern) =
+                canonicalize_def_pattern(env, loc_pattern, scope, flex_info, var_store);
 
             // Any time there's a lookup on this symbol in the outer Let,
             // it should result in this expression's type. After all, this
