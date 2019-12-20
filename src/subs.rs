@@ -215,12 +215,6 @@ impl Subs {
         });
     }
 
-    pub fn copy_var(&mut self, var: Variable) -> Variable {
-        // TODO understand the purpose of using a "deep copy" approach here,
-        // and perform it if necessary. (Seems to be about setting maxRank?)
-        var
-    }
-
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
         self.utable.unioned(left, right)
     }
