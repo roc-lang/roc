@@ -35,6 +35,7 @@ where
                         buf.push('\n');
                     } else {
                         newline(buf, indent);
+
                     }
 
                     // Don't bother incrementing it if we're already over the limit.
@@ -43,10 +44,7 @@ where
                 }
             }
             LineComment(comment) => {
-                buf.push('#');
-                buf.push_str(comment);
-
-                newline(buf, indent);
+                fmt_comment(buf, comment, indent);
 
                 // Reset to 1 because we just printed a \n
                 consecutive_newlines = 1;
@@ -66,11 +64,15 @@ where
         match space {
             Newline => {}
             LineComment(comment) => {
-                buf.push('#');
-                buf.push_str(comment);
-
-                newline(buf, indent);
+                fmt_comment(buf, comment, indent);
             }
         }
     }
+}
+
+fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str, indent:u16) {
+    buf.push('#');
+    buf.push_str(comment);
+
+    newline(buf, indent);
 }

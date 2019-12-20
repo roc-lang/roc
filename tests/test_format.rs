@@ -38,7 +38,7 @@ mod test_format {
             Ok(actual) => {
                 let mut buf = String::new_in(&arena);
 
-                fmt_expr(&mut buf, &actual, 0, false);
+                fmt_expr(&mut buf, &actual, 0, false, true);
 
                 assert_eq!(buf, expected)
             },
@@ -617,6 +617,45 @@ mod test_format {
         "#
         ));
     }
+
+    #[test]
+    fn multi_line_if() {
+        expr_formats_to(indoc!(
+            r#"
+            if lessThan four five then
+                four
+            else
+                five
+            "#
+        ), indoc!(
+            r#"
+            if lessThan four five then
+                four
+
+            else
+                five
+            "#
+        ));
+
+        expr_formats_to(indoc!(
+            r#"
+            if foo bar then
+                a b c
+
+            else
+                d e f
+            "#
+        ), indoc!(
+            r#"
+            if foo bar then
+                a b c
+
+            else
+                d e f
+            "#
+        ));
+    }
+
 
     // CASE
 
