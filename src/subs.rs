@@ -159,6 +159,10 @@ impl Subs {
         self.utable.probe_value(key)
     }
 
+    pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
+        self.utable.probe_value_without_compacting(key)
+    }
+
     pub fn get_root_key(&mut self, key: Variable) -> Variable {
         self.utable.get_root_key(key)
     }

@@ -229,7 +229,7 @@ fn solve(
                     // check that things went well
                     debug_assert!(rigid_vars
                         .iter()
-                        .all(|&var| subs.get(var).rank == Rank::none()));
+                        .all(|&var| subs.get_without_compacting(var).rank == Rank::none()));
 
                     let mut new_vars_by_symbol = vars_by_symbol.clone();
 

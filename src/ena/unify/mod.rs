@@ -271,20 +271,25 @@ impl<S: UnificationStore> UnificationTable<S> {
     /// NB. This is a building-block operation and you would probably
     /// prefer to call `probe` below.
     pub fn get_root_key(&mut self, vid: S::Key) -> S::Key {
-        let redirect = {
-            match self.value(vid).parent(vid) {
-                None => return vid,
-                Some(redirect) => redirect,
+        match self.value(vid).parent(vid) {
+            None => vid,
+            Some(redirect) => {
+                let root_key: S::Key = self.get_root_key(redirect);
+                if root_key != redirect {
+                    // Path compression
+                    self.update_value(vid, |value| value.parent = root_key);
+                }
+
+                root_key
             }
-        };
-
-        let root_key: S::Key = self.get_root_key(redirect);
-        if root_key != redirect {
-            // Path compression
-            self.update_value(vid, |value| value.parent = root_key);
         }
+    }
 
-        root_key
+    pub fn get_root_key_without_compacting(&self, vid: S::Key) -> S::Key {
+        match self.value(vid).parent(vid) {
+            None => vid,
+            Some(redirect) => self.get_root_key_without_compacting(redirect),
+        }
     }
 
     pub fn is_redirect(&mut self, vid: S::Key) -> bool {
@@ -406,6 +411,17 @@ where
     {
         let id = id.into();
         let id = self.get_root_key(id);
+        self.value(id).value.clone()
+    }
+
+    /// This is for a debug_assert! in solve() only. Do not use it elsewhere!
+    pub fn probe_value_without_compacting<K1>(&self, id: K1) -> V
+    where
+        K1: Into<K>,
+    {
+        let id = id.into();
+        let id = self.get_root_key_without_compacting(id);
+
         self.value(id).value.clone()
     }
 }
