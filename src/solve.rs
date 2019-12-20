@@ -420,7 +420,7 @@ fn pool_to_rank_table(
     subs: &mut Subs,
     young_mark: Mark,
     young_rank: Rank,
-    young_vars: &Vec<Variable>,
+    young_vars: &[Variable],
 ) -> Pools {
     let mut pools = Pools::new(young_rank.into_usize() + 1);
 
@@ -545,7 +545,7 @@ fn adjust_rank_content(
     }
 }
 
-fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &Vec<Variable>) {
+fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) {
     let pool: &mut Vec<Variable> = pools.get_mut(rank);
 
     for &var in vars.iter() {

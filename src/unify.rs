@@ -72,6 +72,8 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, problems: &mut Problems, ctx:
     }
 }
 
+// TODO trim down this arg list
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn unify_alias(
     subs: &mut Subs,
@@ -192,7 +194,7 @@ fn unify_record(
             )
         } else {
             let flat_type = FlatType::Record(unique_fields2, rec2.ext);
-            let sub_record = fresh(subs, pool, ctx, Structure(flat_type).into());
+            let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
 
             unify_pool(subs, pool, problems, rec1.ext, sub_record);
 
@@ -208,7 +210,7 @@ fn unify_record(
         }
     } else if unique_fields2.is_empty() {
         let flat_type = FlatType::Record(unique_fields1, rec1.ext);
-        let sub_record = fresh(subs, pool, ctx, Structure(flat_type).into());
+        let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
 
         unify_pool(subs, pool, problems, sub_record, rec2.ext);
 
@@ -225,9 +227,9 @@ fn unify_record(
         let other_fields = unique_fields1.clone().union(unique_fields2.clone());
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
         let flat_type1 = FlatType::Record(unique_fields1, rec1.ext);
-        let sub1 = fresh(subs, pool, ctx, Structure(flat_type1).into());
+        let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let flat_type2 = FlatType::Record(unique_fields2, rec2.ext);
-        let sub2 = fresh(subs, pool, ctx, Structure(flat_type2).into());
+        let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
         unify_pool(subs, pool, problems, rec1.ext, sub2);
         unify_pool(subs, pool, problems, sub1, rec2.ext);
