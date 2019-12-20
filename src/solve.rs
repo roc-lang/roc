@@ -100,8 +100,8 @@ fn solve(
     match constraint {
         True => state,
         Eq(typ, expected_type, _region) => {
-            let actual = type_to_var(subs, rank, pools, typ.clone());
-            let expected = type_to_var(subs, rank, pools, expected_type.clone().get_type());
+            let actual = type_to_var(subs, rank, pools, typ);
+            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
 
             // TODO use region when reporting a problem
             let vars = unify(subs, problems, actual, expected);
@@ -137,7 +137,7 @@ fn solve(
             // infer the type of this lookup (in this case, `Int`) without ever
             // having mutated the original.
             let actual = deep_copy_var(subs, rank, pools, var);
-            let expected = type_to_var(subs, rank, pools, expected_type.clone().get_type());
+            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
 
             // TODO use region when reporting a problem
             let vars = unify(subs, problems, dbg!(actual), dbg!(expected));
@@ -167,8 +167,8 @@ fn solve(
         }
         Pattern(_region, _category, typ, expected) => {
             // TODO use region?
-            let actual = type_to_var(subs, rank, pools, typ.clone());
-            let expected = type_to_var(subs, rank, pools, expected.clone().get_type());
+            let actual = type_to_var(subs, rank, pools, typ);
+            let expected = type_to_var(subs, rank, pools, expected.get_type_ref());
             let vars = unify(subs, problems, actual, expected);
 
             introduce(subs, rank, pools, &vars);
@@ -206,7 +206,7 @@ fn solve(
                     let mut locals = ImMap::default();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(subs, rank, pools, loc_type.value.clone());
+                        let var = type_to_var(subs, rank, pools, &loc_type.value);
 
                         locals.insert(
                             symbol.clone(),
@@ -259,6 +259,7 @@ fn solve(
                     let work_in_next_pools = |next_pools: &mut Pools| {
                         let pool: &mut Vec<Variable> = next_pools.get_mut(next_rank);
 
+                        // Replace the contents of this pool with rigid_vars and flex_vars
                         pool.clear();
                         pool.reserve(rigid_vars.len() + flex_vars.len());
                         pool.extend(rigid_vars.iter());
@@ -269,7 +270,7 @@ fn solve(
 
                         for (symbol, loc_type) in let_con.def_types.iter() {
                             let def_type = loc_type.value.clone();
-                            let var = type_to_var(subs, next_rank, next_pools, def_type);
+                            let var = type_to_var(subs, next_rank, next_pools, &def_type);
 
                             locals.insert(
                                 symbol.clone(),
@@ -351,7 +352,7 @@ fn solve(
     }
 }
 
-fn type_to_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: Type) -> Variable {
+fn type_to_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) -> Variable {
     type_to_variable(subs, rank, pools, &ImMap::default(), typ)
 }
 
@@ -360,10 +361,10 @@ fn type_to_variable(
     rank: Rank,
     pools: &mut Pools,
     aliases: &ImMap<Lowercase, Variable>,
-    typ: Type,
+    typ: &Type,
 ) -> Variable {
     match typ {
-        Variable(var) => var,
+        Variable(var) => *var,
         Apply {
             module_name,
             name,
@@ -372,12 +373,12 @@ fn type_to_variable(
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg.clone()))
+                arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
             }
 
             let flat_type = FlatType::Apply {
-                module_name,
-                name,
+                module_name: module_name.clone(),
+                name: name.clone(),
                 args: arg_vars,
             };
             let content = Content::Structure(flat_type);
@@ -393,10 +394,10 @@ fn type_to_variable(
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg.clone()))
+                arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
             }
 
-            let ret_var = type_to_variable(subs, rank, pools, aliases, *ret_type);
+            let ret_var = type_to_variable(subs, rank, pools, aliases, ret_type);
             let content = Content::Structure(FlatType::Func(arg_vars, ret_var));
 
             register(subs, rank, pools, content)
@@ -406,12 +407,12 @@ fn type_to_variable(
 
             for (field, field_type) in fields {
                 field_vars.insert(
-                    field,
+                    field.clone(),
                     type_to_variable(subs, rank, pools, aliases, field_type),
                 );
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, aliases, *ext);
+            let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
             let content = Content::Structure(FlatType::Record(field_vars, ext_var));
 
             register(subs, rank, pools, content)
@@ -421,19 +422,19 @@ fn type_to_variable(
             let mut new_aliases = ImMap::default();
 
             for (arg, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, aliases, arg_type.clone());
+                let arg_var = type_to_variable(subs, rank, pools, aliases, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
-                new_aliases.insert(arg, arg_var);
+                new_aliases.insert(arg.clone(), arg_var);
             }
 
-            let alias_var = type_to_variable(subs, rank, pools, &new_aliases, *alias_type);
-            let content = Content::Alias(home, name, arg_vars, alias_var);
+            let alias_var = type_to_variable(subs, rank, pools, &new_aliases, alias_type);
+            let content = Content::Alias(home.clone(), name.clone(), arg_vars, alias_var);
 
             register(subs, rank, pools, content)
         }
         Erroneous(problem) => {
-            let content = Content::Structure(FlatType::Erroneous(problem));
+            let content = Content::Structure(FlatType::Erroneous(problem.clone()));
 
             register(subs, rank, pools, content)
         }
@@ -673,7 +674,7 @@ fn deep_copy_var_help(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    let desc = subs.get(var);
+    let desc = dbg!(subs.get(var));
 
     if let Some(copy) = desc.copy {
         return copy;

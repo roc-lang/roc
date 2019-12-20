@@ -202,6 +202,13 @@ impl<T> PExpected<T> {
             PExpected::ForReason(_, val, _) => val,
         }
     }
+
+    pub fn get_type_ref(&self) -> &T {
+        match self {
+            PExpected::NoExpectation(val) => val,
+            PExpected::ForReason(_, val, _) => val,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +222,14 @@ pub enum PReason {
 
 impl<T> Expected<T> {
     pub fn get_type(self) -> T {
+        match self {
+            Expected::NoExpectation(val) => val,
+            Expected::ForReason(_, val, _) => val,
+            Expected::FromAnnotation(_, _, _, val) => val,
+        }
+    }
+
+    pub fn get_type_ref(&self) -> &T {
         match self {
             Expected::NoExpectation(val) => val,
             Expected::ForReason(_, val, _) => val,
