@@ -475,6 +475,7 @@ fn canonicalize_def<'a>(
                 .constraints
                 .push(Eq(expr_type, annotation_expected, loc_annotation.region));
 
+            // Fabricate a body for this annotation, that will error at runtime
             let value = Expr::RuntimeError(NoImplementation);
             let loc_expr = Located {
                 value,
@@ -540,7 +541,7 @@ fn canonicalize_def<'a>(
                 can_annotation,
             );
 
-            let (mut loc_can_expr, mut can_output, ret_constraint) = canonicalize_expr(
+            let (mut loc_can_expr, can_output, ret_constraint) = canonicalize_expr(
                 // rigids,
                 &new_rtv,
                 env,
@@ -551,8 +552,7 @@ fn canonicalize_def<'a>(
                 annotation_expected.clone(),
             );
 
-            *found_rigids = found_rigids.clone().union(ftv_sendmap.clone());
-            can_output.rigids = ftv_sendmap;
+            *found_rigids = found_rigids.clone().union(ftv_sendmap);
 
             // ensure expected type unifies with annotated type
             flex_info
