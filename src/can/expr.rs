@@ -511,7 +511,7 @@ pub fn canonicalize_expr(
                         defs_constraint: defs_constraint,
                         ret_constraint,
                     })),
-                    // "the closure's type is equal to expected  type"
+                    // "the closure's type is equal to expected type"
                     Eq(fn_typ, expected, region),
                 ]),
             );

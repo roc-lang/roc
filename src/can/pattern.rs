@@ -132,7 +132,7 @@ pub fn canonicalize_pattern<'a>(
                             // The latter is relevant when recursively canonicalizing
                             // tag application patterns, which can bring multiple
                             // new idents into scope. For example, it's important that
-                            // we catch (Blah foo foo) as being an example of shadowing.
+                            // we catch (Blah foo foo) -> … as being an example of shadowing.
                             scope
                                 .idents
                                 .insert(new_ident.clone(), symbol_and_region.clone());

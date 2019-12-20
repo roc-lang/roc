@@ -96,9 +96,10 @@ fn solve(
     match constraint {
         True => state,
         Eq(typ, expected_type, _region) => {
-            // TODO use region?
             let actual = type_to_var(subs, typ.clone());
             let expected = type_to_var(subs, expected_type.clone().get_type());
+
+            // TODO use region when reporting a problem
             let vars = unify(subs, problems, actual, expected);
 
             introduce(subs, rank, pools, &vars);
@@ -375,9 +376,8 @@ fn generalize(
     let young_vars = pools.get(young_rank);
     let rank_table = pool_to_rank_table(subs, young_mark, young_rank, young_vars);
 
-    // get the ranks right for each entry.
-    // start at low ranks so that we only have to pass
-    // over the information once.
+    // Get the ranks right for each entry.
+    // Start at low ranks so we only have to pass over the information once.
     for (index, table) in rank_table.iter().enumerate() {
         for &var in table.iter() {
             adjust_rank(subs, young_mark, visit_mark, Rank::from(index), var);
@@ -386,7 +386,7 @@ fn generalize(
 
     let (last_pool, all_but_last_pool) = rank_table.split_last();
 
-    // For variables that have rank lowerer than youngRank, register them in
+    // For variables that have rank lowerer than young_rank, register them in
     // the appropriate old pool if they are not redundant.
     for vars in all_but_last_pool {
         for &var in vars {
@@ -398,9 +398,8 @@ fn generalize(
         }
     }
 
-    // For variables with rank youngRank
-    //   If rank < youngRank: register in oldPool
-    //   otherwise generalize
+    // For variables with rank young_rank, if rank < young_rank: register in old pool,
+    // otherwise generalize
     for &var in last_pool {
         if !subs.redundant(var) {
             let mut desc = subs.get(var);
@@ -438,7 +437,6 @@ fn pool_to_rank_table(
 
 /// Adjust variable ranks such that ranks never increase as you move deeper.
 /// This way the outermost rank is representative of the entire structure.
-///
 fn adjust_rank(
     subs: &mut Subs,
     young_mark: Mark,
@@ -535,7 +533,7 @@ fn adjust_rank_content(
         Alias(_, _, args, _) => {
             let mut rank = Rank::outermost();
 
-            // from elm-compiler: THEORY: anything in the realVar would be outermostRank
+            // from elm-compiler: THEORY: anything in the real_var would be Rank::outermost()
             for (_, var) in args {
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
@@ -545,6 +543,8 @@ fn adjust_rank_content(
     }
 }
 
+/// Introduce some variables to Pools at the given rank.
+/// Also, set each of their ranks in Subs to be the given rank.
 fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) {
     let pool: &mut Vec<Variable> = pools.get_mut(rank);
 
