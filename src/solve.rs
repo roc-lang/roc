@@ -120,7 +120,23 @@ fn solve(
                 )
             });
 
-            let actual = var;
+            // Deep copy the vars associated with this symbol before unifying them.
+            // Otherwise, suppose we have this:
+            //
+            // identity = \a -> a
+            //
+            // x = identity 5
+            //
+            // When we call (identity 5), it's important that we not unify
+            // on identity's original vars. If we do, the type of `identity` will be
+            // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
+            // the type of `identity` is more general than that!
+            //
+            // Instead, we want to unify on a *copy* of its vars. If the copy unifies
+            // successfully (in this case, to `Int -> Int`), we can use that to
+            // infer the type of this lookup (in this case, `Int`) without ever
+            // having mutated the original.
+            let actual = deep_copy_var(subs, rank, pools, var);
             let expected = type_to_var(subs, rank, pools, expected_type.clone().get_type());
 
             // TODO use region when reporting a problem
@@ -501,9 +517,18 @@ fn pool_to_rank_table(
 
     // Sort the variables into buckets by rank.
     for &var in young_vars.iter() {
-        let rank = subs.get(var).rank;
+        let desc = subs.get(var);
+        let rank = desc.rank;
 
-        subs.set_mark(var, young_mark);
+        subs.set(
+            var,
+            Descriptor {
+                rank,
+                mark: young_mark,
+                content: desc.content,
+                copy: desc.copy,
+            },
+        );
 
         pools.get_mut(rank).push(var);
     }

@@ -239,6 +239,26 @@ impl Subs {
 
         var_to_err_type(self, &mut state, var)
     }
+
+    pub fn restore(&mut self, var: Variable) {
+        let desc = self.get(var);
+
+        if desc.copy.is_some() {
+            let content = desc.content;
+
+            self.set(
+                var,
+                Descriptor {
+                    content: content.clone(),
+                    rank: Rank::none(),
+                    mark: Mark::none(),
+                    copy: None,
+                },
+            );
+
+            restore_content(self, &content);
+        }
+    }
 }
 
 #[inline(always)]
@@ -643,4 +663,47 @@ fn get_fresh_var_name(state: &mut NameState) -> Lowercase {
     state.normals = new_index;
 
     name
+}
+
+fn restore_content(subs: &mut Subs, content: &Content) {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match content {
+        FlexVar(_) | RigidVar(_) | Error(_) => (),
+
+        Structure(flat_type) => match flat_type {
+            Apply { args, .. } => {
+                for &var in args {
+                    subs.restore(var);
+                }
+            }
+
+            Func(arg_vars, ret_var) => {
+                for &var in arg_vars {
+                    subs.restore(var);
+                }
+
+                subs.restore(*ret_var);
+            }
+
+            EmptyRecord => (),
+
+            Record(fields, ext_var) => {
+                for (_, var) in fields {
+                    subs.restore(*var);
+                }
+
+                subs.restore(*ext_var);
+            }
+            Erroneous(_) => (),
+        },
+        Alias(_, _, args, var) => {
+            for (_, arg_var) in args {
+                subs.restore(*arg_var);
+            }
+
+            subs.restore(*var);
+        }
+    }
 }
