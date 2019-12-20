@@ -89,87 +89,48 @@ pub fn canonicalize_defs<'a>(
 
     while let Some(loc_def) = it.next() {
         match &loc_def.value {
-            Annotation(pattern, annotation) => match it.peek() {
-                Some(Located {
-                    value: Body(body_pattern, body_expr),
-                    ..
-                }) if &pattern == body_pattern => {
-                    it.next();
+            Nested(Annotation(pattern, annotation)) | Annotation(pattern, annotation) => {
+                match it.peek() {
+                    Some(Located {
+                        value: Body(body_pattern, body_expr),
+                        ..
+                    }) if pattern.value.equivalent(&body_pattern.value) => {
+                        it.next();
 
-                    let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
-                    canonicalize_def(
-                        rigids,
-                        found_rigids,
-                        env,
-                        Located {
-                            region: loc_def.region,
-                            value: &typed,
-                        },
-                        scope,
-                        &mut can_defs_by_symbol,
-                        flex_info,
-                        var_store,
-                        &mut refs_by_symbol,
-                    );
+                        let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
+                        canonicalize_def(
+                            rigids,
+                            found_rigids,
+                            env,
+                            Located {
+                                region: loc_def.region,
+                                value: &typed,
+                            },
+                            scope,
+                            &mut can_defs_by_symbol,
+                            flex_info,
+                            var_store,
+                            &mut refs_by_symbol,
+                        );
+                    }
+                    _ => {
+                        canonicalize_def(
+                            rigids,
+                            found_rigids,
+                            env,
+                            Located {
+                                region: loc_def.region,
+                                value: &loc_def.value,
+                            },
+                            scope,
+                            &mut can_defs_by_symbol,
+                            flex_info,
+                            var_store,
+                            &mut refs_by_symbol,
+                        );
+                    }
                 }
-                _ => {
-                    canonicalize_def(
-                        rigids,
-                        found_rigids,
-                        env,
-                        Located {
-                            region: loc_def.region,
-                            value: &loc_def.value,
-                        },
-                        scope,
-                        &mut can_defs_by_symbol,
-                        flex_info,
-                        var_store,
-                        &mut refs_by_symbol,
-                    );
-                }
-            },
-
-            Nested(Annotation(pattern, annotation)) => match it.peek() {
-                Some(Located {
-                    value: Body(body_pattern, body_expr),
-                    ..
-                }) if pattern.value == body_pattern.value => {
-                    it.next();
-
-                    let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
-                    canonicalize_def(
-                        rigids,
-                        found_rigids,
-                        env,
-                        Located {
-                            region: loc_def.region,
-                            value: &typed,
-                        },
-                        scope,
-                        &mut can_defs_by_symbol,
-                        flex_info,
-                        var_store,
-                        &mut refs_by_symbol,
-                    );
-                }
-                _ => {
-                    canonicalize_def(
-                        rigids,
-                        found_rigids,
-                        env,
-                        Located {
-                            region: loc_def.region,
-                            value: &loc_def.value,
-                        },
-                        scope,
-                        &mut can_defs_by_symbol,
-                        flex_info,
-                        var_store,
-                        &mut refs_by_symbol,
-                    );
-                }
-            },
+            }
 
             _ => {
                 canonicalize_def(

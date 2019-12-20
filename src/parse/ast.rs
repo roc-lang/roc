@@ -354,6 +354,64 @@ impl<'a> Pattern<'a> {
             Ident::Malformed(string) => Pattern::Malformed(string),
         }
     }
+
+    /// Check that patterns are equivalent, meaning they have the same shape, but may have
+    /// different locations/whitespace
+    pub fn equivalent(&self, other: &Self) -> bool {
+        use Pattern::*;
+        match (self, other) {
+            (Identifier(x), Identifier(y)) => x == y,
+            (GlobalTag(x), GlobalTag(y)) => x == y,
+            (PrivateTag(x), PrivateTag(y)) => x == y,
+            (Apply(constructor_x, args_x), Apply(constructor_y, args_y)) => {
+                let equivalent_args = args_x
+                    .iter()
+                    .zip(args_y.iter())
+                    .all(|(p, q)| p.value.equivalent(&q.value));
+
+                constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+            }
+            (RecordDestructure(fields_x), RecordDestructure(fields_y)) => fields_x
+                .iter()
+                .zip(fields_y.iter())
+                .all(|(p, q)| p.value.equivalent(&q.value)),
+            (RecordField(x, inner_x), RecordField(y, inner_y)) => {
+                x == y && inner_x.value.equivalent(&inner_y.value)
+            }
+            (Nested(x), Nested(y)) => x.equivalent(y),
+
+            // Literal
+            (IntLiteral(x), IntLiteral(y)) => x == y,
+            (
+                NonBase10Literal {
+                    string: string_x,
+                    base: base_x,
+                    is_negative: is_negative_x,
+                },
+                NonBase10Literal {
+                    string: string_y,
+                    base: base_y,
+                    is_negative: is_negative_y,
+                },
+            ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
+            (FloatLiteral(x), FloatLiteral(y)) => x == y,
+            (StrLiteral(x), StrLiteral(y)) => x == y,
+            (BlockStrLiteral(x), BlockStrLiteral(y)) => x == y,
+            (EmptyRecordLiteral, EmptyRecordLiteral) => true,
+            (Underscore, Underscore) => true,
+
+            // Space
+            (SpaceBefore(x, _), SpaceBefore(y, _)) => x.equivalent(y),
+            (SpaceAfter(x, _), SpaceAfter(y, _)) => x.equivalent(y),
+
+            // Malformed
+            (Malformed(x), Malformed(y)) => x == y,
+            (QualifiedIdentifier(x), QualifiedIdentifier(y)) => x == y,
+
+            // Different constructors
+            _ => false,
+        }
+    }
 }
 
 pub trait Spaceable<'a> {
