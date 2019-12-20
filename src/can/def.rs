@@ -457,10 +457,8 @@ fn canonicalize_def<'a>(
             // implicitly, that is the case here too
             let mut fname = "invalid name".to_string();
 
-            if let (
-                &ast::Pattern::Identifier(ref name),
-                &Pattern::Identifier(_, ref defined_symbol),
-            ) = (&loc_pattern.value, &loc_can_pattern.value)
+            if let (&ast::Pattern::Identifier(ref name), &Pattern::Identifier(ref defined_symbol)) =
+                (&loc_pattern.value, &loc_can_pattern.value)
             {
                 fname = (*name).to_string();
                 env.tailcallable_symbol = Some(defined_symbol.clone());
@@ -531,7 +529,7 @@ fn canonicalize_def<'a>(
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
                 &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(_, ref defined_symbol),
+                &Pattern::Identifier(ref defined_symbol),
                 &Closure(ref symbol, _, ref arguments, ref body),
             ) = (
                 &loc_pattern.value,
@@ -675,7 +673,7 @@ fn canonicalize_def<'a>(
 
             if let (
                 &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(_, ref defined_symbol),
+                &Pattern::Identifier(ref defined_symbol),
             ) = (&loc_pattern.value, &loc_can_pattern.value)
             {
                 env.tailcallable_symbol = Some(defined_symbol.clone());
@@ -714,7 +712,7 @@ fn canonicalize_def<'a>(
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
                 &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(_, ref defined_symbol),
+                &Pattern::Identifier(ref defined_symbol),
                 &Closure(ref symbol, _, ref arguments, ref body),
             ) = (
                 &loc_pattern.value,
