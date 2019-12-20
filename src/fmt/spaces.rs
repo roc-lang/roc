@@ -35,7 +35,6 @@ where
                         buf.push('\n');
                     } else {
                         newline(buf, indent);
-
                     }
 
                     // Don't bother incrementing it if we're already over the limit.
@@ -70,7 +69,7 @@ where
     }
 }
 
-fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str, indent:u16) {
+fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str, indent: u16) {
     buf.push('#');
     buf.push_str(comment);
 

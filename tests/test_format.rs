@@ -620,42 +620,47 @@ mod test_format {
 
     #[test]
     fn multi_line_if() {
-        expr_formats_to(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
             if lessThan four five then
                 four
             else
                 five
             "#
-        ), indoc!(
-            r#"
+            ),
+            indoc!(
+                r#"
             if lessThan four five then
                 four
 
             else
                 five
             "#
-        ));
+            ),
+        );
 
-        expr_formats_to(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
             if foo bar then
                 a b c
 
             else
                 d e f
             "#
-        ), indoc!(
-            r#"
+            ),
+            indoc!(
+                r#"
             if foo bar then
                 a b c
 
             else
                 d e f
             "#
-        ));
+            ),
+        );
     }
-
 
     // CASE
 

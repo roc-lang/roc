@@ -10,17 +10,29 @@ pub fn fmt_expr<'a>(
     expr: &'a Expr<'a>,
     indent: u16,
     apply_needs_parens: bool,
-    format_newlines_after: bool
+    format_newlines_after: bool,
 ) {
     use self::Expr::*;
 
     match expr {
         SpaceBefore(sub_expr, spaces) => {
             fmt_spaces(buf, spaces.iter(), indent);
-            fmt_expr(buf, sub_expr, indent, apply_needs_parens, format_newlines_after);
+            fmt_expr(
+                buf,
+                sub_expr,
+                indent,
+                apply_needs_parens,
+                format_newlines_after,
+            );
         }
         SpaceAfter(sub_expr, spaces) => {
-            fmt_expr(buf, sub_expr, indent, apply_needs_parens, format_newlines_after);
+            fmt_expr(
+                buf,
+                sub_expr,
+                indent,
+                apply_needs_parens,
+                format_newlines_after,
+            );
             if format_newlines_after {
                 fmt_spaces(buf, spaces.iter(), indent);
             } else {
@@ -353,7 +365,6 @@ fn fmt_if<'a>(
     loc_else: &'a Located<Expr<'a>>,
     indent: u16,
 ) {
-
     let is_multiline_then = is_multiline_expr(&loc_then.value);
 
     let is_multiline_else = is_multiline_expr(&loc_else.value);
