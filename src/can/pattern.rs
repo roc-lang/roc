@@ -147,14 +147,20 @@ pub fn canonicalize_pattern<'a>(
         &GlobalTag(name) => {
             // Canonicalize the tag's name.
             let symbol = Symbol::from_global_tag(name);
+            let var = var_store.fresh();
 
-            Pattern::Tag(var_store.fresh(), symbol)
+            state.vars.push(var);
+
+            Pattern::Tag(var, symbol)
         }
         &PrivateTag(name) => {
             // Canonicalize the tag's name.
             let symbol = Symbol::from_private_tag(&env.home, name);
+            let var = var_store.fresh();
 
-            Pattern::Tag(var_store.fresh(), symbol)
+            state.vars.push(var);
+
+            Pattern::Tag(var, symbol)
         }
         &FloatLiteral(ref string) => match pattern_type {
             CaseBranch => {

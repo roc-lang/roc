@@ -251,6 +251,12 @@ pub fn canonicalize_expr(
                 constraints: Vec::with_capacity(1),
             };
 
+            let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
+            let ret_var = var_store.fresh();
+            let ret_type = Variable(ret_var);
+
+            vars.push(ret_var);
+
             for pattern in args {
                 let arg_var = var_store.fresh();
                 let arg_typ = Variable(arg_var);
@@ -261,12 +267,11 @@ pub fn canonicalize_expr(
                 );
                 arg_types.push(arg_typ);
                 arg_vars.push(arg_var);
+
+                vars.push(arg_var);
             }
 
-            let ret_var = var_store.fresh();
-            let ret_type = Variable(ret_var);
-
-            state.vars.push(ret_var);
+            vars.push(ret_var);
 
             let fn_typ = constrain::lift(
                 var_store,
@@ -291,7 +296,7 @@ pub fn canonicalize_expr(
 
             let defs_constraint = And(state.constraints);
             let constraint = exists(
-                state.vars.clone(),
+                vars,
                 And(vec![
                     Let(Box::new(LetConstraint {
                         rigid_vars: Vec::new(),

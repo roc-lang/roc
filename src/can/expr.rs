@@ -451,8 +451,12 @@ pub fn canonicalize_expr(
                 constraints: Vec::with_capacity(1),
             };
             let mut can_args: Vec<Located<Pattern>> = Vec::with_capacity(loc_arg_patterns.len());
-            let mut vars = Vec::with_capacity(state.vars.capacity());
+            let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
             let mut pattern_types = Vec::with_capacity(state.vars.capacity());
+            let ret_var = var_store.fresh();
+            let ret_type = Type::Variable(ret_var);
+
+            vars.push(ret_var);
 
             for loc_pattern in loc_arg_patterns.into_iter() {
                 // Exclude the current ident from shadowable_idents; you can't shadow yourself!
@@ -483,13 +487,7 @@ pub fn canonicalize_expr(
                 can_args.push(can_arg);
             }
 
-            let ret_var = var_store.fresh();
-            let ret_type = Type::Variable(ret_var);
-
-            state.vars.push(ret_var);
-
             let fn_typ = Type::Function(pattern_types, Box::new(ret_type.clone()));
-
             let body_type = NoExpectation(ret_type);
             let (loc_body_expr, mut output, ret_constraint) = canonicalize_expr(
                 rigids,
@@ -504,7 +502,7 @@ pub fn canonicalize_expr(
             let defs_constraint = And(state.constraints);
 
             let constraint = exists(
-                state.vars.clone(),
+                vars,
                 And(vec![
                     Let(Box::new(LetConstraint {
                         rigid_vars: Vec::new(),
