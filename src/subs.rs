@@ -50,9 +50,15 @@ struct NameState {
     normals: u32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
+}
+
+impl fmt::Debug for Subs {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.utable.fmt(f)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -251,7 +257,7 @@ fn unnamed_flex_var() -> Content {
     Content::FlexVar(None)
 }
 
-#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Rank(usize);
 
 impl Rank {
@@ -278,6 +284,18 @@ impl fmt::Display for Rank {
     }
 }
 
+impl fmt::Debug for Rank {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self == &Rank::none() {
+            write!(f, "none")
+        } else if self == &Rank::outermost() {
+            write!(f, "outermost")
+        } else {
+            write!(f, "Rank({})", self.0)
+        }
+    }
+}
+
 impl Into<usize> for Rank {
     fn into(self) -> usize {
         self.0
@@ -290,12 +308,22 @@ impl From<usize> for Rank {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
     pub mark: Mark,
     pub copy: Option<Variable>,
+}
+
+impl fmt::Debug for Descriptor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:?}, r: {:?}, m: {:?} c: {:?}",
+            self.content, self.rank, self.mark, self.copy
+        )
+    }
 }
 
 impl Default for Descriptor {
