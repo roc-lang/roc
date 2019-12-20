@@ -126,47 +126,7 @@ pub fn fmt_expr<'a>(
             fmt_expr(buf, &ret.value, indent, false, true);
         }
         If((loc_condition, loc_then, loc_else)) => {
-            let is_multiline_then = is_multiline_expr(&loc_then.value);
-
-            let is_multiline_else = is_multiline_expr(&loc_else.value);
-
-            let is_multiline = is_multiline_then || is_multiline_else;
-
-            buf.push_str("if ");
-            fmt_expr(buf, &loc_condition.value, indent, false, true);
-            buf.push_str(" then");
-
-            if !is_multiline {
-                buf.push_str(" ");
-            }
-
-            let then_return_indent = if is_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            fmt_expr(buf, &loc_then.value, then_return_indent, false, false);
-            if is_multiline {
-                buf.push('\n');
-                newline(buf, indent);
-            } else {
-                buf.push_str(" ");
-            }
-
-            buf.push_str("else");
-
-            if !is_multiline {
-                buf.push_str(" ");
-            }
-
-            let else_return_indent = if is_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            fmt_expr(buf, &loc_else.value, else_return_indent, false, true);
+            fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
         Case(loc_condition, branches) => {
             buf.push_str("case ");
@@ -384,6 +344,57 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
         Malformed(text) => text.chars().any(|c| c == '\n'),
     }
+}
+
+fn fmt_if<'a>(
+    buf: &mut String<'a>,
+    loc_condition: &'a Located<Expr<'a>>,
+    loc_then: &'a Located<Expr<'a>>,
+    loc_else: &'a Located<Expr<'a>>,
+    indent: u16,
+) {
+
+    let is_multiline_then = is_multiline_expr(&loc_then.value);
+
+    let is_multiline_else = is_multiline_expr(&loc_else.value);
+
+    let is_multiline = is_multiline_then || is_multiline_else;
+
+    buf.push_str("if ");
+    fmt_expr(buf, &loc_condition.value, indent, false, true);
+    buf.push_str(" then");
+
+    if !is_multiline {
+        buf.push_str(" ");
+    }
+
+    let then_return_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    fmt_expr(buf, &loc_then.value, then_return_indent, false, false);
+    if is_multiline {
+        buf.push('\n');
+        newline(buf, indent);
+    } else {
+        buf.push_str(" ");
+    }
+
+    buf.push_str("else");
+
+    if !is_multiline {
+        buf.push_str(" ");
+    }
+
+    let else_return_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    fmt_expr(buf, &loc_else.value, else_return_indent, false, true);
 }
 
 pub fn fmt_closure<'a>(
