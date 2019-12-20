@@ -457,14 +457,8 @@ fn canonicalize_def<'a>(
             // TODO remove this clone
             *found_rigids = found_rigids.clone().union(ftv_sendmap);
 
-            let fname: String = if let Pattern::Identifier(_, name) = loc_can_pattern.value {
-                (Into::<Box<str>>::into(name)).to_string()
-            } else {
-                panic!("TODO support other patterns too (requires changing FromAnnotation)");
-            };
-
             let annotation_expected = FromAnnotation(
-                fname,
+                loc_can_pattern,
                 can_annotation.arity(),
                 AnnotationSource::TypedBody,
                 can_annotation,
@@ -503,19 +497,9 @@ fn canonicalize_def<'a>(
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
             let outer_identifier = env.tailcallable_symbol.clone();
 
-            // TODO ensure TypedDef has a pattern identifier?
-            // e.g. in elm, you can't type
-            //
-            // (foo, bar) : (Int, Bool)
-            // implicitly, that is the case here too
-            let mut fname = "invalid name".to_string();
-
-            if let (
-                &ast::Pattern::Identifier(ref name),
-                &Pattern::Identifier(_, ref defined_symbol),
-            ) = (&loc_pattern.value, &loc_can_pattern.value)
+            if let (&ast::Pattern::Identifier(_), &Pattern::Identifier(_, ref defined_symbol)) =
+                (&loc_pattern.value, &loc_can_pattern.value)
             {
-                fname = (*name).to_string();
                 env.tailcallable_symbol = Some(defined_symbol.clone());
                 variables_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
@@ -535,7 +519,7 @@ fn canonicalize_def<'a>(
             let new_rtv = rigids.clone().union(new_rigids);
 
             let annotation_expected = FromAnnotation(
-                fname,
+                loc_can_pattern.clone(),
                 can_annotation.arity(),
                 AnnotationSource::TypedBody,
                 can_annotation,
