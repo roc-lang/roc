@@ -179,6 +179,14 @@ impl Type {
             args: Vec::new(),
         }
     }
+
+    pub fn arity(&self) -> usize {
+        if let Type::Function(args, _) = self {
+            args.len()
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -444,22 +444,18 @@ fn canonicalize_def<'a>(
             // TODO remove this clone
             *found_rigids = found_rigids.clone().union(ftv_sendmap);
 
-            //
-
-            let arity = if let crate::types::Type::Function(args, _) = &can_annotation {
-                args.len()
-            } else {
-                0
-            };
-
             let fname: String = if let Pattern::Identifier(_, name) = loc_can_pattern.value {
                 (Into::<Box<str>>::into(name)).to_string()
             } else {
                 panic!("TODO support other patterns too (requires changing FromAnnotation)");
             };
 
-            let annotation_expected =
-                FromAnnotation(fname, arity, AnnotationSource::TypedBody, can_annotation);
+            let annotation_expected = FromAnnotation(
+                fname,
+                can_annotation.arity(),
+                AnnotationSource::TypedBody,
+                can_annotation,
+            );
 
             // ensure expected type unifies with annotated type
             flex_info
@@ -550,14 +546,12 @@ fn canonicalize_def<'a>(
 
             let new_rtv = rigids.clone().union(new_rigids);
 
-            let arity = if let crate::types::Type::Function(args, _) = &can_annotation {
-                args.len()
-            } else {
-                0
-            };
-
-            let annotation_expected =
-                FromAnnotation(fname, arity, AnnotationSource::TypedBody, can_annotation);
+            let annotation_expected = FromAnnotation(
+                fname,
+                can_annotation.arity(),
+                AnnotationSource::TypedBody,
+                can_annotation,
+            );
 
             let (mut loc_can_expr, mut can_output, ret_constraint) = canonicalize_expr(
                 // rigids,
