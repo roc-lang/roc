@@ -869,4 +869,32 @@ mod test_infer {
             "custom -> custom",
         );
     }
+
+    #[test]
+    fn type_signature_without_body() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo : Int -> Bool
+
+            foo 2
+            "#
+            ),
+            "Bool",
+        );
+    }
+
+    #[test]
+    fn type_signature_without_body_rigid() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo : Int -> custom
+
+            foo 2
+            "#
+            ),
+            "custom",
+        );
+    }
 }

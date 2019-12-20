@@ -376,7 +376,7 @@ fn canonicalize_def<'a>(
     // Each def gets to have all the idents in scope that are defined in this
     // block. Order of defs doesn't matter, thanks to referential transparency!
     let (_opt_loc_pattern, (_loc_can_expr, _can_output)) = match loc_def.value {
-        Annotation(_loc_pattern, loc_annotation) => {
+        Annotation(loc_pattern, loc_annotation) => {
             // TODO implement this:
             //
             // Is this a standalone annotation, or is it annotating the
@@ -396,6 +396,75 @@ fn canonicalize_def<'a>(
             // into the next def's. To do this, we extract the next def from the iterator
             // immediately, then canonicalize it to get its Variable, then use that
             // Variable to generate the extra constraints.
+
+            // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+            // (However, still include it in scope, because you *can* recursively refer to yourself.)
+            let mut shadowable_idents = scope.idents.clone();
+            remove_idents(&loc_pattern.value, &mut shadowable_idents);
+
+            let pattern_var = var_store.fresh();
+            let pattern_type = Type::Variable(pattern_var);
+            let pattern_expected = PExpected::NoExpectation(pattern_type);
+
+            let mut state = PatternState {
+                headers: SendMap::default(),
+                vars: Vec::with_capacity(1),
+                constraints: Vec::with_capacity(1),
+            };
+
+            let loc_can_pattern = canonicalize_pattern(
+                env,
+                &mut state,
+                var_store,
+                scope,
+                Assignment,
+                &loc_pattern.value,
+                loc_pattern.region,
+                &mut shadowable_idents,
+                pattern_expected,
+            );
+
+            flex_info.vars.push(pattern_var);
+
+            // Any time there's a lookup on this symbol in the outer Let,
+            // it should result in this expression's type. After all, this
+            // is the type to which this symbol is defined!
+            add_pattern_to_lookup_types(
+                &scope,
+                &loc_pattern,
+                &mut flex_info.def_types,
+                expr_type.clone(),
+            );
+
+            // annotation sans body cannot introduce new rigids that are visible in other annotations
+            // but the rigids can show up in type error messages, so still register them
+            let (ftv_sendmap, can_annotation) =
+                canonicalize_annotation(&loc_annotation.value, var_store);
+
+            // TODO remove this clone
+            *found_rigids = found_rigids.clone().union(ftv_sendmap);
+
+            //
+
+            let arity = if let crate::types::Type::Function(args, _) = &can_annotation {
+                args.len()
+            } else {
+                0
+            };
+
+            let fname: String = if let Pattern::Identifier(_, name) = loc_can_pattern.value {
+                (Into::<Box<str>>::into(name)).to_string()
+            } else {
+                panic!("TODO support other patterns too (requires changing FromAnnotation)");
+            };
+
+            let annotation_expected =
+                FromAnnotation(fname, arity, AnnotationSource::TypedBody, can_annotation);
+
+            // ensure expected type unifies with annotated type
+            flex_info
+                .constraints
+                .push(Eq(expr_type, annotation_expected, loc_annotation.region));
 
             let value = Expr::RuntimeError(NoImplementation);
             let loc_expr = Located {
