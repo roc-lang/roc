@@ -6,7 +6,7 @@ use crate::subs::{Content, Descriptor, FlatType, Mark, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
-use crate::unify::{unify, Problems};
+use crate::unify::{unify, Unified};
 
 type Env = ImMap<Symbol, Variable>;
 
@@ -62,7 +62,7 @@ struct State {
 
 pub fn run(
     vars_by_symbol: &Env,
-    problems: &mut Problems,
+    problems: &mut Vec<Problem>,
     subs: &mut Subs,
     constraint: &Constraint,
 ) {
@@ -89,7 +89,7 @@ fn solve(
     state: State,
     rank: Rank,
     pools: &mut Pools,
-    problems: &mut Problems,
+    problems: &mut Vec<Problem>,
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
@@ -99,7 +99,9 @@ fn solve(
             // TODO use region?
             let actual = type_to_var(subs, typ.clone());
             let expected = type_to_var(subs, expected_type.clone().get_type());
-            let vars = unify(subs, problems, actual, expected);
+            let Unified { vars, mismatches } = unify(subs, actual, expected);
+
+            problems.extend(mismatches);
 
             introduce(subs, rank, pools, &vars);
 
@@ -116,7 +118,9 @@ fn solve(
                 )
             }));
             let expected = type_to_var(subs, expected_type.clone().get_type());
-            let vars = unify(subs, problems, actual, expected);
+            let Unified { vars, mismatches } = unify(subs, actual, expected);
+
+            problems.extend(mismatches);
 
             introduce(subs, rank, pools, &vars);
 
@@ -143,7 +147,9 @@ fn solve(
             // TODO use region?
             let actual = type_to_var(subs, typ.clone());
             let expected = type_to_var(subs, expected.clone().get_type());
-            let vars = unify(subs, problems, actual, expected);
+            let Unified { vars, mismatches } = unify(subs, actual, expected);
+
+            problems.extend(mismatches);
 
             introduce(subs, rank, pools, &vars);
 
@@ -349,7 +355,7 @@ fn type_to_variable(subs: &mut Subs, aliases: &ImMap<Lowercase, Variable>, typ: 
 
 fn check_for_infinite_type(
     subs: &mut Subs,
-    problems: &mut Problems,
+    problems: &mut Vec<Problem>,
     symbol: Symbol,
     loc_var: Located<Variable>,
 ) {
@@ -359,7 +365,7 @@ fn check_for_infinite_type(
         let error_type = subs.var_to_error_type(var);
         let problem = Problem::CircularType(symbol, error_type, loc_var.region);
 
-        subs.set_content(var, Content::Error(problem.clone()));
+        subs.set_content(var, Content::Error);
 
         problems.push(problem);
     }
@@ -490,7 +496,7 @@ fn adjust_rank_content(
     use crate::subs::FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | Error(_) => group_rank,
+        FlexVar(_) | RigidVar(_) | Error => group_rank,
 
         Structure(flat_type) => {
             match flat_type {

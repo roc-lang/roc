@@ -1,12 +1,11 @@
 use crate::collections::ImMap;
 use crate::solve;
 use crate::subs::{Content, Subs, Variable};
-use crate::types::Constraint;
-use crate::unify::Problems;
+use crate::types::{Constraint, Problem};
 
 pub fn infer_expr(
     subs: &mut Subs,
-    problems: &mut Problems,
+    problems: &mut Vec<Problem>,
     constraint: &Constraint,
     expr_var: Variable,
 ) -> Content {

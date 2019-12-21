@@ -104,7 +104,7 @@ fn find_names_needed(
         Alias(_, _, _, _) => {
             panic!("TODO find_names_needed Alias");
         }
-        Error(_) | Structure(Erroneous(_)) | Structure(EmptyRecord) => {
+        Error | Structure(Erroneous(_)) | Structure(EmptyRecord) => {
             // Errors and empty records don't need names.
         }
     }
@@ -177,7 +177,7 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
         Alias(_, _, _, _) => {
             panic!("TODO write_content Alias");
         }
-        Error(_) => buf.push_str("<type mismatch>"),
+        Error => buf.push_str("<type mismatch>"),
     }
 }
 
