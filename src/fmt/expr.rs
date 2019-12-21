@@ -11,18 +11,24 @@ pub fn fmt_expr<'a>(
     indent: u16,
     apply_needs_parens: bool,
     format_newlines_after: bool,
+    format_newlines_before: bool,
 ) {
     use self::Expr::*;
 
     match expr {
         SpaceBefore(sub_expr, spaces) => {
-            fmt_spaces(buf, spaces.iter(), indent);
+            if format_newlines_before {
+                fmt_spaces(buf, spaces.iter(), indent);
+            } else {
+                fmt_comments_only(buf, spaces.iter(), indent);
+            }
             fmt_expr(
                 buf,
                 sub_expr,
                 indent,
                 apply_needs_parens,
                 format_newlines_after,
+                format_newlines_before,
             );
         }
         SpaceAfter(sub_expr, spaces) => {
@@ -32,6 +38,7 @@ pub fn fmt_expr<'a>(
                 indent,
                 apply_needs_parens,
                 format_newlines_after,
+                format_newlines_before,
             );
             if format_newlines_after {
                 fmt_spaces(buf, spaces.iter(), indent);
@@ -41,7 +48,7 @@ pub fn fmt_expr<'a>(
         }
         ParensAround(sub_expr) => {
             buf.push('(');
-            fmt_expr(buf, sub_expr, indent, false, true);
+            fmt_expr(buf, sub_expr, indent, false, true, true);
             buf.push(')');
         }
         Str(string) => {
@@ -62,12 +69,12 @@ pub fn fmt_expr<'a>(
                 buf.push('(');
             }
 
-            fmt_expr(buf, &loc_expr.value, indent, true, true);
+            fmt_expr(buf, &loc_expr.value, indent, true, true, true);
 
             for loc_arg in loc_args {
                 buf.push(' ');
 
-                fmt_expr(buf, &loc_arg.value, indent, true, true);
+                fmt_expr(buf, &loc_arg.value, indent, true, true, true);
             }
 
             if apply_needs_parens {
@@ -135,14 +142,14 @@ pub fn fmt_expr<'a>(
 
             // Even if there were no defs, which theoretically should never happen,
             // still print the return value.
-            fmt_expr(buf, &ret.value, indent, false, true);
+            fmt_expr(buf, &ret.value, indent, false, true, true);
         }
         If((loc_condition, loc_then, loc_else)) => {
             fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
         Case(loc_condition, branches) => {
             buf.push_str("case ");
-            fmt_expr(buf, &loc_condition.value, indent, false, true);
+            fmt_expr(buf, &loc_condition.value, indent, false, true, true);
             buf.push_str(" when\n");
 
             let mut it = branches.iter().peekable();
@@ -165,10 +172,10 @@ pub fn fmt_expr<'a>(
                 match expr.value {
                     Expr::SpaceBefore(nested, spaces) => {
                         fmt_comments_only(buf, spaces.iter(), indent + (INDENT * 2));
-                        fmt_expr(buf, &nested, indent + (INDENT * 2), false, true);
+                        fmt_expr(buf, &nested, indent + (INDENT * 2), false, true, true);
                     }
                     _ => {
-                        fmt_expr(buf, &expr.value, indent + (INDENT * 2), false, true);
+                        fmt_expr(buf, &expr.value, indent + (INDENT * 2), false, true, true);
                     }
                 }
 
@@ -205,7 +212,7 @@ pub fn fmt_field<'a>(
 
             buf.push(':');
             buf.push(' ');
-            fmt_expr(buf, &value.value, indent, apply_needs_parens, true);
+            fmt_expr(buf, &value.value, indent, apply_needs_parens, true, true);
         }
         LabelOnly(name) => {
             if is_multiline {
@@ -372,20 +379,23 @@ fn fmt_if<'a>(
     let is_multiline = is_multiline_then || is_multiline_else;
 
     buf.push_str("if ");
-    fmt_expr(buf, &loc_condition.value, indent, false, true);
+    fmt_expr(buf, &loc_condition.value, indent, false, true, true);
     buf.push_str(" then");
 
-    if !is_multiline {
-        buf.push_str(" ");
-    }
-
-    let then_return_indent = if is_multiline {
+    let return_indent = if is_multiline {
         indent + INDENT
     } else {
         indent
     };
 
-    fmt_expr(buf, &loc_then.value, then_return_indent, false, false);
+    if is_multiline {
+        newline(buf, return_indent);
+    } else {
+        buf.push_str(" ");
+    }
+
+    fmt_expr(buf, &loc_then.value, return_indent, false, false, false);
+
     if is_multiline {
         buf.push('\n');
         newline(buf, indent);
@@ -395,17 +405,14 @@ fn fmt_if<'a>(
 
     buf.push_str("else");
 
-    if !is_multiline {
+    if is_multiline {
+        newline(buf, return_indent);
+    } else {
         buf.push_str(" ");
     }
 
-    let else_return_indent = if is_multiline {
-        indent + INDENT
-    } else {
-        indent
-    };
-
-    fmt_expr(buf, &loc_else.value, else_return_indent, false, true);
+    dbg!(&loc_else.value);
+    fmt_expr(buf, &loc_else.value, return_indent, false, false, false);
 }
 
 pub fn fmt_closure<'a>(
@@ -470,7 +477,7 @@ pub fn fmt_closure<'a>(
         buf.push(' ');
     }
 
-    fmt_expr(buf, &loc_ret.value, indent, false, true);
+    fmt_expr(buf, &loc_ret.value, indent, false, true, true);
 }
 
 pub fn fmt_record<'a>(
