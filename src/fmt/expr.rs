@@ -358,9 +358,7 @@ fn fmt_if<'a>(
     indent: u16,
 ) {
     let is_multiline_then = is_multiline_expr(&loc_then.value);
-
     let is_multiline_else = is_multiline_expr(&loc_else.value);
-
     let is_multiline = is_multiline_then || is_multiline_else;
 
     buf.push_str("if ");
@@ -384,15 +382,11 @@ fn fmt_if<'a>(
     if is_multiline {
         buf.push('\n');
         newline(buf, indent);
-    } else {
-        buf.push_str(" ");
-    }
-
-    buf.push_str("else");
-
-    if is_multiline {
+        buf.push_str("else");
         newline(buf, return_indent);
     } else {
+        buf.push_str(" ");
+        buf.push_str("else");
         buf.push_str(" ");
     }
 
