@@ -706,6 +706,37 @@ mod test_format {
     }
 
     #[test]
+    fn integer_case_with_space() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            case year when
+                1999 ->
+
+
+                    1
+
+
+
+                _ ->
+
+                    0
+        "#
+            ),
+            indoc!(
+                r#"
+            case year when
+                1999 ->
+                    1
+
+                _ ->
+                    0
+            "#
+            ),
+        );
+    }
+
+    #[test]
     fn case_with_comments() {
         expr_formats_same(indoc!(
             r#"
