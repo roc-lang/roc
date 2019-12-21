@@ -26,20 +26,20 @@ interface Float
 
 ## A 64-bit floating-point number. All number literals with decimal points are #Float values.
 ##
-## > 0.1
+## >>> 0.1
 ##
-## > 1.0
+## >>> 1.0
 ##
-## > 0.0
+## >>> 0.0
 ##
 ## If you like, you can put underscores in your #Float literals.
 ## They have no effect on the number's value, but can make things easier to read.
 ##
-## > 1_000_000.000_000_001
+## >>> 1_000_000.000_000_001
 ##
 ## Unlike #Int values, #Float values are imprecise. A classic example of this imprecision:
 ##
-## > 0.1 + 0.2
+## >>> 0.1 + 0.2
 ##
 ## Floating point values work this way because of some (very reasonable) hardware design decisions made in 1985, which are hardwired into all modern CPUs. The performance penalty for having things work any other way than this is severe, so Roc defaults to using the one with hardware support.
 ##
@@ -100,14 +100,14 @@ round = \num ->
 ##
 ## `a / b` is shorthand for `Float.div a b`.
 ##
-## >>> 5.0 / 7.0
+## >>>>> 5.0 / 7.0
 ##
-## >>> Float.div 5 7
+## >>>>> Float.div 5 7
 ##
 ## `Float.div` can be convenient in pipelines.
 ##
-## >>> Float.pi
-## >>>     |> Float.div 2.0
+## >>>>> Float.pi
+## >>>>>     |> Float.div 2.0
 #div : Float, Float -> Result Float DivByZero
 div = \numerator, denominator ->
     case numerator when
@@ -123,14 +123,14 @@ div = \numerator, denominator ->
 ##
 ## `a % b` is shorthand for `Float.mod a b`.
 ##
-## >>> 5.0 % 7.0
+## >>>>> 5.0 % 7.0
 ##
-## >>> Float.mod 5 7
+## >>>>> Float.mod 5 7
 ##
 ## `Float.mod` can be convenient in pipelines.
 ##
-## >>> Float.pi
-## >>>     |> Float.mod 2.0
+## >>>>> Float.pi
+## >>>>>     |> Float.mod 2.0
 #mod : Float, Float -> Result Float DivByZero
 
 ## Return the reciprocal of the #Float.
@@ -142,13 +142,13 @@ div = \numerator, denominator ->
 ##
 ## Return #InvalidSqrt if given a negative number. The square root of a negative number is an irrational number, and #Float only supports rational numbers.
 ##
-## > Float.sqrt 4.0
+## >>> Float.sqrt 4.0
 ##
-## > Float.sqrt 1.5
+## >>> Float.sqrt 1.5
 ##
-## > Float.sqrt 0.0
+## >>> Float.sqrt 0.0
 ##
-## > Float.sqrt -4.0
+## >>> Float.sqrt -4.0
 #sqrt : Float -> Result Float InvalidSqrt
 
 ## Constants
@@ -180,11 +180,11 @@ lowest = 1.0
 ##
 ## Some integers higher than this can be represented, but they may lose precision. For example:
 ##
-## > Float.highestInt
+## >>> Float.highestInt
 ##
-## > Float.highestInt + 100 # Increasing may lose precision
+## >>> Float.highestInt + 100 # Increasing may lose precision
 ##
-## > Float.highestInt - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
+## >>> Float.highestInt - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
 #highestInt : Float
 highestInt = 1.0
 
@@ -193,10 +193,10 @@ highestInt = 1.0
 ##
 ## Some integers lower than this can be represented, but they may lose precision. For example:
 ##
-## > Float.lowestIntVal
+## >>> Float.lowestIntVal
 ##
-## > Float.lowestIntVal - 100 # Decreasing may lose precision
+## >>> Float.lowestIntVal - 100 # Decreasing may lose precision
 ##
-## > Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestInt!
+## >>> Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestInt!
 #lowestInt : Float
 lowestInt = 1.0
