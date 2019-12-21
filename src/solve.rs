@@ -111,7 +111,7 @@ fn solve(
             state
         }
         Lookup(symbol, expected_type, _region) => {
-            let var = *vars_by_symbol.get(&dbg!(symbol)).unwrap_or_else(|| {
+            let var = *vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
                 // a Problem ("module Foo does not expose `bar`") for later.
                 panic!(
@@ -140,11 +140,9 @@ fn solve(
             let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
 
             // TODO use region when reporting a problem
-            let vars = unify(subs, problems, dbg!(actual), dbg!(expected));
+            let vars = unify(subs, problems, actual, expected);
 
             introduce(subs, rank, pools, &vars);
-
-            dbg!(vars_by_symbol);
 
             state
         }
