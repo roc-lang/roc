@@ -385,9 +385,7 @@ fn fmt_if<'a>(
         buf.push_str("else");
         newline(buf, return_indent);
     } else {
-        buf.push_str(" ");
-        buf.push_str("else");
-        buf.push_str(" ");
+        buf.push_str(" else ");
     }
 
     fmt_expr(buf, &loc_else.value, return_indent, false, false);
