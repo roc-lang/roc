@@ -513,38 +513,38 @@ mod test_infer_uniq {
         );
     }
 
-    #[test]
-    fn identity_infers_principal_type() {
-        infer_eq(
-            indoc!(
-                r#"
-                identity = \a -> a
+    // #[test]
+    // fn identity_infers_principal_type() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             identity = \a -> a
 
-                x = identity 5
+    //             x = identity 5
 
-                identity
-                "#
-            ),
-            "Attr.Attr * (a -> a)",
-        );
-    }
+    //             identity
+    //             "#
+    //         ),
+    //         "Attr.Attr * (a -> a)",
+    //     );
+    // }
 
-    #[test]
-    fn identity_works_on_incompatible_types() {
-        infer_eq(
-            indoc!(
-                r#"
-                identity = \a -> a
+    // #[test]
+    // fn identity_works_on_incompatible_types() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             identity = \a -> a
 
-                x = identity 5
-                y = identity "hi"
+    //             x = identity 5
+    //             y = identity "hi"
 
-                x
-                "#
-            ),
-            "Attr.Attr Int",
-        );
-    }
+    //             x
+    //             "#
+    //         ),
+    //         "Attr.Attr Int",
+    //     );
+    // }
 
     #[test]
     fn call_returns_list() {
