@@ -623,43 +623,32 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-            if lessThan four five then
-                four
-            else
-                five
-            "#
+                if lessThan four five then
+                    four
+                else
+                    five
+                "#
             ),
             indoc!(
                 r#"
-            if lessThan four five then
-                four
+                if lessThan four five then
+                    four
 
-            else
-                five
-            "#
+                else
+                    five
+                "#
             ),
         );
 
-        expr_formats_to(
-            indoc!(
-                r#"
+        expr_formats_same(indoc!(
+            r#"
             if foo bar then
                 a b c
 
             else
                 d e f
             "#
-            ),
-            indoc!(
-                r#"
-            if foo bar then
-                a b c
-
-            else
-                d e f
-            "#
-            ),
-        );
+        ));
     }
 
     // CASE
