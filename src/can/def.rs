@@ -15,7 +15,7 @@ use crate::can::problem::RuntimeError::*;
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
+use crate::collections::{ImSet, MutMap, MutSet, SendMap};
 use crate::graph::{strongly_connected_component, topological_sort};
 use crate::ident::Ident;
 use crate::parse::ast;
@@ -412,11 +412,13 @@ fn canonicalize_def<'a>(
 
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
-            let (ftv_sendmap, can_annotation) =
+            let (seen_rigids, can_annotation) =
                 canonicalize_annotation(&loc_annotation.value, var_store);
 
-            // TODO remove this clone
-            *found_rigids = found_rigids.clone().union(ftv_sendmap);
+            // union seen rigids with already found ones
+            for (k, v) in seen_rigids {
+                found_rigids.insert(k, v);
+            }
 
             let annotation_expected = FromAnnotation(
                 loc_can_pattern,
@@ -465,19 +467,24 @@ fn canonicalize_def<'a>(
                 variables_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
 
-            let (ftv_sendmap, can_annotation) =
+            let (seen_rigids, can_annotation) =
                 canonicalize_annotation(&loc_annotation.value, var_store);
 
-            let mut ftv: Rigids = ImMap::default();
+            let mut ftv: Rigids = rigids.clone();
 
-            for (var, name) in ftv_sendmap.clone() {
-                ftv.insert(name.into(), Type::Variable(var));
+            for (var, name_lowercase) in seen_rigids {
+                let name: Box<str> = name_lowercase.clone().into();
+
+                // if the rigid is known already, nothing needs to happen
+                // otherwise register it.
+                if !rigids.contains_key(&name) {
+                    // possible use this rigid in nested def's
+                    ftv.insert(name, Type::Variable(var));
+
+                    // mark this variable as a rigid
+                    found_rigids.insert(var, name_lowercase);
+                }
             }
-
-            // remove the known type variables (TODO can clone be prevented?)
-            let new_rigids = ftv.difference(rigids.clone());
-
-            let new_rtv = rigids.clone().union(new_rigids);
 
             let annotation_expected = FromAnnotation(
                 loc_can_pattern.clone(),
@@ -487,8 +494,7 @@ fn canonicalize_def<'a>(
             );
 
             let (mut loc_can_expr, can_output, ret_constraint) = canonicalize_expr(
-                // rigids,
-                &new_rtv,
+                &ftv,
                 env,
                 var_store,
                 scope,
@@ -496,8 +502,6 @@ fn canonicalize_def<'a>(
                 &loc_expr.value,
                 annotation_expected.clone(),
             );
-
-            *found_rigids = found_rigids.clone().union(ftv_sendmap);
 
             // ensure expected type unifies with annotated type
             flex_info
