@@ -12,7 +12,7 @@ pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
         Body(loc_pattern, loc_expr) => {
             fmt_pattern(buf, &loc_pattern.value, indent, true);
             buf.push_str(" = ");
-            fmt_expr(buf, &loc_expr.value, indent, false, true, true);
+            fmt_expr(buf, &loc_expr.value, indent, false, true);
         }
         TypedDef(_loc_pattern, _loc_annotation, _loc_expr) => {
             panic!("TODO support Annotation in TypedDef");
