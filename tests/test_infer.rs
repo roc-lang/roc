@@ -897,4 +897,9 @@ mod test_infer {
             "custom",
         );
     }
+
+    #[test]
+    fn accessor_function() {
+        infer_eq(".foo", "{ foo : a }* -> a");
+    }
 }

@@ -60,6 +60,8 @@ pub enum Expr {
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access(Box<Located<Expr>>, Box<str>),
+    /// field accessor as a function, e.g. (.foo) expr
+    Accessor(Box<str>),
 
     Tag(Box<str>, Vec<Expr>),
 
@@ -714,8 +716,33 @@ pub fn canonicalize_expr(
                 constraint,
             )
         }
-        ast::Expr::AccessorFunction(_)
-        | ast::Expr::If(_)
+        ast::Expr::AccessorFunction(field) => {
+            let ext_var = var_store.fresh();
+            let ext_type = Variable(ext_var);
+
+            let field_var = var_store.fresh();
+            let field_type = Variable(field_var);
+
+            let mut field_types = SendMap::default();
+            let field_name: Lowercase = (*field).into();
+            field_types.insert(field_name.clone(), field_type.clone());
+            let record_type = Type::Record(field_types, Box::new(ext_type));
+
+            (
+                Accessor(field_name.into()),
+                Output::default(),
+                exists(
+                    vec![field_var, ext_var],
+                    Eq(
+                        Type::Function(vec![record_type], Box::new(field_type)),
+                        expected,
+                        region,
+                    ),
+                ),
+            )
+        }
+
+        ast::Expr::If(_)
         | ast::Expr::GlobalTag(_)
         | ast::Expr::PrivateTag(_)
         | ast::Expr::MalformedIdent(_)
