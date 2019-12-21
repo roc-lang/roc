@@ -420,9 +420,11 @@ fn canonicalize_def<'a>(
                 found_rigids.insert(k, v);
             }
 
+            let arity = can_annotation.arity();
+
             let annotation_expected = FromAnnotation(
-                loc_can_pattern,
-                can_annotation.arity(),
+                loc_can_pattern.clone(),
+                arity,
                 AnnotationSource::TypedBody,
                 can_annotation,
             );
@@ -434,12 +436,54 @@ fn canonicalize_def<'a>(
 
             // Fabricate a body for this annotation, that will error at runtime
             let value = Expr::RuntimeError(NoImplementation);
-            let loc_expr = Located {
-                value,
-                region: loc_annotation.region,
+            let loc_can_expr = if arity > 0 {
+                Located {
+                    value,
+                    region: loc_annotation.region,
+                }
+            } else {
+                let symbol = scope.gen_unique_symbol();
+
+                // generate a fake pattern for each argument. this makes signatures
+                // that are functions only crash when they are applied.
+                let mut underscores = Vec::with_capacity(arity);
+                for _ in 0..arity {
+                    let underscore: Located<Pattern> = Located {
+                        value: Pattern::Underscore(var_store.fresh()),
+                        region: Region::zero(),
+                    };
+
+                    underscores.push(underscore);
+                }
+
+                let body = Box::new(Located {
+                    value,
+                    region: loc_annotation.region,
+                });
+
+                Located {
+                    value: Closure(symbol, Recursive::NotRecursive, underscores, body),
+                    region: loc_annotation.region,
+                }
             };
 
-            (None, (loc_expr, Output::default()))
+            for (_, (symbol, _)) in idents_from_patterns(std::iter::once(loc_pattern), &scope) {
+                can_defs_by_symbol.insert(
+                    symbol,
+                    Def {
+                        // TODO try to remove this .clone()!
+                        pattern: loc_can_pattern.clone(),
+                        expr: Located {
+                            region: loc_can_expr.region,
+                            // TODO try to remove this .clone()!
+                            value: loc_can_expr.value.clone(),
+                        },
+                        variables_by_symbol: im::HashMap::clone(&variables_by_symbol),
+                    },
+                );
+            }
+
+            (None, (loc_can_expr, Output::default()))
         }
 
         TypedDef(loc_pattern, loc_annotation, loc_expr) => {
