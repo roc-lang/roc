@@ -167,6 +167,7 @@ pi = 3.141592653589793
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
 #highest : Float
+highest : Num.Num Float.FloatingPoint
 highest = 1.0
 
 ## The lowest supported #Float value you can have, which is approximately -1.8 × 10^308.
