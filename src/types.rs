@@ -45,6 +45,8 @@ impl fmt::Debug for Type {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
             Type::Function(args, ret) => {
+                write!(f, "Fn(")?;
+
                 for (index, arg) in args.iter().enumerate() {
                     if index > 0 {
                         ", ".fmt(f)?;
@@ -55,7 +57,9 @@ impl fmt::Debug for Type {
 
                 write!(f, " -> ")?;
 
-                ret.fmt(f)
+                ret.fmt(f)?;
+
+                write!(f, ")")
             }
             Type::Variable(var) => write!(f, "<{:?}>", var),
 

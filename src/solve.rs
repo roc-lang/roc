@@ -565,7 +565,7 @@ fn adjust_rank(
     } else if mark == visit_mark {
         desc.rank
     } else {
-        let min_rank = desc.rank.min(group_rank);
+        let min_rank = group_rank.min(desc.rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
         desc.rank = min_rank;

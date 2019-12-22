@@ -385,7 +385,7 @@ pub fn canonicalize_expr(
             )
         }
 
-        Defs(_, defs, loc_ret) => {
+        Defs(defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             // so clone it.
 
