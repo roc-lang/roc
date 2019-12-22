@@ -903,17 +903,18 @@ mod test_infer {
         infer_eq(".foo", "{ foo : a }* -> a");
     }
 
-    #[test]
-    fn type_signature_without_body_record() {
-        infer_eq(
-            indoc!(
-                r#"
-            { x, y } : { x : (Int -> custom) , y : Int }
+    // RecordDestructure does not get canonicalized yet
+    // #[test]
+    // fn type_signature_without_body_record() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //         { x, y } : { x : (Int -> custom) , y : Int }
 
-            x
-            "#
-            ),
-            "Int -> custom",
-        );
-    }
+    //         x
+    //         "#
+    //         ),
+    //         "Int -> custom",
+    //     );
+    // }
 }
