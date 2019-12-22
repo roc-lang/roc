@@ -279,7 +279,7 @@ impl Rank {
         Rank(0)
     }
 
-    pub fn outermost() -> Self {
+    pub fn toplevel() -> Self {
         Rank(1)
     }
 
@@ -300,13 +300,7 @@ impl fmt::Display for Rank {
 
 impl fmt::Debug for Rank {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self == &Rank::none() {
-            write!(f, "none")
-        } else if self == &Rank::outermost() {
-            write!(f, "outermost")
-        } else {
-            write!(f, "Rank({})", self.0)
-        }
+        self.0.fmt(f)
     }
 }
 
