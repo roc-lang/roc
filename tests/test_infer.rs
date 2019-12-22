@@ -902,4 +902,18 @@ mod test_infer {
     fn accessor_function() {
         infer_eq(".foo", "{ foo : a }* -> a");
     }
+
+    #[test]
+    fn type_signature_without_body_record() {
+        infer_eq(
+            indoc!(
+                r#"
+            { x, y } : { x : (Int -> custom) , y : Int }
+
+            x
+            "#
+            ),
+            "Int -> custom",
+        );
+    }
 }
