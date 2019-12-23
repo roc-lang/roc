@@ -329,6 +329,8 @@ fn add_constraints<'a>(
 ) {
     use crate::parse::ast::Pattern::*;
 
+    dbg!(pattern);
+
     match pattern {
         Underscore | Malformed(_) | QualifiedIdentifier(_) => {
             // Neither the _ pattern nor malformed ones add any constraints.
@@ -397,7 +399,7 @@ fn add_constraints<'a>(
                     &loc_pattern.value,
                     scope,
                     loc_pattern.region,
-                    expected,
+                    expected.clone(),
                     state,
                     var_store,
                 );
@@ -421,8 +423,7 @@ fn add_constraints<'a>(
                         &guard.value,
                         scope,
                         guard.region,
-                        // expect the pattern to equal the field
-                        PExpected::NoExpectation(pat_type),
+                        expected,
                         state,
                         var_store,
                     );
@@ -436,6 +437,7 @@ fn add_constraints<'a>(
                 Constraint::Pattern(region, PatternCategory::Record, record_type, expected);
 
             state.constraints.push(record_con);
+            dbg!(&state.constraints);
         }
 
         GlobalTag(_) | PrivateTag(_) | Apply(_, _) | RecordField(_, _) | EmptyRecordLiteral => {

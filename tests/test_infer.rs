@@ -956,7 +956,22 @@ mod test_infer {
             indoc!(
                 r#"
                 case { x : 4 , y : 3.14 } when
+                    { x: 4 } -> x
                     { x, y } -> x
+                    { y } -> 42
+            "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn record_pattern_match_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                case foo when
+                    {x:4}-> x
             "#
             ),
             "Int",
