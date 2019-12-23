@@ -75,7 +75,7 @@ pub fn run(
         vars_by_symbol: vars_by_symbol.clone(),
         mark: Mark::none().next(),
     };
-    let rank = Rank::outermost();
+    let rank = Rank::toplevel();
 
     solve(
         vars_by_symbol,
@@ -565,7 +565,7 @@ fn adjust_rank(
     } else if mark == visit_mark {
         desc.rank
     } else {
-        let min_rank = desc.rank.min(group_rank);
+        let min_rank = group_rank.min(desc.rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
         desc.rank = min_rank;
@@ -593,7 +593,7 @@ fn adjust_rank_content(
         Structure(flat_type) => {
             match flat_type {
                 Apply { args, .. } => {
-                    let mut rank = Rank::outermost();
+                    let mut rank = Rank::toplevel();
 
                     for var in args {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
@@ -614,7 +614,7 @@ fn adjust_rank_content(
 
                 EmptyRecord => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
-                    Rank::outermost()
+                    Rank::toplevel()
                 }
 
                 Record(fields, ext_var) => {
@@ -631,9 +631,9 @@ fn adjust_rank_content(
         }
 
         Alias(_, _, args, _) => {
-            let mut rank = Rank::outermost();
+            let mut rank = Rank::toplevel();
 
-            // from elm-compiler: THEORY: anything in the real_var would be Rank::outermost()
+            // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
             for (_, var) in args {
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }

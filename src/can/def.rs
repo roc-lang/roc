@@ -937,37 +937,32 @@ pub fn can_defs_with_return<'a>(
 
     output.rigids = output.rigids.union(found_rigids);
 
-    // Rigid constraint for the def expr as a whole
+    // Rigid constraint for the def expr as a whole.
+    // This is a "LetRec" constraint; it supports recursion.
+    // (The only advantage of "Let" over "LetRec" is if you want to
+    // shadow things, and Roc disallows shadowing anyway.)
     let constraint = Let(Box::new(LetConstraint {
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
         def_types: rigid_info.def_types,
-        defs_constraint:
-            // Flex constraint
-            Let(Box::new(LetConstraint {
+        defs_constraint: True,
+        ret_constraint: Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: flex_info.vars,
+            def_types: flex_info.def_types.clone(),
+            defs_constraint: Let(Box::new(LetConstraint {
+                flex_vars: Vec::new(),
                 rigid_vars: Vec::new(),
-                flex_vars: flex_info.vars,
-                def_types: flex_info.def_types.clone(),
-                defs_constraint:
-                    // Final flex constraints
-                    Let(Box::new(LetConstraint {
-                        rigid_vars: Vec::new(),
-                        flex_vars: Vec::new(),
-                        def_types: flex_info.def_types,
-                        defs_constraint: True,
-                        ret_constraint: And(flex_info.constraints)
-                    })),
-                ret_constraint: And(vec![And(rigid_info.constraints), ret_con])
+                def_types: flex_info.def_types,
+                defs_constraint: True,
+                ret_constraint: And(flex_info.constraints),
             })),
-        ret_constraint: True,
+            ret_constraint: And(vec![And(rigid_info.constraints), ret_con]),
+        })),
     }));
 
     match can_defs {
-        Ok(defs) => (
-            Defs(var_store.fresh(), defs, Box::new(ret_expr)),
-            output,
-            constraint,
-        ),
+        Ok(defs) => (Defs(defs, Box::new(ret_expr)), output, constraint),
         Err(err) => (RuntimeError(err), output, constraint),
     }
 }

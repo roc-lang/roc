@@ -74,7 +74,7 @@ pub enum Expr {
         Box<Located<Expr>>,
         Vec<(Located<Pattern>, Located<Expr>)>,
     ),
-    Defs(Variable, Vec<Def>, Box<Located<Expr>>),
+    Defs(Vec<Def>, Box<Located<Expr>>),
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
