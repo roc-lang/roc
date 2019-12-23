@@ -1,7 +1,7 @@
 use crate::ena::snapshot_vec as sv;
 #[cfg(feature = "persistent")]
 use im_rc::Vector;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::ops::{self, Range};
 
@@ -50,9 +50,19 @@ pub trait UnificationStore:
 
 /// Backing store for an in-place unification table.
 /// Not typically used directly.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InPlace<K: UnifyKey> {
     values: sv::SnapshotVec<Delegate<K>>,
+}
+
+impl<K> fmt::Debug for InPlace<K>
+where
+    K: UnifyKey,
+    K: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.values.fmt(f)
+    }
 }
 
 // HACK(eddyb) manual impl avoids `Default` bound on `K`.
