@@ -904,7 +904,50 @@ mod test_infer {
     }
 
     #[test]
+    fn type_signature_without_body() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo : Int -> Bool
+
+            foo 2
+            "#
+            ),
+            "Bool",
+        );
+    }
+
+    #[test]
+    fn type_signature_without_body_rigid() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo : Int -> custom
+
+            foo 2
+            "#
+            ),
+            "custom",
+        );
+    }
+
+    #[test]
     fn accessor_function() {
         infer_eq(".foo", "{ foo : a }* -> a");
     }
+
+    // RecordDestructure does not get canonicalized yet
+    // #[test]
+    // fn type_signature_without_body_record() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //         { x, y } : { x : (Int -> custom) , y : Int }
+
+    //         x
+    //         "#
+    //         ),
+    //         "Int -> custom",
+    //     );
+    // }
 }
