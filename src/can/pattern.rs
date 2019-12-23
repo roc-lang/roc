@@ -199,24 +199,58 @@ fn canonicalize_pattern_help<'a>(
                 shadowable_idents,
             )
         }
-        RecordDestructure(patterns) => {
+        &RecordDestructure(patterns) => {
             let mut fields = Vec::with_capacity(patterns.len());
             for loc_pattern in patterns {
-                let inner = canonicalize_pattern_help(
-                    env,
-                    state,
-                    var_store,
-                    scope,
-                    pattern_type,
-                    &loc_pattern.value,
-                    region,
-                    shadowable_idents,
-                );
-                fields.push((inner, None));
+                match loc_pattern.value {
+                    Identifier(ref name) => {
+                        let result = match canonicalize_pattern_identifier(
+                            name,
+                            env,
+                            scope,
+                            region,
+                            shadowable_idents,
+                        ) {
+                            Ok(symbol) => Pattern::Identifier(symbol),
+                            Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
+                        };
+
+                        fields.push((Located::at(region, result), None));
+                    }
+                    RecordField(ref name, loc_guard) => {
+                        let result = match canonicalize_pattern_identifier(
+                            name,
+                            env,
+                            scope,
+                            region,
+                            shadowable_idents,
+                        ) {
+                            Ok(symbol) => Pattern::Identifier(symbol),
+                            Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
+                        };
+
+                        let can_guard = canonicalize_pattern_help(
+                            env,
+                            state,
+                            var_store,
+                            scope,
+                            pattern_type,
+                            &loc_guard.value,
+                            loc_guard.region,
+                            shadowable_idents,
+                        );
+
+                        fields.push((Located::at(region, result), Some(can_guard)));
+                    }
+                    _ => panic!("invalid pattern in record"),
+                }
             }
             Pattern::RecordDestructure(fields)
         }
-        RecordField(_name, _loc_pattern) => panic!("implement record fields"),
+        &RecordField(_name, _loc_pattern) => {
+            // do nothing, is handled in RecordDestructure
+            unreachable!("should be handled in RecordDestructure");
+        }
 
         _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
@@ -329,8 +363,6 @@ fn add_constraints<'a>(
 ) {
     use crate::parse::ast::Pattern::*;
 
-    dbg!(pattern);
-
     match pattern {
         Underscore | Malformed(_) | QualifiedIdentifier(_) => {
             // Neither the _ pattern nor malformed ones add any constraints.
@@ -395,6 +427,7 @@ fn add_constraints<'a>(
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
                 // constrain the field identifier
+                // is this needed? I think not
                 add_constraints(
                     &loc_pattern.value,
                     scope,
@@ -437,10 +470,13 @@ fn add_constraints<'a>(
                 Constraint::Pattern(region, PatternCategory::Record, record_type, expected);
 
             state.constraints.push(record_con);
-            dbg!(&state.constraints);
         }
 
-        GlobalTag(_) | PrivateTag(_) | Apply(_, _) | RecordField(_, _) | EmptyRecordLiteral => {
+        RecordField(_, _) => {
+            // just do nothing, is handled by already by RecordDestructure
+        }
+
+        GlobalTag(_) | PrivateTag(_) | Apply(_, _) | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
     }
