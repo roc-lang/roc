@@ -636,6 +636,7 @@ fn reserved_keyword<'a>() -> impl Parser<'a, ()> {
         string(keyword::ELSE),
         string(keyword::CASE),
         string(keyword::WHEN),
+        string(keyword::IS),
         string(keyword::AS)
     )
 }
@@ -778,13 +779,13 @@ pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                         loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                         min_indent,
                     ),
-                    string(keyword::WHEN)
+                    string(keyword::IS)
                 )
             )
         ),
         move |arena, state, (case_indent, loc_condition)| {
             if case_indent < min_indent {
-                panic!("TODO case wasns't indented enough");
+                panic!("TODO case wasn't indented enough");
             }
 
             // Everything in the branches must be indented at least as much as the case itself.

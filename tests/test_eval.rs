@@ -87,7 +87,7 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-            case 1 when
+            case 1 is
                 1 -> 12
                 _ -> 34
             "#
@@ -102,7 +102,7 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-            case 2 when
+            case 2 is
                 1 -> 63
                 _ -> 48
             "#

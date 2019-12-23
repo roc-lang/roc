@@ -133,9 +133,10 @@ pub fn fmt_expr<'a>(
             fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
         Case(loc_condition, branches) => {
-            buf.push_str("case ");
+            buf.push_str("\
+            case ");
             fmt_expr(buf, &loc_condition.value, indent, false, true);
-            buf.push_str(" when\n");
+            buf.push_str(" is\n");
 
             let mut it = branches.iter().peekable();
             while let Some((pattern, expr)) = it.next() {
