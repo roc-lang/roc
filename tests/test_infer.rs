@@ -950,4 +950,16 @@ mod test_infer {
     //         "Int -> custom",
     //     );
     // }
+    #[test]
+    fn record_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                case foo when 
+                    { x, y } -> x
+            "#
+            ),
+            "*",
+        );
+    }
 }

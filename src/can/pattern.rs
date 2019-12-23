@@ -23,6 +23,7 @@ pub enum Pattern {
     IntLiteral(i64),
     FloatLiteral(f64),
     ExactString(Box<str>),
+    RecordDestructure(Vec<(Located<Pattern>, Option<Located<Pattern>>)>),
     EmptyRecordLiteral,
     Underscore,
 
@@ -171,6 +172,25 @@ pub fn canonicalize_pattern<'a>(
                 expected,
             )
         }
+        RecordDestructure(patterns) => {
+            let mut fields = Vec::with_capacity(patterns.len());
+            for loc_pattern in patterns {
+                let inner = canonicalize_pattern(
+                    env,
+                    state,
+                    var_store,
+                    scope,
+                    pattern_type,
+                    &loc_pattern.value,
+                    region,
+                    shadowable_idents,
+                    expected.clone(),
+                );
+                fields.push((inner, None));
+            }
+            Pattern::RecordDestructure(fields)
+        }
+        RecordField(name, loc_pattern) => panic!("implement record fields"),
 
         _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
