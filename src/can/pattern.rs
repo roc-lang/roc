@@ -75,73 +75,9 @@ pub fn canonicalize_pattern<'a>(
 
     let can_pattern = match &pattern {
         &Identifier(ref name) => {
-            let lowercase_ident = Ident::Unqualified((*name).into());
-
-            // We use shadowable_idents for this, and not scope, because for assignments
-            // they are different. When canonicalizing a particular assignment, that new
-            // ident is in scope (for recursion) but not shadowable.
-            //
-            // For example, when canonicalizing (fibonacci = ...), `fibonacci` should be in scope
-            // so that it can refer to itself without getting a naming problem, but it should not
-            // be in the collection of shadowable idents because you can't shadow yourself!
-            match shadowable_idents.get(&lowercase_ident) {
-                Some((_, region)) => {
-                    let loc_shadowed_ident = Located {
-                        region: *region,
-                        value: lowercase_ident,
-                    };
-
-                    // This is already in scope, meaning it's about to be shadowed.
-                    // Shadowing is not allowed!
-                    env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
-
-                    // Change this Pattern to a Shadowed variant, so that
-                    // codegen knows to generate a runtime exception here.
-                    Pattern::Shadowed(loc_shadowed_ident)
-                }
-                None => {
-                    // Make sure we aren't shadowing something in the home module's scope.
-                    let qualified_ident =
-                        Ident::Qualified(env.home.clone(), lowercase_ident.name());
-
-                    match scope.idents.get(&qualified_ident) {
-                        Some((_, region)) => {
-                            let loc_shadowed_ident = Located {
-                                region: *region,
-                                value: qualified_ident,
-                            };
-
-                            // This is already in scope, meaning it's about to be shadowed.
-                            // Shadowing is not allowed!
-                            env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
-
-                            // Change this Pattern to a Shadowed variant, so that
-                            // codegen knows to generate a runtime exception here.
-                            Pattern::Shadowed(loc_shadowed_ident)
-                        }
-                        None => {
-                            let new_ident = qualified_ident.clone();
-                            let new_name = qualified_ident.name();
-                            let symbol = scope.symbol(&new_name);
-
-                            // This is a fresh identifier that wasn't already in scope.
-                            // Add it to scope!
-                            let symbol_and_region = (symbol.clone(), region);
-
-                            // Add this to both scope.idents *and* shadowable_idents.
-                            // The latter is relevant when recursively canonicalizing
-                            // tag application patterns, which can bring multiple
-                            // new idents into scope. For example, it's important that
-                            // we catch (Blah foo foo) -> … as being an example of shadowing.
-                            scope
-                                .idents
-                                .insert(new_ident.clone(), symbol_and_region.clone());
-                            shadowable_idents.insert(new_ident, symbol_and_region);
-
-                            Pattern::Identifier(symbol)
-                        }
-                    }
-                }
+            match canonicalize_pattern_identifier(name, env, scope, region, shadowable_idents) {
+                Ok(symbol) => Pattern::Identifier(symbol),
+                Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
             }
         }
         &GlobalTag(name) => {
@@ -244,6 +180,82 @@ pub fn canonicalize_pattern<'a>(
     Located {
         region,
         value: can_pattern,
+    }
+}
+
+pub fn canonicalize_pattern_identifier<'a>(
+    name: &'a &str,
+    env: &'a mut Env,
+    scope: &mut Scope,
+    region: Region,
+    shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
+) -> Result<Symbol, Located<Ident>> {
+    let lowercase_ident = Ident::Unqualified((*name).into());
+
+    // We use shadowable_idents for this, and not scope, because for assignments
+    // they are different. When canonicalizing a particular assignment, that new
+    // ident is in scope (for recursion) but not shadowable.
+    //
+    // For example, when canonicalizing (fibonacci = ...), `fibonacci` should be in scope
+    // so that it can refer to itself without getting a naming problem, but it should not
+    // be in the collection of shadowable idents because you can't shadow yourself!
+    match shadowable_idents.get(&lowercase_ident) {
+        Some((_, region)) => {
+            let loc_shadowed_ident = Located {
+                region: *region,
+                value: lowercase_ident,
+            };
+
+            // This is already in scope, meaning it's about to be shadowed.
+            // Shadowing is not allowed!
+            env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
+
+            // Change this Pattern to a Shadowed variant, so that
+            // codegen knows to generate a runtime exception here.
+            Err(loc_shadowed_ident)
+        }
+        None => {
+            // Make sure we aren't shadowing something in the home module's scope.
+            let qualified_ident = Ident::Qualified(env.home.clone(), lowercase_ident.name());
+
+            match scope.idents.get(&qualified_ident) {
+                Some((_, region)) => {
+                    let loc_shadowed_ident = Located {
+                        region: *region,
+                        value: qualified_ident,
+                    };
+
+                    // This is already in scope, meaning it's about to be shadowed.
+                    // Shadowing is not allowed!
+                    env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
+
+                    // Change this Pattern to a Shadowed variant, so that
+                    // codegen knows to generate a runtime exception here.
+                    Err(loc_shadowed_ident)
+                }
+                None => {
+                    let new_ident = qualified_ident.clone();
+                    let new_name = qualified_ident.name();
+                    let symbol = scope.symbol(&new_name);
+
+                    // This is a fresh identifier that wasn't already in scope.
+                    // Add it to scope!
+                    let symbol_and_region = (symbol.clone(), region);
+
+                    // Add this to both scope.idents *and* shadowable_idents.
+                    // The latter is relevant when recursively canonicalizing
+                    // tag application patterns, which can bring multiple
+                    // new idents into scope. For example, it's important that
+                    // we catch (Blah foo foo) -> … as being an example of shadowing.
+                    scope
+                        .idents
+                        .insert(new_ident.clone(), symbol_and_region.clone());
+                    shadowable_idents.insert(new_ident, symbol_and_region);
+
+                    Ok(symbol)
+                }
+            }
+        }
     }
 }
 
