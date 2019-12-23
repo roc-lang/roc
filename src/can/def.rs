@@ -346,8 +346,6 @@ fn canonicalize_def_pattern(
         pattern_expected,
     );
 
-    // flex_info.vars.push(pattern_var);
-
     (state, loc_can_pattern)
 }
 

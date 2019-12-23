@@ -248,7 +248,6 @@ fn canonicalize_pattern_help<'a>(
             Pattern::RecordDestructure(fields)
         }
         &RecordField(_name, _loc_pattern) => {
-            // do nothing, is handled in RecordDestructure
             unreachable!("should be handled in RecordDestructure");
         }
 
@@ -426,17 +425,6 @@ fn add_constraints<'a>(
                 let pat_type = Type::Variable(pat_var);
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
-                // constrain the field identifier
-                // is this needed? I think not
-                add_constraints(
-                    &loc_pattern.value,
-                    scope,
-                    loc_pattern.region,
-                    expected.clone(),
-                    state,
-                    var_store,
-                );
-
                 match loc_pattern.value {
                     Identifier(name) | RecordField(name, _) => {
                         let symbol = scope.symbol(name);
@@ -451,7 +439,6 @@ fn add_constraints<'a>(
                 }
 
                 if let RecordField(_, guard) = loc_pattern.value {
-                    // shadow to avoid clone in the Identifier case
                     add_constraints(
                         &guard.value,
                         scope,
@@ -473,7 +460,7 @@ fn add_constraints<'a>(
         }
 
         RecordField(_, _) => {
-            // just do nothing, is handled by already by RecordDestructure
+            // unreachable, this pattern is handled by already by RecordDestructure
         }
 
         GlobalTag(_) | PrivateTag(_) | Apply(_, _) | EmptyRecordLiteral => {
