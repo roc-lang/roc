@@ -457,11 +457,16 @@ fn add_idents_from_pattern<'a>(
             // },
         }
 
-        RecordDestructure(_) => {
-            panic!("TODO implement RecordDestructure pattern in add_idents_from_pattern.");
+        RecordDestructure(patterns) => {
+            for loc_pattern in patterns {
+                add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
+            }
         }
-        RecordField(_, _) => {
-            panic!("TODO implement RecordField pattern in add_idents_from_pattern.");
+        RecordField(name, loc_pattern) => {
+            let symbol = scope.symbol(&name);
+
+            answer.push_back((Ident::Unqualified((*name).into()), (symbol, *region)));
+            add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
         }
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
