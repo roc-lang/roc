@@ -1,4 +1,5 @@
 use crate::can::env::Env;
+use crate::can::ident::Lowercase;
 use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
@@ -70,6 +71,33 @@ pub fn canonicalize_pattern<'a>(
     region: Region,
     shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
     expected: PExpected<Type>,
+) -> Located<Pattern> {
+    // add_constraints recurses by itself
+    add_constraints(&pattern, &scope, region, expected, state, var_store);
+
+    canonicalize_pattern_help(
+        env,
+        state,
+        var_store,
+        scope,
+        pattern_type,
+        pattern,
+        region,
+        shadowable_idents,
+    )
+}
+
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
+fn canonicalize_pattern_help<'a>(
+    env: &'a mut Env,
+    state: &'a mut PatternState,
+    var_store: &VarStore,
+    scope: &mut Scope,
+    pattern_type: PatternType,
+    pattern: &'a ast::Pattern<'a>,
+    region: Region,
+    shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
 ) -> Located<Pattern> {
     use self::PatternType::*;
     use crate::parse::ast::Pattern::*;
@@ -160,7 +188,7 @@ pub fn canonicalize_pattern<'a>(
 
         // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
         &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
-            return canonicalize_pattern(
+            return canonicalize_pattern_help(
                 env,
                 state,
                 var_store,
@@ -169,13 +197,12 @@ pub fn canonicalize_pattern<'a>(
                 sub_pattern,
                 region,
                 shadowable_idents,
-                expected,
             )
         }
         RecordDestructure(patterns) => {
             let mut fields = Vec::with_capacity(patterns.len());
             for loc_pattern in patterns {
-                let inner = canonicalize_pattern(
+                let inner = canonicalize_pattern_help(
                     env,
                     state,
                     var_store,
@@ -184,18 +211,15 @@ pub fn canonicalize_pattern<'a>(
                     &loc_pattern.value,
                     region,
                     shadowable_idents,
-                    expected.clone(),
                 );
                 fields.push((inner, None));
             }
             Pattern::RecordDestructure(fields)
         }
-        RecordField(name, loc_pattern) => panic!("implement record fields"),
+        RecordField(_name, _loc_pattern) => panic!("implement record fields"),
 
         _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
-
-    add_constraints(&pattern, &scope, region, expected, state);
 
     Located {
         region,
@@ -301,6 +325,7 @@ fn add_constraints<'a>(
     region: Region,
     expected: PExpected<Type>,
     state: &'a mut PatternState,
+    var_store: &VarStore,
 ) {
     use crate::parse::ast::Pattern::*;
 
@@ -354,15 +379,66 @@ fn add_constraints<'a>(
         }
 
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
-            add_constraints(pattern, scope, region, expected, state)
+            add_constraints(pattern, scope, region, expected, state, var_store)
         }
 
-        GlobalTag(_)
-        | PrivateTag(_)
-        | Apply(_, _)
-        | RecordDestructure(_)
-        | RecordField(_, _)
-        | EmptyRecordLiteral => {
+        RecordDestructure(patterns) => {
+            let ext_var = var_store.fresh();
+            let ext_type = Type::Variable(ext_var);
+
+            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            for loc_pattern in patterns {
+                let pat_var = var_store.fresh();
+                let pat_type = Type::Variable(pat_var);
+                let expected = PExpected::NoExpectation(pat_type.clone());
+
+                // constrain the field identifier
+                add_constraints(
+                    &loc_pattern.value,
+                    scope,
+                    loc_pattern.region,
+                    expected,
+                    state,
+                    var_store,
+                );
+
+                match loc_pattern.value {
+                    Identifier(name) | RecordField(name, _) => {
+                        let symbol = scope.symbol(name);
+                        if !state.headers.contains_key(&symbol) {
+                            state
+                                .headers
+                                .insert(symbol, Located::at(region, pat_type.clone()));
+                        }
+                        field_types.insert(name.into(), pat_type.clone());
+                    }
+                    _ => panic!("invalid record pattern"),
+                }
+
+                if let RecordField(_, guard) = loc_pattern.value {
+                    // shadow to avoid clone in the Identifier case
+                    add_constraints(
+                        &guard.value,
+                        scope,
+                        guard.region,
+                        // expect the pattern to equal the field
+                        PExpected::NoExpectation(pat_type),
+                        state,
+                        var_store,
+                    );
+                }
+
+                state.vars.push(pat_var);
+            }
+
+            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_con =
+                Constraint::Pattern(region, PatternCategory::Record, record_type, expected);
+
+            state.constraints.push(record_con);
+        }
+
+        GlobalTag(_) | PrivateTag(_) | Apply(_, _) | RecordField(_, _) | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
     }

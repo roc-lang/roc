@@ -85,6 +85,10 @@ impl<T> Located<T> {
         };
         Located { value, region }
     }
+
+    pub fn at(region: Region, value: T) -> Located<T> {
+        Located { value, region }
+    }
 }
 
 impl<T> Located<T> {

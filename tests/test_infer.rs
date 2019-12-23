@@ -936,30 +936,32 @@ mod test_infer {
         infer_eq(".foo", "{ foo : a }* -> a");
     }
 
-    // RecordDestructure does not get canonicalized yet
-    // #[test]
-    // fn type_signature_without_body_record() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //         { x, y } : { x : (Int -> custom) , y : Int }
+    /*
+    #[test]
+    fn type_signature_without_body_record() {
+        infer_eq(
+            indoc!(
+                r#"
+            { x, y } : { x : (Int -> custom) , y : Int }
 
-    //         x
-    //         "#
-    //         ),
-    //         "Int -> custom",
-    //     );
-    // }
+            x
+            "#
+            ),
+            "Int -> custom",
+        );
+    }
+    */
+
     #[test]
     fn record_pattern_match() {
         infer_eq(
             indoc!(
                 r#"
-                case foo when 
+                case { x : 4 , y : 3.14 } when 
                     { x, y } -> x
             "#
             ),
-            "*",
+            "Int",
         );
     }
 }
