@@ -83,7 +83,7 @@ mod test_gen {
     }
 
     #[test]
-    fn gen_case_take_first_branch() {
+    fn gen_when_take_first_branch() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -98,7 +98,7 @@ mod test_gen {
     }
 
     #[test]
-    fn gen_case_take_second_branch() {
+    fn gen_when_take_second_branch() {
         assert_evals_to!(
             indoc!(
                 r#"

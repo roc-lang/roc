@@ -66,10 +66,10 @@ pub enum Expr {
     Tag(Box<str>, Vec<Expr>),
 
     // Pattern Matching
-    /// Case is guaranteed to be exhaustive at this point. (If it wasn't, then
+    /// When is guaranteed to be exhaustive at this point. (If it wasn't, then
     /// a _ branch was added at the end that will throw a runtime error.)
-    /// Also, `If` is desugared into `Case` matching on `False` and `_` at this point.
-    Case(
+    /// Also, `If` is desugared into `When` matching on `False` and `_` at this point.
+    When(
         Variable,
         Box<Located<Expr>>,
         Vec<(Located<Pattern>, Located<Expr>)>,
@@ -547,7 +547,7 @@ pub fn canonicalize_expr(
             )
         }
 
-        ast::Expr::Case(loc_cond, branches) => {
+        ast::Expr::When(loc_cond, branches) => {
             // Infer the condition expression's type.
             let cond_var = var_store.fresh();
             let cond_type = Variable(cond_var);
@@ -573,7 +573,7 @@ pub fn canonicalize_expr(
                         let mut shadowable_idents = scope.idents.clone();
                         remove_idents(&loc_pattern.value, &mut shadowable_idents);
                         let (can_pattern, loc_can_expr, branch_con, branch_references) =
-                            canonicalize_case_branch(
+                            canonicalize_when_branch(
                                 env,
                                 var_store,
                                 rigids,
@@ -582,14 +582,14 @@ pub fn canonicalize_expr(
                                 loc_pattern,
                                 loc_expr,
                                 PExpected::ForReason(
-                                    PReason::CaseMatch { index },
+                                    PReason::WhenMatch { index },
                                     cond_type.clone(),
                                     region,
                                 ),
                                 FromAnnotation(
                                     name.clone(),
                                     arity,
-                                    TypedCaseBranch(index),
+                                    TypedWhenBranch(index),
                                     typ.clone(),
                                 ),
                                 &mut output,
@@ -619,7 +619,7 @@ pub fn canonicalize_expr(
                         remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
                         let (can_pattern, loc_can_expr, branch_con, branch_references) =
-                            canonicalize_case_branch(
+                            canonicalize_when_branch(
                                 env,
                                 var_store,
                                 rigids,
@@ -628,12 +628,12 @@ pub fn canonicalize_expr(
                                 loc_pattern,
                                 loc_expr,
                                 PExpected::ForReason(
-                                    PReason::CaseMatch { index },
+                                    PReason::WhenMatch { index },
                                     cond_type.clone(),
                                     region,
                                 ),
                                 ForReason(
-                                    Reason::CaseBranch { index },
+                                    Reason::WhenBranch { index },
                                     branch_type.clone(),
                                     region,
                                 ),
@@ -656,14 +656,14 @@ pub fn canonicalize_expr(
                             // as the condition expression did.
                             And(branch_cons),
                             // The return type of each branch must equal
-                            // the return type of the entire case-expression.
+                            // the return type of the entire when-expression.
                             Eq(branch_type, expected, region),
                         ]),
                     ));
                 }
             }
 
-            // A case with no branches is a runtime error, but it will mess things up
+            // A "when" with no branches is a runtime error, but it will mess things up
             // if code gen mistakenly thinks this is a tail call just because its condition
             // happend to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
@@ -671,7 +671,7 @@ pub fn canonicalize_expr(
             }
 
             // Incorporate all three expressions into a combined Output value.
-            let expr = Case(cond_var, Box::new(can_cond), can_branches);
+            let expr = When(cond_var, Box::new(can_cond), can_branches);
 
             // TODO check for exhaustiveness. If this `case` is non-exaustive, then:
             //
@@ -860,7 +860,7 @@ fn canonicalize_lookup(
 // TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn canonicalize_case_branch<'a>(
+fn canonicalize_when_branch<'a>(
     env: &mut Env,
     var_store: &VarStore,
     rigids: &Rigids,
@@ -930,7 +930,7 @@ fn canonicalize_case_branch<'a>(
         &mut state,
         var_store,
         &mut scope,
-        CaseBranch,
+        WhenBranch,
         &loc_pattern.value,
         loc_pattern.region,
         &mut shadowable_idents,

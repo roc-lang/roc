@@ -283,7 +283,7 @@ mod test_canonicalize {
     }
 
     #[test]
-    fn case_tail_call() {
+    fn when_tail_call() {
         with_larger_debug_stack(|| {
             let src = indoc!(
                 r#"
@@ -322,7 +322,7 @@ mod test_canonicalize {
     }
 
     #[test]
-    fn case_condition_is_no_tail_call() {
+    fn when_condition_is_no_tail_call() {
         // TODO when a case witn no branches parses, remove the pattern wildcard here
         let src = indoc!(
             r#"

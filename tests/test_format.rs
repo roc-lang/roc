@@ -467,7 +467,7 @@ mod test_format {
     // fn record_field_destructuring() {
     //     expr_formats_same(indoc!(
     //         r#"
-    //         case foo when
+    //         when foo is
     //             { x: 5 } -> 42
     //         "#
     //     ));
@@ -689,10 +689,10 @@ mod test_format {
     //        ));
     //    }
 
-    // CASE
+    // WHEN
 
     #[test]
-    fn integer_case() {
+    fn integer_when() {
         expr_formats_same(indoc!(
             r#"
             when b is
@@ -706,7 +706,7 @@ mod test_format {
     }
 
     #[test]
-    fn integer_case_with_space() {
+    fn integer_when_with_space() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -737,7 +737,7 @@ mod test_format {
     }
 
     #[test]
-    fn case_with_comments() {
+    fn when_with_comments() {
         expr_formats_same(indoc!(
             r#"
             when b is
@@ -758,7 +758,7 @@ mod test_format {
     }
 
     #[test]
-    fn nested_case() {
+    fn nested_when() {
         expr_formats_same(indoc!(
             r#"
             when b is
@@ -771,7 +771,7 @@ mod test_format {
     }
 
     #[test]
-    fn case_with_moving_comments() {
+    fn when_with_moving_comments() {
         expr_formats_to(
             indoc!(
                 r#"

@@ -118,16 +118,16 @@ fn compile_expr<'ctx, 'env>(
     match *expr {
         Int(num) => IntConst(env.context.i64_type().const_int(num as u64, false)),
         Float(num) => FloatConst(env.context.f64_type().const_float(num)),
-        Case(_, ref loc_cond_expr, ref branches) => {
+        When(_, ref loc_cond_expr, ref branches) => {
             if branches.len() < 2 {
-                panic!("TODO support case-expressions of fewer than 2 branches.");
+                panic!("TODO support when-expressions of fewer than 2 branches.");
             }
             if branches.len() == 2 {
                 let mut iter = branches.iter();
 
                 let (pattern, branch_expr) = iter.next().unwrap();
 
-                compile_case_branch(
+                compile_when_branch(
                     env,
                     parent,
                     &loc_cond_expr.value,
@@ -137,7 +137,7 @@ fn compile_expr<'ctx, 'env>(
                     vars,
                 )
             } else {
-                panic!("TODO support case-expressions of more than 2 branches.");
+                panic!("TODO support when-expressions of more than 2 branches.");
             }
         }
         _ => {
@@ -155,7 +155,7 @@ pub struct Env<'ctx, 'env> {
     pub module: &'env Module<'ctx>,
 }
 
-fn compile_case_branch<'ctx, 'env>(
+fn compile_when_branch<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
     parent: &FunctionValue<'ctx>,
     cond_expr: &Expr,

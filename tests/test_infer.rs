@@ -829,7 +829,7 @@ mod test_infer {
     // }
 
     #[test]
-    fn case_with_int_literals() {
+    fn when_with_int_literals() {
         infer_eq(
             indoc!(
                 r#"

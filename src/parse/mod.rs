@@ -45,7 +45,7 @@ fn loc_parse_expr_body_without_operators<'a>(
         loc!(record_literal(min_indent)),
         loc!(list_literal(min_indent)),
         loc!(unary_op(min_indent)),
-        loc!(case_expr(min_indent)),
+        loc!(when_expr(min_indent)),
         loc!(if_expr(min_indent)),
         loc!(ident_etc(min_indent))
     )
@@ -321,7 +321,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::BinOp(_)
         | Expr::Defs(_, _)
         | Expr::If(_)
-        | Expr::Case(_, _)
+        | Expr::When(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _)
         | Expr::UnaryOp(_, _) => Err(Fail {
@@ -622,7 +622,7 @@ fn loc_parse_function_arg<'a>(
         loc!(record_literal(min_indent)),
         loc!(list_literal(min_indent)),
         loc!(unary_op(min_indent)),
-        loc!(case_expr(min_indent)),
+        loc!(when_expr(min_indent)),
         loc!(if_expr(min_indent)),
         loc!(ident_without_apply())
     )
@@ -768,12 +768,12 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
     map!(lowercase_ident(), Pattern::Identifier)
 }
 
-pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+pub fn when_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     then(
         and!(
             case_with_indent(),
             attempt!(
-                Attempting::CaseCondition,
+                Attempting::WhenCondition,
                 skip_second!(
                     space1_around(
                         loc!(move |arena, state| parse_expr(min_indent, arena, state)),
@@ -792,9 +792,9 @@ pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             let min_indent = case_indent;
 
             let (branches, state) =
-                attempt!(Attempting::CaseBranch, case_branches(min_indent)).parse(arena, state)?;
+                attempt!(Attempting::WhenBranch, case_branches(min_indent)).parse(arena, state)?;
 
-            Ok((Expr::Case(arena.alloc(loc_condition), branches), state))
+            Ok((Expr::When(arena.alloc(loc_condition), branches), state))
         },
     )
 }

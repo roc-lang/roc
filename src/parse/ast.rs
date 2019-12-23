@@ -153,7 +153,7 @@ pub enum Expr<'a> {
 
     // Conditionals
     If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
-    Case(
+    When(
         &'a Loc<Expr<'a>>,
         Vec<'a, &'a (Loc<Pattern<'a>>, Loc<Expr<'a>>)>,
     ),
@@ -522,8 +522,8 @@ pub enum Attempting {
     Identifier,
     ConcreteType,
     TypeVariable,
-    CaseCondition,
-    CaseBranch,
+    WhenCondition,
+    WhenBranch,
 }
 
 impl<'a> Expr<'a> {
