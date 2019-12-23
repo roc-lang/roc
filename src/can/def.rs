@@ -449,7 +449,7 @@ fn canonicalize_def<'a>(
                 let mut underscores = Vec::with_capacity(arity);
                 for _ in 0..arity {
                     let underscore: Located<Pattern> = Located {
-                        value: Pattern::Underscore(var_store.fresh()),
+                        value: Pattern::Underscore,
                         region: Region::zero(),
                     };
 
@@ -504,7 +504,7 @@ fn canonicalize_def<'a>(
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
             let outer_identifier = env.tailcallable_symbol.clone();
 
-            if let (&ast::Pattern::Identifier(_), &Pattern::Identifier(_, ref defined_symbol)) =
+            if let (&ast::Pattern::Identifier(_), &Pattern::Identifier(ref defined_symbol)) =
                 (&loc_pattern.value, &loc_can_pattern.value)
             {
                 env.tailcallable_symbol = Some(defined_symbol.clone());
@@ -574,7 +574,7 @@ fn canonicalize_def<'a>(
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
                 &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(_, ref defined_symbol),
+                &Pattern::Identifier(ref defined_symbol),
                 &Closure(ref symbol, _, ref arguments, ref body),
             ) = (
                 &loc_pattern.value,
@@ -692,7 +692,7 @@ fn canonicalize_def<'a>(
 
             if let (
                 &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(_, ref defined_symbol),
+                &Pattern::Identifier(ref defined_symbol),
             ) = (&loc_pattern.value, &loc_can_pattern.value)
             {
                 env.tailcallable_symbol = Some(defined_symbol.clone());
@@ -731,7 +731,7 @@ fn canonicalize_def<'a>(
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
                 &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(_, ref defined_symbol),
+                &Pattern::Identifier(ref defined_symbol),
                 &Closure(ref symbol, _, ref arguments, ref body),
             ) = (
                 &loc_pattern.value,
