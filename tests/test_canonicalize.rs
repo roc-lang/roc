@@ -232,7 +232,7 @@ mod test_canonicalize {
 
     fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
-            Defs(_, assignments, _) => match &assignments.get(i).map(|def| &def.expr.value) {
+            Defs(assignments, _) => match &assignments.get(i).map(|def| &def.expr.value) {
                 Some(Closure(_, recursion, _, _)) => recursion.clone(),
                 Some(other @ _) => {
                     panic!("assignment at {} is not a closure, but a {:?}", i, other)
@@ -248,17 +248,17 @@ mod test_canonicalize {
         with_larger_debug_stack(|| {
             let src = indoc!(
                 r#"
-            g = \x -> 
+            g = \x ->
                 case x when
                     0 -> 0
                     _ -> g (x - 1)
 
-            h = \x -> 
+            h = \x ->
                 case x when
                     0 -> 0
                     _ -> g (x - 1)
 
-            p = \x -> 
+            p = \x ->
                 case x when
                     0 -> 0
                     1 -> g (x - 1)
@@ -326,7 +326,7 @@ mod test_canonicalize {
         // TODO when a case witn no branches parses, remove the pattern wildcard here
         let src = indoc!(
             r#"
-            q = \x -> 
+            q = \x ->
                     case q x when
                         _ -> 0
 
@@ -347,12 +347,12 @@ mod test_canonicalize {
             // TODO when a case with no branches parses, remove the pattern wildcard here
             let src = indoc!(
                 r#"
-            q = \x -> 
+            q = \x ->
                     case x when
                         0 -> 0
                         _ -> p (x - 1)
 
-            p = \x -> 
+            p = \x ->
                     case x when
                         0 -> 0
                         _ -> q (x - 1)

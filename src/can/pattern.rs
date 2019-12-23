@@ -16,15 +16,15 @@ use im_rc::Vector;
 /// codegen can generate a runtime error if this pattern is reached.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
-    Identifier(Variable, Symbol),
+    Identifier(Symbol),
     Tag(Variable, Symbol),
     /// TODO replace regular Tag with this
     AppliedTag(Variable, Symbol, Vec<Located<Pattern>>),
     IntLiteral(i64),
     FloatLiteral(f64),
     ExactString(Box<str>),
-    EmptyRecordLiteral(Variable),
-    Underscore(Variable),
+    EmptyRecordLiteral,
+    Underscore,
 
     // Runtime Exceptions
     Shadowed(Located<Ident>),
@@ -40,7 +40,7 @@ pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
 }
 
 pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
-    if let Pattern::Identifier(_, symbol) = pattern {
+    if let Pattern::Identifier(symbol) = pattern {
         symbols.push(symbol.clone());
     }
 }
@@ -132,13 +132,13 @@ pub fn canonicalize_pattern<'a>(
                             // The latter is relevant when recursively canonicalizing
                             // tag application patterns, which can bring multiple
                             // new idents into scope. For example, it's important that
-                            // we catch (Blah foo foo) as being an example of shadowing.
+                            // we catch (Blah foo foo) -> … as being an example of shadowing.
                             scope
                                 .idents
                                 .insert(new_ident.clone(), symbol_and_region.clone());
                             shadowable_idents.insert(new_ident, symbol_and_region);
 
-                            Pattern::Identifier(var_store.fresh(), symbol)
+                            Pattern::Identifier(symbol)
                         }
                     }
                 }
@@ -147,14 +147,20 @@ pub fn canonicalize_pattern<'a>(
         &GlobalTag(name) => {
             // Canonicalize the tag's name.
             let symbol = Symbol::from_global_tag(name);
+            let var = var_store.fresh();
 
-            Pattern::Tag(var_store.fresh(), symbol)
+            state.vars.push(var);
+
+            Pattern::Tag(var, symbol)
         }
         &PrivateTag(name) => {
             // Canonicalize the tag's name.
             let symbol = Symbol::from_private_tag(&env.home, name);
+            let var = var_store.fresh();
 
-            Pattern::Tag(var_store.fresh(), symbol)
+            state.vars.push(var);
+
+            Pattern::Tag(var, symbol)
         }
         &FloatLiteral(ref string) => match pattern_type {
             CaseBranch => {
@@ -169,7 +175,7 @@ pub fn canonicalize_pattern<'a>(
         },
 
         &Underscore => match pattern_type {
-            CaseBranch | FunctionArg => Pattern::Underscore(var_store.fresh()),
+            CaseBranch | FunctionArg => Pattern::Underscore,
             ptype @ Assignment | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
         },
 
@@ -348,11 +354,13 @@ pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, 
             //     }
             // }
         }
-        RecordDestructure(_) => {
-            panic!("TODO implement RecordDestructure pattern in remove_idents.");
+        RecordDestructure(patterns) => {
+            for loc_pattern in patterns {
+                remove_idents(&loc_pattern.value, idents);
+            }
         }
-        RecordField(_, _) => {
-            panic!("TODO implement RecordField pattern in remove_idents.");
+        RecordField(_, loc_pattern) => {
+            remove_idents(&loc_pattern.value, idents);
         }
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.

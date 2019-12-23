@@ -68,7 +68,7 @@ fn canonicalize_pattern(
     use crate::types::PatternCategory;
 
     match &pattern.value {
-        Identifier(_, symbol) => {
+        Identifier(symbol) => {
             state.headers.insert(
                 symbol.clone(),
                 Located {
@@ -104,11 +104,11 @@ fn canonicalize_pattern(
             ));
         }
 
-        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral(_) => {
+        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
-        Underscore(_) | Shadowed(_) | UnsupportedPattern(_) => {
+        Underscore | Shadowed(_) | UnsupportedPattern(_) => {
             // no constraints
         }
     }
@@ -251,6 +251,12 @@ pub fn canonicalize_expr(
                 constraints: Vec::with_capacity(1),
             };
 
+            let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
+            let ret_var = var_store.fresh();
+            let ret_type = Variable(ret_var);
+
+            vars.push(ret_var);
+
             for pattern in args {
                 let arg_var = var_store.fresh();
                 let arg_typ = Variable(arg_var);
@@ -261,12 +267,11 @@ pub fn canonicalize_expr(
                 );
                 arg_types.push(arg_typ);
                 arg_vars.push(arg_var);
+
+                vars.push(arg_var);
             }
 
-            let ret_var = var_store.fresh();
-            let ret_type = Variable(ret_var);
-
-            state.vars.push(ret_var);
+            vars.push(ret_var);
 
             let fn_typ = constrain::lift(
                 var_store,
@@ -291,7 +296,7 @@ pub fn canonicalize_expr(
 
             let defs_constraint = And(state.constraints);
             let constraint = exists(
-                state.vars.clone(),
+                vars,
                 And(vec![
                     Let(Box::new(LetConstraint {
                         rigid_vars: Vec::new(),
@@ -380,7 +385,7 @@ pub fn canonicalize_expr(
             )
         }
 
-        Defs(_, defs, loc_ret) => {
+        Defs(defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             // so clone it.
 
@@ -583,7 +588,7 @@ fn add_pattern_to_lookup_types(
     let region = loc_pattern.region;
 
     match loc_pattern.value {
-        Pattern::Identifier(_, symbol) => {
+        Pattern::Identifier(symbol) => {
             let loc_type = Located {
                 region,
                 value: expr_type,

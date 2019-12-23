@@ -495,6 +495,39 @@ mod test_infer {
         );
     }
 
+    // #[test]
+    // fn identity_infers_principal_type() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             identity = \a -> a
+
+    //             x = identity 5
+
+    //             identity
+    //             "#
+    //         ),
+    //         "a -> a",
+    //     );
+    // }
+
+    // #[test]
+    // fn identity_works_on_incompatible_types() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             identity = \a -> a
+
+    //             x = identity 5
+    //             y = identity "hi"
+
+    //             x
+    //             "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
+
     #[test]
     fn call_returns_list() {
         infer_eq(
@@ -871,7 +904,50 @@ mod test_infer {
     }
 
     #[test]
+    fn type_signature_without_body() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo : Int -> Bool
+
+            foo 2
+            "#
+            ),
+            "Bool",
+        );
+    }
+
+    #[test]
+    fn type_signature_without_body_rigid() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo : Int -> custom
+
+            foo 2
+            "#
+            ),
+            "custom",
+        );
+    }
+
+    #[test]
     fn accessor_function() {
         infer_eq(".foo", "{ foo : a }* -> a");
     }
+
+    // RecordDestructure does not get canonicalized yet
+    // #[test]
+    // fn type_signature_without_body_record() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //         { x, y } : { x : (Int -> custom) , y : Int }
+
+    //         x
+    //         "#
+    //         ),
+    //         "Int -> custom",
+    //     );
+    // }
 }

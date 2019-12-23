@@ -1,4 +1,5 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{MutSet, SendMap};
 use crate::operator::{ArgSide, BinOp};
@@ -45,6 +46,8 @@ impl fmt::Debug for Type {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
             Type::Function(args, ret) => {
+                write!(f, "Fn(")?;
+
                 for (index, arg) in args.iter().enumerate() {
                     if index > 0 {
                         ", ".fmt(f)?;
@@ -55,7 +58,9 @@ impl fmt::Debug for Type {
 
                 write!(f, " -> ")?;
 
-                ret.fmt(f)
+                ret.fmt(f)?;
+
+                write!(f, ")")
             }
             Type::Variable(var) => write!(f, "<{:?}>", var),
 
@@ -179,12 +184,20 @@ impl Type {
             args: Vec::new(),
         }
     }
+
+    pub fn arity(&self) -> usize {
+        if let Type::Function(args, _) = self {
+            args.len()
+        } else {
+            0
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expected<T> {
     NoExpectation(T),
-    FromAnnotation(String, usize, AnnotationSource, T),
+    FromAnnotation(Located<Pattern>, usize, AnnotationSource, T),
     ForReason(Reason, T, Region),
 }
 
@@ -197,6 +210,13 @@ pub enum PExpected<T> {
 
 impl<T> PExpected<T> {
     pub fn get_type(self) -> T {
+        match self {
+            PExpected::NoExpectation(val) => val,
+            PExpected::ForReason(_, val, _) => val,
+        }
+    }
+
+    pub fn get_type_ref(&self) -> &T {
         match self {
             PExpected::NoExpectation(val) => val,
             PExpected::ForReason(_, val, _) => val,
@@ -215,6 +235,14 @@ pub enum PReason {
 
 impl<T> Expected<T> {
     pub fn get_type(self) -> T {
+        match self {
+            Expected::NoExpectation(val) => val,
+            Expected::ForReason(_, val, _) => val,
+            Expected::FromAnnotation(_, _, _, val) => val,
+        }
+    }
+
+    pub fn get_type_ref(&self) -> &T {
         match self {
             Expected::NoExpectation(val) => val,
             Expected::ForReason(_, val, _) => val,
@@ -245,7 +273,7 @@ pub enum Reason {
     ElemInList,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
@@ -269,7 +297,7 @@ pub enum PatternCategory {
     Float,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
