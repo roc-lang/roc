@@ -370,34 +370,45 @@ pub fn assigned_expr_field_to_pattern<'a>(
 pub fn assigned_pattern_field_to_pattern<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Pattern<'a>>,
-) -> Result<Pattern<'a>, Fail> {
+    backup_region: Region,
+) -> Result<Located<Pattern<'a>>, Fail> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
         AssignedField::LabeledValue(name, spaces, value) => {
             let pattern = value.value.clone();
+            let region = Region::span_across(&value.region, &value.region);
             let result = arena.alloc(Located {
                 region: value.region,
                 value: pattern,
             });
             if spaces.is_empty() {
-                Pattern::RecordField(name.value, result)
+                Located::at(region, Pattern::RecordField(name.value, result))
             } else {
-                Pattern::SpaceAfter(
-                    arena.alloc(Pattern::RecordField(name.value, result)),
-                    spaces,
+                Located::at(
+                    region,
+                    Pattern::SpaceAfter(
+                        arena.alloc(Pattern::RecordField(name.value, result)),
+                        spaces,
+                    ),
                 )
             }
         }
-        AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
-        AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
-            arena.alloc(assigned_pattern_field_to_pattern(arena, nested)?),
-            spaces,
-        ),
-        AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
-            arena.alloc(assigned_pattern_field_to_pattern(arena, nested)?),
-            spaces,
-        ),
-        AssignedField::Malformed(string) => Pattern::Malformed(string),
+        AssignedField::LabelOnly(name) => Located::at(name.region, Pattern::Identifier(name.value)),
+        AssignedField::SpaceBefore(nested, spaces) => {
+            let can_nested = assigned_pattern_field_to_pattern(arena, nested, backup_region)?;
+            Located::at(
+                can_nested.region,
+                Pattern::SpaceBefore(arena.alloc(can_nested.value), spaces),
+            )
+        }
+        AssignedField::SpaceAfter(nested, spaces) => {
+            let can_nested = assigned_pattern_field_to_pattern(arena, nested, backup_region)?;
+            Located::at(
+                can_nested.region,
+                Pattern::SpaceAfter(arena.alloc(can_nested.value), spaces),
+            )
+        }
+        AssignedField::Malformed(string) => Located::at(backup_region, Pattern::Malformed(string)),
     })
 }
 
@@ -785,8 +796,12 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
         move |arena, state, assigned_fields| {
             let mut patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
             for assigned_field in assigned_fields {
-                match assigned_pattern_field_to_pattern(arena, &assigned_field.value) {
-                    Ok(pattern) => patterns.push(Located::at(assigned_field.region, pattern)),
+                match assigned_pattern_field_to_pattern(
+                    arena,
+                    &assigned_field.value,
+                    assigned_field.region,
+                ) {
+                    Ok(pattern) => patterns.push(pattern),
                     Err(e) => return Err((e, state)),
                 }
             }
