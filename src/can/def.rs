@@ -318,17 +318,15 @@ fn canonicalize_def_pattern(
     env: &mut Env,
     loc_pattern: &Located<ast::Pattern>,
     scope: &mut Scope,
-    flex_info: &mut Info,
     var_store: &VarStore,
+    expr_type: Type,
 ) -> (PatternState, Located<Pattern>) {
     // Exclude the current ident from shadowable_idents; you can't shadow yourself!
     // (However, still include it in scope, because you *can* recursively refer to yourself.)
     let mut shadowable_idents = scope.idents.clone();
     remove_idents(&loc_pattern.value, &mut shadowable_idents);
 
-    let pattern_var = var_store.fresh();
-    let pattern_type = Type::Variable(pattern_var);
-    let pattern_expected = PExpected::NoExpectation(pattern_type);
+    let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
         headers: SendMap::default(),
@@ -348,7 +346,7 @@ fn canonicalize_def_pattern(
         pattern_expected,
     );
 
-    flex_info.vars.push(pattern_var);
+    // flex_info.vars.push(pattern_var);
 
     (state, loc_can_pattern)
 }
@@ -397,18 +395,12 @@ fn canonicalize_def<'a>(
             // immediately, then canonicalize it to get its Variable, then use that
             // Variable to generate the extra constraints.
 
-            let (_state, loc_can_pattern) =
-                canonicalize_def_pattern(env, loc_pattern, scope, flex_info, var_store);
+            let (pattern_state, loc_can_pattern) =
+                canonicalize_def_pattern(env, loc_pattern, scope, var_store, expr_type.clone());
 
-            // Any time there's a lookup on this symbol in the outer Let,
-            // it should result in this expression's type. After all, this
-            // is the type to which this symbol is defined!
-            add_pattern_to_lookup_types(
-                &scope,
-                &loc_pattern,
-                &mut flex_info.def_types,
-                expr_type.clone(),
-            );
+            for (k, v) in pattern_state.headers.clone() {
+                flex_info.def_types.insert(k, v);
+            }
 
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
@@ -429,10 +421,16 @@ fn canonicalize_def<'a>(
                 can_annotation,
             );
 
-            // ensure expected type unifies with annotated type
-            flex_info
-                .constraints
-                .push(Eq(expr_type, annotation_expected, loc_annotation.region));
+            flex_info.constraints.push(Let(Box::new(LetConstraint {
+                rigid_vars: Vec::new(),
+                flex_vars: pattern_state.vars,
+                def_types: pattern_state.headers,
+                defs_constraint: And(vec![
+                    And(pattern_state.constraints),
+                    Eq(expr_type, annotation_expected, loc_annotation.region),
+                ]),
+                ret_constraint: True,
+            })));
 
             // Fabricate a body for this annotation, that will error at runtime
             let value = Expr::RuntimeError(NoImplementation);
@@ -487,18 +485,12 @@ fn canonicalize_def<'a>(
         }
 
         TypedDef(loc_pattern, loc_annotation, loc_expr) => {
-            let (state, loc_can_pattern) =
-                canonicalize_def_pattern(env, loc_pattern, scope, flex_info, var_store);
+            let (pattern_state, loc_can_pattern) =
+                canonicalize_def_pattern(env, loc_pattern, scope, var_store, expr_type.clone());
 
-            // Any time there's a lookup on this symbol in the outer Let,
-            // it should result in this expression's type. After all, this
-            // is the type to which this symbol is defined!
-            add_pattern_to_lookup_types(
-                &scope,
-                &loc_pattern,
-                &mut flex_info.def_types,
-                expr_type.clone(),
-            );
+            for (k, v) in &pattern_state.headers {
+                flex_info.def_types.insert(k.clone(), v.clone());
+            }
 
             // bookkeeping for tail-call detection. If we're assigning to an
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
@@ -557,9 +549,9 @@ fn canonicalize_def<'a>(
 
             flex_info.constraints.push(Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
-                flex_vars: state.vars,
-                def_types: state.headers,
-                defs_constraint: And(state.constraints),
+                flex_vars: pattern_state.vars,
+                def_types: pattern_state.headers,
+                defs_constraint: And(pattern_state.constraints),
                 ret_constraint,
             })));
 
@@ -673,18 +665,12 @@ fn canonicalize_def<'a>(
         // If we have a pattern, then the def has a body (that is, it's not a
         // standalone annotation), so we need to canonicalize the pattern and expr.
         Body(loc_pattern, loc_expr) => {
-            let (state, loc_can_pattern) =
-                canonicalize_def_pattern(env, loc_pattern, scope, flex_info, var_store);
+            let (pattern_state, loc_can_pattern) =
+                canonicalize_def_pattern(env, loc_pattern, scope, var_store, expr_type.clone());
 
-            // Any time there's a lookup on this symbol in the outer Let,
-            // it should result in this expression's type. After all, this
-            // is the type to which this symbol is defined!
-            add_pattern_to_lookup_types(
-                &scope,
-                &loc_pattern,
-                &mut flex_info.def_types,
-                expr_type.clone(),
-            );
+            for (k, v) in &pattern_state.headers {
+                flex_info.def_types.insert(k.clone(), v.clone());
+            }
 
             // bookkeeping for tail-call detection. If we're assigning to an
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
@@ -714,9 +700,9 @@ fn canonicalize_def<'a>(
 
             flex_info.constraints.push(Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
-                flex_vars: state.vars,
-                def_types: state.headers,
-                defs_constraint: And(state.constraints),
+                flex_vars: pattern_state.vars,
+                def_types: pattern_state.headers,
+                defs_constraint: And(pattern_state.constraints),
                 ret_constraint,
             })));
 
@@ -964,38 +950,6 @@ pub fn can_defs_with_return<'a>(
     match can_defs {
         Ok(defs) => (Defs(defs, Box::new(ret_expr)), output, constraint),
         Err(err) => (RuntimeError(err), output, constraint),
-    }
-}
-
-/// This lets us share bound type variables between nested annotations, e.g.
-///
-/// blah : Map k v -> Int
-/// blah mapping =
-///     nested : Map k v # <-- the same k and v from the top-level annotation
-///     nested = mapping
-///     42
-///
-/// In elm/compiler this is called RTV - the "Rigid Type Variables" dictionary.
-/// type BoundTypeVars = ImMap<Box<str>, Type>;
-fn add_pattern_to_lookup_types<'a>(
-    scope: &Scope,
-    loc_pattern: &'a Located<ast::Pattern<'a>>,
-    lookup_types: &mut SendMap<Symbol, Located<Type>>,
-    expr_type: Type,
-) {
-    let region = loc_pattern.region;
-
-    match loc_pattern.value {
-        ast::Pattern::Identifier(name) => {
-            let symbol = scope.symbol(&name);
-            let loc_type = Located {
-                region,
-                value: expr_type,
-            };
-
-            lookup_types.insert(symbol, loc_type);
-        }
-        _ => panic!("TODO constrain patterns other than Identifier"),
     }
 }
 

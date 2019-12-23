@@ -936,7 +936,6 @@ mod test_infer {
         infer_eq(".foo", "{ foo : a }* -> a");
     }
 
-    /*
     #[test]
     fn type_signature_without_body_record() {
         infer_eq(
@@ -950,14 +949,13 @@ mod test_infer {
             "Int -> custom",
         );
     }
-    */
 
     #[test]
     fn record_pattern_match() {
         infer_eq(
             indoc!(
                 r#"
-                case { x : 4 , y : 3.14 } when 
+                case { x : 4 , y : 3.14 } when
                     { x, y } -> x
             "#
             ),
