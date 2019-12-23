@@ -1,4 +1,5 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{MutSet, SendMap};
 use crate::operator::{ArgSide, BinOp};
@@ -179,12 +180,20 @@ impl Type {
             args: Vec::new(),
         }
     }
+
+    pub fn arity(&self) -> usize {
+        if let Type::Function(args, _) = self {
+            args.len()
+        } else {
+            0
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expected<T> {
     NoExpectation(T),
-    FromAnnotation(String, usize, AnnotationSource, T),
+    FromAnnotation(Located<Pattern>, usize, AnnotationSource, T),
     ForReason(Reason, T, Region),
 }
 
@@ -260,7 +269,7 @@ pub enum Reason {
     ElemInList,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
@@ -284,7 +293,7 @@ pub enum PatternCategory {
     Float,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,

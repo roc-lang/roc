@@ -354,11 +354,13 @@ pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, 
             //     }
             // }
         }
-        RecordDestructure(_) => {
-            panic!("TODO implement RecordDestructure pattern in remove_idents.");
+        RecordDestructure(patterns) => {
+            for loc_pattern in patterns {
+                remove_idents(&loc_pattern.value, idents);
+            }
         }
-        RecordField(_, _) => {
-            panic!("TODO implement RecordField pattern in remove_idents.");
+        RecordField(_, loc_pattern) => {
+            remove_idents(&loc_pattern.value, idents);
         }
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
