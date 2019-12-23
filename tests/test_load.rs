@@ -227,4 +227,45 @@ mod test_load {
             }
         });
     }
+
+    #[test]
+    fn load_principal_types() {
+        test_async(async {
+            let mut deps = Vec::new();
+            let src_dir = fixtures_dir().join("interface_with_deps");
+            let filename = src_dir.join("Principal.roc");
+            let loaded = load(src_dir, filename, &mut deps, first_var()).await;
+            let mut subs = Subs::new(loaded.next_var);
+            let module = expect_module(loaded);
+
+            assert_eq!(module.name, Some("Principal".into()));
+
+            let mut unify_problems = Vec::new();
+            solve_loaded(&module, &mut unify_problems, &mut subs, deps);
+
+            let expected_types = hashmap! {
+                "Princial.intVal" => "Int",
+                "Principal.identity" => "a -> a",
+            };
+
+            assert_eq!(expected_types.len(), module.defs.len());
+
+            for def in module.defs {
+                for (symbol, expr_var) in def.pattern_vars {
+                    let content = subs.get(expr_var).content;
+
+                    name_all_type_vars(expr_var, &mut subs);
+
+                    let actual_str = content_to_string(content, &mut subs);
+                    let expected_type = expected_types
+                        .get(&*symbol.clone().into_boxed_str())
+                        .unwrap_or_else(|| {
+                            panic!("Defs included an unexpected symbol: {:?}", symbol)
+                        });
+
+                    assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
+                }
+            }
+        });
+    }
 }
