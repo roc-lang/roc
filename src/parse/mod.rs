@@ -1235,7 +1235,10 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 Attempting::Record,
                 loc!(record!(loc!(expr(min_indent)), min_indent))
             ),
-            optional(and!(space0(min_indent), equals_with_indent()))
+            optional(and!(
+                space0(min_indent),
+                either!(equals_with_indent(), colon_with_indent())
+            ))
         ),
         move |arena, state, (loc_assigned_fields, opt_def)| match opt_def {
             None => {
@@ -1258,7 +1261,7 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
                 Ok((value, state))
             }
-            Some((spaces_before_equals, equals_indent)) => {
+            Some((spaces_before_equals, Either::First(equals_indent))) => {
                 // This is a record destructure def.
                 let region = loc_assigned_fields.region;
                 let assigned_fields = loc_assigned_fields.value;
@@ -1284,6 +1287,40 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
                 let (parsed_expr, state) =
                     parse_def_expr(min_indent, equals_indent, arena, state, loc_pattern)?;
+
+                let answer = if spaces_after_equals.is_empty() {
+                    parsed_expr
+                } else {
+                    Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
+                };
+
+                Ok((answer, state))
+            }
+            Some((spaces_before_colon, Either::Second(colon_indent))) => {
+                // This is a record type annotation
+                let region = loc_assigned_fields.region;
+                let assigned_fields = loc_assigned_fields.value;
+                let mut loc_patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
+
+                for loc_assigned_field in assigned_fields {
+                    let region = loc_assigned_field.region;
+                    match assigned_field_to_pattern(arena, &loc_assigned_field.value) {
+                        Ok(value) => loc_patterns.push(Located { region, value }),
+                        // an Expr became a pattern that should not be.
+                        Err(e) => return Err((e, state)),
+                    }
+                }
+
+                let pattern = Pattern::RecordDestructure(loc_patterns);
+                let value = if spaces_before_colon.is_empty() {
+                    pattern
+                } else {
+                    Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_colon)
+                };
+                let loc_pattern = Located { region, value };
+                let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
+                let (parsed_expr, state) =
+                    parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)?;
 
                 let answer = if spaces_after_equals.is_empty() {
                     parsed_expr

@@ -50,9 +50,15 @@ struct NameState {
     normals: u32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
+}
+
+impl fmt::Debug for Subs {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.utable.fmt(f)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -209,12 +215,6 @@ impl Subs {
         });
     }
 
-    pub fn copy_var(&mut self, var: Variable) -> Variable {
-        // TODO understand the purpose of using a "deep copy" approach here,
-        // and perform it if necessary. (Seems to be about setting maxRank?)
-        var
-    }
-
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
         self.utable.unioned(left, right)
     }
@@ -239,6 +239,26 @@ impl Subs {
 
         var_to_err_type(self, &mut state, var)
     }
+
+    pub fn restore(&mut self, var: Variable) {
+        let desc = self.get(var);
+
+        if desc.copy.is_some() {
+            let content = desc.content;
+
+            self.set(
+                var,
+                Descriptor {
+                    content: content.clone(),
+                    rank: Rank::none(),
+                    mark: Mark::none(),
+                    copy: None,
+                },
+            );
+
+            restore_content(self, &content);
+        }
+    }
 }
 
 #[inline(always)]
@@ -251,7 +271,7 @@ fn unnamed_flex_var() -> Content {
     Content::FlexVar(None)
 }
 
-#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Rank(usize);
 
 impl Rank {
@@ -278,6 +298,18 @@ impl fmt::Display for Rank {
     }
 }
 
+impl fmt::Debug for Rank {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self == &Rank::none() {
+            write!(f, "none")
+        } else if self == &Rank::outermost() {
+            write!(f, "outermost")
+        } else {
+            write!(f, "Rank({})", self.0)
+        }
+    }
+}
+
 impl Into<usize> for Rank {
     fn into(self) -> usize {
         self.0
@@ -290,12 +322,22 @@ impl From<usize> for Rank {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
     pub mark: Mark,
     pub copy: Option<Variable>,
+}
+
+impl fmt::Debug for Descriptor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:?}, r: {:?}, m: {:?} c: {:?}",
+            self.content, self.rank, self.mark, self.copy
+        )
+    }
 }
 
 impl Default for Descriptor {
@@ -621,4 +663,47 @@ fn get_fresh_var_name(state: &mut NameState) -> Lowercase {
     state.normals = new_index;
 
     name
+}
+
+fn restore_content(subs: &mut Subs, content: &Content) {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match content {
+        FlexVar(_) | RigidVar(_) | Error(_) => (),
+
+        Structure(flat_type) => match flat_type {
+            Apply { args, .. } => {
+                for &var in args {
+                    subs.restore(var);
+                }
+            }
+
+            Func(arg_vars, ret_var) => {
+                for &var in arg_vars {
+                    subs.restore(var);
+                }
+
+                subs.restore(*ret_var);
+            }
+
+            EmptyRecord => (),
+
+            Record(fields, ext_var) => {
+                for (_, var) in fields {
+                    subs.restore(*var);
+                }
+
+                subs.restore(*ext_var);
+            }
+            Erroneous(_) => (),
+        },
+        Alias(_, _, args, var) => {
+            for (_, arg_var) in args {
+                subs.restore(*arg_var);
+            }
+
+            subs.restore(*var);
+        }
+    }
 }

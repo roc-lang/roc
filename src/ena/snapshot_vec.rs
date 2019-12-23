@@ -56,11 +56,7 @@ where
     D::Value: fmt::Debug,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.debug_struct("SnapshotVec")
-            .field("values", &self.values)
-            .field("undo_log", &self.undo_log)
-            .field("num_open_snapshots", &self.num_open_snapshots)
-            .finish()
+        self.values.fmt(fmt)
     }
 }
 

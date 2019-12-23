@@ -31,7 +31,7 @@
 //! The best way to see how it is used is to read the `tests.rs` file;
 //! search for e.g. `UnitKey`.
 
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::marker;
 use std::ops::Range;
 
@@ -100,12 +100,21 @@ pub struct NoError {
 /// to keep the DAG relatively balanced, which helps keep the running
 /// time of the algorithm under control. For more information, see
 /// <http://en.wikipedia.org/wiki/Disjoint-set_data_structure>.
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone)]
 pub struct VarValue<K: UnifyKey> {
     // FIXME pub
     parent: K,           // if equal to self, this is a root
     pub value: K::Value, // value assigned (only relevant to root)
     rank: u32,           // max depth (only relevant to root)
+}
+
+impl<K> fmt::Debug for VarValue<K>
+where
+    K: UnifyKey,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "p: {:?}, c: {:?}", self.parent, self.value)
+    }
 }
 
 /// Table of unification keys and their values. You must define a key type K
@@ -121,10 +130,20 @@ pub struct VarValue<K: UnifyKey> {
 ///     cloning the table is an O(1) operation.
 ///   - This implies that ordinary operations are quite a bit slower though.
 ///   - Requires the `persistent` feature be selected in your Cargo.toml file.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct UnificationTable<S: UnificationStore> {
     /// Indicates the current value of each key.
     values: S,
+}
+
+impl<S> fmt::Debug for UnificationTable<S>
+where
+    S: UnificationStore,
+    S: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.values.fmt(f)
+    }
 }
 
 /// A unification table that uses an "in-place" vector.
