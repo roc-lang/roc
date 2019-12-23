@@ -1139,7 +1139,7 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
 
 pub fn case_with_indent<'a>() -> impl Parser<'a, u16> {
     move |arena, state: State<'a>| {
-        string(keyword::CASE)
+        string(keyword::WHEN)
             .parse(arena, state)
             .map(|((), state)| (state.indent_col, state))
     }

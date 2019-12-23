@@ -249,17 +249,17 @@ mod test_canonicalize {
             let src = indoc!(
                 r#"
             g = \x ->
-                case x is
+                when x is
                     0 -> 0
                     _ -> g (x - 1)
 
             h = \x ->
-                case x is
+                when x is
                     0 -> 0
                     _ -> g (x - 1)
 
             p = \x ->
-                case x is
+                when x is
                     0 -> 0
                     1 -> g (x - 1)
                     _ -> p (x - 1)
@@ -288,7 +288,7 @@ mod test_canonicalize {
             let src = indoc!(
                 r#"
                 g = \x ->
-                    case x is
+                    when x is
                         0 -> 0
                         _ -> g (x + 1)
 
@@ -327,7 +327,7 @@ mod test_canonicalize {
         let src = indoc!(
             r#"
             q = \x ->
-                    case q x is
+                    when q x is
                         _ -> 0
 
             0
@@ -348,12 +348,12 @@ mod test_canonicalize {
             let src = indoc!(
                 r#"
             q = \x ->
-                    case x is
+                    when x is
                         0 -> 0
                         _ -> p (x - 1)
 
             p = \x ->
-                    case x is
+                    when x is
                         0 -> 0
                         _ -> q (x - 1)
 

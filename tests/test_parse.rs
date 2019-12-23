@@ -1322,7 +1322,7 @@ mod test_parse {
             &arena,
             indoc!(
                 r#"
-                case x is
+                when x is
                  "blah" -> 1
                  "mise" -> 2
                 "#
@@ -1356,7 +1356,7 @@ mod test_parse {
             &arena,
             indoc!(
                 r#"
-                case x is
+                when x is
                  1 -> 2
                  3 -> 4
                 "#
@@ -1396,7 +1396,7 @@ mod test_parse {
             &arena,
             indoc!(
                 r#"
-                case x is
+                when x is
                  { y } -> 2
                  { z, w } -> 4
                 "#

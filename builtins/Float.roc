@@ -69,7 +69,7 @@ interface Float
 
 #round : Float -> Int
 round = \num ->
-    case num is
+    when num is
         0.0 -> 0
         _ -> 1
 
@@ -110,7 +110,7 @@ round = \num ->
 ## >>>     |> Float.div 2.0
 #div : Float, Float -> Result Float DivByZero
 div = \numerator, denominator ->
-    case numerator is
+    when numerator is
         0.0 -> 0.0 # TODO return Result!
         _ -> denominator
 

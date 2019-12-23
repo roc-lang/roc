@@ -695,7 +695,7 @@ mod test_format {
     fn integer_case() {
         expr_formats_same(indoc!(
             r#"
-            case b is
+            when b is
                 1 ->
                     1
 
@@ -710,7 +710,7 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-            case year is
+            when year is
                 1999 ->
 
 
@@ -725,7 +725,7 @@ mod test_format {
             ),
             indoc!(
                 r#"
-            case year is
+            when year is
                 1999 ->
                     1
 
@@ -740,10 +740,10 @@ mod test_format {
     fn case_with_comments() {
         expr_formats_same(indoc!(
             r#"
-            case b is
+            when b is
                 # look at cases
                 1 ->
-                    # case 1
+                    # when 1
                     1
 
                 # important
@@ -761,9 +761,9 @@ mod test_format {
     fn nested_case() {
         expr_formats_same(indoc!(
             r#"
-            case b is
+            when b is
                 _ ->
-                    case c is
+                    when c is
                         _ ->
                             1
         "#
@@ -775,9 +775,9 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-            case b is
+            when b is
                 1 ->
-                    1 # case 1
+                    1 # when 1
 
                 # fall through
                 _ ->
@@ -786,11 +786,11 @@ mod test_format {
             ),
             indoc!(
                 r#"
-            case b is
+            when b is
                 1 ->
                     1
 
-                # case 1
+                # when 1
                 # fall through
                 _ ->
                     2

@@ -134,7 +134,7 @@ pub fn fmt_expr<'a>(
         }
         Case(loc_condition, branches) => {
             buf.push_str("\
-            case ");
+            when ");
             fmt_expr(buf, &loc_condition.value, indent, false, true);
             buf.push_str(" is\n");
 

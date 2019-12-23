@@ -863,7 +863,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                case 1 is
+                when 1 is
                  1 -> 2
                  3 -> 4
             "#
