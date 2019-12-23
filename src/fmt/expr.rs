@@ -133,8 +133,10 @@ pub fn fmt_expr<'a>(
             fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
         When(loc_condition, branches) => {
-            buf.push_str("\
-            when ");
+            buf.push_str(
+                "\
+                 when ",
+            );
             fmt_expr(buf, &loc_condition.value, indent, false, true);
             buf.push_str(" is\n");
 
