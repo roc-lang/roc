@@ -298,7 +298,6 @@ pub enum Pattern<'a> {
     FloatLiteral(&'a str),
     StrLiteral(&'a str),
     BlockStrLiteral(&'a [&'a str]),
-    EmptyRecordLiteral,
     Underscore,
 
     // Space
@@ -397,7 +396,6 @@ impl<'a> Pattern<'a> {
             (FloatLiteral(x), FloatLiteral(y)) => x == y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
             (BlockStrLiteral(x), BlockStrLiteral(y)) => x == y,
-            (EmptyRecordLiteral, EmptyRecordLiteral) => true,
             (Underscore, Underscore) => true,
 
             // Space
