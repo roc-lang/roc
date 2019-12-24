@@ -372,7 +372,7 @@ pub fn solve_loaded(
 
     // All the top-level defs should also be available in vars_by_symbol
     for def in module.defs.iter() {
-        for (symbol, var) in def.variables_by_symbol.iter() {
+        for (symbol, var) in def.vars_by_symbol.iter() {
             vars_by_symbol.insert(symbol.clone(), var.clone());
         }
     }
@@ -397,7 +397,7 @@ pub fn solve_loaded(
 
                 // All its top-level defs should also be available in vars_by_symbol
                 for def in valid_dep.defs {
-                    for (symbol, var) in def.variables_by_symbol {
+                    for (symbol, var) in def.vars_by_symbol {
                         vars_by_symbol.insert(symbol, var);
                     }
                 }

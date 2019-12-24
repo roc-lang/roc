@@ -200,13 +200,14 @@ fn solve(
                         subs,
                         &let_con.defs_constraint,
                     );
-                    // Add a variable for each assignment to the vars_by_symbol.
-                    let mut locals = ImMap::default();
+
+                    // Add a variable for each def to new_vars_by_env.
+                    let mut local_def_vars = ImMap::default();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let var = type_to_var(subs, rank, pools, &loc_type.value);
 
-                        locals.insert(
+                        local_def_vars.insert(
                             symbol.clone(),
                             Located {
                                 value: var,
@@ -214,9 +215,10 @@ fn solve(
                             },
                         );
                     }
+
                     let mut new_vars_by_symbol = vars_by_symbol.clone();
 
-                    for (symbol, loc_var) in locals.iter() {
+                    for (symbol, loc_var) in local_def_vars.iter() {
                         if !new_vars_by_symbol.contains_key(&symbol) {
                             new_vars_by_symbol.insert(symbol.clone(), loc_var.value);
                         }
@@ -232,7 +234,7 @@ fn solve(
                         ret_con,
                     );
 
-                    for (symbol, loc_var) in locals {
+                    for (symbol, loc_var) in local_def_vars {
                         check_for_infinite_type(subs, problems, symbol, loc_var);
                     }
 
@@ -264,13 +266,13 @@ fn solve(
                         pool.extend(flex_vars.iter());
 
                         // Add a variable for each assignment to the vars_by_symbol.
-                        let mut locals = ImMap::default();
+                        let mut local_def_vars = ImMap::default();
 
                         for (symbol, loc_type) in let_con.def_types.iter() {
                             let def_type = loc_type.value.clone();
                             let var = type_to_var(subs, next_rank, next_pools, &def_type);
 
-                            locals.insert(
+                            local_def_vars.insert(
                                 symbol.clone(),
                                 Located {
                                     value: var,
@@ -307,7 +309,7 @@ fn solve(
 
                         let mut new_vars_by_symbol = vars_by_symbol.clone();
 
-                        for (symbol, loc_var) in locals.iter() {
+                        for (symbol, loc_var) in local_def_vars.iter() {
                             if !new_vars_by_symbol.contains_key(&symbol) {
                                 new_vars_by_symbol.insert(symbol.clone(), loc_var.value);
                             }
@@ -332,7 +334,7 @@ fn solve(
                             &ret_con,
                         );
 
-                        for (symbol, loc_var) in locals {
+                        for (symbol, loc_var) in local_def_vars {
                             check_for_infinite_type(subs, problems, symbol, loc_var);
                         }
 

@@ -146,7 +146,7 @@ fn canonicalize_pattern(
             state.constraints.push(record_con);
         }
 
-        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral => {
+        Tag(_) | AppliedTag(_, _) | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
