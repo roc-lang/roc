@@ -32,7 +32,7 @@ use std::fmt::Debug;
 pub struct Def {
     pub pattern: Located<Pattern>,
     pub expr: Located<Expr>,
-    pub variables_by_symbol: SendMap<Symbol, Variable>,
+    pub vars_by_symbol: SendMap<Symbol, Variable>,
 }
 
 #[derive(Debug)]
@@ -98,6 +98,7 @@ pub fn canonicalize_defs<'a>(
                         it.next();
 
                         let typed = TypedDef(body_pattern, annotation.clone(), body_expr);
+
                         canonicalize_def(
                             rigids,
                             found_rigids,
@@ -174,6 +175,7 @@ pub fn sort_can_defs(
     let mut visited_symbols = MutSet::default();
 
     let returned_locals = ImSet::clone(&output.references.locals);
+
     // Start with the return expression's referenced locals. They're the only ones that count!
     //
     // If I have two defs which reference each other, but neither of them is referenced
@@ -367,7 +369,7 @@ fn canonicalize_def<'a>(
     // Make types for the body expr, even if we won't end up having a body.
     let expr_var = var_store.fresh();
     let expr_type = Type::Variable(expr_var);
-    let mut variables_by_symbol = SendMap::default();
+    let mut vars_by_symbol = SendMap::default();
 
     // Each def gets to have all the idents in scope that are defined in this
     // block. Order of defs doesn't matter, thanks to referential transparency!
@@ -474,7 +476,7 @@ fn canonicalize_def<'a>(
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
                         },
-                        variables_by_symbol: im::HashMap::clone(&variables_by_symbol),
+                        vars_by_symbol: im::HashMap::clone(&vars_by_symbol),
                     },
                 );
             }
@@ -496,7 +498,7 @@ fn canonicalize_def<'a>(
                 (&loc_pattern.value, &loc_can_pattern.value)
             {
                 env.tailcallable_symbol = Some(defined_symbol.clone());
-                variables_by_symbol.insert(defined_symbol.clone(), expr_var);
+                vars_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
 
             let (seen_rigids, can_annotation) =
@@ -651,7 +653,7 @@ fn canonicalize_def<'a>(
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
                         },
-                        variables_by_symbol: im::HashMap::clone(&variables_by_symbol),
+                        vars_by_symbol: im::HashMap::clone(&vars_by_symbol),
                     },
                 );
             }
@@ -676,7 +678,9 @@ fn canonicalize_def<'a>(
             ) = (&loc_pattern.value, &loc_can_pattern.value)
             {
                 env.tailcallable_symbol = Some(defined_symbol.clone());
-                variables_by_symbol.insert(defined_symbol.clone(), expr_var);
+
+                // TODO isn't types_by_symbol enough? Do we need vars_by_symbol too?
+                vars_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
 
             let (mut loc_can_expr, can_output, ret_constraint) = canonicalize_expr(
@@ -800,13 +804,14 @@ fn canonicalize_def<'a>(
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
                         },
-                        variables_by_symbol: im::HashMap::clone(&variables_by_symbol),
+                        vars_by_symbol: im::HashMap::clone(&vars_by_symbol),
                     },
                 );
             }
         }
+
         Nested(value) => {
-            return canonicalize_def(
+            canonicalize_def(
                 rigids,
                 found_rigids,
                 env,
