@@ -6,6 +6,7 @@ use crate::can::procedure::{Procedure, References};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 // use crate::constrain::{self, exists};
+use crate::can::ident::Lowercase;
 use crate::can::pattern;
 use crate::ident::Ident;
 use crate::region::{Located, Region};
@@ -60,6 +61,7 @@ pub struct PatternState {
 }
 
 fn canonicalize_pattern(
+    var_store: &VarStore,
     state: &mut PatternState,
     pattern: &Located<Pattern>,
     expected: PExpected<Type>,
@@ -104,7 +106,47 @@ fn canonicalize_pattern(
             ));
         }
 
-        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral | RecordDestructure(_) => {
+        RecordDestructure(patterns) => {
+            let ext_var = var_store.fresh();
+            let ext_type = Type::Variable(ext_var);
+
+            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            for (pattern, maybe_guard) in patterns {
+                let pat_var = var_store.fresh();
+                let pat_type = Type::Variable(pat_var);
+                let pattern_expected = PExpected::NoExpectation(pat_type.clone());
+
+                if let Some(loc_guard) = maybe_guard {
+                    canonicalize_pattern(var_store, state, pattern, pattern_expected.clone());
+                    canonicalize_pattern(var_store, state, loc_guard, pattern_expected);
+                } else {
+                    canonicalize_pattern(var_store, state, pattern, pattern_expected);
+                }
+
+                let name = if let Identifier(n) = &pattern.value {
+                    let a: Box<str> = n.clone().into();
+                    let b: Lowercase = a.into();
+                    b
+                } else {
+                    unreachable!("the lhs must be an identifier at this point");
+                };
+
+                state.vars.push(pat_var);
+                field_types.insert(name, pat_type);
+            }
+
+            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_con = Constraint::Pattern(
+                pattern.region,
+                PatternCategory::Record,
+                record_type,
+                expected,
+            );
+
+            state.constraints.push(record_con);
+        }
+
+        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
@@ -148,16 +190,69 @@ pub fn canonicalize_expr(
             let constraint = Eq(inferred, expected, region);
             (Output::default(), constraint)
         }
-        Record(_, _) => panic!("TODO implement records"),
-        List(_variable, loc_elems) => {
+        Record(variable, fields) => {
+            if fields.is_empty() {
+                let constraint = Eq(constrain::lift(var_store, EmptyRec), expected, region);
+
+                (Output::default(), constraint)
+            } else {
+                let mut field_types = SendMap::default();
+                let mut field_vars = Vec::with_capacity(fields.len());
+
+                // Constraints need capacity for each field + 1 for the record itself.
+                let mut constraints = Vec::with_capacity(1 + fields.len());
+                let mut output = Output::default();
+
+                for (label, loc_expr) in fields.iter() {
+                    let field_var = var_store.fresh();
+                    let field_type = Variable(field_var);
+                    let field_expected = Expected::NoExpectation(field_type.clone());
+                    let (field_out, field_con) = canonicalize_expr(
+                        rigids,
+                        var_store,
+                        var_usage,
+                        loc_expr.region,
+                        &loc_expr.value,
+                        field_expected,
+                    );
+
+                    field_vars.push(field_var);
+                    field_types.insert(label.clone(), field_type);
+
+                    constraints.push(field_con);
+                    output.references = output.references.union(field_out.references);
+                }
+
+                let record_type = constrain::lift(
+                    var_store,
+                    Type::Record(
+                        field_types,
+                        // TODO can we avoid doing Box::new on every single one of these?
+                        // For example, could we have a single lazy_static global Box they
+                        // could all share?
+                        Box::new(Type::EmptyRec),
+                    ),
+                );
+                let record_con = Eq(record_type, expected.clone(), region);
+                let ext_con = Eq(Type::Variable(*variable), expected, region);
+
+                constraints.push(record_con);
+                constraints.push(ext_con);
+
+                let constraint = exists(field_vars, And(constraints));
+
+                (output, constraint)
+            }
+        }
+        List(variable, loc_elems) => {
             if loc_elems.is_empty() {
-                let list_var = var_store.fresh();
+                let list_var = *variable;
                 let inferred = constrain::lift(var_store, constrain::empty_list_type(list_var));
                 let constraint = Eq(inferred, expected, region);
                 (Output::default(), constraint)
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
-                let list_var = var_store.fresh(); // `v` in the type (List v)
+                let list_var = *variable; // `v` in the type (List v)
                 let list_type = Type::Variable(list_var);
                 let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
                 let mut references = References::new();
@@ -198,12 +293,12 @@ pub fn canonicalize_expr(
                 (output, And(constraints))
             }
         }
-        Var(_variable, symbol) => {
+        Var(variable, symbol) => {
             var_usage.register(symbol);
             match var_usage.get_usage(symbol) {
                 Some(sharing::ReferenceCount::Shared) => {
                     // the variable is used/consumed more than once, so it must be Shared
-                    let val_var = var_store.fresh();
+                    let val_var = *variable;
                     let uniq_var = var_store.fresh();
 
                     let val_type = Variable(val_var);
@@ -261,6 +356,7 @@ pub fn canonicalize_expr(
                 let arg_var = var_store.fresh();
                 let arg_typ = Variable(arg_var);
                 canonicalize_pattern(
+                    var_store,
                     &mut state,
                     &pattern,
                     PExpected::NoExpectation(arg_typ.clone()),
@@ -385,18 +481,12 @@ pub fn canonicalize_expr(
             )
         }
 
-        Defs(defs, loc_ret) => {
-            // The body expression gets a new scope for canonicalization,
-            // so clone it.
-
-            (
-                Output::default(),
-                can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
-            )
-        }
-        // When( Variable, Box<Located<Expr>>, Vec<(Located<Pattern>, Located<Expr>)>,
-        When(_variable, loc_cond, branches) => {
-            let cond_var = var_store.fresh();
+        Defs(defs, loc_ret) => (
+            Output::default(),
+            can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
+        ),
+        When(variable, loc_cond, branches) => {
+            let cond_var = *variable;
             let cond_type = Variable(cond_var);
             let (mut output, expr_con) = canonicalize_expr(
                 rigids,
@@ -519,6 +609,65 @@ pub fn canonicalize_expr(
 
             (output, And(constraints))
         }
+
+        Access(loc_expr, field) => {
+            let ext_var = var_store.fresh();
+            let field_var = var_store.fresh();
+            let ext_type = Type::Variable(ext_var);
+            let field_type = Type::Variable(field_var);
+
+            let mut rec_field_types = SendMap::default();
+
+            rec_field_types.insert(Lowercase::from(field.clone()), field_type.clone());
+
+            let record_type =
+                constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));
+            let record_expected = Expected::NoExpectation(record_type);
+
+            let (output, mut constraint) = canonicalize_expr(
+                rigids,
+                var_store,
+                var_usage,
+                loc_expr.region,
+                &loc_expr.value,
+                record_expected,
+            );
+
+            constraint = exists(
+                vec![field_var, ext_var],
+                And(vec![constraint, Eq(field_type, expected, region)]),
+            );
+
+            (output, constraint)
+        }
+
+        Accessor(name) => {
+            let ext_var = var_store.fresh();
+            let ext_type = Variable(ext_var);
+
+            let field_var = var_store.fresh();
+            let field_type = Variable(field_var);
+
+            let mut field_types = SendMap::default();
+            let field_name: Lowercase = name.clone().into();
+            field_types.insert(field_name, field_type.clone());
+            let record_type =
+                constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
+
+            (
+                Output::default(),
+                exists(
+                    vec![field_var, ext_var],
+                    Eq(
+                        Type::Function(vec![record_type], Box::new(field_type)),
+                        expected,
+                        region,
+                    ),
+                ),
+            )
+        }
+        RuntimeError(_) => (Output::default(), True),
+
         _ => panic!("{:?}", expr),
     }
 }
@@ -553,7 +702,7 @@ fn canonicalize_when_branch(
     };
 
     // mutates the state, so return value is not used
-    canonicalize_pattern(&mut state, &loc_pattern, pattern_expected);
+    canonicalize_pattern(var_store, &mut state, &loc_pattern, pattern_expected);
 
     Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
@@ -623,7 +772,7 @@ fn can_defs(
             constraints: Vec::with_capacity(1),
         };
 
-        canonicalize_pattern(&mut state, &def.pattern, pattern_expected);
+        canonicalize_pattern(var_store, &mut state, &def.pattern, pattern_expected);
 
         flex_info.vars.push(pattern_var);
 
