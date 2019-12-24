@@ -15,7 +15,7 @@ use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
 use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
-use roc::subs::{VarStore, Variable};
+use roc::subs::{Subs, VarStore, Variable};
 use roc::types::{Constraint, Expected, Type};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -91,9 +91,9 @@ pub fn uniq_expr(
     Output,
     Output,
     Vec<Problem>,
-    VarStore,
+    Subs,
     Variable,
-    VarStore,
+    Subs,
     Variable,
     Constraint,
     Constraint,
@@ -110,9 +110,9 @@ pub fn uniq_expr_with(
     Output,
     Output,
     Vec<Problem>,
-    VarStore,
+    Subs,
     Variable,
-    VarStore,
+    Subs,
     Variable,
     Constraint,
     Constraint,
@@ -121,8 +121,10 @@ pub fn uniq_expr_with(
     let (loc_expr, output, problems, var_store1, variable, constraint1) =
         can_expr_with(arena, home, expr_str, &ImMap::default());
 
+    let var_count: usize = var_store1.into();
+    let subs1 = Subs::new(var_count);
     // double check
-    let var_store2 = VarStore::default();
+    let var_store2 = VarStore::new(var_count);
 
     let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
@@ -134,13 +136,15 @@ pub fn uniq_expr_with(
         expected2,
     );
 
+    let subs2 = Subs::new(var_store2.into());
+
     (
         output2,
         output,
         problems,
-        var_store1,
+        subs1,
         variable,
-        var_store2,
+        subs2,
         variable2,
         constraint1,
         constraint2,
