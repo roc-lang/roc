@@ -1,4 +1,5 @@
 use crate::can::env::Env;
+use crate::can::ident::Lowercase;
 use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
@@ -23,6 +24,7 @@ pub enum Pattern {
     IntLiteral(i64),
     FloatLiteral(f64),
     ExactString(Box<str>),
+    RecordDestructure(Vec<(Located<Pattern>, Option<Located<Pattern>>)>),
     EmptyRecordLiteral,
     Underscore,
 
@@ -70,78 +72,41 @@ pub fn canonicalize_pattern<'a>(
     shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
     expected: PExpected<Type>,
 ) -> Located<Pattern> {
+    // add_constraints recurses by itself
+    add_constraints(&pattern, &scope, region, expected, state, var_store);
+
+    canonicalize_pattern_help(
+        env,
+        state,
+        var_store,
+        scope,
+        pattern_type,
+        pattern,
+        region,
+        shadowable_idents,
+    )
+}
+
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
+fn canonicalize_pattern_help<'a>(
+    env: &'a mut Env,
+    state: &'a mut PatternState,
+    var_store: &VarStore,
+    scope: &mut Scope,
+    pattern_type: PatternType,
+    pattern: &'a ast::Pattern<'a>,
+    region: Region,
+    shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
+) -> Located<Pattern> {
     use self::PatternType::*;
     use crate::parse::ast::Pattern::*;
 
     let can_pattern = match &pattern {
         &Identifier(ref name) => {
-            let lowercase_ident = Ident::Unqualified((*name).into());
-
-            // We use shadowable_idents for this, and not scope, because for assignments
-            // they are different. When canonicalizing a particular assignment, that new
-            // ident is in scope (for recursion) but not shadowable.
-            //
-            // For example, when canonicalizing (fibonacci = ...), `fibonacci` should be in scope
-            // so that it can refer to itself without getting a naming problem, but it should not
-            // be in the collection of shadowable idents because you can't shadow yourself!
-            match shadowable_idents.get(&lowercase_ident) {
-                Some((_, region)) => {
-                    let loc_shadowed_ident = Located {
-                        region: *region,
-                        value: lowercase_ident,
-                    };
-
-                    // This is already in scope, meaning it's about to be shadowed.
-                    // Shadowing is not allowed!
-                    env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
-
-                    // Change this Pattern to a Shadowed variant, so that
-                    // codegen knows to generate a runtime exception here.
-                    Pattern::Shadowed(loc_shadowed_ident)
-                }
-                None => {
-                    // Make sure we aren't shadowing something in the home module's scope.
-                    let qualified_ident =
-                        Ident::Qualified(env.home.clone(), lowercase_ident.name());
-
-                    match scope.idents.get(&qualified_ident) {
-                        Some((_, region)) => {
-                            let loc_shadowed_ident = Located {
-                                region: *region,
-                                value: qualified_ident,
-                            };
-
-                            // This is already in scope, meaning it's about to be shadowed.
-                            // Shadowing is not allowed!
-                            env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
-
-                            // Change this Pattern to a Shadowed variant, so that
-                            // codegen knows to generate a runtime exception here.
-                            Pattern::Shadowed(loc_shadowed_ident)
-                        }
-                        None => {
-                            let new_ident = qualified_ident.clone();
-                            let new_name = qualified_ident.name();
-                            let symbol = scope.symbol(&new_name);
-
-                            // This is a fresh identifier that wasn't already in scope.
-                            // Add it to scope!
-                            let symbol_and_region = (symbol.clone(), region);
-
-                            // Add this to both scope.idents *and* shadowable_idents.
-                            // The latter is relevant when recursively canonicalizing
-                            // tag application patterns, which can bring multiple
-                            // new idents into scope. For example, it's important that
-                            // we catch (Blah foo foo) -> … as being an example of shadowing.
-                            scope
-                                .idents
-                                .insert(new_ident.clone(), symbol_and_region.clone());
-                            shadowable_idents.insert(new_ident, symbol_and_region);
-
-                            Pattern::Identifier(symbol)
-                        }
-                    }
-                }
+            match canonicalize_pattern_identifier(name, env, scope, region, shadowable_idents) {
+                Ok(symbol) => Pattern::Identifier(symbol),
+                Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
             }
         }
         &GlobalTag(name) => {
@@ -223,7 +188,7 @@ pub fn canonicalize_pattern<'a>(
 
         // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
         &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
-            return canonicalize_pattern(
+            return canonicalize_pattern_help(
                 env,
                 state,
                 var_store,
@@ -232,18 +197,142 @@ pub fn canonicalize_pattern<'a>(
                 sub_pattern,
                 region,
                 shadowable_idents,
-                expected,
             )
+        }
+        &RecordDestructure(patterns) => {
+            let mut fields = Vec::with_capacity(patterns.len());
+            for loc_pattern in patterns {
+                match loc_pattern.value {
+                    Identifier(ref name) => {
+                        let result = match canonicalize_pattern_identifier(
+                            name,
+                            env,
+                            scope,
+                            region,
+                            shadowable_idents,
+                        ) {
+                            Ok(symbol) => Pattern::Identifier(symbol),
+                            Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
+                        };
+
+                        fields.push((Located::at(region, result), None));
+                    }
+                    RecordField(ref name, loc_guard) => {
+                        let result = match canonicalize_pattern_identifier(
+                            name,
+                            env,
+                            scope,
+                            region,
+                            shadowable_idents,
+                        ) {
+                            Ok(symbol) => Pattern::Identifier(symbol),
+                            Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
+                        };
+
+                        let can_guard = canonicalize_pattern_help(
+                            env,
+                            state,
+                            var_store,
+                            scope,
+                            pattern_type,
+                            &loc_guard.value,
+                            loc_guard.region,
+                            shadowable_idents,
+                        );
+
+                        fields.push((Located::at(region, result), Some(can_guard)));
+                    }
+                    _ => panic!("invalid pattern in record"),
+                }
+            }
+            Pattern::RecordDestructure(fields)
+        }
+        &RecordField(_name, _loc_pattern) => {
+            unreachable!("should be handled in RecordDestructure");
         }
 
         _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
     };
 
-    add_constraints(&pattern, &scope, region, expected, state);
-
     Located {
         region,
         value: can_pattern,
+    }
+}
+
+pub fn canonicalize_pattern_identifier<'a>(
+    name: &'a &str,
+    env: &'a mut Env,
+    scope: &mut Scope,
+    region: Region,
+    shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
+) -> Result<Symbol, Located<Ident>> {
+    let lowercase_ident = Ident::Unqualified((*name).into());
+
+    // We use shadowable_idents for this, and not scope, because for assignments
+    // they are different. When canonicalizing a particular assignment, that new
+    // ident is in scope (for recursion) but not shadowable.
+    //
+    // For example, when canonicalizing (fibonacci = ...), `fibonacci` should be in scope
+    // so that it can refer to itself without getting a naming problem, but it should not
+    // be in the collection of shadowable idents because you can't shadow yourself!
+    match shadowable_idents.get(&lowercase_ident) {
+        Some((_, region)) => {
+            let loc_shadowed_ident = Located {
+                region: *region,
+                value: lowercase_ident,
+            };
+
+            // This is already in scope, meaning it's about to be shadowed.
+            // Shadowing is not allowed!
+            env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
+
+            // Change this Pattern to a Shadowed variant, so that
+            // codegen knows to generate a runtime exception here.
+            Err(loc_shadowed_ident)
+        }
+        None => {
+            // Make sure we aren't shadowing something in the home module's scope.
+            let qualified_ident = Ident::Qualified(env.home.clone(), lowercase_ident.name());
+
+            match scope.idents.get(&qualified_ident) {
+                Some((_, region)) => {
+                    let loc_shadowed_ident = Located {
+                        region: *region,
+                        value: qualified_ident,
+                    };
+
+                    // This is already in scope, meaning it's about to be shadowed.
+                    // Shadowing is not allowed!
+                    env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
+
+                    // Change this Pattern to a Shadowed variant, so that
+                    // codegen knows to generate a runtime exception here.
+                    Err(loc_shadowed_ident)
+                }
+                None => {
+                    let new_ident = qualified_ident.clone();
+                    let new_name = qualified_ident.name();
+                    let symbol = scope.symbol(&new_name);
+
+                    // This is a fresh identifier that wasn't already in scope.
+                    // Add it to scope!
+                    let symbol_and_region = (symbol.clone(), region);
+
+                    // Add this to both scope.idents *and* shadowable_idents.
+                    // The latter is relevant when recursively canonicalizing
+                    // tag application patterns, which can bring multiple
+                    // new idents into scope. For example, it's important that
+                    // we catch (Blah foo foo) -> … as being an example of shadowing.
+                    scope
+                        .idents
+                        .insert(new_ident.clone(), symbol_and_region.clone());
+                    shadowable_idents.insert(new_ident, symbol_and_region);
+
+                    Ok(symbol)
+                }
+            }
+        }
     }
 }
 
@@ -269,6 +358,7 @@ fn add_constraints<'a>(
     region: Region,
     expected: PExpected<Type>,
     state: &'a mut PatternState,
+    var_store: &VarStore,
 ) {
     use crate::parse::ast::Pattern::*;
 
@@ -322,15 +412,58 @@ fn add_constraints<'a>(
         }
 
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
-            add_constraints(pattern, scope, region, expected, state)
+            add_constraints(pattern, scope, region, expected, state, var_store)
         }
 
-        GlobalTag(_)
-        | PrivateTag(_)
-        | Apply(_, _)
-        | RecordDestructure(_)
-        | RecordField(_, _)
-        | EmptyRecordLiteral => {
+        RecordDestructure(patterns) => {
+            let ext_var = var_store.fresh();
+            let ext_type = Type::Variable(ext_var);
+
+            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            for loc_pattern in patterns {
+                let pat_var = var_store.fresh();
+                let pat_type = Type::Variable(pat_var);
+                let expected = PExpected::NoExpectation(pat_type.clone());
+
+                match loc_pattern.value {
+                    Identifier(name) | RecordField(name, _) => {
+                        let symbol = scope.symbol(name);
+                        if !state.headers.contains_key(&symbol) {
+                            state
+                                .headers
+                                .insert(symbol, Located::at(region, pat_type.clone()));
+                        }
+                        field_types.insert(name.into(), pat_type.clone());
+                    }
+                    _ => panic!("invalid record pattern"),
+                }
+
+                if let RecordField(_, guard) = loc_pattern.value {
+                    add_constraints(
+                        &guard.value,
+                        scope,
+                        guard.region,
+                        expected,
+                        state,
+                        var_store,
+                    );
+                }
+
+                state.vars.push(pat_var);
+            }
+
+            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_con =
+                Constraint::Pattern(region, PatternCategory::Record, record_type, expected);
+
+            state.constraints.push(record_con);
+        }
+
+        RecordField(_, _) => {
+            // unreachable, this pattern is handled by already by RecordDestructure
+        }
+
+        GlobalTag(_) | PrivateTag(_) | Apply(_, _) | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
     }
@@ -425,11 +558,16 @@ fn add_idents_from_pattern<'a>(
             // },
         }
 
-        RecordDestructure(_) => {
-            panic!("TODO implement RecordDestructure pattern in add_idents_from_pattern.");
+        RecordDestructure(patterns) => {
+            for loc_pattern in patterns {
+                add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
+            }
         }
-        RecordField(_, _) => {
-            panic!("TODO implement RecordField pattern in add_idents_from_pattern.");
+        RecordField(name, loc_pattern) => {
+            let symbol = scope.symbol(&name);
+
+            answer.push_back((Ident::Unqualified((*name).into()), (symbol, *region)));
+            add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
         }
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.

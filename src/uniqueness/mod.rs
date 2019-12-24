@@ -104,7 +104,7 @@ fn canonicalize_pattern(
             ));
         }
 
-        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral => {
+        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral | RecordDestructure(_) => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
