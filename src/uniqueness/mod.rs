@@ -61,6 +61,7 @@ pub struct PatternState {
 }
 
 fn canonicalize_pattern(
+    var_store: &VarStore,
     state: &mut PatternState,
     pattern: &Located<Pattern>,
     expected: PExpected<Type>,
@@ -105,7 +106,47 @@ fn canonicalize_pattern(
             ));
         }
 
-        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral | RecordDestructure(_) => {
+        RecordDestructure(patterns) => {
+            let ext_var = var_store.fresh();
+            let ext_type = Type::Variable(ext_var);
+
+            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            for (pattern, maybe_guard) in patterns {
+                let pat_var = var_store.fresh();
+                let pat_type = Type::Variable(pat_var);
+                let pattern_expected = PExpected::NoExpectation(pat_type.clone());
+
+                if let Some(loc_guard) = maybe_guard {
+                    canonicalize_pattern(var_store, state, pattern, pattern_expected.clone());
+                    canonicalize_pattern(var_store, state, loc_guard, pattern_expected);
+                } else {
+                    canonicalize_pattern(var_store, state, pattern, pattern_expected);
+                }
+
+                let name = if let Identifier(n) = &pattern.value {
+                    let a: Box<str> = n.clone().into();
+                    let b: Lowercase = a.into();
+                    b
+                } else {
+                    unreachable!("the lhs must be an identifier at this point");
+                };
+
+                state.vars.push(pat_var);
+                field_types.insert(name, pat_type);
+            }
+
+            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_con = Constraint::Pattern(
+                pattern.region,
+                PatternCategory::Record,
+                record_type,
+                expected,
+            );
+
+            state.constraints.push(record_con);
+        }
+
+        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
@@ -316,6 +357,7 @@ pub fn canonicalize_expr(
                 let arg_var = var_store.fresh();
                 let arg_typ = Variable(arg_var);
                 canonicalize_pattern(
+                    var_store,
                     &mut state,
                     &pattern,
                     PExpected::NoExpectation(arg_typ.clone()),
@@ -630,6 +672,8 @@ pub fn canonicalize_expr(
                 ),
             )
         }
+        RuntimeError(_) => (Output::default(), True),
+
         _ => panic!("{:?}", expr),
     }
 }
@@ -664,7 +708,7 @@ fn canonicalize_when_branch(
     };
 
     // mutates the state, so return value is not used
-    canonicalize_pattern(&mut state, &loc_pattern, pattern_expected);
+    canonicalize_pattern(var_store, &mut state, &loc_pattern, pattern_expected);
 
     Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
@@ -734,7 +778,7 @@ fn can_defs(
             constraints: Vec::with_capacity(1),
         };
 
-        canonicalize_pattern(&mut state, &def.pattern, pattern_expected);
+        canonicalize_pattern(var_store, &mut state, &def.pattern, pattern_expected);
 
         flex_info.vars.push(pattern_var);
 

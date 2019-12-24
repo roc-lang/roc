@@ -882,4 +882,17 @@ mod test_infer_uniq {
     fn record_access() {
         infer_eq("{ foo: 42 }.foo", "Attr.Attr * Int");
     }
+
+    #[test]
+    fn record_pattern_match_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                when foo is
+                    { x: 4 }-> x
+            "#
+            ),
+            "Int",
+        );
+    }
 }
