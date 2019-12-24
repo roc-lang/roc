@@ -371,30 +371,12 @@ fn canonicalize_def<'a>(
     let expr_type = Type::Variable(expr_var);
     let mut vars_by_symbol = SendMap::default();
 
+    flex_info.vars.push(expr_var);
+
     // Each def gets to have all the idents in scope that are defined in this
     // block. Order of defs doesn't matter, thanks to referential transparency!
     match loc_def.value {
         Annotation(loc_pattern, loc_annotation) => {
-            // TODO implement this:
-            //
-            // Is this a standalone annotation, or is it annotating the
-            // next def? This is annotating the next def iff:
-            //
-            // 1. There is a next def.
-            // 2. It is a Def::Body.
-            // 3. Its Pattern contains at least one SpaceBefore.
-            // 4. The count of all Newlines across all of its SpaceBefores is exactly 1.
-            //
-            // This tells us we're an annotation in the following scenario:
-            //
-            // foo : String
-            // foo = "blah"
-            //
-            // Knowing that, we then need to incorporate the annotation's type constraints
-            // into the next def's. To do this, we extract the next def from the iterator
-            // immediately, then canonicalize it to get its Variable, then use that
-            // Variable to generate the extra constraints.
-
             let (pattern_state, loc_can_pattern) =
                 canonicalize_def_pattern(env, loc_pattern, scope, var_store, expr_type.clone());
 
