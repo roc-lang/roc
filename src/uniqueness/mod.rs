@@ -198,12 +198,12 @@ pub fn canonicalize_expr(
                 (output, And(constraints))
             }
         }
-        Var(_variable, symbol) => {
+        Var(variable, symbol) => {
             var_usage.register(symbol);
             match var_usage.get_usage(symbol) {
                 Some(sharing::ReferenceCount::Shared) => {
                     // the variable is used/consumed more than once, so it must be Shared
-                    let val_var = var_store.fresh();
+                    let val_var = *variable;
                     let uniq_var = var_store.fresh();
 
                     let val_type = Variable(val_var);
@@ -394,9 +394,8 @@ pub fn canonicalize_expr(
                 can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
             )
         }
-        // When( Variable, Box<Located<Expr>>, Vec<(Located<Pattern>, Located<Expr>)>,
-        When(_variable, loc_cond, branches) => {
-            let cond_var = var_store.fresh();
+        When(variable, loc_cond, branches) => {
+            let cond_var = *variable;
             let cond_type = Variable(cond_var);
             let (mut output, expr_con) = canonicalize_expr(
                 rigids,
