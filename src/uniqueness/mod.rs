@@ -574,6 +574,37 @@ pub fn canonicalize_expr(
             (output, And(constraints))
         }
 
+        Access(loc_expr, field) => {
+            let ext_var = var_store.fresh();
+            let field_var = var_store.fresh();
+            let ext_type = Type::Variable(ext_var);
+            let field_type = Type::Variable(field_var);
+
+            let mut rec_field_types = SendMap::default();
+
+            rec_field_types.insert(Lowercase::from(field.clone()), field_type.clone());
+
+            let record_type =
+                constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));
+            let record_expected = Expected::NoExpectation(record_type);
+
+            let (output, mut constraint) = canonicalize_expr(
+                rigids,
+                var_store,
+                var_usage,
+                loc_expr.region,
+                &loc_expr.value,
+                record_expected,
+            );
+
+            constraint = exists(
+                vec![field_var, ext_var],
+                And(vec![constraint, Eq(field_type, expected, region)]),
+            );
+
+            (output, constraint)
+        }
+
         Accessor(name) => {
             let ext_var = var_store.fresh();
             let ext_type = Variable(ext_var);

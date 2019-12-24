@@ -877,4 +877,9 @@ mod test_infer_uniq {
     fn record() {
         infer_eq("{ foo: 42 }", "Attr.Attr * { foo : (Attr.Attr * Int) }");
     }
+
+    #[test]
+    fn record_access() {
+        infer_eq("{ foo: 42 }.foo", "Attr.Attr * Int");
+    }
 }
