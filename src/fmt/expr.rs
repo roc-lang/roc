@@ -132,10 +132,13 @@ pub fn fmt_expr<'a>(
         If((loc_condition, loc_then, loc_else)) => {
             fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
-        Case(loc_condition, branches) => {
-            buf.push_str("case ");
+        When(loc_condition, branches) => {
+            buf.push_str(
+                "\
+                 when ",
+            );
             fmt_expr(buf, &loc_condition.value, indent, false, true);
-            buf.push_str(" when\n");
+            buf.push_str(" is\n");
 
             let mut it = branches.iter().peekable();
             while let Some((pattern, expr)) = it.next() {
@@ -297,7 +300,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         | PrivateTag(_) => false,
 
         // These expressions always have newlines
-        Defs(_, _) | Case(_, _) => true,
+        Defs(_, _) | When(_, _) => true,
 
         List(elems) => elems
             .iter()

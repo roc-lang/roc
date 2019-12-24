@@ -10,7 +10,7 @@ use crate::can::pattern;
 use crate::ident::Ident;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
-use crate::types::AnnotationSource::TypedCaseBranch;
+use crate::types::AnnotationSource::TypedWhenBranch;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self};
 use crate::types::LetConstraint;
@@ -104,7 +104,7 @@ fn canonicalize_pattern(
             ));
         }
 
-        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral => {
+        Tag(_, _) | AppliedTag(_, _, _) | EmptyRecordLiteral | RecordDestructure(_) => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
@@ -394,8 +394,8 @@ pub fn canonicalize_expr(
                 can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
             )
         }
-        // Case( Variable, Box<Located<Expr>>, Vec<(Located<Pattern>, Located<Expr>)>,
-        Case(_variable, loc_cond, branches) => {
+        // When( Variable, Box<Located<Expr>>, Vec<(Located<Pattern>, Located<Expr>)>,
+        When(_variable, loc_cond, branches) => {
             let cond_var = var_store.fresh();
             let cond_type = Variable(cond_var);
             let (mut output, expr_con) = canonicalize_expr(
@@ -415,7 +415,7 @@ pub fn canonicalize_expr(
                 Expected::FromAnnotation(name, arity, _, typ) => {
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
-                        let branch_con = canonicalize_case_branch(
+                        let branch_con = canonicalize_when_branch(
                             var_store,
                             &mut branch_var_usage,
                             rigids,
@@ -423,14 +423,14 @@ pub fn canonicalize_expr(
                             loc_pattern,
                             loc_expr,
                             PExpected::ForReason(
-                                PReason::CaseMatch { index },
+                                PReason::WhenMatch { index },
                                 cond_type.clone(),
                                 region,
                             ),
                             Expected::FromAnnotation(
                                 name.clone(),
                                 arity,
-                                TypedCaseBranch(index),
+                                TypedWhenBranch(index),
                                 typ.clone(),
                             ),
                             &mut output,
@@ -438,7 +438,7 @@ pub fn canonicalize_expr(
 
                         // required for a case like
                         //
-                        // case b when
+                        // when b is
                         //      Foo x -> x + x
                         //      Bar x -> x
                         //
@@ -465,7 +465,7 @@ pub fn canonicalize_expr(
 
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
-                        let branch_con = canonicalize_case_branch(
+                        let branch_con = canonicalize_when_branch(
                             var_store,
                             &mut branch_var_usage,
                             rigids,
@@ -473,12 +473,12 @@ pub fn canonicalize_expr(
                             loc_pattern,
                             loc_expr,
                             PExpected::ForReason(
-                                PReason::CaseMatch { index },
+                                PReason::WhenMatch { index },
                                 cond_type.clone(),
                                 region,
                             ),
                             Expected::ForReason(
-                                Reason::CaseBranch { index },
+                                Reason::WhenBranch { index },
                                 branch_type.clone(),
                                 region,
                             ),
@@ -526,7 +526,7 @@ pub fn canonicalize_expr(
 // TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn canonicalize_case_branch(
+fn canonicalize_when_branch(
     var_store: &VarStore,
     var_usage: &mut VarUsage,
     rigids: &Rigids,

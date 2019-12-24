@@ -8,7 +8,7 @@ Bool : [ False, True ]
 ## Returns #False when given #True, and vice versa.
 not : Bool -> Bool
 not = \bool ->
-    case bool when
+    when bool is
         False -> True
         True -> False
 

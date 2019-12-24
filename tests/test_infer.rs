@@ -829,11 +829,11 @@ mod test_infer {
     // }
 
     #[test]
-    fn case_with_int_literals() {
+    fn when_with_int_literals() {
         infer_eq(
             indoc!(
                 r#"
-                case 1 when
+                when 1 is
                  1 -> 2
                  3 -> 4
             "#
@@ -936,18 +936,30 @@ mod test_infer {
         infer_eq(".foo", "{ foo : a }* -> a");
     }
 
-    // RecordDestructure does not get canonicalized yet
-    // #[test]
-    // fn type_signature_without_body_record() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //         { x, y } : { x : (Int -> custom) , y : Int }
+    #[test]
+    fn type_signature_without_body_record() {
+        infer_eq(
+            indoc!(
+                r#"
+            { x, y } : { x : (Int -> custom) , y : Int }
 
-    //         x
-    //         "#
-    //         ),
-    //         "Int -> custom",
-    //     );
-    // }
+            x
+            "#
+            ),
+            "Int -> custom",
+        );
+    }
+
+    #[test]
+    fn record_pattern_match_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                when foo is
+                    { x: 4 }-> x
+            "#
+            ),
+            "Int",
+        );
+    }
 }

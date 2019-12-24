@@ -45,7 +45,7 @@ fn loc_parse_expr_body_without_operators<'a>(
         loc!(record_literal(min_indent)),
         loc!(list_literal(min_indent)),
         loc!(unary_op(min_indent)),
-        loc!(case_expr(min_indent)),
+        loc!(when_expr(min_indent)),
         loc!(if_expr(min_indent)),
         loc!(ident_etc(min_indent))
     )
@@ -290,7 +290,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
 
             for loc_assigned_field in loc_assigned_fields {
                 let region = loc_assigned_field.region;
-                let value = assigned_field_to_pattern(arena, &loc_assigned_field.value)?;
+                let value = assigned_expr_field_to_pattern(arena, &loc_assigned_field.value)?;
 
                 loc_patterns.push(Located { region, value });
             }
@@ -321,7 +321,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::BinOp(_)
         | Expr::Defs(_, _)
         | Expr::If(_)
-        | Expr::Case(_, _)
+        | Expr::When(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _)
         | Expr::UnaryOp(_, _) => Err(Fail {
@@ -331,7 +331,8 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
     }
 }
 
-pub fn assigned_field_to_pattern<'a>(
+/// use for expressions like { x: a + b }
+pub fn assigned_expr_field_to_pattern<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
 ) -> Result<Pattern<'a>, Fail> {
@@ -354,14 +355,60 @@ pub fn assigned_field_to_pattern<'a>(
         }
         AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
         AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
-            arena.alloc(assigned_field_to_pattern(arena, nested)?),
+            arena.alloc(assigned_expr_field_to_pattern(arena, nested)?),
             spaces,
         ),
         AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
-            arena.alloc(assigned_field_to_pattern(arena, nested)?),
+            arena.alloc(assigned_expr_field_to_pattern(arena, nested)?),
             spaces,
         ),
         AssignedField::Malformed(string) => Pattern::Malformed(string),
+    })
+}
+
+/// Used for patterns like { x: Just _ }
+pub fn assigned_pattern_field_to_pattern<'a>(
+    arena: &'a Bump,
+    assigned_field: &AssignedField<'a, Pattern<'a>>,
+    backup_region: Region,
+) -> Result<Located<Pattern<'a>>, Fail> {
+    // the assigned fields always store spaces, but this slice is often empty
+    Ok(match assigned_field {
+        AssignedField::LabeledValue(name, spaces, value) => {
+            let pattern = value.value.clone();
+            let region = Region::span_across(&value.region, &value.region);
+            let result = arena.alloc(Located {
+                region: value.region,
+                value: pattern,
+            });
+            if spaces.is_empty() {
+                Located::at(region, Pattern::RecordField(name.value, result))
+            } else {
+                Located::at(
+                    region,
+                    Pattern::SpaceAfter(
+                        arena.alloc(Pattern::RecordField(name.value, result)),
+                        spaces,
+                    ),
+                )
+            }
+        }
+        AssignedField::LabelOnly(name) => Located::at(name.region, Pattern::Identifier(name.value)),
+        AssignedField::SpaceBefore(nested, spaces) => {
+            let can_nested = assigned_pattern_field_to_pattern(arena, nested, backup_region)?;
+            Located::at(
+                can_nested.region,
+                Pattern::SpaceBefore(arena.alloc(can_nested.value), spaces),
+            )
+        }
+        AssignedField::SpaceAfter(nested, spaces) => {
+            let can_nested = assigned_pattern_field_to_pattern(arena, nested, backup_region)?;
+            Located::at(
+                can_nested.region,
+                Pattern::SpaceAfter(arena.alloc(can_nested.value), spaces),
+            )
+        }
+        AssignedField::Malformed(string) => Located::at(backup_region, Pattern::Malformed(string)),
     })
 }
 
@@ -622,7 +669,7 @@ fn loc_parse_function_arg<'a>(
         loc!(record_literal(min_indent)),
         loc!(list_literal(min_indent)),
         loc!(unary_op(min_indent)),
-        loc!(case_expr(min_indent)),
+        loc!(when_expr(min_indent)),
         loc!(if_expr(min_indent)),
         loc!(ident_without_apply())
     )
@@ -636,6 +683,7 @@ fn reserved_keyword<'a>() -> impl Parser<'a, ()> {
         string(keyword::ELSE),
         string(keyword::CASE),
         string(keyword::WHEN),
+        string(keyword::IS),
         string(keyword::AS)
     )
 }
@@ -744,15 +792,23 @@ fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
-    map!(
-        collection!(
-            char('{'),
-            loc!(ident_pattern()),
-            char(','),
-            char('}'),
-            min_indent
-        ),
-        Pattern::RecordDestructure
+    then(
+        record!(loc!(pattern(min_indent)), min_indent),
+        move |arena, state, assigned_fields| {
+            let mut patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
+            for assigned_field in assigned_fields {
+                match assigned_pattern_field_to_pattern(
+                    arena,
+                    &assigned_field.value,
+                    assigned_field.region,
+                ) {
+                    Ok(pattern) => patterns.push(pattern),
+                    Err(e) => return Err((e, state)),
+                }
+            }
+
+            Ok((Pattern::RecordDestructure(patterns), state))
+        },
     )
 }
 
@@ -767,33 +823,33 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
     map!(lowercase_ident(), Pattern::Identifier)
 }
 
-pub fn case_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+pub fn when_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     then(
         and!(
             case_with_indent(),
             attempt!(
-                Attempting::CaseCondition,
+                Attempting::WhenCondition,
                 skip_second!(
                     space1_around(
                         loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                         min_indent,
                     ),
-                    string(keyword::WHEN)
+                    string(keyword::IS)
                 )
             )
         ),
         move |arena, state, (case_indent, loc_condition)| {
             if case_indent < min_indent {
-                panic!("TODO case wasns't indented enough");
+                panic!("TODO case wasn't indented enough");
             }
 
             // Everything in the branches must be indented at least as much as the case itself.
             let min_indent = case_indent;
 
             let (branches, state) =
-                attempt!(Attempting::CaseBranch, case_branches(min_indent)).parse(arena, state)?;
+                attempt!(Attempting::WhenBranch, case_branches(min_indent)).parse(arena, state)?;
 
-            Ok((Expr::Case(arena.alloc(loc_condition), branches), state))
+            Ok((Expr::When(arena.alloc(loc_condition), branches), state))
         },
     )
 }
@@ -1138,7 +1194,7 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
 
 pub fn case_with_indent<'a>() -> impl Parser<'a, u16> {
     move |arena, state: State<'a>| {
-        string(keyword::CASE)
+        string(keyword::WHEN)
             .parse(arena, state)
             .map(|((), state)| (state.indent_col, state))
     }
@@ -1269,7 +1325,7 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
                 for loc_assigned_field in assigned_fields {
                     let region = loc_assigned_field.region;
-                    match assigned_field_to_pattern(arena, &loc_assigned_field.value) {
+                    match assigned_expr_field_to_pattern(arena, &loc_assigned_field.value) {
                         Ok(value) => loc_patterns.push(Located { region, value }),
                         // an Expr became a pattern that should not be.
                         Err(e) => return Err((e, state)),
@@ -1304,7 +1360,7 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
                 for loc_assigned_field in assigned_fields {
                     let region = loc_assigned_field.region;
-                    match assigned_field_to_pattern(arena, &loc_assigned_field.value) {
+                    match assigned_expr_field_to_pattern(arena, &loc_assigned_field.value) {
                         Ok(value) => loc_patterns.push(Located { region, value }),
                         // an Expr became a pattern that should not be.
                         Err(e) => return Err((e, state)),

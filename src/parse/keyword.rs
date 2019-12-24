@@ -4,3 +4,4 @@ pub static ELSE: &str = "else";
 pub static CASE: &str = "case";
 pub static WHEN: &str = "when";
 pub static AS: &str = "as";
+pub static IS: &str = "is";
