@@ -18,9 +18,9 @@ use im_rc::Vector;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
-    Tag(Variable, Symbol),
+    Tag(Symbol),
     /// TODO replace regular Tag with this
-    AppliedTag(Variable, Symbol, Vec<Located<Pattern>>),
+    AppliedTag(Symbol, Vec<Located<Pattern>>),
     IntLiteral(i64),
     FloatLiteral(f64),
     ExactString(Box<str>),
@@ -111,21 +111,11 @@ fn canonicalize_pattern_help<'a>(
         }
         &GlobalTag(name) => {
             // Canonicalize the tag's name.
-            let symbol = Symbol::from_global_tag(name);
-            let var = var_store.fresh();
-
-            state.vars.push(var);
-
-            Pattern::Tag(var, symbol)
+            Pattern::Tag(Symbol::from_global_tag(name))
         }
         &PrivateTag(name) => {
             // Canonicalize the tag's name.
-            let symbol = Symbol::from_private_tag(&env.home, name);
-            let var = var_store.fresh();
-
-            state.vars.push(var);
-
-            Pattern::Tag(var, symbol)
+            Pattern::Tag(Symbol::from_private_tag(&env.home, name))
         }
         &FloatLiteral(ref string) => match pattern_type {
             WhenBranch => {
