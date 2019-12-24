@@ -83,11 +83,11 @@ mod test_gen {
     }
 
     #[test]
-    fn gen_case_take_first_branch() {
+    fn gen_when_take_first_branch() {
         assert_evals_to!(
             indoc!(
                 r#"
-            case 1 when
+            when 1 is
                 1 -> 12
                 _ -> 34
             "#
@@ -98,11 +98,11 @@ mod test_gen {
     }
 
     #[test]
-    fn gen_case_take_second_branch() {
+    fn gen_when_take_second_branch() {
         assert_evals_to!(
             indoc!(
                 r#"
-            case 2 when
+            when 2 is
                 1 -> 63
                 _ -> 48
             "#

@@ -159,7 +159,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 region: loc_expr.region,
             })
         }
-        Case(loc_cond_expr, branches) | Nested(Case(loc_cond_expr, branches)) => {
+        When(loc_cond_expr, branches) | Nested(When(loc_cond_expr, branches)) => {
             let loc_desugared_cond = &*arena.alloc(desugar_expr(arena, &loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
@@ -179,7 +179,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             }
 
             arena.alloc(Located {
-                value: Case(loc_desugared_cond, desugared_branches),
+                value: When(loc_desugared_cond, desugared_branches),
                 region: loc_expr.region,
             })
         }
@@ -231,7 +231,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             //
             // becomes
             //
-            //      case b when
+            //      when b is
             //          False -> y
             //          _ -> x
             //
@@ -272,7 +272,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             desugar_expr(
                 arena,
                 arena.alloc(Located {
-                    value: Case(condition, branches),
+                    value: When(condition, branches),
                     region: loc_expr.region,
                 }),
             )

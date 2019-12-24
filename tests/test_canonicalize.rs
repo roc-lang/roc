@@ -249,17 +249,17 @@ mod test_canonicalize {
             let src = indoc!(
                 r#"
             g = \x ->
-                case x when
+                when x is
                     0 -> 0
                     _ -> g (x - 1)
 
             h = \x ->
-                case x when
+                when x is
                     0 -> 0
                     _ -> g (x - 1)
 
             p = \x ->
-                case x when
+                when x is
                     0 -> 0
                     1 -> g (x - 1)
                     _ -> p (x - 1)
@@ -283,12 +283,12 @@ mod test_canonicalize {
     }
 
     #[test]
-    fn case_tail_call() {
+    fn when_tail_call() {
         with_larger_debug_stack(|| {
             let src = indoc!(
                 r#"
                 g = \x ->
-                    case x when
+                    when x is
                         0 -> 0
                         _ -> g (x + 1)
 
@@ -322,12 +322,12 @@ mod test_canonicalize {
     }
 
     #[test]
-    fn case_condition_is_no_tail_call() {
+    fn when_condition_is_no_tail_call() {
         // TODO when a case witn no branches parses, remove the pattern wildcard here
         let src = indoc!(
             r#"
             q = \x ->
-                    case q x when
+                    when q x is
                         _ -> 0
 
             0
@@ -348,12 +348,12 @@ mod test_canonicalize {
             let src = indoc!(
                 r#"
             q = \x ->
-                    case x when
+                    when x is
                         0 -> 0
                         _ -> p (x - 1)
 
             p = \x ->
-                    case x when
+                    when x is
                         0 -> 0
                         _ -> q (x - 1)
 

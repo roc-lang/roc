@@ -467,7 +467,7 @@ mod test_format {
     // fn record_field_destructuring() {
     //     expr_formats_same(indoc!(
     //         r#"
-    //         case foo when
+    //         when foo is
     //             { x: 5 } -> 42
     //         "#
     //     ));
@@ -689,13 +689,13 @@ mod test_format {
     //        ));
     //    }
 
-    // CASE
+    // WHEN
 
     #[test]
-    fn integer_case() {
+    fn integer_when() {
         expr_formats_same(indoc!(
             r#"
-            case b when
+            when b is
                 1 ->
                     1
 
@@ -706,11 +706,11 @@ mod test_format {
     }
 
     #[test]
-    fn integer_case_with_space() {
+    fn integer_when_with_space() {
         expr_formats_to(
             indoc!(
                 r#"
-            case year when
+            when year is
                 1999 ->
 
 
@@ -725,7 +725,7 @@ mod test_format {
             ),
             indoc!(
                 r#"
-            case year when
+            when year is
                 1999 ->
                     1
 
@@ -737,13 +737,13 @@ mod test_format {
     }
 
     #[test]
-    fn case_with_comments() {
+    fn when_with_comments() {
         expr_formats_same(indoc!(
             r#"
-            case b when
+            when b is
                 # look at cases
                 1 ->
-                    # case 1
+                    # when 1
                     1
 
                 # important
@@ -758,12 +758,12 @@ mod test_format {
     }
 
     #[test]
-    fn nested_case() {
+    fn nested_when() {
         expr_formats_same(indoc!(
             r#"
-            case b when
+            when b is
                 _ ->
-                    case c when
+                    when c is
                         _ ->
                             1
         "#
@@ -771,13 +771,13 @@ mod test_format {
     }
 
     #[test]
-    fn case_with_moving_comments() {
+    fn when_with_moving_comments() {
         expr_formats_to(
             indoc!(
                 r#"
-            case b when
+            when b is
                 1 ->
-                    1 # case 1
+                    1 # when 1
 
                 # fall through
                 _ ->
@@ -786,11 +786,11 @@ mod test_format {
             ),
             indoc!(
                 r#"
-            case b when
+            when b is
                 1 ->
                     1
 
-                # case 1
+                # when 1
                 # fall through
                 _ ->
                     2

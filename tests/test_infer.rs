@@ -829,11 +829,11 @@ mod test_infer {
     // }
 
     #[test]
-    fn case_with_int_literals() {
+    fn when_with_int_literals() {
         infer_eq(
             indoc!(
                 r#"
-                case 1 when
+                when 1 is
                  1 -> 2
                  3 -> 4
             "#
@@ -955,7 +955,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                case foo when
+                when foo is
                     { x: 4 }-> x
             "#
             ),

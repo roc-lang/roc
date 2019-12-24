@@ -48,15 +48,15 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
 }
 
 /// Different patterns are supported in different circumstances.
-/// For example, case branches can pattern match on number literals, but
+/// For example, when branches can pattern match on number literals, but
 /// assignments and function args can't. Underscore is supported in function
-/// arg patterns and in case branch patterns, but not in assignments.
+/// arg patterns and in when branch patterns, but not in assignments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PatternType {
     TopLevelDef,
     Assignment,
     FunctionArg,
-    CaseBranch,
+    WhenBranch,
 }
 
 // TODO trim down these arguments
@@ -128,7 +128,7 @@ fn canonicalize_pattern_help<'a>(
             Pattern::Tag(var, symbol)
         }
         &FloatLiteral(ref string) => match pattern_type {
-            CaseBranch => {
+            WhenBranch => {
                 let float = finish_parsing_float(string)
                     .unwrap_or_else(|_| panic!("TODO handle malformed float pattern"));
 
@@ -140,12 +140,12 @@ fn canonicalize_pattern_help<'a>(
         },
 
         &Underscore => match pattern_type {
-            CaseBranch | FunctionArg => Pattern::Underscore,
+            WhenBranch | FunctionArg => Pattern::Underscore,
             ptype @ Assignment | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
         },
 
         &IntLiteral(string) => match pattern_type {
-            CaseBranch => {
+            WhenBranch => {
                 let int = finish_parsing_int(string)
                     .unwrap_or_else(|_| panic!("TODO handle malformed int pattern"));
 
@@ -161,7 +161,7 @@ fn canonicalize_pattern_help<'a>(
             base,
             is_negative,
         } => match pattern_type {
-            CaseBranch => {
+            WhenBranch => {
                 let int = finish_parsing_base(string, *base)
                     .unwrap_or_else(|_| panic!("TODO handle malformed {:?} pattern", base));
 
@@ -177,7 +177,7 @@ fn canonicalize_pattern_help<'a>(
         },
 
         &StrLiteral(_string) => match pattern_type {
-            CaseBranch => {
+            WhenBranch => {
                 panic!("TODO check whether string pattern is malformed.");
                 // Pattern::ExactString((*string).into())
             }

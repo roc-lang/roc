@@ -227,7 +227,7 @@ impl<T> PExpected<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PReason {
     TypedArg { name: Box<str>, index: usize },
-    CaseMatch { index: usize },
+    WhenMatch { index: usize },
     CtorArg { name: Box<str>, index: usize },
     ListEntry { index: usize },
     Tail,
@@ -254,7 +254,7 @@ impl<T> Expected<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationSource {
     TypedIfBranch(usize /* index */),
-    TypedCaseBranch(usize /* index */),
+    TypedWhenBranch(usize /* index */),
     TypedBody,
 }
 
@@ -269,7 +269,7 @@ pub enum Reason {
     FloatLiteral,
     IntLiteral,
     InterpolatedStringVar,
-    CaseBranch { index: usize },
+    WhenBranch { index: usize },
     ElemInList,
 }
 
@@ -313,7 +313,7 @@ pub enum Problem {
     MissingArguments,
     IfConditionNotBool,
     InconsistentIfElse,
-    InconsistentCaseBranches,
+    InconsistentWhenBranches,
     CircularType(Symbol, ErrorType, Region),
     CanonicalizationProblem,
 }
