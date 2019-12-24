@@ -371,7 +371,7 @@ fn canonicalize_def<'a>(
 
     // Each def gets to have all the idents in scope that are defined in this
     // block. Order of defs doesn't matter, thanks to referential transparency!
-    let (_opt_loc_pattern, (_loc_can_expr, _can_output)) = match loc_def.value {
+    match loc_def.value {
         Annotation(loc_pattern, loc_annotation) => {
             // TODO implement this:
             //
@@ -478,8 +478,6 @@ fn canonicalize_def<'a>(
                     },
                 );
             }
-
-            (None, (loc_can_expr, Output::default()))
         }
 
         TypedDef(loc_pattern, loc_annotation, loc_expr) => {
@@ -657,8 +655,6 @@ fn canonicalize_def<'a>(
                     },
                 );
             }
-
-            (Some(loc_pattern), (loc_can_expr, can_output))
         }
         // If we have a pattern, then the def has a body (that is, it's not a
         // standalone annotation), so we need to canonicalize the pattern and expr.
@@ -808,8 +804,6 @@ fn canonicalize_def<'a>(
                     },
                 );
             }
-
-            (Some(loc_pattern), (loc_can_expr, can_output))
         }
         Nested(value) => {
             return canonicalize_def(
