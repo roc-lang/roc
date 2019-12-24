@@ -149,7 +149,61 @@ pub fn canonicalize_expr(
             let constraint = Eq(inferred, expected, region);
             (Output::default(), constraint)
         }
-        Record(_, _) => panic!("TODO implement records"),
+        // Record(Variable, SendMap<Lowercase, Located<Expr>>),
+        Record(variable, fields) => {
+            if fields.is_empty() {
+                let constraint = Eq(constrain::lift(var_store, EmptyRec), expected, region);
+
+                (Output::default(), constraint)
+            } else {
+                let mut field_types = SendMap::default();
+                let mut field_vars = Vec::with_capacity(fields.len());
+
+                // Constraints need capacity for each field + 1 for the record itself.
+                let mut constraints = Vec::with_capacity(1 + fields.len());
+                let mut output = Output::default();
+
+                for (label, loc_expr) in fields.iter() {
+                    let field_var = var_store.fresh();
+                    let field_type = Variable(field_var);
+                    let field_expected = Expected::NoExpectation(field_type.clone());
+                    let (field_out, field_con) = canonicalize_expr(
+                        rigids,
+                        var_store,
+                        var_usage,
+                        loc_expr.region,
+                        &loc_expr.value,
+                        field_expected,
+                    );
+
+                    field_vars.push(field_var);
+                    field_types.insert(label.clone(), field_type);
+
+                    constraints.push(field_con);
+                    output.references = output.references.union(field_out.references);
+                }
+
+                let record_type = constrain::lift(
+                    var_store,
+                    Type::Record(
+                        field_types,
+                        // TODO can we avoid doing Box::new on every single one of these?
+                        // For example, could we have a single lazy_static global Box they
+                        // could all share?
+                        Box::new(Type::EmptyRec),
+                    ),
+                );
+                let record_con = Eq(record_type, expected.clone(), region);
+                let ext_con = Eq(Type::Variable(*variable), expected, region);
+
+                constraints.push(record_con);
+                constraints.push(ext_con);
+
+                let constraint = exists(field_vars, And(constraints));
+
+                (output, constraint)
+            }
+        }
         List(_variable, loc_elems) => {
             if loc_elems.is_empty() {
                 let list_var = var_store.fresh();
