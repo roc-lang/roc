@@ -955,7 +955,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                case foo when
+                when foo is
                     { x: 4 }-> x
             "#
             ),
