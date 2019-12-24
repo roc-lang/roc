@@ -867,6 +867,9 @@ mod test_infer_uniq {
             "Attr.Attr * Int",
         );
     }
-    /*
-     */
+
+    #[test]
+    fn accessor_function() {
+        infer_eq(".foo", "Attr.Attr * { foo : a }* -> a");
+    }
 }

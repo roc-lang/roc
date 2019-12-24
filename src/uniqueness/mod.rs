@@ -6,6 +6,7 @@ use crate::can::procedure::{Procedure, References};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 // use crate::constrain::{self, exists};
+use crate::can::ident::Lowercase;
 use crate::can::pattern;
 use crate::ident::Ident;
 use crate::region::{Located, Region};
@@ -517,6 +518,32 @@ pub fn canonicalize_expr(
             }
 
             (output, And(constraints))
+        }
+
+        Accessor(name) => {
+            let ext_var = var_store.fresh();
+            let ext_type = Variable(ext_var);
+
+            let field_var = var_store.fresh();
+            let field_type = Variable(field_var);
+
+            let mut field_types = SendMap::default();
+            let field_name: Lowercase = name.clone().into();
+            field_types.insert(field_name, field_type.clone());
+            let record_type =
+                constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
+
+            (
+                Output::default(),
+                exists(
+                    vec![field_var, ext_var],
+                    Eq(
+                        Type::Function(vec![record_type], Box::new(field_type)),
+                        expected,
+                        region,
+                    ),
+                ),
+            )
         }
         _ => panic!("{:?}", expr),
     }
