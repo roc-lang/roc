@@ -25,7 +25,6 @@ pub enum Pattern {
     FloatLiteral(f64),
     ExactString(Box<str>),
     RecordDestructure(Vec<(Located<Pattern>, Option<Located<Pattern>>)>),
-    EmptyRecordLiteral,
     Underscore,
 
     // Runtime Exceptions

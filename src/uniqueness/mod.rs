@@ -135,7 +135,8 @@ fn canonicalize_pattern(
                 field_types.insert(name, pat_type);
             }
 
-            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_type =
+                constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
             let record_con = Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Record,
@@ -146,7 +147,7 @@ fn canonicalize_pattern(
             state.constraints.push(record_con);
         }
 
-        Tag(_) | AppliedTag(_, _) | EmptyRecordLiteral => {
+        Tag(_) | AppliedTag(_, _) => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
@@ -185,15 +186,9 @@ pub fn canonicalize_expr(
             let constraint = Eq(inferred, expected, region);
             (Output::default(), constraint)
         }
-        EmptyRecord => {
-            let inferred = constrain::lift(var_store, EmptyRec);
-            let constraint = Eq(inferred, expected, region);
-            (Output::default(), constraint)
-        }
         Record(variable, fields) => {
             if fields.is_empty() {
                 let constraint = Eq(constrain::lift(var_store, EmptyRec), expected, region);
-
                 (Output::default(), constraint)
             } else {
                 let mut field_types = SendMap::default();

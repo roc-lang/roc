@@ -962,4 +962,21 @@ mod test_infer {
             "Int",
         );
     }
+
+    #[test]
+    fn empty_record_pattern() {
+        infer_eq(
+            indoc!(
+                r#"
+                # technically, an empty record can be destructured
+                {} = {}
+                bar = \{} -> 42
+
+                when foo is
+                    { x: {} } -> x
+            "#
+            ),
+            "{}*",
+        );
+    }
 }
