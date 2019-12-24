@@ -190,7 +190,6 @@ pub fn canonicalize_expr(
             let constraint = Eq(inferred, expected, region);
             (Output::default(), constraint)
         }
-        // Record(Variable, SendMap<Lowercase, Located<Expr>>),
         Record(variable, fields) => {
             if fields.is_empty() {
                 let constraint = Eq(constrain::lift(var_store, EmptyRec), expected, region);
@@ -245,15 +244,15 @@ pub fn canonicalize_expr(
                 (output, constraint)
             }
         }
-        List(_variable, loc_elems) => {
+        List(variable, loc_elems) => {
             if loc_elems.is_empty() {
-                let list_var = var_store.fresh();
+                let list_var = *variable;
                 let inferred = constrain::lift(var_store, constrain::empty_list_type(list_var));
                 let constraint = Eq(inferred, expected, region);
                 (Output::default(), constraint)
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
-                let list_var = var_store.fresh(); // `v` in the type (List v)
+                let list_var = *variable; // `v` in the type (List v)
                 let list_type = Type::Variable(list_var);
                 let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
                 let mut references = References::new();
@@ -482,15 +481,10 @@ pub fn canonicalize_expr(
             )
         }
 
-        Defs(defs, loc_ret) => {
-            // The body expression gets a new scope for canonicalization,
-            // so clone it.
-
-            (
-                Output::default(),
-                can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
-            )
-        }
+        Defs(defs, loc_ret) => (
+            Output::default(),
+            can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
+        ),
         When(variable, loc_cond, branches) => {
             let cond_var = *variable;
             let cond_type = Variable(cond_var);
