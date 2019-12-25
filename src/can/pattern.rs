@@ -25,7 +25,6 @@ pub enum Pattern {
     FloatLiteral(f64),
     ExactString(Box<str>),
     RecordDestructure(Vec<(Located<Pattern>, Option<Located<Pattern>>)>),
-    EmptyRecordLiteral,
     Underscore,
 
     // Runtime Exceptions
@@ -174,7 +173,6 @@ fn canonicalize_pattern_help<'a>(
             }
         },
 
-        // &EmptyRecordLiteral => Pattern::EmptyRecordLiteral,
         &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
             return canonicalize_pattern_help(
                 env,
@@ -449,7 +447,7 @@ fn add_constraints<'a>(
             // unreachable, this pattern is handled by already by RecordDestructure
         }
 
-        GlobalTag(_) | PrivateTag(_) | Apply(_, _) | EmptyRecordLiteral => {
+        GlobalTag(_) | PrivateTag(_) | Apply(_, _) => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
     }
@@ -492,7 +490,6 @@ pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, 
         | FloatLiteral(_)
         | StrLiteral(_)
         | BlockStrLiteral(_)
-        | EmptyRecordLiteral
         | Malformed(_)
         | Underscore => {}
     }
@@ -566,7 +563,6 @@ fn add_idents_from_pattern<'a>(
         | FloatLiteral(_)
         | StrLiteral(_)
         | BlockStrLiteral(_)
-        | EmptyRecordLiteral
         | Malformed(_)
         | Underscore => (),
     }

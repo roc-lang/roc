@@ -58,13 +58,6 @@ pub enum Expr {
     /// See 13623e3f5f65ea2d703cf155f16650c1e8246502 for the bug this fixed.
     FunctionPointer(Variable, Symbol),
 
-    /// Look up exactly one field on a record, e.g. (expr).foo.
-    Access(Box<Located<Expr>>, Box<str>),
-    /// field accessor as a function, e.g. (.foo) expr
-    Accessor(Box<str>),
-
-    Tag(Box<str>, Vec<Expr>),
-
     // Pattern Matching
     /// When is guaranteed to be exhaustive at this point. (If it wasn't, then
     /// a _ branch was added at the end that will throw a runtime error.)
@@ -84,7 +77,17 @@ pub enum Expr {
 
     // Product Types
     Record(Variable, SendMap<Lowercase, Located<Expr>>),
+
+    /// Empty record constant
     EmptyRecord,
+
+    /// Look up exactly one field on a record, e.g. (expr).foo.
+    Access(Box<Located<Expr>>, Box<str>),
+    /// field accessor as a function, e.g. (.foo) expr
+    Accessor(Box<str>),
+
+    // Sum Types
+    Tag(Box<str>, Vec<Expr>),
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),

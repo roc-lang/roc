@@ -268,7 +268,6 @@ pub fn is_multiline_pattern<'a>(pattern: &'a Pattern<'a>) -> bool {
         | Pattern::FloatLiteral(_)
         | Pattern::StrLiteral(_)
         | Pattern::BlockStrLiteral(_)
-        | Pattern::EmptyRecordLiteral
         | Pattern::Underscore
         | Pattern::Malformed(_)
         | Pattern::QualifiedIdentifier(_) => false,

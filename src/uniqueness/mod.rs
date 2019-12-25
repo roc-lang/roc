@@ -135,7 +135,8 @@ fn canonicalize_pattern(
                 field_types.insert(name, pat_type);
             }
 
-            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_type =
+                constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
             let record_con = Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Record,
@@ -146,7 +147,7 @@ fn canonicalize_pattern(
             state.constraints.push(record_con);
         }
 
-        Tag(_) | AppliedTag(_, _) | EmptyRecordLiteral => {
+        Tag(_) | AppliedTag(_, _) => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
@@ -186,63 +187,62 @@ pub fn canonicalize_expr(
             (Output::default(), constraint)
         }
         EmptyRecord => {
-            let inferred = constrain::lift(var_store, EmptyRec);
-            let constraint = Eq(inferred, expected, region);
+            let constraint = Eq(constrain::lift(var_store, EmptyRec), expected, region);
+
             (Output::default(), constraint)
         }
         Record(variable, fields) => {
-            if fields.is_empty() {
-                let constraint = Eq(constrain::lift(var_store, EmptyRec), expected, region);
+            // NOTE: canonicalization guarantees at least one field
+            // zero fields generates an EmptyRecord
+            let mut field_types = SendMap::default();
+            let mut field_vars = Vec::with_capacity(fields.len());
 
-                (Output::default(), constraint)
-            } else {
-                let mut field_types = SendMap::default();
-                let mut field_vars = Vec::with_capacity(fields.len());
+            // Constraints need capacity for each field + 1 for the record itself.
+            let mut constraints = Vec::with_capacity(1 + fields.len());
+            let mut output = Output::default();
 
-                // Constraints need capacity for each field + 1 for the record itself.
-                let mut constraints = Vec::with_capacity(1 + fields.len());
-                let mut output = Output::default();
-
-                for (label, loc_expr) in fields.iter() {
-                    let field_var = var_store.fresh();
-                    let field_type = Variable(field_var);
-                    let field_expected = Expected::NoExpectation(field_type.clone());
-                    let (field_out, field_con) = canonicalize_expr(
-                        rigids,
-                        var_store,
-                        var_usage,
-                        loc_expr.region,
-                        &loc_expr.value,
-                        field_expected,
-                    );
-
-                    field_vars.push(field_var);
-                    field_types.insert(label.clone(), field_type);
-
-                    constraints.push(field_con);
-                    output.references = output.references.union(field_out.references);
-                }
-
-                let record_type = constrain::lift(
+            for (label, loc_expr) in fields.iter() {
+                let field_var = var_store.fresh();
+                let field_type = Variable(field_var);
+                let field_expected = Expected::NoExpectation(field_type.clone());
+                let (field_out, field_con) = canonicalize_expr(
+                    rigids,
                     var_store,
-                    Type::Record(
-                        field_types,
-                        // TODO can we avoid doing Box::new on every single one of these?
-                        // For example, could we have a single lazy_static global Box they
-                        // could all share?
-                        Box::new(Type::EmptyRec),
-                    ),
+                    var_usage,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    field_expected,
                 );
-                let record_con = Eq(record_type, expected.clone(), region);
-                let ext_con = Eq(Type::Variable(*variable), expected, region);
 
-                constraints.push(record_con);
-                constraints.push(ext_con);
+                field_vars.push(field_var);
+                field_types.insert(label.clone(), field_type);
 
-                let constraint = exists(field_vars, And(constraints));
-
-                (output, constraint)
+                constraints.push(field_con);
+                output.references = output.references.union(field_out.references);
             }
+
+            let record_type = constrain::lift(
+                var_store,
+                Type::Record(
+                    field_types,
+                    // TODO can we avoid doing Box::new on every single one of these?
+                    // For example, could we have a single lazy_static global Box they
+                    // could all share?
+                    Box::new(Type::EmptyRec),
+                ),
+            );
+            let record_con = Eq(record_type, expected.clone(), region);
+            let ext_con = Eq(Type::Variable(*variable), expected, region);
+
+            constraints.push(record_con);
+            constraints.push(ext_con);
+
+            let constraint = exists(field_vars, And(constraints));
+
+            (output, constraint)
+        }
+        Tag(name, arguments) => {
+            panic!("TODO implement tag {:?} {:?}", name, arguments);
         }
         List(variable, loc_elems) => {
             if loc_elems.is_empty() {
@@ -335,6 +335,9 @@ pub fn canonicalize_expr(
             Some(var) => Output::new(Eq(Variable(*var), expected, Region::zero())),
         },
         */
+        FunctionPointer(_, _) => {
+            panic!("TODO implement function pointer?");
+        }
         Closure(_symbol, _recursion, args, body) => {
             // first, generate constraints for the arguments
             let mut arg_types = Vec::new();
@@ -667,8 +670,7 @@ pub fn canonicalize_expr(
             )
         }
         RuntimeError(_) => (Output::default(), True),
-
-        _ => panic!("{:?}", expr),
+        // _ => panic!("{:?}", expr),
     }
 }
 
