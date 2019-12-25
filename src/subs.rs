@@ -250,7 +250,7 @@ impl Subs {
                 var,
                 Descriptor {
                     content: content.clone(),
-                    rank: Rank::none(),
+                    rank: Rank::NONE,
                     mark: Mark::none(),
                     copy: None,
                 },
@@ -275,9 +275,7 @@ fn unnamed_flex_var() -> Content {
 pub struct Rank(usize);
 
 impl Rank {
-    pub fn none() -> Self {
-        Rank(0)
-    }
+    pub const NONE: Rank = Rank(0);
 
     pub fn toplevel() -> Self {
         Rank(1)
@@ -344,7 +342,7 @@ impl From<Content> for Descriptor {
     fn from(content: Content) -> Descriptor {
         Descriptor {
             content,
-            rank: Rank::none(),
+            rank: Rank::NONE,
             mark: Mark::none(),
             copy: None,
         }
