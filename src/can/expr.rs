@@ -78,6 +78,9 @@ pub enum Expr {
     // Product Types
     Record(Variable, SendMap<Lowercase, Located<Expr>>),
 
+    /// Empty record constant
+    EmptyRecord,
+
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access(Box<Located<Expr>>, Box<str>),
     /// field accessor as a function, e.g. (.foo) expr
@@ -128,20 +131,9 @@ pub fn canonicalize_expr(
         }
         ast::Expr::Record(fields) => {
             if fields.is_empty() {
-                let var = var_store.fresh();
+                let constraint = Eq(EmptyRec, expected, region);
 
-                let constraint = exists(
-                    vec![var],
-                    And(vec![
-                        Eq(EmptyRec, expected.clone(), region),
-                        Eq(Type::Variable(var), expected, region),
-                    ]),
-                );
-                (
-                    Record(var, SendMap::default()),
-                    Output::default(),
-                    constraint,
-                )
+                (EmptyRecord, Output::default(), constraint)
             } else {
                 let mut field_exprs = SendMap::default();
                 let mut field_types = SendMap::default();
