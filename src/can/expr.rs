@@ -170,14 +170,14 @@ pub fn canonicalize_expr(
                 constraints.push(record_con);
 
                 // variable to store in the AST
-                let ext_var = var_store.fresh();
-                let ext_con = Eq(Type::Variable(ext_var), expected, region);
-                field_vars.push(ext_var);
-                constraints.push(ext_con);
+                let stored_var = var_store.fresh();
+                let stored_con = Eq(Type::Variable(stored_var), expected, region);
+                field_vars.push(stored_var);
+                constraints.push(stored_con);
 
                 let constraint = exists(field_vars, And(constraints));
 
-                (Record(ext_var, field_exprs), output, constraint)
+                (Record(stored_var, field_exprs), output, constraint)
             }
         }
         ast::Expr::Str(string) => {
