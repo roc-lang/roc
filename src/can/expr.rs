@@ -162,7 +162,6 @@ pub fn canonicalize_expr(
                     output.references = output.references.union(field_out.references);
                 }
 
-                let record_var = var_store.fresh();
                 let record_type = Type::Record(
                     field_types,
                     // TODO can we avoid doing Box::new on every single one of these?
@@ -170,13 +169,18 @@ pub fn canonicalize_expr(
                     // could all share?
                     Box::new(Type::EmptyRec),
                 );
-                let record_con = Eq(record_type, expected, region);
-
+                let record_con = Eq(record_type, expected.clone(), region);
                 constraints.push(record_con);
+
+                // variable to store in the AST
+                let stored_var = var_store.fresh();
+                let stored_con = Eq(Type::Variable(stored_var), expected, region);
+                field_vars.push(stored_var);
+                constraints.push(stored_con);
 
                 let constraint = exists(field_vars, And(constraints));
 
-                (Record(record_var, field_exprs), output, constraint)
+                (Record(stored_var, field_exprs), output, constraint)
             }
         }
         ast::Expr::Str(string) => {

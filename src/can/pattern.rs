@@ -77,7 +77,6 @@ pub fn canonicalize_pattern<'a>(
     canonicalize_pattern_help(
         env,
         state,
-        var_store,
         scope,
         pattern_type,
         pattern,
@@ -91,7 +90,6 @@ pub fn canonicalize_pattern<'a>(
 fn canonicalize_pattern_help<'a>(
     env: &'a mut Env,
     state: &'a mut PatternState,
-    var_store: &VarStore,
     scope: &mut Scope,
     pattern_type: PatternType,
     pattern: &'a ast::Pattern<'a>,
@@ -179,7 +177,6 @@ fn canonicalize_pattern_help<'a>(
             return canonicalize_pattern_help(
                 env,
                 state,
-                var_store,
                 scope,
                 pattern_type,
                 sub_pattern,
@@ -220,7 +217,6 @@ fn canonicalize_pattern_help<'a>(
                         let can_guard = canonicalize_pattern_help(
                             env,
                             state,
-                            var_store,
                             scope,
                             pattern_type,
                             &loc_guard.value,
