@@ -73,7 +73,7 @@ pub fn run(
     let mut pools = Pools::default();
     let state = State {
         vars_by_symbol: vars_by_symbol.clone(),
-        mark: Mark::none().next(),
+        mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
 
@@ -661,7 +661,7 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
     let var = subs.fresh(Descriptor {
         content,
         rank,
-        mark: Mark::none(),
+        mark: Mark::NONE,
         copy: None,
     });
 

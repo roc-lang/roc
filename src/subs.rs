@@ -9,20 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub struct Mark(i32);
 
 impl Mark {
-    #[inline(always)]
-    pub fn none() -> Mark {
-        Mark(2)
-    }
-
-    #[inline(always)]
-    pub fn occurs() -> Mark {
-        Mark(1)
-    }
-
-    #[inline(always)]
-    pub fn get_var_names() -> Mark {
-        Mark(0)
-    }
+    pub const NONE: Mark = Mark(2);
+    pub const OCCURS: Mark = Mark(1);
+    pub const GET_VAR_NAMES: Mark = Mark(1);
 
     #[inline(always)]
     pub fn next(self) -> Mark {
@@ -32,11 +21,11 @@ impl Mark {
 
 impl fmt::Debug for Mark {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self == &Mark::none() {
+        if self == &Mark::NONE {
             write!(f, "none")
-        } else if self == &Mark::occurs() {
+        } else if self == &Mark::OCCURS {
             write!(f, "occurs")
-        } else if self == &Mark::get_var_names() {
+        } else if self == &Mark::GET_VAR_NAMES {
             write!(f, "get_var_names")
         } else {
             write!(f, "Mark({})", self.0)
@@ -251,7 +240,7 @@ impl Subs {
                 Descriptor {
                     content: content.clone(),
                     rank: Rank::NONE,
-                    mark: Mark::none(),
+                    mark: Mark::NONE,
                     copy: None,
                 },
             );
@@ -343,7 +332,7 @@ impl From<Content> for Descriptor {
         Descriptor {
             content,
             rank: Rank::NONE,
-            mark: Mark::none(),
+            mark: Mark::NONE,
             copy: None,
         }
     }
@@ -436,10 +425,10 @@ fn get_var_names(
     use self::Content::*;
     let desc = subs.get(var);
 
-    if desc.mark == Mark::get_var_names() {
+    if desc.mark == Mark::GET_VAR_NAMES {
         taken_names
     } else {
-        subs.set_mark(var, Mark::get_var_names());
+        subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
             Error(_) | FlexVar(None) => taken_names,
@@ -534,10 +523,10 @@ where
 fn var_to_err_type(subs: &mut Subs, state: &mut NameState, var: Variable) -> ErrorType {
     let desc = subs.get(var);
 
-    if desc.mark == Mark::occurs() {
+    if desc.mark == Mark::OCCURS {
         ErrorType::Infinite
     } else {
-        subs.set_mark(var, Mark::occurs());
+        subs.set_mark(var, Mark::OCCURS);
 
         let err_type = content_to_err_type(subs, state, var, desc.content);
 
