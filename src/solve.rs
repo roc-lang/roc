@@ -248,11 +248,7 @@ fn solve(
                     let next_rank = rank.next();
 
                     // introduce variables
-                    for &var in rigid_vars.iter() {
-                        subs.set_rank(var, next_rank);
-                    }
-
-                    for &var in flex_vars.iter() {
+                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
                         subs.set_rank(var, next_rank);
                     }
 
