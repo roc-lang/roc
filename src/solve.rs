@@ -261,7 +261,7 @@ fn solve(
                         pool.extend(rigid_vars.iter());
                         pool.extend(flex_vars.iter());
 
-                        // Add a variable for each assignment to the vars_by_symbol.
+                        // Add a variable for each def to local_def_vars.
                         let mut local_def_vars = ImMap::default();
 
                         for (symbol, loc_type) in let_con.def_types.iter() {
