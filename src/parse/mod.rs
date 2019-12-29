@@ -322,6 +322,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::Defs(_, _)
         | Expr::If(_)
         | Expr::When(_, _)
+        | Expr::RecordMerge(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _)
         | Expr::UnaryOp(_, _) => Err(Fail {

@@ -127,6 +127,8 @@ pub enum Expr<'a> {
     Access(&'a Expr<'a>, &'a str),
     /// e.g. `.foo`
     AccessorFunction(&'a str),
+    /// e.g. `rec...{ x: 5 }`
+    RecordMerge(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Collection Literals
     List(Vec<'a, &'a Loc<Expr<'a>>>),

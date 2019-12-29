@@ -183,6 +183,9 @@ pub fn canonicalize_expr(
                 (Record(stored_var, field_exprs), output, constraint)
             }
         }
+        ast::Expr::RecordMerge(_loc_left, _loc_right) => {
+            panic!("TODO record merge");
+        }
         ast::Expr::Str(string) => {
             let constraint = Eq(constrain::str_type(), expected, region);
 

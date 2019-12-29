@@ -123,6 +123,12 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 value: Record(new_fields),
             })
         }
+
+        RecordMerge(left, right) | Nested(RecordMerge(left, right)) => arena.alloc(Located {
+            region: loc_expr.region,
+            value: RecordMerge(desugar_expr(arena, left), desugar_expr(arena, right)),
+        }),
+
         Closure(loc_patterns, loc_ret) | Nested(Closure(loc_patterns, loc_ret)) => {
             arena.alloc(Located {
                 region: loc_expr.region,

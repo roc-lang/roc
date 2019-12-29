@@ -979,4 +979,18 @@ mod test_infer {
             "{}*",
         );
     }
+
+    #[test]
+    fn record_merge() {
+        infer_eq(
+            indoc!(
+                r#"
+                x = rec...{ x: 5 }
+
+                rec
+            "#
+            ),
+            "{ x? : Int }*",
+        );
+    }
 }

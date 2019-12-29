@@ -338,6 +338,10 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         Record(loc_fields) => loc_fields
             .iter()
             .any(|loc_field| is_multiline_field(&loc_field.value)),
+
+        RecordMerge(left, right) => {
+            is_multiline_expr(&left.value) || is_multiline_expr(&right.value)
+        }
     }
 }
 
