@@ -183,7 +183,34 @@ pub fn canonicalize_expr(
                 (Record(stored_var, field_exprs), output, constraint)
             }
         }
-        ast::Expr::RecordMerge(_loc_left, _loc_right) => {
+        ast::Expr::RecordMerge(loc_left, loc_right) => {
+            let left_var = var_store.fresh();
+            let right_var = var_store.fresh();
+
+            let left_type = Variable(left_var);
+            let right_type = Variable(right_var);
+
+            let left_expected = NoExpectation(left_type);
+            let right_expected = NoExpectation(right_type);
+
+            let (can_left, left_out, left_con) = canonicalize_expr(
+                rigids,
+                env,
+                var_store,
+                scope,
+                loc_left.region,
+                &loc_left.value,
+                left_expected,
+            );
+            let (can_right, right_out, right_con) = canonicalize_expr(
+                rigids,
+                env,
+                var_store,
+                scope,
+                loc_right.region,
+                &loc_right.value,
+                right_expected,
+            );
             panic!("TODO record merge");
         }
         ast::Expr::Str(string) => {
