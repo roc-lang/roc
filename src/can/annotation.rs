@@ -117,6 +117,9 @@ fn can_assigned_field<'a>(
             let field_type = can_annotation_help(&annotation.value, var_store, rigids);
             field_types.insert(Lowercase::from(field_name.value), field_type);
         }
+        OptionalField(_field_name, _, _annotation) => {
+            panic!("TODO handle optional field");
+        }
         LabelOnly(loc_field_name) => {
             // Interpret { a, b } as { a : a, b : b }
             let field_name = Lowercase::from(loc_field_name.value);
