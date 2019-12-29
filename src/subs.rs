@@ -363,6 +363,7 @@ pub enum FlatType {
     },
     Func(Vec<Variable>, Variable),
     Record(ImMap<Lowercase, Variable>, Variable),
+    RecordUnion(Variable, Variable),
     Erroneous(Problem),
     EmptyRecord,
 }
@@ -401,6 +402,9 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                             || vars_by_field
                                 .into_iter()
                                 .any(|(_, var)| occurs(subs, &new_seen, var))
+                    }
+                    RecordUnion(left, right) => {
+                        occurs(subs, &new_seen, left) || occurs(subs, &new_seen, right)
                     }
                     EmptyRecord | Erroneous(_) => false,
                 }
@@ -466,6 +470,11 @@ fn get_var_names(
                         .fold(taken_names, |answer, (_, arg_var)| {
                             get_var_names(subs, arg_var, answer)
                         })
+                }
+
+                FlatType::RecordUnion(left, right) => {
+                    let taken_names = get_var_names(subs, left, taken_names);
+                    get_var_names(subs, right, taken_names)
                 }
             },
         }
@@ -634,6 +643,10 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
             }
         }
 
+        RecordUnion(_left, _right) => {
+            panic!("TODO error type for record union");
+        }
+
         Erroneous(_) => ErrorType::Error,
     }
 }
@@ -677,6 +690,12 @@ fn restore_content(subs: &mut Subs, content: &Content) {
 
                 subs.restore(*ext_var);
             }
+
+            RecordUnion(left, right) => {
+                subs.restore(*left);
+                subs.restore(*right);
+            }
+
             Erroneous(_) => (),
         },
         Alias(_, _, args, var) => {

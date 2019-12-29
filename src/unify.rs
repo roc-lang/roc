@@ -305,6 +305,19 @@ fn unify_flat_type(
 
             unify_record(subs, pool, problems, ctx, rec1, rec2)
         }
+
+        (RecordUnion(_left1, _right1), RecordUnion(_left2, _right2)) => {
+            panic!("TODO");
+        }
+
+        (Record(_fields, _ext), RecordUnion(_left, _right)) => {
+            panic!("TODO");
+        }
+
+        (RecordUnion(_left, _right), Record(_fields, _ext)) => {
+            panic!("TODO");
+        }
+
         (
             Apply {
                 module_name: l_module_name,

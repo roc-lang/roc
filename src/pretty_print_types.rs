@@ -96,6 +96,10 @@ fn find_names_needed(
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
+        Structure(RecordUnion(left, right)) => {
+            find_names_needed(left, subs, roots, root_appearances, names_taken);
+            find_names_needed(right, subs, roots, root_appearances, names_taken);
+        }
         RigidVar(name) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
@@ -192,6 +196,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
         } => write_apply(module_name, name, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         Func(args, ret) => write_fn(args, ret, subs, buf, parens),
+        RecordUnion(_, _) => panic!("should not be visible to user"),
         Record(fields, ext_var) => {
             if fields.is_empty() {
                 buf.push_str(EMPTY_RECORD)

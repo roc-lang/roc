@@ -192,8 +192,8 @@ pub fn canonicalize_expr(
             let left_type = Variable(left_var);
             let right_type = Variable(right_var);
 
-            let left_expected = NoExpectation(left_type);
-            let right_expected = NoExpectation(right_type);
+            let left_expected = NoExpectation(left_type.clone());
+            let right_expected = NoExpectation(right_type.clone());
 
             let (can_left, left_out, left_con) = canonicalize_expr(
                 rigids,
@@ -223,7 +223,15 @@ pub fn canonicalize_expr(
 
             let constraint = exists(
                 vec![left_var, right_var],
-                And(vec![RecordUnion(left_var, right_var), left_con, right_con]),
+                And(vec![
+                    Eq(
+                        Type::RecordUnion(Box::new(left_type), Box::new(right_type)),
+                        expected,
+                        region,
+                    ),
+                    left_con,
+                    right_con,
+                ]),
             );
 
             (

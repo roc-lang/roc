@@ -173,9 +173,6 @@ fn solve(
 
             state
         }
-        RecordUnion(_, _) => {
-            panic!("TODO record union");
-        }
         Let(let_con) => {
             match &let_con.ret_constraint {
                 True if let_con.rigid_vars.is_empty() => {
@@ -416,6 +413,14 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
+        RecordUnion(left, right) => {
+            let left_var = type_to_variable(subs, rank, pools, aliases, left);
+            let right_var = type_to_variable(subs, rank, pools, aliases, right);
+
+            let content = Content::Structure(FlatType::RecordUnion(left_var, right_var));
+
+            register(subs, rank, pools, content)
+        }
         Alias(home, name, args, alias_type) => {
             let mut arg_vars = Vec::with_capacity(args.len());
             let mut new_aliases = ImMap::default();
@@ -627,6 +632,11 @@ fn adjust_rank_content(
 
                     rank
                 }
+
+                RecordUnion(_left, _right) => {
+                    panic!("TODO record union rank: no idea what this should be");
+                }
+
                 Erroneous(_) => group_rank,
             }
         }

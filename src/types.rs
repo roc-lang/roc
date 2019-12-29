@@ -29,6 +29,7 @@ pub enum Type {
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
     Record(SendMap<Lowercase, Type>, Box<Type>),
+    RecordUnion(Box<Type>, Box<Type>),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
@@ -94,6 +95,9 @@ impl fmt::Debug for Type {
             }
             Type::Alias(_, _, _, _) => {
                 panic!("TODO fmt type aliases");
+            }
+            Type::RecordUnion(_, _) => {
+                panic!("TODO fmt record union");
             }
             Type::Record(fields, ext) => {
                 write!(f, "{{")?;
@@ -282,7 +286,6 @@ pub enum Constraint {
     True, // Used for things that always unify, e.g. blanks and runtime errors
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
-    RecordUnion(Variable, Variable),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
