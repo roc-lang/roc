@@ -191,6 +191,9 @@ pub fn canonicalize_expr(
 
             (Output::default(), constraint)
         }
+        RecordMerge(_, _) => {
+            panic!("TODO implement record merge for uniq types");
+        }
         Record(variable, fields) => {
             // NOTE: canonicalization guarantees at least one field
             // zero fields generates an EmptyRecord

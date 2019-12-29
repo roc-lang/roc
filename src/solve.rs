@@ -173,6 +173,9 @@ fn solve(
 
             state
         }
+        RecordUnion(_, _) => {
+            panic!("TODO record union");
+        }
         Let(let_con) => {
             match &let_con.ret_constraint {
                 True if let_con.rigid_vars.is_empty() => {

@@ -282,6 +282,7 @@ pub enum Constraint {
     True, // Used for things that always unify, e.g. blanks and runtime errors
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
+    RecordUnion(Variable, Variable),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -78,6 +78,8 @@ pub enum Expr {
     // Product Types
     Record(Variable, SendMap<Lowercase, Located<Expr>>),
 
+    RecordMerge(Box<Located<Expr>>, Box<Located<Expr>>),
+
     /// Empty record constant
     EmptyRecord,
 
@@ -211,7 +213,24 @@ pub fn canonicalize_expr(
                 &loc_right.value,
                 right_expected,
             );
-            panic!("TODO record merge");
+
+            let mut references = References::new();
+            references = references.union(left_out.references);
+            references = references.union(right_out.references);
+
+            let mut output = Output::default();
+            output.references = references;
+
+            let constraint = exists(
+                vec![left_var, right_var],
+                And(vec![RecordUnion(left_var, right_var), left_con, right_con]),
+            );
+
+            (
+                RecordMerge(Box::new(can_left), Box::new(can_right)),
+                output,
+                constraint,
+            )
         }
         ast::Expr::Str(string) => {
             let constraint = Eq(constrain::str_type(), expected, region);
