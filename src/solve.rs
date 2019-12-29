@@ -73,7 +73,7 @@ pub fn run(
     let mut pools = Pools::default();
     let state = State {
         vars_by_symbol: vars_by_symbol.clone(),
-        mark: Mark::none().next(),
+        mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
 
@@ -248,11 +248,7 @@ fn solve(
                     let next_rank = rank.next();
 
                     // introduce variables
-                    for &var in rigid_vars.iter() {
-                        subs.set_rank(var, next_rank);
-                    }
-
-                    for &var in flex_vars.iter() {
+                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
                         subs.set_rank(var, next_rank);
                     }
 
@@ -265,7 +261,7 @@ fn solve(
                         pool.extend(rigid_vars.iter());
                         pool.extend(flex_vars.iter());
 
-                        // Add a variable for each assignment to the vars_by_symbol.
+                        // Add a variable for each def to local_def_vars.
                         let mut local_def_vars = ImMap::default();
 
                         for (symbol, loc_type) in let_con.def_types.iter() {
@@ -305,7 +301,7 @@ fn solve(
                         // check that things went well
                         debug_assert!(rigid_vars
                             .iter()
-                            .all(|&var| subs.get_without_compacting(var).rank == Rank::none()));
+                            .all(|&var| subs.get_without_compacting(var).rank == Rank::NONE));
 
                         let mut new_vars_by_symbol = vars_by_symbol.clone();
 
@@ -500,7 +496,7 @@ fn generalize(
             if desc.rank < young_rank {
                 pools.get_mut(desc.rank).push(var);
             } else {
-                desc.rank = Rank::none();
+                desc.rank = Rank::NONE;
 
                 subs.set(var, desc);
             }
@@ -661,7 +657,7 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
     let var = subs.fresh(Descriptor {
         content,
         rank,
-        mark: Mark::none(),
+        mark: Mark::NONE,
         copy: None,
     });
 

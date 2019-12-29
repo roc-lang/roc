@@ -442,7 +442,7 @@ fn merge(subs: &mut Subs, ctx: &Context, content: Content) {
     let desc = Descriptor {
         content,
         rank,
-        mark: Mark::none(),
+        mark: Mark::NONE,
         copy: None,
     };
 
@@ -463,7 +463,7 @@ fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> V
         Descriptor {
             content,
             rank: ctx.first_desc.rank.min(ctx.second_desc.rank),
-            mark: Mark::none(),
+            mark: Mark::NONE,
             copy: None,
         },
         pool,
