@@ -979,4 +979,19 @@ mod test_infer {
             "{}*",
         );
     }
+
+    #[test]
+    fn optional_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                foo : { x? : Int } -> Int 
+                foo = \_ -> 42
+
+                foo {}
+            "#
+            ),
+            "Int",
+        );
+    }
 }
