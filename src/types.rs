@@ -47,6 +47,15 @@ pub enum RecordFieldLabel {
     Optional(Lowercase),
 }
 
+impl Into<Lowercase> for RecordFieldLabel {
+    fn into(self) -> Lowercase {
+        match self {
+            RecordFieldLabel::Required(label) => label,
+            RecordFieldLabel::Optional(label) => label,
+        }
+    }
+}
+
 impl fmt::Debug for RecordFieldLabel {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

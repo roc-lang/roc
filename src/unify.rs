@@ -173,6 +173,7 @@ fn unify_record(
     rec1: RecordStructure,
     rec2: RecordStructure,
 ) {
+    // This is a bit more complicated because of optional fields
     let fields1 = rec1.fields;
     let fields2 = rec2.fields;
     let shared_fields = fields1
