@@ -5,9 +5,9 @@ use crate::can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
 };
+use crate::can::pattern::idents_from_patterns;
 use crate::can::pattern::PatternType::*;
 use crate::can::pattern::{canonicalize_pattern, remove_idents, Pattern};
-use crate::can::pattern::{idents_from_patterns, PatternState};
 use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError;
 use crate::can::problem::RuntimeError::*;
@@ -20,23 +20,16 @@ use crate::operator::CalledVia;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
-use crate::types::AnnotationSource::*;
-use crate::types::Expected::{self, *};
-use crate::types::Type::{self, *};
 use im_rc::Vector;
 use std::fmt::Debug;
 use std::i64;
 use std::ops::Neg;
 
-/// Whenever we encounter a user-defined type variable (a "rigid" var for short),
-/// for example `a` in the annotation `identity : a -> a`, we add it to this
-/// map so that expressions within that annotation can share these vars.
-pub type Rigids = ImMap<Box<str>, Type>;
-
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
+    pub rigids: SendMap<Variable, Lowercase>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,31 +42,35 @@ pub enum Expr {
     List(Variable, Vec<(Variable, Located<Expr>)>),
 
     // Lookups
-    Var(Variable, Symbol),
-    /// Works the same as Var, but has an important marking purpose.
-    /// See 13623e3f5f65ea2d703cf155f16650c1e8246502 for the bug this fixed.
-    FunctionPointer(Variable, Symbol),
-
+    Var {
+        symbol_for_lookup: Symbol,
+        resolved_symbol: Symbol,
+    },
     // Pattern Matching
     /// When is guaranteed to be exhaustive at this point. (If it wasn't, then
     /// a _ branch was added at the end that will throw a runtime error.)
     /// Also, `If` is desugared into `When` matching on `False` and `_` at this point.
-    When(
-        Variable,
-        Box<Located<Expr>>,
-        Vec<((Variable, Located<Pattern>), (Variable, Located<Expr>))>,
-    ),
+    When {
+        cond_var: Variable,
+        expr_var: Variable,
+        loc_cond: Box<Located<Expr>>,
+        branches: Vec<(Located<Pattern>, Located<Expr>)>,
+    },
     Defs(Vec<Def>, Box<Located<Expr>>),
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
-    Call(Box<Expr>, Vec<(Variable, Located<Expr>)>, CalledVia),
+    Call(
+        Box<(Variable, Located<Expr>, Variable)>,
+        Vec<(Variable, Located<Expr>)>,
+        CalledVia,
+    ),
 
     Closure(
         Symbol,
         Recursive,
         Vec<(Variable, Located<Pattern>)>,
-        Box<(Variable, Located<Expr>)>,
+        Box<(Located<Expr>, Variable)>,
     ),
 
     // Product Types
@@ -190,11 +187,10 @@ pub fn canonicalize_expr(
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
             let fn_region = loc_fn.region;
-            // TODO look up the name and use NamedFnArg if possible.
 
             // Canonicalize the function expression and its arguments
             let (fn_expr, mut output) =
-                canonicalize_expr(env, var_store, scope, loc_fn.region, &loc_fn.value);
+                canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
 
             // The function's return type
             let mut args = Vec::new();
@@ -212,26 +208,35 @@ pub fn canonicalize_expr(
             output.tail_call = None;
 
             let expr = match fn_expr.value {
-                Var(_, ref sym) | FunctionPointer(_, ref sym) => {
-                    // In the FunctionPointer case, we're calling an inline closure;
-                    // something like ((\a b -> a + b) 1 2).
-                    output.references.calls.insert(sym.clone());
+                Var {
+                    ref resolved_symbol,
+                    ..
+                } => {
+                    output.references.calls.insert(resolved_symbol.clone());
 
                     // we're tail-calling a symbol by name, check if it's the tail-callable symbol
                     output.tail_call = match &env.tailcallable_symbol {
-                        Some(tc_sym) if tc_sym == sym => Some(sym.clone()),
+                        Some(tc_sym) if tc_sym == resolved_symbol => Some(resolved_symbol.clone()),
                         Some(_) | None => None,
                     };
 
-                    Call(Box::new(fn_expr.value), args, *application_style)
+                    Call(
+                        Box::new((var_store.fresh(), fn_expr, var_store.fresh())),
+                        args,
+                        *application_style,
+                    )
                 }
                 RuntimeError(_) => {
                     // We can't call a runtime error; bail out by propagating it!
                     return (fn_expr, output);
                 }
-                not_var => {
+                _ => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
-                    Call(Box::new(not_var), args, *application_style)
+                    Call(
+                        Box::new((var_store.fresh(), fn_expr, var_store.fresh())),
+                        args,
+                        *application_style,
+                    )
                 }
             };
 
@@ -250,7 +255,7 @@ pub fn canonicalize_expr(
 
             let ident = Ident::new(module_parts, name);
 
-            canonicalize_lookup(env, scope, ident, symbol, region, var_store)
+            canonicalize_lookup(env, scope, ident, symbol, region)
         } //ast::Expr::InterpolatedStr(pairs, suffix) => {
         //    let mut output = Output::new();
         //    let can_pairs: Vec<(String, Located<Expr>)> = pairs
@@ -326,11 +331,6 @@ pub fn canonicalize_expr(
             // it means there was shadowing, which will be handled later.
             scope.idents = union_pairs(scope.idents, arg_idents.iter());
 
-            let mut state = PatternState {
-                headers: SendMap::default(),
-                vars: Vec::with_capacity(loc_arg_patterns.len()),
-                constraints: Vec::with_capacity(1),
-            };
             let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
 
             for loc_pattern in loc_arg_patterns.into_iter() {
@@ -384,7 +384,7 @@ pub fn canonicalize_expr(
                     symbol,
                     Recursive::NotRecursive,
                     can_args,
-                    Box::new((var_store.fresh(), loc_body_expr)),
+                    Box::new((loc_body_expr, var_store.fresh())),
                 ),
                 output,
             )
@@ -392,7 +392,6 @@ pub fn canonicalize_expr(
         ast::Expr::When(loc_cond, branches) => {
             // Infer the condition expression's type.
             let cond_var = var_store.fresh();
-            let cond_type = Variable(cond_var);
             let (can_cond, mut output) =
                 canonicalize_expr(env, var_store, scope, region, &loc_cond.value);
 
@@ -401,7 +400,7 @@ pub fn canonicalize_expr(
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
-            for (index, (loc_pattern, loc_expr)) in branches.into_iter().enumerate() {
+            for (loc_pattern, loc_expr) in branches {
                 let mut shadowable_idents = scope.idents.clone();
 
                 remove_idents(&loc_pattern.value, &mut shadowable_idents);
@@ -418,10 +417,7 @@ pub fn canonicalize_expr(
 
                 output.references = output.references.union(branch_references);
 
-                can_branches.push((
-                    (var_store.fresh(), can_pattern),
-                    (var_store.fresh(), loc_can_expr),
-                ));
+                can_branches.push((can_pattern, loc_can_expr));
             }
 
             // A "when" with no branches is a runtime error, but it will mess things up
@@ -432,7 +428,12 @@ pub fn canonicalize_expr(
             }
 
             // Incorporate all three expressions into a combined Output value.
-            let expr = When(cond_var, Box::new(can_cond), can_branches);
+            let expr = When {
+                expr_var: var_store.fresh(),
+                cond_var,
+                loc_cond: Box::new(can_cond),
+                branches: can_branches,
+            };
 
             (expr, output)
         }
@@ -549,15 +550,17 @@ fn canonicalize_lookup(
     env: &mut Env,
     scope: &Scope,
     ident: Ident,
-    symbol: Symbol,
+    symbol_for_lookup: Symbol,
     region: Region,
-    var_store: &VarStore,
 ) -> (Expr, Output) {
     use self::Expr::*;
 
     let mut output = Output::default();
     let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
-        Ok(sub_symbol) => Var(var_store.fresh(), sub_symbol),
+        Ok(resolved_symbol) => Var {
+            symbol_for_lookup,
+            resolved_symbol,
+        },
         Err(ident) => {
             let loc_ident = Located {
                 region,

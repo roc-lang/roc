@@ -4,13 +4,12 @@ use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, SendMap};
+use crate::collections::ImMap;
 use crate::ident::Ident;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::VarStore;
 use crate::subs::Variable;
-use crate::types::{Constraint, PExpected, PatternCategory, Type};
 use im_rc::Vector;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
@@ -23,8 +22,16 @@ pub enum Pattern {
     AppliedTag(Symbol, Vec<Located<Pattern>>),
     IntLiteral(i64),
     FloatLiteral(f64),
-    ExactString(Box<str>),
-    RecordDestructure(Vec<(Located<Pattern>, Option<Located<Pattern>>)>),
+    StrLiteral(Box<str>),
+    RecordDestructure(
+        Variable,
+        Vec<(
+            Variable,
+            Lowercase,
+            Symbol,
+            Option<(Variable, Located<Pattern>)>,
+        )>,
+    ),
     Underscore,
 
     // Runtime Exceptions
@@ -137,7 +144,7 @@ pub fn canonicalize_pattern<'a>(
         &StrLiteral(_string) => match pattern_type {
             WhenBranch => {
                 panic!("TODO check whether string pattern is malformed.");
-                // Pattern::ExactString((*string).into())
+                // Pattern::StrLiteral((*string).into())
             }
             ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
@@ -157,32 +164,49 @@ pub fn canonicalize_pattern<'a>(
         }
         &RecordDestructure(patterns) => {
             let mut fields = Vec::with_capacity(patterns.len());
+
             for loc_pattern in patterns {
                 match loc_pattern.value {
-                    Identifier(ref name) => {
-                        let result = match canonicalize_pattern_identifier(
-                            name,
+                    Identifier(label) => {
+                        let symbol = match canonicalize_pattern_identifier(
+                            &label,
                             env,
                             scope,
                             region,
                             shadowable_idents,
                         ) {
-                            Ok(symbol) => Pattern::Identifier(symbol),
-                            Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
+                            Ok(symbol) => symbol,
+                            Err(loc_shadowed_ident) => {
+                                // If any idents are shadowed, consider the entire
+                                // destructure pattern shadowed!
+                                let _loc_pattern = Located {
+                                    region,
+                                    value: Pattern::Shadowed(loc_shadowed_ident),
+                                };
+                                panic!("TODO gather all the shadowing errors, not just the first one, and report them in Problems.");
+                            }
                         };
 
-                        fields.push((Located::at(region, result), None));
+                        fields.push((var_store.fresh(), Lowercase::from(label), symbol, None));
                     }
-                    RecordField(ref name, loc_guard) => {
-                        let result = match canonicalize_pattern_identifier(
-                            name,
+                    RecordField(label, loc_guard) => {
+                        let symbol = match canonicalize_pattern_identifier(
+                            &label,
                             env,
                             scope,
                             region,
                             shadowable_idents,
                         ) {
-                            Ok(symbol) => Pattern::Identifier(symbol),
-                            Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
+                            Ok(symbol) => symbol,
+                            Err(loc_shadowed_ident) => {
+                                // If any idents are shadowed, consider the entire
+                                // destructure pattern shadowed!
+                                let _loc_pattern = Located {
+                                    region,
+                                    value: Pattern::Shadowed(loc_shadowed_ident),
+                                };
+                                panic!("TODO gather all the shadowing errors, not just the first one, and report them in Problems.");
+                            }
                         };
 
                         let can_guard = canonicalize_pattern(
@@ -195,12 +219,18 @@ pub fn canonicalize_pattern<'a>(
                             shadowable_idents,
                         );
 
-                        fields.push((Located::at(region, result), Some(can_guard)));
+                        fields.push((
+                            var_store.fresh(),
+                            Lowercase::from(label),
+                            symbol,
+                            Some((var_store.fresh(), can_guard)),
+                        ));
                     }
                     _ => panic!("invalid pattern in record"),
                 }
             }
-            Pattern::RecordDestructure(fields)
+
+            Pattern::RecordDestructure(var_store.fresh(), fields)
         }
         &RecordField(_name, _loc_pattern) => {
             unreachable!("should be handled in RecordDestructure");
@@ -279,10 +309,8 @@ pub fn canonicalize_pattern_identifier<'a>(
                     // tag application patterns, which can bring multiple
                     // new idents into scope. For example, it's important that
                     // we catch (Blah foo foo) -> … as being an example of shadowing.
-                    scope
-                        .idents
-                        .insert(new_ident.clone(), symbol_and_region.clone());
-                    shadowable_idents.insert(new_ident, symbol_and_region);
+                    shadowable_idents.insert(new_ident.clone(), symbol_and_region.clone());
+                    scope.idents.insert(new_ident, symbol_and_region);
 
                     Ok(symbol)
                 }
@@ -297,131 +325,6 @@ fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region)
     env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
-}
-
-// CONSTRAIN
-
-pub struct PatternState {
-    pub headers: SendMap<Symbol, Located<Type>>,
-    pub vars: Vec<Variable>,
-    pub constraints: Vec<Constraint>,
-}
-
-fn add_constraints<'a>(
-    pattern: &'a ast::Pattern<'a>,
-    scope: &'a Scope,
-    region: Region,
-    expected: PExpected<Type>,
-    state: &'a mut PatternState,
-    var_store: &VarStore,
-) {
-    use crate::parse::ast::Pattern::*;
-
-    match pattern {
-        Underscore | Malformed(_) | QualifiedIdentifier(_) => {
-            // Neither the _ pattern nor malformed ones add any constraints.
-        }
-        Identifier(name) => {
-            state.headers.insert(
-                scope.symbol(name),
-                Located {
-                    region,
-                    value: expected.get_type(),
-                },
-            );
-        }
-        IntLiteral(_) | NonBase10Literal { .. } => {
-            state.constraints.push(Constraint::Pattern(
-                region,
-                PatternCategory::Int,
-                Type::int(),
-                expected,
-            ));
-        }
-
-        FloatLiteral(_) => {
-            state.constraints.push(Constraint::Pattern(
-                region,
-                PatternCategory::Float,
-                Type::float(),
-                expected,
-            ));
-        }
-
-        StrLiteral(_) => {
-            state.constraints.push(Constraint::Pattern(
-                region,
-                PatternCategory::Str,
-                Type::string(),
-                expected,
-            ));
-        }
-
-        BlockStrLiteral(_) => {
-            state.constraints.push(Constraint::Pattern(
-                region,
-                PatternCategory::Str,
-                Type::string(),
-                expected,
-            ));
-        }
-
-        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
-            add_constraints(pattern, scope, region, expected, state, var_store)
-        }
-
-        RecordDestructure(patterns) => {
-            let ext_var = var_store.fresh();
-            let ext_type = Type::Variable(ext_var);
-
-            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
-            for loc_pattern in patterns {
-                let pat_var = var_store.fresh();
-                let pat_type = Type::Variable(pat_var);
-                let expected = PExpected::NoExpectation(pat_type.clone());
-
-                match loc_pattern.value {
-                    Identifier(name) | RecordField(name, _) => {
-                        let symbol = scope.symbol(name);
-                        if !state.headers.contains_key(&symbol) {
-                            state
-                                .headers
-                                .insert(symbol, Located::at(region, pat_type.clone()));
-                        }
-                        field_types.insert(name.into(), pat_type.clone());
-                    }
-                    _ => panic!("invalid record pattern"),
-                }
-
-                if let RecordField(_, guard) = loc_pattern.value {
-                    add_constraints(
-                        &guard.value,
-                        scope,
-                        guard.region,
-                        expected,
-                        state,
-                        var_store,
-                    );
-                }
-
-                state.vars.push(pat_var);
-            }
-
-            let record_type = Type::Record(field_types, Box::new(ext_type));
-            let record_con =
-                Constraint::Pattern(region, PatternCategory::Record, record_type, expected);
-
-            state.constraints.push(record_con);
-        }
-
-        RecordField(_, _) => {
-            // unreachable, this pattern is handled by already by RecordDestructure
-        }
-
-        GlobalTag(_) | PrivateTag(_) | Apply(_, _) => {
-            panic!("TODO add_constraints for {:?}", pattern);
-        }
-    }
 }
 
 pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Region)>) {

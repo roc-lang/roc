@@ -6,8 +6,9 @@ use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
 use crate::parse::ast::{self, ExposesEntry};
-use crate::region::Located;
+use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
+use crate::types::Constraint;
 use bumpalo::Bump;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -15,6 +16,7 @@ pub struct Module {
     pub name: Option<Box<str>>,
     pub defs: Vec<Def>,
     pub exposed_imports: SendMap<Symbol, Variable>,
+    pub constraint: Constraint,
 }
 
 pub fn canonicalize_module_defs<'a, I>(
@@ -24,7 +26,11 @@ pub fn canonicalize_module_defs<'a, I>(
     _exposes: I,
     scope: &mut Scope,
     var_store: &VarStore,
-) -> (Vec<Def>, SendMap<Symbol, Variable>)
+) -> (
+    Vec<Def>,
+    SendMap<Symbol, Variable>,
+    Vec<(Symbol, Variable, Region)>,
+)
 where
     I: Iterator<Item = Located<ExposesEntry<'a>>>,
 {
@@ -48,6 +54,7 @@ where
     }
 
     let mut env = Env::new(home);
+    let mut lookups = Vec::with_capacity(scope.idents.len());
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
@@ -62,17 +69,24 @@ where
     // by canonicalizing them right before we canonicalize the actual ast::Def nodes.
     for (ident, (symbol, region)) in scope.idents.iter() {
         if ident.first_char().is_lowercase() {
+            let expr_var = var_store.fresh();
+
             // Add an entry to exposed_imports using the current module's name
             // as the key; e.g. if this is the Foo module and we have
             // exposes [ Bar.{ baz } ] then insert Foo.baz as the key, so when
             // anything references `baz` in this Foo module, it will resolve to Bar.baz.
-            exposed_imports.insert(scope.symbol(&*ident.clone().name()), var_store.fresh());
+            exposed_imports.insert(scope.symbol(&*ident.clone().name()), expr_var);
+
+            // This will be used during constraint generation,
+            // to add the usual Lookup constraint as if this were a normal def.
+            lookups.push((symbol.clone(), expr_var, *region));
         } else {
             // TODO add type aliases to type alias dictionary, based on exposed types
         }
     }
 
-    let defs = canonicalize_defs(&mut env, var_store, scope, &desugared);
+    let mut output = Output::default();
+    let defs = canonicalize_defs(&mut env, &mut output.rigids, var_store, scope, &desugared);
     let defs = match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(defs), _) => {
             // TODO examine the patterns, extract toplevel identifiers from them,
@@ -89,5 +103,5 @@ where
     // TODO incorporate rigids into here (possibly by making this be a Let instead
     // of an And)
 
-    (defs, exposed_imports)
+    (defs, exposed_imports, lookups)
 }

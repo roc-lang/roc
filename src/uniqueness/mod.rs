@@ -33,7 +33,6 @@ pub struct Env {
     pub procedures: ImMap<Symbol, Procedure>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_declaration(
     var_store: &VarStore,
     region: Region,
@@ -97,7 +96,7 @@ fn canonicalize_pattern(
             ));
         }
 
-        ExactString(_) => {
+        StrLiteral(_) => {
             state.constraints.push(Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Str,
@@ -106,33 +105,33 @@ fn canonicalize_pattern(
             ));
         }
 
-        RecordDestructure(patterns) => {
-            let ext_var = var_store.fresh();
-            let ext_type = Type::Variable(ext_var);
+        RecordDestructure(ext_var, patterns) => {
+            let ext_type = Type::Variable(*ext_var);
 
             let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
-            for (pattern, maybe_guard) in patterns {
-                let pat_var = var_store.fresh();
-                let pat_type = Type::Variable(pat_var);
+            for (pat_var, label, symbol, maybe_guard) in patterns {
+                let pat_type = Type::Variable(*pat_var);
                 let pattern_expected = PExpected::NoExpectation(pat_type.clone());
 
-                if let Some(loc_guard) = maybe_guard {
-                    canonicalize_pattern(var_store, state, pattern, pattern_expected.clone());
-                    canonicalize_pattern(var_store, state, loc_guard, pattern_expected);
-                } else {
-                    canonicalize_pattern(var_store, state, pattern, pattern_expected);
+                match maybe_guard {
+                    Some((_guard_var, loc_guard)) => {
+                        state.headers.insert(
+                            symbol.clone(),
+                            Located {
+                                region: pattern.region,
+                                value: pat_type.clone(),
+                            },
+                        );
+
+                        canonicalize_pattern(var_store, state, loc_guard, pattern_expected);
+                    }
+                    None => {
+                        canonicalize_pattern(var_store, state, pattern, pattern_expected);
+                    }
                 }
 
-                let name = if let Identifier(n) = &pattern.value {
-                    let a: Box<str> = n.clone().into();
-                    let b: Lowercase = a.into();
-                    b
-                } else {
-                    unreachable!("the lhs must be an identifier at this point");
-                };
-
-                state.vars.push(pat_var);
-                field_types.insert(name, pat_type);
+                state.vars.push(*pat_var);
+                field_types.insert(label.clone(), pat_type);
             }
 
             let record_type =
@@ -292,22 +291,25 @@ pub fn canonicalize_expr(
                 (output, And(constraints))
             }
         }
-        Var(variable, symbol) => {
-            var_usage.register(symbol);
-            match var_usage.get_usage(symbol) {
+        Var {
+            symbol_for_lookup, ..
+        } => {
+            var_usage.register(symbol_for_lookup);
+            match var_usage.get_usage(symbol_for_lookup) {
                 Some(sharing::ReferenceCount::Shared) => {
                     // the variable is used/consumed more than once, so it must be Shared
-                    let val_var = *variable;
+                    let val_var = var_store.fresh();
                     let uniq_var = var_store.fresh();
 
                     let val_type = Variable(val_var);
                     let uniq_type = Variable(uniq_var);
+
                     let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
 
                     (
                         Output::default(),
                         And(vec![
-                            Lookup(symbol.clone(), expected.clone(), region),
+                            Lookup(symbol_for_lookup.clone(), expected.clone(), region),
                             Eq(attr_type, expected, region),
                             Eq(
                                 uniq_type,
@@ -321,24 +323,14 @@ pub fn canonicalize_expr(
                     // no additional constraints, keep uniqueness unbound
                     (
                         Output::default(),
-                        Lookup(symbol.clone(), expected.clone(), region),
+                        Lookup(symbol_for_lookup.clone(), expected.clone(), region),
                     )
                 }
                 None => panic!("symbol not analyzed"),
             }
         }
-        /*
-        FunctionPointer(_variable, symbol) => match env.bound_names.get(symbol) {
-            // constraint expected ~ the type of this symbol in the environment
-            None => panic!("FunctionPointer: no variable for {:?}", symbol),
-            Some(var) => Output::new(Eq(Variable(*var), expected, Region::zero())),
-        },
-        */
-        FunctionPointer(_, _) => {
-            panic!("TODO implement function pointer?");
-        }
         Closure(_symbol, _recursion, args, boxed_body) => {
-            let (ret_var, body) = &**boxed_body;
+            let (body, ret_var) = &**boxed_body;
 
             // first, generate constraints for the arguments
             let mut arg_types = Vec::new();
@@ -409,13 +401,12 @@ pub fn canonicalize_expr(
             (output, constraint)
         }
 
-        Call(fn_expr, loc_args, _) => {
-            let fn_var = var_store.fresh();
-            let fn_type = Variable(fn_var);
-            let ret_var = var_store.fresh();
-            let ret_type = Variable(ret_var);
+        Call(boxed, loc_args, _) => {
+            let (fn_var, fn_expr, ret_var) = &**boxed;
+            let fn_type = Variable(*fn_var);
+            let ret_type = Variable(*ret_var);
             let fn_expected = Expected::NoExpectation(fn_type.clone());
-            let fn_region = Region::zero();
+            let fn_region = fn_expr.region;
 
             let mut vars = Vec::with_capacity(2 + loc_args.len());
 
@@ -425,7 +416,7 @@ pub fn canonicalize_expr(
                 var_store,
                 var_usage,
                 fn_region,
-                &fn_expr,
+                &fn_expr.value,
                 fn_expected,
             );
 
@@ -484,8 +475,13 @@ pub fn canonicalize_expr(
             Output::default(),
             can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
         ),
-        When(variable, loc_cond, branches) => {
-            let cond_var = *variable;
+        When {
+            cond_var,
+            loc_cond,
+            branches,
+            ..
+        } => {
+            let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
             let (mut output, expr_con) = canonicalize_expr(
                 rigids,
@@ -502,9 +498,7 @@ pub fn canonicalize_expr(
 
             match expected {
                 Expected::FromAnnotation(name, arity, _, typ) => {
-                    for (index, ((_patter_var, loc_pattern), (_expr_var, loc_expr))) in
-                        branches.iter().enumerate()
-                    {
+                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = canonicalize_when_branch(
                             var_store,
@@ -554,9 +548,7 @@ pub fn canonicalize_expr(
                     let branch_type = Variable(branch_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, ((_pattern_var, loc_pattern), (_expr_var, loc_expr))) in
-                        branches.iter().enumerate()
-                    {
+                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = canonicalize_when_branch(
                             var_store,
@@ -778,7 +770,7 @@ fn can_defs(
             constraints: Vec::with_capacity(1),
         };
 
-        canonicalize_pattern(var_store, &mut state, &def.pattern, pattern_expected);
+        canonicalize_pattern(var_store, &mut state, &def.loc_pattern, pattern_expected);
 
         flex_info.vars.push(pattern_var);
 
@@ -788,19 +780,19 @@ fn can_defs(
             rigids,
             var_store,
             var_usage,
-            def.expr.region,
-            &def.expr.value,
+            def.loc_expr.region,
+            &def.loc_expr.value,
             Expected::NoExpectation(expr_type.clone()),
         );
 
         add_pattern_to_lookup_types(
             // TODO can we we avoid this clone?
-            def.pattern.clone(),
+            def.loc_pattern.clone(),
             &mut flex_info.def_types,
             expr_type.clone(),
         );
 
-        bound_symbols.extend(pattern::symbols_from_pattern(&def.pattern.value));
+        bound_symbols.extend(pattern::symbols_from_pattern(&def.loc_pattern.value));
 
         flex_info.constraints.push(Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
