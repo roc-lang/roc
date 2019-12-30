@@ -79,9 +79,8 @@ fn can_annotation_help(
                 can_assigned_field(&field.value, var_store, rigids, &mut field_types);
             }
 
-            // fragment variable is free in this case
-            let fragment_var = var_store.fresh();
-            let fragment_type = Type::Variable(fragment_var);
+            // This is a closed record, so the fragment must be {}
+            let fragment_type = Type::EmptyRec;
 
             Type::Record(field_types, Box::new(fragment_type))
         }

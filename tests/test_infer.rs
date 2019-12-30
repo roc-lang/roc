@@ -994,4 +994,19 @@ mod test_infer {
             "Int",
         );
     }
+
+    #[test]
+    fn record_type_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                foo : { x : custom } -> custom
+                foo = \{ x } -> x
+
+                foo 
+            "#
+            ),
+            "{ x : custom } -> custom",
+        );
+    }
 }
