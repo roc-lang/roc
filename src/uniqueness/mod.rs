@@ -173,11 +173,11 @@ pub fn canonicalize_expr(
     pub use crate::can::expr::Expr::*;
 
     match expr {
-        Int(_) => {
+        Int(_, _) => {
             let constraint = constrain::int_literal(var_store, expected, region);
             (Output::default(), constraint)
         }
-        Float(_) => {
+        Float(_, _) => {
             let constraint = constrain::float_literal(var_store, expected, region);
             (Output::default(), constraint)
         }
@@ -201,7 +201,7 @@ pub fn canonicalize_expr(
             let mut constraints = Vec::with_capacity(1 + fields.len());
             let mut output = Output::default();
 
-            for (label, loc_expr) in fields.iter() {
+            for (label, (_, loc_expr)) in fields.iter() {
                 let field_var = var_store.fresh();
                 let field_type = Variable(field_var);
                 let field_expected = Expected::NoExpectation(field_type.clone());
@@ -257,9 +257,8 @@ pub fn canonicalize_expr(
                 let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
                 let mut references = References::new();
 
-                for loc_elem in loc_elems.iter() {
-                    let elem_var = var_store.fresh();
-                    let elem_type = Variable(elem_var);
+                for (elem_var, loc_elem) in loc_elems.iter() {
+                    let elem_type = Variable(*elem_var);
                     let elem_expected = Expected::NoExpectation(elem_type.clone());
                     let list_elem_constraint = Eq(
                         list_type.clone(),
@@ -338,7 +337,9 @@ pub fn canonicalize_expr(
         FunctionPointer(_, _) => {
             panic!("TODO implement function pointer?");
         }
-        Closure(_symbol, _recursion, args, body) => {
+        Closure(_symbol, _recursion, args, boxed_body) => {
+            let (ret_var, body) = &**boxed_body;
+
             // first, generate constraints for the arguments
             let mut arg_types = Vec::new();
             let mut arg_vars = Vec::new();
@@ -350,14 +351,12 @@ pub fn canonicalize_expr(
             };
 
             let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
-            let ret_var = var_store.fresh();
-            let ret_type = Variable(ret_var);
+            let ret_type = Variable(*ret_var);
 
-            vars.push(ret_var);
+            vars.push(*ret_var);
 
-            for pattern in args {
-                let arg_var = var_store.fresh();
-                let arg_typ = Variable(arg_var);
+            for (arg_var, pattern) in args {
+                let arg_typ = Variable(*arg_var);
                 canonicalize_pattern(
                     var_store,
                     &mut state,
@@ -367,10 +366,8 @@ pub fn canonicalize_expr(
                 arg_types.push(arg_typ);
                 arg_vars.push(arg_var);
 
-                vars.push(arg_var);
+                vars.push(*arg_var);
             }
-
-            vars.push(ret_var);
 
             let fn_typ = constrain::lift(
                 var_store,
@@ -387,7 +384,7 @@ pub fn canonicalize_expr(
             );
 
             // remove identifiers bound in the arguments from VarUsage
-            for pattern in args {
+            for (_, pattern) in args {
                 for identifier in pattern::symbols_from_pattern(&pattern.value) {
                     var_usage.unregister(&identifier);
                 }
@@ -440,10 +437,9 @@ pub fn canonicalize_expr(
             let mut arg_types = Vec::with_capacity(loc_args.len());
             let mut arg_cons = Vec::with_capacity(loc_args.len());
 
-            for (index, loc_arg) in loc_args.iter().enumerate() {
+            for (index, (arg_var, loc_arg)) in loc_args.iter().enumerate() {
                 let region = loc_arg.region;
-                let arg_var = var_store.fresh();
-                let arg_type = Variable(arg_var);
+                let arg_type = Variable(*arg_var);
 
                 let reason = Reason::AnonymousFnArg {
                     arg_index: index as u8,
@@ -459,7 +455,7 @@ pub fn canonicalize_expr(
                     expected_arg,
                 );
 
-                vars.push(arg_var);
+                vars.push(*arg_var);
                 arg_types.push(arg_type);
                 arg_cons.push(arg_con);
             }
@@ -506,7 +502,9 @@ pub fn canonicalize_expr(
 
             match expected {
                 Expected::FromAnnotation(name, arity, _, typ) => {
-                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, ((_patter_var, loc_pattern), (_expr_var, loc_expr))) in
+                        branches.iter().enumerate()
+                    {
                         let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = canonicalize_when_branch(
                             var_store,
@@ -556,7 +554,9 @@ pub fn canonicalize_expr(
                     let branch_type = Variable(branch_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, ((_pattern_var, loc_pattern), (_expr_var, loc_expr))) in
+                        branches.iter().enumerate()
+                    {
                         let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = canonicalize_when_branch(
                             var_store,
@@ -613,11 +613,14 @@ pub fn canonicalize_expr(
             (output, And(constraints))
         }
 
-        Access(loc_expr, field) => {
-            let ext_var = var_store.fresh();
-            let field_var = var_store.fresh();
-            let ext_type = Type::Variable(ext_var);
-            let field_type = Type::Variable(field_var);
+        Access {
+            ext_var,
+            field_var,
+            loc_expr,
+            field,
+        } => {
+            let ext_type = Type::Variable(*ext_var);
+            let field_type = Type::Variable(*field_var);
 
             let mut rec_field_types = SendMap::default();
 
@@ -637,22 +640,23 @@ pub fn canonicalize_expr(
             );
 
             constraint = exists(
-                vec![field_var, ext_var],
+                vec![*field_var, *ext_var],
                 And(vec![constraint, Eq(field_type, expected, region)]),
             );
 
             (output, constraint)
         }
 
-        Accessor(name) => {
-            let ext_var = var_store.fresh();
-            let ext_type = Variable(ext_var);
-
-            let field_var = var_store.fresh();
-            let field_type = Variable(field_var);
+        Accessor {
+            field,
+            field_var,
+            ext_var,
+        } => {
+            let ext_type = Variable(*ext_var);
+            let field_type = Variable(*field_var);
 
             let mut field_types = SendMap::default();
-            let field_name: Lowercase = name.clone().into();
+            let field_name = field.clone();
             field_types.insert(field_name, field_type.clone());
             let record_type =
                 constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
@@ -660,7 +664,7 @@ pub fn canonicalize_expr(
             (
                 Output::default(),
                 exists(
-                    vec![field_var, ext_var],
+                    vec![*field_var, *ext_var],
                     Eq(
                         Type::Function(vec![record_type], Box::new(field_type)),
                         expected,

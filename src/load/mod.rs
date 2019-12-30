@@ -12,7 +12,6 @@ use crate::region::{Located, Region};
 use crate::solve;
 use crate::subs::VarStore;
 use crate::subs::{Subs, Variable};
-use crate::types::Constraint;
 use crate::unify::Problems;
 use bumpalo::Bump;
 use futures::future::join_all;
@@ -219,7 +218,7 @@ fn load_filename(
                     let mut scope =
                         Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
 
-                    let (defs, exposed_imports, constraint) = parse_and_canonicalize_defs(
+                    let (defs, exposed_imports) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         declared_name.clone(),
@@ -231,7 +230,6 @@ fn load_filename(
                         name: Some(declared_name),
                         defs,
                         exposed_imports,
-                        constraint,
                     };
 
                     LoadedModule::Valid(module)
@@ -260,7 +258,7 @@ fn load_filename(
                     let mut scope = Scope::new(".".into(), scope_from_imports);
 
                     // The app module has no declared name. Pass it as "".
-                    let (defs, exposed_imports, constraint) = parse_and_canonicalize_defs(
+                    let (defs, exposed_imports) = parse_and_canonicalize_defs(
                         &arena,
                         state,
                         "".into(),
@@ -272,7 +270,6 @@ fn load_filename(
                         name: None,
                         defs,
                         exposed_imports,
-                        constraint,
                     };
 
                     LoadedModule::Valid(module)
@@ -296,7 +293,7 @@ fn parse_and_canonicalize_defs<'a, I>(
     exposes: I,
     scope: &mut Scope,
     var_store: &VarStore,
-) -> (Vec<Def>, SendMap<Symbol, Variable>, Constraint)
+) -> (Vec<Def>, SendMap<Symbol, Variable>)
 where
     I: Iterator<Item = Located<ExposesEntry<'a>>>,
 {
@@ -364,6 +361,11 @@ pub fn solve_loaded(
 
     let mut vars_by_symbol: ImMap<Symbol, Variable> = ImMap::default();
     let mut constraints = Vec::with_capacity(loaded_deps.len() + 1);
+    let module_constraint = if true {
+        panic!("TODO populate constraints for each module");
+    } else {
+        crate::types::Constraint::True
+    };
 
     // All the exposed imports should be available in the solver's vars_by_symbol
     for (symbol, var) in module.exposed_imports.iter() {
@@ -393,8 +395,6 @@ pub fn solve_loaded(
                     vars_by_symbol.insert(symbol, var);
                 }
 
-                constraints.push(valid_dep.constraint);
-
                 // All its top-level defs should also be available in vars_by_symbol
                 for def in valid_dep.defs {
                     for (symbol, var) in def.vars_by_symbol {
@@ -417,5 +417,5 @@ pub fn solve_loaded(
         solve::run(&vars_by_symbol, problems, subs, &constraint);
     }
 
-    solve::run(&vars_by_symbol, problems, subs, &module.constraint);
+    solve::run(&vars_by_symbol, problems, subs, &module_constraint);
 }

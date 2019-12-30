@@ -116,8 +116,8 @@ fn compile_expr<'ctx, 'env>(
     use crate::can::expr::Expr::*;
 
     match *expr {
-        Int(num) => IntConst(env.context.i64_type().const_int(num as u64, false)),
-        Float(num) => FloatConst(env.context.f64_type().const_float(num)),
+        Int(_, num) => IntConst(env.context.i64_type().const_int(num as u64, false)),
+        Float(_, num) => FloatConst(env.context.f64_type().const_float(num)),
         When(_, ref loc_cond_expr, ref branches) => {
             if branches.len() < 2 {
                 panic!("TODO support when-expressions of fewer than 2 branches.");
@@ -125,7 +125,8 @@ fn compile_expr<'ctx, 'env>(
             if branches.len() == 2 {
                 let mut iter = branches.iter();
 
-                let (pattern, branch_expr) = iter.next().unwrap();
+                let ((_pattern_var, pattern), (_expr_var, branch_expr)) = iter.next().unwrap();
+                let (_, (_, else_expr)) = iter.next().unwrap();
 
                 compile_when_branch(
                     env,
@@ -133,7 +134,7 @@ fn compile_expr<'ctx, 'env>(
                     &loc_cond_expr.value,
                     pattern.value.clone(),
                     &branch_expr.value,
-                    &iter.next().unwrap().1.value,
+                    &else_expr.value,
                     vars,
                 )
             } else {

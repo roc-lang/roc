@@ -58,38 +58,9 @@ pub enum PatternType {
     WhenBranch,
 }
 
-// TODO trim down these arguments
-#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_pattern<'a>(
     env: &'a mut Env,
-    state: &'a mut PatternState,
     var_store: &VarStore,
-    scope: &mut Scope,
-    pattern_type: PatternType,
-    pattern: &'a ast::Pattern<'a>,
-    region: Region,
-    shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
-    expected: PExpected<Type>,
-) -> Located<Pattern> {
-    // add_constraints recurses by itself
-    add_constraints(&pattern, &scope, region, expected, state, var_store);
-
-    canonicalize_pattern_help(
-        env,
-        state,
-        scope,
-        pattern_type,
-        pattern,
-        region,
-        shadowable_idents,
-    )
-}
-
-// TODO trim down these arguments
-#[allow(clippy::too_many_arguments)]
-fn canonicalize_pattern_help<'a>(
-    env: &'a mut Env,
-    state: &'a mut PatternState,
     scope: &mut Scope,
     pattern_type: PatternType,
     pattern: &'a ast::Pattern<'a>,
@@ -174,9 +145,9 @@ fn canonicalize_pattern_help<'a>(
         },
 
         &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
-            return canonicalize_pattern_help(
+            return canonicalize_pattern(
                 env,
-                state,
+                var_store,
                 scope,
                 pattern_type,
                 sub_pattern,
@@ -214,9 +185,9 @@ fn canonicalize_pattern_help<'a>(
                             Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
                         };
 
-                        let can_guard = canonicalize_pattern_help(
+                        let can_guard = canonicalize_pattern(
                             env,
-                            state,
+                            var_store,
                             scope,
                             pattern_type,
                             &loc_guard.value,

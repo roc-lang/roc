@@ -1,16 +1,13 @@
-use crate::can::def::{canonicalize_defs, sort_can_defs, Def, Info};
+use crate::can::def::{canonicalize_defs, sort_can_defs, Def};
 use crate::can::env::Env;
 use crate::can::expr::Output;
 use crate::can::operator::desugar_def;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, SendMap};
+use crate::collections::SendMap;
 use crate::parse::ast::{self, ExposesEntry};
 use crate::region::Located;
 use crate::subs::{VarStore, Variable};
-use crate::types::Constraint::{self, *};
-use crate::types::Expected::*;
-use crate::types::Type;
 use bumpalo::Bump;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -18,7 +15,6 @@ pub struct Module {
     pub name: Option<Box<str>>,
     pub defs: Vec<Def>,
     pub exposed_imports: SendMap<Symbol, Variable>,
-    pub constraint: Constraint,
 }
 
 pub fn canonicalize_module_defs<'a, I>(
@@ -28,7 +24,7 @@ pub fn canonicalize_module_defs<'a, I>(
     _exposes: I,
     scope: &mut Scope,
     var_store: &VarStore,
-) -> (Vec<Def>, SendMap<Symbol, Variable>, Constraint)
+) -> (Vec<Def>, SendMap<Symbol, Variable>)
 where
     I: Iterator<Item = Located<ExposesEntry<'a>>>,
 {
@@ -52,8 +48,6 @@ where
     }
 
     let mut env = Env::new(home);
-    let rigids = ImMap::default();
-    let mut flex_info = Info::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
@@ -68,38 +62,17 @@ where
     // by canonicalizing them right before we canonicalize the actual ast::Def nodes.
     for (ident, (symbol, region)) in scope.idents.iter() {
         if ident.first_char().is_lowercase() {
-            let expr_var = var_store.fresh();
-
             // Add an entry to exposed_imports using the current module's name
             // as the key; e.g. if this is the Foo module and we have
             // exposes [ Bar.{ baz } ] then insert Foo.baz as the key, so when
             // anything references `baz` in this Foo module, it will resolve to Bar.baz.
-            exposed_imports.insert(scope.symbol(&*ident.clone().name()), expr_var);
-
-            // Add the usual Lookup constraint as if this were a normal def.
-            let expr_type = Type::Variable(expr_var);
-            let expected = NoExpectation(expr_type.clone());
-
-            flex_info
-                .constraints
-                .push(Lookup(symbol.clone(), expected, *region));
+            exposed_imports.insert(scope.symbol(&*ident.clone().name()), var_store.fresh());
         } else {
             // TODO add type aliases to type alias dictionary, based on exposed types
         }
     }
 
-    let mut found_rigids = SendMap::default();
-
-    let defs = canonicalize_defs(
-        &rigids,
-        &mut found_rigids,
-        &mut env,
-        var_store,
-        scope,
-        &desugared,
-        &mut flex_info,
-    );
-
+    let defs = canonicalize_defs(&mut env, var_store, scope, &desugared);
     let defs = match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(defs), _) => {
             // TODO examine the patterns, extract toplevel identifiers from them,
@@ -116,5 +89,5 @@ where
     // TODO incorporate rigids into here (possibly by making this be a Let instead
     // of an And)
 
-    (defs, exposed_imports, And(flex_info.constraints))
+    (defs, exposed_imports)
 }
