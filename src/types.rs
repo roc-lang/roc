@@ -28,7 +28,7 @@ pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Record(SendMap<Lowercase, Type>, Box<Type>),
+    Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
@@ -39,6 +39,21 @@ pub enum Type {
     Variable(Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RecordFieldLabel {
+    Required(Lowercase),
+    Optional(Lowercase),
+}
+
+impl fmt::Debug for RecordFieldLabel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RecordFieldLabel::Required(label) => write!(f, "{}", label),
+            RecordFieldLabel::Optional(label) => write!(f, "{}?", label),
+        }
+    }
 }
 
 impl fmt::Debug for Type {
@@ -105,7 +120,7 @@ impl fmt::Debug for Type {
                 let mut any_written_yet = false;
 
                 for (label, field_type) in fields {
-                    write!(f, "{} : {:?}", label, field_type)?;
+                    write!(f, "{:?} : {:?}", label, field_type)?;
 
                     if any_written_yet {
                         write!(f, ", ")?;
@@ -324,7 +339,7 @@ pub enum ErrorType {
     Type(ModuleName, Uppercase, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    Record(SendMap<Lowercase, ErrorType>, RecordExt),
+    Record(SendMap<RecordFieldLabel, ErrorType>, RecordExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(
         ModuleName,

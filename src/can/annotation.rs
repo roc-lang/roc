@@ -2,6 +2,7 @@ use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, SendMap};
 use crate::parse::ast::{AssignedField, TypeAnnotation};
 use crate::subs::{VarStore, Variable};
+use crate::types::RecordFieldLabel;
 use crate::types::Type;
 
 pub fn canonicalize_annotation(
@@ -108,17 +109,20 @@ fn can_assigned_field<'a>(
     field: &AssignedField<'a, TypeAnnotation<'a>>,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    field_types: &mut SendMap<Lowercase, Type>,
+    field_types: &mut SendMap<RecordFieldLabel, Type>,
 ) {
     use crate::parse::ast::AssignedField::*;
 
     match field {
         LabeledValue(field_name, _, annotation) => {
             let field_type = can_annotation_help(&annotation.value, var_store, rigids);
-            field_types.insert(Lowercase::from(field_name.value), field_type);
+            let label = RecordFieldLabel::Required(Lowercase::from(field_name.value));
+            field_types.insert(label, field_type);
         }
-        OptionalField(_field_name, _, _annotation) => {
-            panic!("TODO handle optional field");
+        OptionalField(field_name, _, annotation) => {
+            let field_type = can_annotation_help(&annotation.value, var_store, rigids);
+            let label = RecordFieldLabel::Optional(Lowercase::from(field_name.value));
+            field_types.insert(label, field_type);
         }
         LabelOnly(loc_field_name) => {
             // Interpret { a, b } as { a : a, b : b }
@@ -132,7 +136,8 @@ fn can_assigned_field<'a>(
                     Type::Variable(field_var)
                 }
             };
-            field_types.insert(field_name, field_type);
+            let label = RecordFieldLabel::Required(field_name);
+            field_types.insert(label, field_type);
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
             can_assigned_field(nested, var_store, rigids, field_types)

@@ -3,6 +3,7 @@ use crate::collections::ImMap;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, Subs, Variable};
 use crate::types::Problem;
+use crate::types::RecordFieldLabel;
 use std::cmp::Ordering;
 
 struct Context {
@@ -13,7 +14,7 @@ struct Context {
 }
 
 struct RecordStructure {
-    fields: ImMap<Lowercase, Variable>,
+    fields: ImMap<RecordFieldLabel, Variable>,
     ext: Variable,
 }
 
@@ -243,8 +244,8 @@ fn unify_shared_fields(
     pool: &mut Pool,
     problems: &mut Problems,
     ctx: &Context,
-    shared_fields: ImMap<Lowercase, (Variable, Variable)>,
-    other_fields: ImMap<Lowercase, Variable>,
+    shared_fields: ImMap<RecordFieldLabel, (Variable, Variable)>,
+    other_fields: ImMap<RecordFieldLabel, Variable>,
     ext: Variable,
 ) {
     let mut matching_fields = ImMap::default();
@@ -418,7 +419,7 @@ fn unify_flex(
 fn gather_fields(
     subs: &mut Subs,
     problems: &mut Problems,
-    fields: ImMap<Lowercase, Variable>,
+    fields: ImMap<RecordFieldLabel, Variable>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::FlatType::*;

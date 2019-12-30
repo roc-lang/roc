@@ -24,6 +24,7 @@ use crate::subs::{VarStore, Variable};
 use crate::types::AnnotationSource::*;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
+use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::types::{LetConstraint, PExpected, PReason, Reason};
 use im_rc::Vector;
@@ -156,7 +157,7 @@ pub fn canonicalize_expr(
 
                     field_vars.push(field_var);
                     field_exprs.insert(label.clone(), field_expr);
-                    field_types.insert(label, field_type);
+                    field_types.insert(RecordFieldLabel::Required(label), field_type);
 
                     constraints.push(field_con);
                     output.references = output.references.union(field_out.references);
@@ -695,7 +696,8 @@ pub fn canonicalize_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            rec_field_types.insert(Lowercase::from(*field), field_type.clone());
+            let label = RecordFieldLabel::Required(Lowercase::from(*field));
+            rec_field_types.insert(label, field_type.clone());
 
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
@@ -729,8 +731,9 @@ pub fn canonicalize_expr(
             let field_type = Variable(field_var);
 
             let mut field_types = SendMap::default();
-            let field_name: Lowercase = (*field).into();
-            field_types.insert(field_name.clone(), field_type.clone());
+            let field_name = Lowercase::from(*field);
+            let label = RecordFieldLabel::Required(field_name.clone());
+            field_types.insert(label, field_type.clone());
             let record_type = Type::Record(field_types, Box::new(ext_type));
 
             (

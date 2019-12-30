@@ -18,6 +18,7 @@ use crate::types::LetConstraint;
 use crate::types::PExpected::{self};
 use crate::types::PReason::{self};
 use crate::types::Reason;
+use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::uniqueness::constrain::exists;
 use crate::uniqueness::sharing::VarUsage;
@@ -110,7 +111,7 @@ fn canonicalize_pattern(
             let ext_var = var_store.fresh();
             let ext_type = Type::Variable(ext_var);
 
-            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
             for (pattern, maybe_guard) in patterns {
                 let pat_var = var_store.fresh();
                 let pat_type = Type::Variable(pat_var);
@@ -126,7 +127,7 @@ fn canonicalize_pattern(
                 let name = if let Identifier(n) = &pattern.value {
                     let a: Box<str> = n.clone().into();
                     let b: Lowercase = a.into();
-                    b
+                    RecordFieldLabel::Required(b)
                 } else {
                     unreachable!("the lhs must be an identifier at this point");
                 };
@@ -215,7 +216,7 @@ pub fn canonicalize_expr(
                 );
 
                 field_vars.push(field_var);
-                field_types.insert(label.clone(), field_type);
+                field_types.insert(RecordFieldLabel::Required(label.clone()), field_type);
 
                 constraints.push(field_con);
                 output.references = output.references.union(field_out.references);
@@ -621,7 +622,8 @@ pub fn canonicalize_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            rec_field_types.insert(Lowercase::from(field.clone()), field_type.clone());
+            let label = RecordFieldLabel::Required(Lowercase::from(field.clone()));
+            rec_field_types.insert(label, field_type.clone());
 
             let record_type =
                 constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));
@@ -653,7 +655,8 @@ pub fn canonicalize_expr(
 
             let mut field_types = SendMap::default();
             let field_name: Lowercase = name.clone().into();
-            field_types.insert(field_name, field_type.clone());
+            let label = RecordFieldLabel::Required(field_name);
+            field_types.insert(label, field_type.clone());
             let record_type =
                 constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
 
