@@ -401,8 +401,29 @@ pub fn constrain_expr(
             Info::with_capacity(defs.len()),
             loc_ret,
         ),
-        LetNonRec(_def, _loc_ret) => {
-            panic!("TODO constrain LetNonRec");
+        LetNonRec(def, loc_ret) => {
+            let ret_con =
+                constrain_expr(&ImMap::default(), loc_ret.region, &loc_ret.value, expected);
+
+            let mut found_rigids = SendMap::default();
+            let mut flex_info = Info::default();
+            constrain_def(rigids, &mut found_rigids, def, &mut flex_info);
+
+            let constraint = Let(Box::new(LetConstraint {
+                rigid_vars: Vec::new(),
+                flex_vars: Vec::new(),
+                def_types: SendMap::default(), // INCORRECT!
+                defs_constraint: Let(Box::new(LetConstraint {
+                    rigid_vars: Vec::new(),
+                    flex_vars: Vec::new(),
+                    def_types: flex_info.def_types.clone(),
+                    defs_constraint: And(flex_info.constraints),
+                    ret_constraint: True,
+                })),
+                ret_constraint: ret_con,
+            }));
+
+            constraint
         }
         Tag(_, _) => {
             panic!("TODO constrain Tag");

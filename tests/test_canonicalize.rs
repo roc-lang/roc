@@ -266,6 +266,19 @@ mod test_canonicalize {
                 }
                 None => panic!("Looking for assignment at {} but the list is too short", i),
             },
+            LetNonRec(def, _) => {
+                if i > 0 {
+                    // recurse in the chain
+                    get_closure(&def.loc_expr.value, i - 1)
+                } else {
+                    match &def.loc_expr.value {
+                        Closure(_, recursion, _, _) => recursion.clone(),
+                        other @ _ => {
+                            panic!("assignment at {} is not a closure, but a {:?}", i, other)
+                        }
+                    }
+                }
+            }
             _ => panic!("expression is not a Defs, but a {:?}", expr),
         }
     }
