@@ -41,6 +41,36 @@ pub struct CanDefs {
     pub defined_idents: Vector<(Ident, (Symbol, Region))>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Declaration {
+    Declare(Def),
+    DeclareRec(Vec<Def>),
+}
+
+impl Declaration {
+    pub fn def_count(&self) -> usize {
+        use Declaration::*;
+        match self {
+            Declare(_) => 1,
+            DeclareRec(defs) => defs.len(),
+        }
+    }
+}
+
+impl IntoIterator for Declaration {
+    type Item = Def;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        use Declaration::*;
+        match self {
+            // TODO remove singleton vec?
+            Declare(def) => vec![def].into_iter(),
+            DeclareRec(defs) => defs.into_iter(),
+        }
+    }
+}
+
 #[inline(always)]
 pub fn canonicalize_defs<'a>(
     env: &mut Env,
@@ -138,7 +168,8 @@ pub fn sort_can_defs(
     env: &mut Env,
     defs: CanDefs,
     mut output: Output,
-) -> (Result<Vec<Def>, RuntimeError>, Output) {
+) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
+    use Declaration::*;
     let CanDefs {
         defined_idents,
         refs_by_symbol,
@@ -227,6 +258,8 @@ pub fn sort_can_defs(
         Ok(sorted_symbols) => {
             let mut can_defs = Vec::new();
 
+            // let mut it = sorted_symbols.into_iter().rev();
+
             for symbol in sorted_symbols
                 .into_iter()
                 // Topological sort gives us the reverse of the sorting we want!
@@ -248,7 +281,7 @@ pub fn sort_can_defs(
                 }
             }
 
-            (Ok(can_defs), output)
+            (Ok(vec![DeclareRec(can_defs)]), output)
         }
         Err(node_in_cycle) => {
             // We have one node we know is in the cycle.
@@ -747,7 +780,31 @@ pub fn can_defs_with_return<'a>(
     output.rigids = output.rigids.union(found_rigids);
 
     match can_defs {
-        Ok(defs) => (LetRec(defs, Box::new(ret_expr)), output),
+        Ok(mut decls) => {
+            let mut loc_expr: Located<Expr> = ret_expr;
+
+            // TODO right to left traversal without a copy/clone
+            decls.reverse();
+
+            for declaration in decls {
+                match declaration {
+                    Declaration::Declare(def) => {
+                        loc_expr = Located {
+                            region: Region::zero(),
+                            value: Expr::LetNonRec(Box::new(def), Box::new(loc_expr)),
+                        };
+                    }
+                    Declaration::DeclareRec(defs) => {
+                        loc_expr = Located {
+                            region: Region::zero(),
+                            value: Expr::LetRec((*defs).to_vec(), Box::new(loc_expr)),
+                        };
+                    }
+                }
+            }
+
+            (loc_expr.value, output)
+        }
         Err(err) => (RuntimeError(err), output),
     }
 }

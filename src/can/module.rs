@@ -1,4 +1,4 @@
-use crate::can::def::{canonicalize_defs, sort_can_defs, Def};
+use crate::can::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::can::env::Env;
 use crate::can::expr::Output;
 use crate::can::operator::desugar_def;
@@ -14,13 +14,13 @@ use bumpalo::Bump;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
     pub name: Option<Box<str>>,
-    pub defs: Vec<Def>,
+    pub declarations: Vec<Declaration>,
     pub exposed_imports: SendMap<Symbol, Variable>,
     pub constraint: Constraint,
 }
 
 pub struct ModuleOutput {
-    pub defs: Vec<Def>,
+    pub declarations: Vec<Declaration>,
     pub exposed_imports: SendMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
 }
@@ -89,7 +89,7 @@ where
 
     let mut output = Output::default();
     let defs = canonicalize_defs(&mut env, &mut output.rigids, var_store, scope, &desugared);
-    let defs = match sort_can_defs(&mut env, defs, Output::default()) {
+    let declarations = match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(defs), _) => {
             // TODO examine the patterns, extract toplevel identifiers from them,
             // and verify that everything in the `exposes` list is actually present in
@@ -106,7 +106,7 @@ where
     // of an And)
 
     ModuleOutput {
-        defs,
+        declarations,
         exposed_imports,
         lookups,
     }

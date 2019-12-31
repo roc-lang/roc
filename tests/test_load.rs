@@ -61,8 +61,13 @@ mod test_load {
         test_async(async {
             let module = expect_module(load(src_dir, filename, &mut deps, 0).await);
 
+            let def_count: usize = module
+                .declarations
+                .iter()
+                .map(|decl| decl.def_count())
+                .sum();
             assert_eq!(module.name, Some("Primary".into()));
-            assert_eq!(module.defs.len(), 6);
+            assert_eq!(def_count, 6);
 
             let module_names: Vec<Option<Box<str>>> = deps
                 .into_iter()
@@ -89,8 +94,13 @@ mod test_load {
         test_async(async {
             let module = expect_module(load(src_dir, filename, &mut deps, 0).await);
 
+            let def_count: usize = module
+                .declarations
+                .iter()
+                .map(|decl| decl.def_count())
+                .sum();
             assert_eq!(module.name, Some("Defaults".into()));
-            assert_eq!(module.defs.len(), 0);
+            assert_eq!(def_count, 0);
 
             let module_names: Vec<Option<Box<str>>> = deps
                 .into_iter()
@@ -119,8 +129,13 @@ mod test_load {
             let filename = src_dir.join("Primary.roc");
             let module = expect_module(load(src_dir, filename, &mut deps, vars_created).await);
 
+            let def_count: usize = module
+                .declarations
+                .iter()
+                .map(|decl| decl.def_count())
+                .sum();
             assert_eq!(module.name, Some("Primary".into()));
-            assert_eq!(module.defs.len(), 6);
+            assert_eq!(def_count, 6);
 
             let module_names: Vec<Option<Box<str>>> = deps
                 .into_iter()

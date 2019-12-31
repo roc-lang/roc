@@ -1,3 +1,4 @@
+use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
 use crate::can::ident::Lowercase;
@@ -458,6 +459,26 @@ fn constrain_field(
 #[inline(always)]
 fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constraint {
     Eq(EmptyRec, expected, region)
+}
+
+#[inline(always)]
+pub fn constrain_decls(
+    rigids: &Rigids,
+    found_rigids: &mut SendMap<Variable, Lowercase>,
+    decls: &[Declaration],
+    flex_info: &mut Info,
+) {
+    // TODO simplify iteration with IntoIter
+    for decl in decls {
+        match decl {
+            Declaration::Declare(def) => constrain_def(rigids, found_rigids, def, flex_info),
+            Declaration::DeclareRec(defs) => {
+                for def in defs {
+                    constrain_def(rigids, found_rigids, def, flex_info)
+                }
+            }
+        }
+    }
 }
 
 #[inline(always)]

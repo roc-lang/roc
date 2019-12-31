@@ -1,4 +1,4 @@
-use crate::can::def::Def;
+use crate::can::def::Declaration;
 use crate::can::module::{canonicalize_module_defs, Module, ModuleOutput};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
@@ -219,7 +219,7 @@ fn load_filename(
 
                     let mut scope =
                         Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
-                    let (defs, exposed_imports, constraint) = process_defs(
+                    let (declarations, exposed_imports, constraint) = process_defs(
                         &arena,
                         state,
                         declared_name.clone(),
@@ -229,7 +229,7 @@ fn load_filename(
                     );
                     let module = Module {
                         name: Some(declared_name),
-                        defs,
+                        declarations,
                         exposed_imports,
                         constraint,
                     };
@@ -260,7 +260,7 @@ fn load_filename(
                     let mut scope = Scope::new(".".into(), scope_from_imports);
 
                     // The app module has no declared name. Pass it as "".
-                    let (defs, exposed_imports, constraint) = process_defs(
+                    let (declarations, exposed_imports, constraint) = process_defs(
                         &arena,
                         state,
                         "".into(),
@@ -270,7 +270,7 @@ fn load_filename(
                     );
                     let module = Module {
                         name: None,
-                        defs,
+                        declarations,
                         exposed_imports,
                         constraint,
                     };
@@ -296,7 +296,7 @@ fn process_defs<'a, I>(
     exposes: I,
     scope: &mut Scope,
     var_store: &VarStore,
-) -> (Vec<Def>, SendMap<Symbol, Variable>, Constraint)
+) -> (Vec<Declaration>, SendMap<Symbol, Variable>, Constraint)
 where
     I: Iterator<Item = Located<ExposesEntry<'a>>>,
 {
@@ -305,14 +305,14 @@ where
         .expect("TODO gracefully handle parse error on module defs");
 
     let ModuleOutput {
-        defs,
+        declarations,
         exposed_imports,
         lookups,
     } = canonicalize_module_defs(arena, parsed_defs, home, exposes, scope, var_store);
 
-    let constraint = constrain_module(&defs, lookups);
+    let constraint = constrain_module(&declarations, lookups);
 
-    (defs, exposed_imports, constraint)
+    (declarations, exposed_imports, constraint)
 }
 
 fn load_import(
@@ -368,6 +368,7 @@ pub fn solve_loaded(
     subs: &mut Subs,
     loaded_deps: LoadedDeps,
 ) {
+    use Declaration::*;
     use LoadedModule::*;
 
     let mut vars_by_symbol: ImMap<Symbol, Variable> = ImMap::default();
@@ -379,9 +380,22 @@ pub fn solve_loaded(
     }
 
     // All the top-level defs should also be available in vars_by_symbol
-    for def in module.defs.iter() {
-        for (symbol, var) in def.pattern_vars.iter() {
-            vars_by_symbol.insert(symbol.clone(), var.clone());
+    for decl in &module.declarations {
+        // TODO use Declaration::IntoIter here
+        // couldn't get it to work with the borrow checker
+        match decl {
+            Declare(def) => {
+                for (symbol, var) in def.pattern_vars.iter() {
+                    vars_by_symbol.insert(symbol.clone(), var.clone());
+                }
+            }
+            DeclareRec(defs) => {
+                for def in defs {
+                    for (symbol, var) in def.pattern_vars.iter() {
+                        vars_by_symbol.insert(symbol.clone(), var.clone());
+                    }
+                }
+            }
         }
     }
 
@@ -402,9 +416,11 @@ pub fn solve_loaded(
                 }
 
                 // All its top-level defs should also be available in vars_by_symbol
-                for def in valid_dep.defs {
-                    for (symbol, var) in def.pattern_vars {
-                        vars_by_symbol.insert(symbol, var);
+                for decl in valid_dep.declarations {
+                    for def in decl.into_iter() {
+                        for (symbol, var) in def.pattern_vars {
+                            vars_by_symbol.insert(symbol, var);
+                        }
                     }
                 }
 
