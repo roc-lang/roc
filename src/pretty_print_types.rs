@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{MutMap, MutSet};
 use crate::subs::{Content, FlatType, Subs, Variable};
-use crate::types::{self, name_type_var};
+use crate::types::{self, name_type_var, RecordFieldLabel};
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -202,7 +202,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                 let mut sorted_fields = Vec::with_capacity(fields.len());
 
                 for (label, field_var) in fields {
-                    sorted_fields.push((label.into_str(), field_var));
+                    sorted_fields.push((label, field_var));
                 }
 
                 sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -216,7 +216,13 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                         any_written_yet = true;
                     }
 
-                    buf.push_str(&label);
+                    match label {
+                        RecordFieldLabel::Required(l) => buf.push_str(&l.into_str()),
+                        RecordFieldLabel::Optional(l) => {
+                            buf.push_str(&l.into_str());
+                            buf.push('?')
+                        }
+                    }
                     buf.push_str(" : ");
                     write_content(subs.get(field_var).content, subs, buf, parens);
                 }

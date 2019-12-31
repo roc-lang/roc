@@ -1,13 +1,11 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Output;
+use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::can::procedure::{Procedure, References};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
-// use crate::constrain::{self, exists};
-use crate::can::ident::Lowercase;
-use crate::can::pattern;
 use crate::ident::Ident;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
@@ -18,6 +16,7 @@ use crate::types::LetConstraint;
 use crate::types::PExpected::{self};
 use crate::types::PReason::{self};
 use crate::types::Reason;
+use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::uniqueness::constrain::exists;
 use crate::uniqueness::sharing::VarUsage;
@@ -108,7 +107,7 @@ fn canonicalize_pattern(
         RecordDestructure(ext_var, patterns) => {
             let ext_type = Type::Variable(*ext_var);
 
-            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
             for RecordDestruct {
                 var,
                 label,
@@ -137,7 +136,7 @@ fn canonicalize_pattern(
                 }
 
                 state.vars.push(*var);
-                field_types.insert(label.clone(), pat_type);
+                field_types.insert(RecordFieldLabel::Required(label.clone()), pat_type);
             }
 
             let record_type =
@@ -220,7 +219,7 @@ pub fn canonicalize_expr(
                 );
 
                 field_vars.push(field_var);
-                field_types.insert(label.clone(), field_type);
+                field_types.insert(RecordFieldLabel::Required(label.clone()), field_type);
 
                 constraints.push(field_con);
                 output.references = output.references.union(field_out.references);
@@ -622,7 +621,10 @@ pub fn canonicalize_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            rec_field_types.insert(field.clone(), field_type.clone());
+            rec_field_types.insert(
+                RecordFieldLabel::Required(field.clone()),
+                field_type.clone(),
+            );
 
             let record_type =
                 constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));
@@ -652,10 +654,13 @@ pub fn canonicalize_expr(
         } => {
             let ext_type = Variable(*ext_var);
             let field_type = Variable(*field_var);
-
             let mut field_types = SendMap::default();
-            let field_name = field.clone();
-            field_types.insert(field_name, field_type.clone());
+
+            field_types.insert(
+                RecordFieldLabel::Required(field.clone()),
+                field_type.clone(),
+            );
+
             let record_type =
                 constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
 

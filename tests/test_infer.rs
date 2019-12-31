@@ -979,4 +979,35 @@ mod test_infer {
             "{}*",
         );
     }
+
+    #[test]
+    fn record_type_annotation() {
+        // check that a closed record remains closed
+        infer_eq(
+            indoc!(
+                r#"
+                foo : { x : custom } -> custom
+                foo = \{ x } -> x
+
+                foo
+            "#
+            ),
+            "{ x : custom } -> custom",
+        );
+    }
+
+    #[test]
+    fn optional_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                foo : { x? : Int } -> Int 
+                foo = \_ -> 42
+
+                foo
+            "#
+            ),
+            "{ x? : Int } -> Int",
+        );
+    }
 }

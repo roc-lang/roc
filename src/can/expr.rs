@@ -857,6 +857,8 @@ fn canonicalize_field<'a>(
             )
         }
 
+        OptionalField(_, _, _) => panic!("invalid in expressions"),
+
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
             panic!("Somehow a LabelOnly record field was not desugared!");
