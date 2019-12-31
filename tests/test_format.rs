@@ -540,6 +540,24 @@ mod test_format {
         ));
     }
 
+    // LIST
+    #[test]
+    fn empty_list() {
+        expr_formats_same("[]");
+        //        expr_formats_to("[     ]", "[]");
+    }
+
+    #[test]
+    fn one_item_list() {
+        expr_formats_same(indoc!("[ 4 ] "));
+    }
+
+    #[test]
+    fn two_item_list() {
+        expr_formats_same(indoc!("[ 7, 8 ] "));
+        expr_formats_to(indoc!("[   7  ,   8  ] "), indoc!("[ 7, 8 ] "));
+    }
+
     // RECORD LITERALS
 
     #[test]
