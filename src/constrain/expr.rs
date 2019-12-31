@@ -402,15 +402,21 @@ pub fn constrain_expr(
             loc_ret,
         ),
         LetNonRec(def, loc_ret) => {
-            let ret_con =
-                constrain_expr(&ImMap::default(), loc_ret.region, &loc_ret.value, expected);
-
             let mut found_rigids = SendMap::default();
             let mut flex_info = Info::default();
             constrain_def(rigids, &mut found_rigids, def, &mut flex_info);
 
+            let rigid_vars = found_rigids.keys().map(|k| k.clone()).collect();
+
+            let mut new_rigids = rigids.clone();
+            for (k, v) in found_rigids {
+                new_rigids.insert(v, Type::Variable(k));
+            }
+
+            let ret_con = constrain_expr(&new_rigids, loc_ret.region, &loc_ret.value, expected);
+
             Let(Box::new(LetConstraint {
-                rigid_vars: Vec::new(),
+                rigid_vars,
                 flex_vars: Vec::new(),
                 def_types: flex_info.def_types.clone(),
                 defs_constraint: Let(Box::new(LetConstraint {
