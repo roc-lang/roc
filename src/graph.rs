@@ -1,4 +1,4 @@
-// Adapted from the Pathfinding crate by Samuel Tardieu <sam@rfc1149.net>,
+// Adapted from the Pathfinding crate v2.0.3 by Samuel Tardieu <sam@rfc1149.net>,
 // licensed under the Apache License, version 2.0 - https://www.apache.org/licenses/LICENSE-2.0
 //
 // The original source code can be found at: https://github.com/samueltardieu/pathfinding
@@ -217,12 +217,12 @@ where
         let remaining: Vec<N> = preds_map.into_iter().map(|(node, _)| node).collect();
         return Err((Vec::new(), remaining));
     }
-    for node in prev_group.iter() {
+    for node in &prev_group {
         preds_map.remove(node);
     }
     while !preds_map.is_empty() {
         let mut next_group = Vec::<N>::new();
-        for node in prev_group.iter() {
+        for node in &prev_group {
             for succ in &succs_map[node] {
                 {
                     let num_preds = preds_map.get_mut(succ).unwrap();
@@ -273,7 +273,7 @@ where
     IN: IntoIterator<Item = N>,
 {
     fn new(nodes: &[N], successors: FN) -> Self {
-        Params {
+        Self {
             preorders: nodes.iter().map(|n| (n.clone(), None)).collect::<HashMap<
                 N,
                 Option<usize>,
