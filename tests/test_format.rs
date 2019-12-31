@@ -418,6 +418,58 @@ mod test_format {
     }
 
     #[test]
+    fn reduce_space_between_comments() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                # First
+
+
+
+
+                # Second
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                # First
+
+                # Second
+                x
+                "#
+            ),
+        );
+
+        //        expr_formats_to(
+        //            indoc!(
+        //                r#"
+        //                f = \x ->
+        //                    # 1st
+        //
+        //
+        //
+        //
+        //                    # 2nd
+        //                    x
+        //
+        //                f 4
+        //                "#
+        //            ),
+        //            indoc!(
+        //                r#"
+        //                f = \x ->
+        //                    # 1st
+        //
+        //                    # 2nd
+        //                    x
+        //
+        //                f 4
+        //                "#
+        //            ),
+        //        );
+    }
+    #[test]
     fn doesnt_detect_comment_in_comment() {
         expr_formats_same(indoc!(
             r#"
@@ -620,107 +672,113 @@ mod test_format {
 
     #[test]
     fn multi_line_if_condition() {
-        //        expr_formats_same(indoc!(
-        //            r#"
-        //            if
-        //                waterWillBoil pressure temperature
-        //            then
-        //                turnOnAc
-        //
-        //            else
-        //                identity
-        //            "#
-        //        ));
+        expr_formats_same(indoc!(
+            r#"
+            if
+                waterWillBoil pressure temperature
+            then
+                turnOnAc
 
-        //        expr_formats_to(
-        //            indoc!(
-        //                r#"
-        //                if
-        //
-        //
-        //                    willBoil home water
-        //
-        //
-        //                then
-        //                    \_ -> leave
-        //
-        //                else
-        //                    identity
-        //                "#
-        //            ),
-        //            indoc!(
-        //                r#"
-        //                if
-        //                    willBoil home water
-        //                then
-        //                    \_ -> leave
-        //
-        //                else
-        //                    identity
-        //                "#
-        //            ),
-        //        );
-        //    }
+            else
+                identity
+            "#
+        ));
 
-        //    #[test]
-        //    fn if_removes_newlines() {
-        //        expr_formats_to(
-        //            indoc!(
-        //                r#"
-        //                if
-        //
-        //                    # You never know!
-        //                    isPrime 8
-        //
-        //                    # Top Comment
-        //
-        //                    # Bottom Comment
-        //
-        //
-        //                then
-        //
-        //                    # A
-        //
-        //                    # B
-        //
-        //                    nothing
-        //
-        //                    # B again
-        //
-        //                else
-        //
-        //                    # C
-        //                    # D
-        //
-        //                    # E
-        //                    # F
-        //
-        //                    just (div 1 8)
-        //                "#
-        //            ),
-        //            indoc!(
-        //                r#"
-        //                if
-        //                    # You never know!
-        //                    isPrime 8
-        //                    # Top Comment
-        //                    # Bottom Comment
-        //                then
-        //                    # A
-        //                    # B
-        //                    nothing
-        //                    # B again
-        //
-        //                else
-        //                    # C
-        //                    # D
-        //                    # E
-        //                    # F
-        //                    just (div 1 8)
-        //                "#
-        //            ),
-        //        );
+        expr_formats_to(
+            indoc!(
+                r#"
+                if
+
+
+                    willBoil home water
+
+
+                then
+                    \_ -> leave
+
+                else
+                    identity
+                "#
+            ),
+            indoc!(
+                r#"
+                if
+                    willBoil home water
+                then
+                    \_ -> leave
+
+                else
+                    identity
+                "#
+            ),
+        );
     }
+
+    //    #[test]
+    //    fn if_removes_newlines() {
+    //        expr_formats_to(
+    //            indoc!(
+    //                r#"
+    //                if
+    //
+    //                    # You never know!
+    //                    isPrime 8
+    //
+    //                    # Top Comment
+    //
+    //                    # Bottom Comment
+    //
+    //
+    //                then
+    //
+    //                    # A
+    //
+    //                    # B
+    //
+    //                    nothing
+    //
+    //                    # B again
+    //
+    //                else
+    //
+    //                    # C
+    //                    # D
+    //
+    //                    # E
+    //                    # F
+    //
+    //                    just (div 1 8)
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                if
+    //                    # You never know!
+    //                    isPrime 8
+
+    //                    # Top Comment
+
+    //                    # Bottom Comment
+    //                then
+    //                    # A
+
+    //                    # B
+
+    //                    nothing
+
+    //                    # B again
+    //
+    //                else
+    //                    # C
+    //                    # D
+
+    //                    # E
+    //                    # F
+    //                    just (div 1 8)
+    //                "#
+    //            ),
+    //        );
+    //    }
     #[test]
     fn multi_line_if() {
         expr_formats_to(

@@ -361,17 +361,26 @@ fn fmt_if<'a>(
 ) {
     let is_multiline_then = is_multiline_expr(&loc_then.value);
     let is_multiline_else = is_multiline_expr(&loc_else.value);
-    let is_multiline = is_multiline_then || is_multiline_else;
-
-    buf.push_str("if ");
-    fmt_expr(buf, &loc_condition.value, indent, false, true);
-    buf.push_str(" then");
+    let is_multiline_condition = is_multiline_expr(&loc_condition.value);
+    let is_multiline = is_multiline_then || is_multiline_else || is_multiline_condition;
 
     let return_indent = if is_multiline {
         indent + INDENT
     } else {
         indent
     };
+
+    if is_multiline_condition {
+        buf.push_str("if");
+        newline(buf, return_indent);
+        fmt_expr(buf, &loc_condition.value, return_indent, false, false);
+        newline(buf, indent);
+        buf.push_str("then");
+    } else {
+        buf.push_str("if ");
+        fmt_expr(buf, &loc_condition.value, indent, false, true);
+        buf.push_str(" then");
+    }
 
     if is_multiline {
         newline(buf, return_indent);
