@@ -240,6 +240,9 @@ pub enum AssignedField<'a, Val> {
     // Both a label and a value, e.g. `{ name: "blah" }`
     LabeledValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
+    // An optional field, e.g. `{ name? : String }`. Only for types
+    OptionalField(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
     LabelOnly(Loc<&'a str>),
 
