@@ -1,5 +1,4 @@
 use crate::can::env::Env;
-use crate::can::ident::Lowercase;
 use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
@@ -10,7 +9,7 @@ use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::VarStore;
 use crate::subs::Variable;
-use crate::types::{Constraint, PExpected, PatternCategory, Type};
+use crate::types::{Constraint, PExpected, PatternCategory, RecordFieldLabel, Type};
 use im_rc::Vector;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
@@ -403,7 +402,7 @@ fn add_constraints<'a>(
             let ext_var = var_store.fresh();
             let ext_type = Type::Variable(ext_var);
 
-            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
             for loc_pattern in patterns {
                 let pat_var = var_store.fresh();
                 let pat_type = Type::Variable(pat_var);
@@ -417,7 +416,8 @@ fn add_constraints<'a>(
                                 .headers
                                 .insert(symbol, Located::at(region, pat_type.clone()));
                         }
-                        field_types.insert(name.into(), pat_type.clone());
+                        field_types
+                            .insert(RecordFieldLabel::Required(name.into()), pat_type.clone());
                     }
                     _ => panic!("invalid record pattern"),
                 }

@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
-use crate::types::{name_type_var, ErrorType, Problem, RecordExt};
+use crate::types::{name_type_var, ErrorType, Problem, RecordExt, RecordFieldLabel};
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -362,7 +362,7 @@ pub enum FlatType {
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
-    Record(ImMap<Lowercase, Variable>, Variable),
+    Record(ImMap<RecordFieldLabel, Variable>, Variable),
     Erroneous(Problem),
     EmptyRecord,
 }

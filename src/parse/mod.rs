@@ -353,6 +353,7 @@ pub fn assigned_expr_field_to_pattern<'a>(
                 )
             }
         }
+        AssignedField::OptionalField(_, _, _) => panic!("invalid in literals"),
         AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
         AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
             arena.alloc(assigned_expr_field_to_pattern(arena, nested)?),
@@ -392,6 +393,9 @@ pub fn assigned_pattern_field_to_pattern<'a>(
                     ),
                 )
             }
+        }
+        AssignedField::OptionalField(_, _, _) => {
+            panic!("invalid as a pattern");
         }
         AssignedField::LabelOnly(name) => Located::at(name.region, Pattern::Identifier(name.value)),
         AssignedField::SpaceBefore(nested, spaces) => {

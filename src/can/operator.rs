@@ -295,6 +295,7 @@ fn desugar_field<'a>(
             spaces,
             desugar_expr(arena, loc_expr),
         ),
+        OptionalField(_, _, _) => panic!("invalid in expressions"),
         LabelOnly(loc_str) => {
             // Desugar { x } into { x: x }
             let loc_expr = Located {
