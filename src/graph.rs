@@ -197,9 +197,12 @@ where
         succs_map.insert(node.clone(), successors(node).into_iter().collect());
         preds_map.insert(node.clone(), 0);
     }
+
     for succs in succs_map.values() {
         for succ in succs.iter() {
-            *preds_map.get_mut(succ).unwrap() += 1;
+            *preds_map
+                .get_mut(succ)
+                .unwrap_or_else(|| panic!("key missing from preds_map")) += 1;
         }
     }
     let mut groups = Vec::<Vec<N>>::new();

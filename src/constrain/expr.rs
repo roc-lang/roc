@@ -25,7 +25,7 @@ use crate::types::{LetConstraint, PExpected, Reason};
 pub type Rigids = ImMap<Lowercase, Type>;
 
 /// This is for constraining Defs
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Info {
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
@@ -409,21 +409,19 @@ pub fn constrain_expr(
             let mut flex_info = Info::default();
             constrain_def(rigids, &mut found_rigids, def, &mut flex_info);
 
-            let constraint = Let(Box::new(LetConstraint {
+            Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: Vec::new(),
-                def_types: SendMap::default(), // INCORRECT!
+                def_types: flex_info.def_types.clone(),
                 defs_constraint: Let(Box::new(LetConstraint {
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(),
-                    def_types: flex_info.def_types.clone(),
+                    def_types: SendMap::default(),
                     defs_constraint: And(flex_info.constraints),
                     ret_constraint: True,
                 })),
                 ret_constraint: ret_con,
-            }));
-
-            constraint
+            }))
         }
         Tag(_, _) => {
             panic!("TODO constrain Tag");
@@ -599,13 +597,18 @@ fn constrain_def(
         ),
     };
 
-    flex_info.constraints.push(Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars: pattern_state.vars,
-        def_types: pattern_state.headers,
-        defs_constraint: And(pattern_state.constraints),
-        ret_constraint,
-    })));
+    if pattern_state.constraints.is_empty() {
+        // small optimization
+        flex_info.constraints.push(ret_constraint);
+    } else {
+        flex_info.constraints.push(Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: pattern_state.vars,
+            def_types: pattern_state.headers,
+            defs_constraint: And(pattern_state.constraints),
+            ret_constraint,
+        })));
+    }
 }
 
 #[inline(always)]

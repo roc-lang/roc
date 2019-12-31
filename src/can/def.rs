@@ -222,6 +222,14 @@ pub fn sort_can_defs(
         }
     }
 
+    let mut defined_symbols: Vec<Symbol> = Vec::new();
+    let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();
+
+    for symbol in can_defs_by_symbol.keys().into_iter() {
+        defined_symbols.push(symbol.clone());
+        defined_symbols_set.insert(symbol.clone());
+    }
+
     // Use topological sort to reorder the defs based on their dependencies to one another.
     // This way, during code gen, no def will refer to a value that hasn't been initialized yet.
     // As a bonus, the topological sort also reveals any cycles between the defs, allowing
@@ -240,25 +248,30 @@ pub fn sort_can_defs(
         // it's in the enclosing scope. It's still referenced though, so successors
         // will receive it as an argument!
         match refs_by_symbol.get(symbol) {
-            Some((_, references)) => local_successors(&references, &env.closures),
+            Some((_, references)) => {
+                // We can only sort the symbols at the current level. That is safe because
+                // symbols defined at higher levels cannot refer to symbols at lower levels.
+                // Therefore they can never form a cycle!
+                //
+                // In the above example, `f` cannot reference `a`, and in the closure
+                // a call to `f` cannot cycle back to `a`.
+                let mut loc_succ = local_successors(&references, &env.closures);
+                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ
+            }
             None => ImSet::default(),
         }
     };
-
-    let mut defined_symbols: Vec<Symbol> = Vec::new();
-
-    for symbol in can_defs_by_symbol.keys().into_iter() {
-        defined_symbols.push(symbol.clone())
-    }
 
     // TODO also do the same `addDirects` check elm/compiler does, so we can
     // report an error if a recursive definition can't possibly terminate!
     match topological_sort_into_groups(defined_symbols.as_slice(), successors) {
         Ok(groups) => {
             let mut declarations = Vec::new();
-            // TODO make sure group order is correct
-            for group in groups {
-                group_to_declaration(group, env, &can_defs_by_symbol, &mut declarations);
+            // groups are in reversed order
+            for group in groups.iter().rev() {
+                // TODO remove this clone
+                group_to_declaration(group.clone(), env, &can_defs_by_symbol, &mut declarations);
             }
 
             (Ok(declarations), output)
