@@ -19,6 +19,12 @@ pub struct Module {
     pub constraint: Constraint,
 }
 
+pub struct ModuleOutput {
+    pub defs: Vec<Def>,
+    pub exposed_imports: SendMap<Symbol, Variable>,
+    pub lookups: Vec<(Symbol, Variable, Region)>,
+}
+
 pub fn canonicalize_module_defs<'a, I>(
     arena: &Bump,
     loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
@@ -26,11 +32,7 @@ pub fn canonicalize_module_defs<'a, I>(
     _exposes: I,
     scope: &mut Scope,
     var_store: &VarStore,
-) -> (
-    Vec<Def>,
-    SendMap<Symbol, Variable>,
-    Vec<(Symbol, Variable, Region)>,
-)
+) -> ModuleOutput
 where
     I: Iterator<Item = Located<ExposesEntry<'a>>>,
 {
@@ -103,5 +105,9 @@ where
     // TODO incorporate rigids into here (possibly by making this be a Let instead
     // of an And)
 
-    (defs, exposed_imports, lookups)
+    ModuleOutput {
+        defs,
+        exposed_imports,
+        lookups,
+    }
 }

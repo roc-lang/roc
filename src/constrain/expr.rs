@@ -266,7 +266,7 @@ pub fn constrain_expr(
 
             match expected {
                 FromAnnotation(name, arity, _, typ) => {
-                    for (index, (loc_pattern, loc_expr)) in branches.into_iter().enumerate() {
+                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             rigids,
                             region,
@@ -300,7 +300,7 @@ pub fn constrain_expr(
                     let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, (loc_pattern, loc_expr)) in branches.into_iter().enumerate() {
+                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             rigids,
                             region,
@@ -405,7 +405,7 @@ pub fn constrain_expr(
 }
 
 #[inline(always)]
-fn constrain_when_branch<'a>(
+fn constrain_when_branch(
     rigids: &Rigids,
     region: Region,
     loc_pattern: &Located<Pattern>,

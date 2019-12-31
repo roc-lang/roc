@@ -1,5 +1,6 @@
 use crate::can::ident::Lowercase;
 use crate::can::pattern::Pattern::{self, *};
+use crate::can::pattern::RecordDestruct;
 use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
 use crate::region::{Located, Region};
@@ -66,8 +67,14 @@ pub fn constrain_pattern(
 
             let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
 
-            for (pat_var, label, symbol, opt_guard) in patterns {
-                let pat_type = Type::Variable(*pat_var);
+            for RecordDestruct {
+                var,
+                label,
+                symbol,
+                guard,
+            } in patterns
+            {
+                let pat_type = Type::Variable(*var);
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
                 if !state.headers.contains_key(&symbol) {
@@ -79,11 +86,11 @@ pub fn constrain_pattern(
                 field_types.insert(label.clone(), pat_type.clone());
 
                 // TODO investigate: shouldn't guard_var be constrained somewhere?
-                if let Some((_guard_var, loc_guard)) = opt_guard {
+                if let Some((_guard_var, loc_guard)) = guard {
                     constrain_pattern(&loc_guard.value, loc_guard.region, expected, state);
                 }
 
-                state.vars.push(*pat_var);
+                state.vars.push(*var);
             }
 
             let record_type = Type::Record(field_types, Box::new(ext_type));

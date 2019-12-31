@@ -23,21 +23,21 @@ pub enum Pattern {
     IntLiteral(i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
-    RecordDestructure(
-        Variable,
-        Vec<(
-            Variable,
-            Lowercase,
-            Symbol,
-            Option<(Variable, Located<Pattern>)>,
-        )>,
-    ),
+    RecordDestructure(Variable, Vec<RecordDestruct>),
     Underscore,
 
     // Runtime Exceptions
     Shadowed(Located<Ident>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordDestruct {
+    pub var: Variable,
+    pub label: Lowercase,
+    pub symbol: Symbol,
+    pub guard: Option<(Variable, Located<Pattern>)>,
 }
 
 pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
@@ -187,7 +187,12 @@ pub fn canonicalize_pattern<'a>(
                             }
                         };
 
-                        fields.push((var_store.fresh(), Lowercase::from(label), symbol, None));
+                        fields.push(RecordDestruct {
+                            var: var_store.fresh(),
+                            label: Lowercase::from(label),
+                            symbol,
+                            guard: None,
+                        });
                     }
                     RecordField(label, loc_guard) => {
                         let symbol = match canonicalize_pattern_identifier(
@@ -219,12 +224,12 @@ pub fn canonicalize_pattern<'a>(
                             shadowable_idents,
                         );
 
-                        fields.push((
-                            var_store.fresh(),
-                            Lowercase::from(label),
+                        fields.push(RecordDestruct {
+                            var: var_store.fresh(),
+                            label: Lowercase::from(label),
                             symbol,
-                            Some((var_store.fresh(), can_guard)),
-                        ));
+                            guard: Some((var_store.fresh(), can_guard)),
+                        });
                     }
                     _ => panic!("invalid pattern in record"),
                 }

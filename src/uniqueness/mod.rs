@@ -1,7 +1,7 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Output;
-use crate::can::pattern::Pattern;
+use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::can::procedure::{Procedure, References};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
@@ -109,11 +109,17 @@ fn canonicalize_pattern(
             let ext_type = Type::Variable(*ext_var);
 
             let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
-            for (pat_var, label, symbol, maybe_guard) in patterns {
-                let pat_type = Type::Variable(*pat_var);
+            for RecordDestruct {
+                var,
+                label,
+                symbol,
+                guard,
+            } in patterns
+            {
+                let pat_type = Type::Variable(*var);
                 let pattern_expected = PExpected::NoExpectation(pat_type.clone());
 
-                match maybe_guard {
+                match guard {
                     Some((_guard_var, loc_guard)) => {
                         state.headers.insert(
                             symbol.clone(),
@@ -130,7 +136,7 @@ fn canonicalize_pattern(
                     }
                 }
 
-                state.vars.push(*pat_var);
+                state.vars.push(*var);
                 field_types.insert(label.clone(), pat_type);
             }
 
@@ -616,7 +622,7 @@ pub fn canonicalize_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            rec_field_types.insert(Lowercase::from(field.clone()), field_type.clone());
+            rec_field_types.insert(field.clone(), field_type.clone());
 
             let record_type =
                 constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));

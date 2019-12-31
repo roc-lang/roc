@@ -1,5 +1,5 @@
 use crate::can::def::Def;
-use crate::can::module::{canonicalize_module_defs, Module};
+use crate::can::module::{canonicalize_module_defs, Module, ModuleOutput};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap, SendSet};
@@ -304,8 +304,11 @@ where
         .parse(arena, state)
         .expect("TODO gracefully handle parse error on module defs");
 
-    let (defs, exposed_imports, lookups) =
-        canonicalize_module_defs(arena, parsed_defs, home, exposes, scope, var_store);
+    let ModuleOutput {
+        defs,
+        exposed_imports,
+        lookups,
+    } = canonicalize_module_defs(arena, parsed_defs, home, exposes, scope, var_store);
 
     let constraint = constrain_module(&defs, lookups);
 
