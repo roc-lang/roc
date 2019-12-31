@@ -1,47 +1,34 @@
-use crate::collections::SendMap;
 use crate::region::Region;
-use crate::subs::{VarStore, Variable};
+use crate::subs::Variable;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
 use crate::types::Type::{self, *};
-use crate::types::{self, LetConstraint, Reason};
+use crate::types::{self, Reason};
 
 #[inline(always)]
-pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
-    Constraint::Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars,
-        def_types: SendMap::default(),
-        defs_constraint: constraint,
-        ret_constraint: Constraint::True,
-    }))
-}
-
-#[inline(always)]
-pub fn int_literal(var_store: &VarStore, expected: Expected<Type>, region: Region) -> Constraint {
+pub fn int_literal(var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
     let typ = number_literal_type("Int", "Integer");
     let reason = Reason::IntLiteral;
 
-    num_literal(var_store, typ, reason, expected, region)
+    num_literal(var, typ, reason, expected, region)
 }
 
 #[inline(always)]
-pub fn float_literal(var_store: &VarStore, expected: Expected<Type>, region: Region) -> Constraint {
+pub fn float_literal(var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
     let typ = number_literal_type("Float", "FloatingPoint");
     let reason = Reason::FloatLiteral;
 
-    num_literal(var_store, typ, reason, expected, region)
+    num_literal(var, typ, reason, expected, region)
 }
 
 #[inline(always)]
 fn num_literal(
-    var_store: &VarStore,
+    num_var: Variable,
     literal_type: Type,
     reason: Reason,
     expected: Expected<Type>,
     region: Region,
 ) -> Constraint {
-    let num_var = var_store.fresh();
     let num_type = Variable(num_var);
     let expected_literal = ForReason(reason, literal_type, region);
 

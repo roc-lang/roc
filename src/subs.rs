@@ -235,15 +235,7 @@ impl Subs {
         if desc.copy.is_some() {
             let content = desc.content;
 
-            self.set(
-                var,
-                Descriptor {
-                    content: content.clone(),
-                    rank: Rank::NONE,
-                    mark: Mark::NONE,
-                    copy: None,
-                },
-            );
+            self.set(var, content.clone().into());
 
             restore_content(self, &content);
         }

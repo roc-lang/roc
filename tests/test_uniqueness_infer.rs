@@ -888,9 +888,9 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                when foo is
-                    { x: 4 }-> x
-            "#
+                    when foo is
+                        { x: 4 }-> x
+                "#
             ),
             "Int",
         );

@@ -9,6 +9,7 @@ use roc::can::problem::Problem;
 use roc::can::scope::Scope;
 use roc::can::symbol::Symbol;
 use roc::collections::{ImMap, MutMap, SendSet};
+use roc::constrain::expr::constrain_expr;
 use roc::ident::Ident;
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
@@ -191,12 +192,17 @@ pub fn can_expr_with(
     let scope_prefix = format!("{}.{}$", home, name).into();
     let mut scope = Scope::new(scope_prefix, declared_idents.clone());
     let mut env = Env::new(home.into());
-    let (loc_expr, output, constraint) = canonicalize_expr(
-        &ImMap::default(),
+    let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &var_store,
         &mut scope,
         Region::zero(),
+        &loc_expr.value,
+    );
+
+    let constraint = constrain_expr(
+        &ImMap::default(),
+        loc_expr.region,
         &loc_expr.value,
         expected,
     );

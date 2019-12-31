@@ -908,7 +908,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            foo : Int -> Bool
+            foo: Int -> Bool
 
             foo 2
             "#

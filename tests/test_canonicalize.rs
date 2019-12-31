@@ -62,6 +62,33 @@ mod test_canonicalize {
         assert_eq!(actual.value, expected);
     }
 
+    fn assert_can_float(input: &str, expected: f64) {
+        let arena = Bump::new();
+        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+
+        match loc_actual.value {
+            Expr::Float(_, actual) => {
+                assert_eq!(expected, actual);
+            }
+            actual => {
+                panic!("Expected a Float, but got: {:?}", actual);
+            }
+        }
+    }
+    fn assert_can_int(input: &str, expected: i64) {
+        let arena = Bump::new();
+        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+
+        match loc_actual.value {
+            Expr::Int(_, actual) => {
+                assert_eq!(expected, actual);
+            }
+            actual => {
+                panic!("Expected an Int, but got: {:?}", actual);
+            }
+        }
+    }
+
     // NUMBER LITERALS
 
     #[test]
@@ -106,67 +133,67 @@ mod test_canonicalize {
 
     #[test]
     fn zero() {
-        assert_can("0", Int(0));
+        assert_can_int("0", 0);
     }
 
     #[test]
     fn minus_zero() {
-        assert_can("-0", Int(0));
+        assert_can_int("-0", 0);
     }
 
     #[test]
     fn zero_point_zero() {
-        assert_can("0.0", Float(0.0));
+        assert_can_float("0.0", 0.0);
     }
 
     #[test]
     fn minus_zero_point_zero() {
-        assert_can("-0.0", Float(-0.0));
+        assert_can_float("-0.0", -0.0);
     }
 
     #[test]
     fn hex_zero() {
-        assert_can("0x0", Int(0x0));
+        assert_can_int("0x0", 0x0);
     }
 
     #[test]
     fn hex_one_b() {
-        assert_can("0x1b", Int(0x1b));
+        assert_can_int("0x1b", 0x1b);
     }
 
     #[test]
     fn minus_hex_one_b() {
-        assert_can("-0x1b", Int(-0x1b));
+        assert_can_int("-0x1b", -0x1b);
     }
 
     #[test]
     fn octal_zero() {
-        assert_can("0o0", Int(0o0));
+        assert_can_int("0o0", 0o0);
     }
 
     #[test]
     fn octal_one_two() {
-        assert_can("0o12", Int(0o12));
+        assert_can_int("0o12", 0o12);
     }
 
     #[test]
     fn minus_octal_one_two() {
-        assert_can("-0o12", Int(-0o12));
+        assert_can_int("-0o12", -0o12);
     }
 
     #[test]
     fn binary_zero() {
-        assert_can("0b0", Int(0b0));
+        assert_can_int("0b0", 0b0);
     }
 
     #[test]
     fn binary_one_one() {
-        assert_can("0b11", Int(0b11));
+        assert_can_int("0b11", 0b11);
     }
 
     #[test]
     fn minus_binary_one_one() {
-        assert_can("-0b11", Int(-0b11));
+        assert_can_int("-0b11", -0b11);
     }
 
     // LOCALS
@@ -232,7 +259,7 @@ mod test_canonicalize {
 
     fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
-            Defs(assignments, _) => match &assignments.get(i).map(|def| &def.expr.value) {
+            Defs(assignments, _) => match &assignments.get(i).map(|def| &def.loc_expr.value) {
                 Some(Closure(_, recursion, _, _)) => recursion.clone(),
                 Some(other @ _) => {
                     panic!("assignment at {} is not a closure, but a {:?}", i, other)
