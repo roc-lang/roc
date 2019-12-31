@@ -2,13 +2,8 @@ use crate::can::env::Env;
 use crate::can::expr::Expr;
 use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError::*;
-use crate::constrain;
 use crate::parse::ast::Base;
-use crate::region::Region;
 use crate::subs::VarStore;
-use crate::types::Constraint::{self, *};
-use crate::types::Expected;
-use crate::types::Type;
 use std::i64;
 
 #[inline(always)]
@@ -16,20 +11,15 @@ pub fn int_expr_from_result(
     var_store: &VarStore,
     result: Result<i64, &str>,
     env: &mut Env,
-    expected: Expected<Type>,
-    region: Region,
-) -> (Constraint, Expr) {
+) -> Expr {
     match result {
-        Ok(int) => (
-            constrain::int_literal(var_store, expected, region),
-            Expr::Int(int),
-        ),
+        Ok(int) => Expr::Int(var_store.fresh(), int),
         Err(raw) => {
             let runtime_error = IntOutsideRange(raw.into());
 
             env.problem(Problem::RuntimeError(runtime_error.clone()));
 
-            (True, Expr::RuntimeError(runtime_error))
+            Expr::RuntimeError(runtime_error)
         }
     }
 }
@@ -39,20 +29,15 @@ pub fn float_expr_from_result(
     var_store: &VarStore,
     result: Result<f64, &str>,
     env: &mut Env,
-    expected: Expected<Type>,
-    region: Region,
-) -> (Constraint, Expr) {
+) -> Expr {
     match result {
-        Ok(float) => (
-            constrain::float_literal(var_store, expected, region),
-            Expr::Float(float),
-        ),
+        Ok(float) => Expr::Float(var_store.fresh(), float),
         Err(raw) => {
             let runtime_error = FloatOutsideRange(raw.into());
 
             env.problem(Problem::RuntimeError(runtime_error.clone()));
 
-            (True, Expr::RuntimeError(runtime_error))
+            Expr::RuntimeError(runtime_error)
         }
     }
 }
