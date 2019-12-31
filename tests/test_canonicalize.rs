@@ -259,7 +259,7 @@ mod test_canonicalize {
 
     fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
-            Defs(assignments, _) => match &assignments.get(i).map(|def| &def.loc_expr.value) {
+            LetRec(assignments, _) => match &assignments.get(i).map(|def| &def.loc_expr.value) {
                 Some(Closure(_, recursion, _, _)) => recursion.clone(),
                 Some(other @ _) => {
                     panic!("assignment at {} is not a closure, but a {:?}", i, other)

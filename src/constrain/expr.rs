@@ -392,7 +392,7 @@ pub fn constrain_expr(
                 ),
             )
         }
-        Defs(defs, loc_ret) => constrain_defs_with_return(
+        LetRec(defs, loc_ret) => constrain_defs_with_return(
             rigids,
             defs,
             expected,
@@ -400,6 +400,9 @@ pub fn constrain_expr(
             Info::with_capacity(defs.len()),
             loc_ret,
         ),
+        LetNonRec(_def, _loc_ret) => {
+            panic!("TODO constrain LetNonRec");
+        }
         Tag(_, _) => {
             panic!("TODO constrain Tag");
         }

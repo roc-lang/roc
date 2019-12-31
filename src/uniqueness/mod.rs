@@ -475,11 +475,13 @@ pub fn canonicalize_expr(
                 ),
             )
         }
-
-        Defs(defs, loc_ret) => (
+        LetRec(defs, loc_ret) => (
             Output::default(),
             can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
         ),
+        LetNonRec(_def, _loc_ret) => {
+            panic!("TODO uniqueness for LetNonRec");
+        }
         When {
             cond_var,
             loc_cond,

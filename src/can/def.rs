@@ -747,7 +747,7 @@ pub fn can_defs_with_return<'a>(
     output.rigids = output.rigids.union(found_rigids);
 
     match can_defs {
-        Ok(defs) => (Defs(defs, Box::new(ret_expr)), output),
+        Ok(defs) => (LetRec(defs, Box::new(ret_expr)), output),
         Err(err) => (RuntimeError(err), output),
     }
 }
