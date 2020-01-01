@@ -652,9 +652,6 @@ macro_rules! skip_second {
 #[macro_export]
 macro_rules! collection {
     ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr) => {
-        // TODO allow trailing commas before the closing delimiter, *but* without
-        // losing any comments or newlines! This will require parsing them and then,
-        // if they are present, merging them into the final Spaceable.
         skip_first!(
             $opening_brace,
             skip_second!(
