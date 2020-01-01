@@ -42,6 +42,7 @@ pub struct CanDefs {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>),
