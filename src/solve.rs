@@ -2,7 +2,7 @@ use crate::can::ident::Lowercase;
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::region::Located;
-use crate::subs::{Content, Descriptor, FlatType, Mark, Rank, Subs, Variable};
+use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
@@ -662,7 +662,7 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
         content,
         rank,
         mark: Mark::NONE,
-        copy: Variable::NULL,
+        copy: OptVariable::NONE,
     });
 
     pools.get_mut(rank).push(var);

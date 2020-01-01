@@ -88,6 +88,35 @@ impl Into<Variable> for VarStore {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+pub struct OptVariable(usize);
+
+impl OptVariable {
+    pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
+
+    pub fn is_none(&self) -> bool {
+        self == &OptVariable::NONE
+    }
+
+    pub fn is_some(&self) -> bool {
+        self != &OptVariable::NONE
+    }
+
+    pub fn into_variable(self) -> Option<Variable> {
+        if self.is_none() {
+            None
+        } else {
+            Some(Variable(self.0))
+        }
+    }
+}
+
+impl Into<Option<Variable>> for OptVariable {
+    fn into(self) -> Option<Variable> {
+        self.into_variable()
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Variable(usize);
 
 impl Variable {
@@ -95,21 +124,13 @@ impl Variable {
     // This lets us avoid using Option<Variable> for the Descriptor's
     // copy field, which is a relevant space savings because we make
     // a *ton* of Descriptors.
-    pub const NULL: Variable = Variable(0);
+    const NULL: Variable = Variable(0);
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(1);
 
     pub fn new_for_testing_only(num: usize) -> Self {
         // This is a hack that should only ever be used for testing!
         Variable(num)
-    }
-
-    pub fn is_null(&self) -> bool {
-        self == &Variable::NULL
-    }
-
-    pub fn is_not_null(&self) -> bool {
-        self != &Variable::NULL
     }
 }
 
@@ -258,7 +279,7 @@ impl Subs {
     pub fn restore(&mut self, var: Variable) {
         let desc = self.get(var);
 
-        if desc.copy.is_not_null() {
+        if desc.copy.is_some() {
             let content = desc.content;
 
             self.set(var, content.clone().into());
@@ -326,7 +347,7 @@ pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
     pub mark: Mark,
-    pub copy: Variable,
+    pub copy: OptVariable,
 }
 
 impl fmt::Debug for Descriptor {
@@ -334,7 +355,10 @@ impl fmt::Debug for Descriptor {
         write!(
             f,
             "{:?}, r: {:?}, m: {:?} c: {:?}",
-            self.content, self.rank, self.mark, self.copy
+            self.content,
+            self.rank,
+            self.mark,
+            self.copy.into_variable()
         )
     }
 }
@@ -351,7 +375,7 @@ impl From<Content> for Descriptor {
             content,
             rank: Rank::NONE,
             mark: Mark::NONE,
-            copy: Variable::NULL,
+            copy: OptVariable::NONE,
         }
     }
 }
