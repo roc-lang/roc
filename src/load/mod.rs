@@ -26,7 +26,7 @@ use tokio::task::spawn_blocking;
 #[derive(Debug)]
 pub struct Loaded {
     pub requested_module: LoadedModule,
-    pub vars_created: usize,
+    pub next_var: Variable,
 }
 
 #[derive(Debug, Clone)]
@@ -43,7 +43,6 @@ type LoadedDeps = Vec<LoadedModule>;
 type DepNames = SendSet<Box<str>>;
 
 #[derive(Clone, Debug, PartialEq)]
-#[allow(clippy::large_enum_variant)]
 pub enum LoadedModule {
     Valid(Module),
     FileProblem {
@@ -82,14 +81,14 @@ pub async fn load<'a>(
     src_dir: PathBuf,
     filename: PathBuf,
     loaded_deps: &mut LoadedDeps,
-    vars_created: usize,
+    next_var: Variable,
 ) -> Loaded {
     let env = Env {
         src_dir: src_dir.clone(),
     };
     let (tx, mut rx): (Sender<DepNames>, Receiver<DepNames>) = mpsc::channel(1024);
     let main_tx = tx.clone();
-    let arc_var_store = Arc::new(VarStore::new(vars_created));
+    let arc_var_store = Arc::new(VarStore::new(next_var));
     let var_store = Arc::clone(&arc_var_store);
 
     // Use spawn_blocking here so that we can proceed to the recv() loop
@@ -137,13 +136,13 @@ pub async fn load<'a>(
         }
     }
 
-    let vars_created: usize = Arc::try_unwrap(arc_var_store)
+    let next_var: Variable = Arc::try_unwrap(arc_var_store)
         .expect("TODO better error for Arc being unable to unwrap")
         .into();
 
     Loaded {
         requested_module,
-        vars_created,
+        next_var,
     }
 }
 

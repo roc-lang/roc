@@ -1,27 +1,18 @@
+use inlinable_string::InlinableString;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ModuleName(Box<str>);
+pub struct ModuleName(InlinableString);
 
 /// An uncapitalized identifier, such as a field name or local variable
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Lowercase(Box<str>);
+pub struct Lowercase(InlinableString);
 
 /// A capitalized identifier, such as a tag name or module name
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Uppercase(Box<str>);
-
-impl Into<Box<str>> for ModuleName {
-    fn into(self) -> Box<str> {
-        self.0
-    }
-}
+pub struct Uppercase(InlinableString);
 
 impl ModuleName {
-    pub fn into_str(self) -> Box<str> {
-        self.0
-    }
-
     pub fn as_str(&self) -> &str {
         &*self.0
     }
@@ -39,23 +30,7 @@ impl<'a> From<String> for ModuleName {
     }
 }
 
-impl<'a> From<Box<str>> for ModuleName {
-    fn from(string: Box<str>) -> Self {
-        Self(string)
-    }
-}
-
-impl Into<Box<str>> for Uppercase {
-    fn into(self) -> Box<str> {
-        self.0
-    }
-}
-
 impl Uppercase {
-    pub fn into_str(self) -> Box<str> {
-        self.0
-    }
-
     pub fn as_str(&self) -> &str {
         &*self.0
     }
@@ -73,23 +48,7 @@ impl<'a> From<String> for Uppercase {
     }
 }
 
-impl<'a> From<Box<str>> for Uppercase {
-    fn from(string: Box<str>) -> Self {
-        Self(string)
-    }
-}
-
-impl Into<Box<str>> for Lowercase {
-    fn into(self) -> Box<str> {
-        self.0
-    }
-}
-
 impl Lowercase {
-    pub fn into_str(self) -> Box<str> {
-        self.0
-    }
-
     pub fn as_str(&self) -> &str {
         &*self.0
     }
@@ -104,12 +63,6 @@ impl<'a> From<&'a str> for Lowercase {
 impl<'a> From<String> for Lowercase {
     fn from(string: String) -> Self {
         Self(string.into())
-    }
-}
-
-impl<'a> From<Box<str>> for Lowercase {
-    fn from(string: Box<str>) -> Self {
-        Self(string)
     }
 }
 
