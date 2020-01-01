@@ -406,7 +406,7 @@ pub fn constrain_expr(
             let mut flex_info = Info::default();
             constrain_def(rigids, &mut found_rigids, def, &mut flex_info);
 
-            let rigid_vars = found_rigids.keys().map(|k| k.clone()).collect();
+            let rigid_vars = found_rigids.keys().copied().collect();
 
             let mut new_rigids = rigids.clone();
             for (k, v) in found_rigids {
