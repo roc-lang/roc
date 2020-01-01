@@ -808,13 +808,10 @@ pub fn can_defs_with_return<'a>(
     output.rigids = output.rigids.union(found_rigids);
 
     match can_defs {
-        Ok(mut decls) => {
+        Ok(decls) => {
             let mut loc_expr: Located<Expr> = ret_expr;
 
-            // TODO right to left traversal without a copy/clone
-            decls.reverse();
-
-            for declaration in decls {
+            for declaration in decls.into_iter().rev() {
                 match declaration {
                     Declaration::Declare(def) => {
                         loc_expr = Located {
