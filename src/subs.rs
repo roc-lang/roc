@@ -93,12 +93,12 @@ pub struct OptVariable(usize);
 impl OptVariable {
     pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
 
-    pub fn is_none(&self) -> bool {
-        self == &OptVariable::NONE
+    pub fn is_none(self) -> bool {
+        self == OptVariable::NONE
     }
 
-    pub fn is_some(&self) -> bool {
-        self != &OptVariable::NONE
+    pub fn is_some(self) -> bool {
+        self != OptVariable::NONE
     }
 
     pub fn into_variable(self) -> Option<Variable> {
