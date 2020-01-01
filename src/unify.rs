@@ -36,7 +36,7 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> Unified {
             let type1 = subs.var_to_error_type(var1);
             let type2 = subs.var_to_error_type(var2);
 
-            subs.union(var1, var2, Descriptor::ERROR);
+            subs.union(var1, var2, Content::Error.into());
 
             Problem::Mismatch(problem, type1, type2)
         })

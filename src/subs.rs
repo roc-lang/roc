@@ -330,15 +330,6 @@ impl From<Content> for Descriptor {
     }
 }
 
-impl Descriptor {
-    pub const ERROR: Descriptor = Descriptor {
-        content: Content::Error,
-        rank: Rank::NONE,
-        mark: Mark::NONE,
-        copy: None,
-    };
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Content {
     /// A type variable which the user did not name in an annotation,
