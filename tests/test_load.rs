@@ -17,7 +17,7 @@ mod test_load {
     use roc::can::module::Module;
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
-    use roc::subs::{Subs, Variable, VarStore};
+    use roc::subs::{Subs, VarStore, Variable};
 
     // HELPERS
 
@@ -66,9 +66,7 @@ mod test_load {
         let filename = src_dir.join("Primary.roc");
 
         test_async(async {
-            let module = expect_module(
-                load(src_dir, filename, &mut deps, first_var()).await,
-            );
+            let module = expect_module(load(src_dir, filename, &mut deps, first_var()).await);
 
             assert_eq!(module.name, Some("Primary".into()));
             assert_eq!(module.defs.len(), 6);
