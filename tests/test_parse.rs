@@ -670,6 +670,17 @@ mod test_parse {
     }
 
     #[test]
+    fn spaces_inside_empty_list() {
+        // This is a regression test!
+        let arena = Bump::new();
+        let elems = Vec::new_in(&arena);
+        let expected = List(elems);
+        let actual = parse_with(&arena, "[  ]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn packed_singleton_list() {
         let arena = Bump::new();
         let elems = bumpalo::vec![in &arena; &*arena.alloc(Located::new(0, 0, 1, 2, Int("1")))];

@@ -173,6 +173,25 @@ pub fn fmt_expr<'a>(
                 }
             }
         }
+        List(loc_items) => {
+            buf.push('[');
+
+            let mut iter = loc_items.iter().peekable();
+
+            while let Some(item) = iter.next() {
+                buf.push(' ');
+                fmt_expr(buf, &item.value, indent, false, true);
+
+                if iter.peek().is_some() {
+                    buf.push(',');
+                }
+            }
+
+            if !loc_items.is_empty() {
+                buf.push(' ');
+            }
+            buf.push(']');
+        }
         other => panic!("TODO implement Display for AST variant {:?}", other),
     }
 }
