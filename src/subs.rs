@@ -103,6 +103,14 @@ impl Variable {
         // This is a hack that should only ever be used for testing!
         Variable(num)
     }
+
+    pub fn is_null(&self) -> bool {
+        self == &Variable::NULL
+    }
+
+    pub fn is_not_null(&self) -> bool {
+        self != &Variable::NULL
+    }
 }
 
 impl fmt::Debug for Variable {
@@ -250,7 +258,7 @@ impl Subs {
     pub fn restore(&mut self, var: Variable) {
         let desc = self.get(var);
 
-        if desc.copy.is_some() {
+        if desc.copy.is_not_null() {
             let content = desc.content;
 
             self.set(var, content.clone().into());
@@ -318,7 +326,7 @@ pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
     pub mark: Mark,
-    pub copy: Option<Variable>,
+    pub copy: Variable,
 }
 
 impl fmt::Debug for Descriptor {
@@ -343,7 +351,7 @@ impl From<Content> for Descriptor {
             content,
             rank: Rank::NONE,
             mark: Mark::NONE,
-            copy: None,
+            copy: Variable::NULL,
         }
     }
 }

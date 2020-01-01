@@ -662,7 +662,7 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
         content,
         rank,
         mark: Mark::NONE,
-        copy: None,
+        copy: Variable::NULL,
     });
 
     pools.get_mut(rank).push(var);

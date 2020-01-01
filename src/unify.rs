@@ -397,7 +397,7 @@ fn merge(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome {
         content,
         rank,
         mark: Mark::NONE,
-        copy: None,
+        copy: Variable::NULL,
     };
 
     subs.union(ctx.first, ctx.second, desc);
@@ -420,7 +420,7 @@ fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> V
             content,
             rank: ctx.first_desc.rank.min(ctx.second_desc.rank),
             mark: Mark::NONE,
-            copy: None,
+            copy: Variable::NULL,
         },
         pool,
     )
