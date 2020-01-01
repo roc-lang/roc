@@ -500,9 +500,9 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                identity = \a -> a
+                identity = \x -> x
 
-                x = identity 5
+                y = identity 5
 
                 identity
                 "#

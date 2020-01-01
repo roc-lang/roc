@@ -244,7 +244,7 @@ mod test_load {
             solve_loaded(&module, &mut unify_problems, &mut subs, deps);
 
             let expected_types = hashmap! {
-                "Princial.intVal" => "Int",
+                "Principal.intVal" => "Int",
                 "Principal.identity" => "a -> a",
             };
 

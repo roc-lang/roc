@@ -6,6 +6,7 @@ use crate::region::Region;
 use crate::subs::Variable;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::*;
+use crate::types::LetConstraint;
 use crate::types::Type;
 
 #[inline(always)]
@@ -30,5 +31,12 @@ pub fn constrain_module(
         &mut flex_info,
     );
 
-    Constraint::And(flex_info.constraints)
+    // Constraint::And(flex_info.constraints)
+    Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars: flex_info.vars,
+        def_types: flex_info.def_types,
+        defs_constraint: And(flex_info.constraints),
+        ret_constraint: True,
+    }))
 }
