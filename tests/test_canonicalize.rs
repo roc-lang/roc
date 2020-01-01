@@ -463,7 +463,7 @@ mod test_canonicalize {
 
             let problem = Problem::CircularAssignment(vec![Located::at(
                 Region::new(0, 0, 0, 1),
-                Ident::Unqualified(format!("x").into()),
+                Ident::Unqualified("x".into()),
             )]);
 
             assert_eq!(is_circular_def, true);
@@ -495,18 +495,9 @@ mod test_canonicalize {
                 };
 
             let problem = Problem::CircularAssignment(vec![
-                Located::at(
-                    Region::new(1, 1, 0, 1),
-                    Ident::Unqualified(format!("y").into()),
-                ),
-                Located::at(
-                    Region::new(0, 0, 0, 1),
-                    Ident::Unqualified(format!("x").into()),
-                ),
-                Located::at(
-                    Region::new(2, 2, 0, 1),
-                    Ident::Unqualified(format!("z").into()),
-                ),
+                Located::at(Region::new(0, 0, 0, 1), Ident::Unqualified("x".into())),
+                Located::at(Region::new(1, 1, 0, 1), Ident::Unqualified("y".into())),
+                Located::at(Region::new(2, 2, 0, 1), Ident::Unqualified("z".into())),
             ]);
 
             assert_eq!(is_circular_def, true);
