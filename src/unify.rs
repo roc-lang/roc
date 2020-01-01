@@ -4,7 +4,6 @@ use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, Subs, Variable};
 use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
-use std::cmp::Ordering;
 
 type Pool = Vec<Variable>;
 
@@ -102,22 +101,14 @@ fn unify_alias(
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
         Alias(other_home, other_name, other_args, other_real_var) => {
             if name == other_name && home == other_home {
-                match args.len().cmp(&other_args.len()) {
-                    Ordering::Greater => vec![Mismatch::ExtraArguments {
-                        expected: other_args.len(),
-                        actual: args.len(),
-                    }],
-                    Ordering::Less => vec![Mismatch::MissingArguments {
-                        expected: other_args.len(),
-                        actual: args.len(),
-                    }],
-                    Ordering::Equal => {
-                        for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
-                            unify_pool(subs, pool, *l_var, *r_var);
-                        }
-
-                        merge(subs, &ctx, other_content.clone())
+                if args.len() == other_args.len() {
+                    for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
+                        unify_pool(subs, pool, *l_var, *r_var);
                     }
+
+                    merge(subs, &ctx, other_content.clone())
+                } else {
+                    mismatch()
                 }
             } else {
                 unify_pool(subs, pool, real_var, *other_real_var)
@@ -305,30 +296,20 @@ fn unify_flat_type(
                 problems
             }
         }
-        (Func(l_args, l_ret), Func(r_args, r_ret)) => match l_args.len().cmp(&r_args.len()) {
-            Ordering::Greater => vec![Mismatch::ExtraArguments {
-                expected: l_args.len(),
-                actual: r_args.len(),
-            }],
-            Ordering::Less => vec![Mismatch::MissingArguments {
-                expected: l_args.len(),
-                actual: r_args.len(),
-            }],
-            Ordering::Equal => {
-                let arg_problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
-                let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret);
+        (Func(l_args, l_ret), Func(r_args, r_ret)) if l_args.len() == r_args.len() => {
+            let arg_problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
+            let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret);
 
-                if arg_problems.is_empty() && ret_problems.is_empty() {
-                    merge(subs, ctx, Structure(Func((*r_args).clone(), *r_ret)))
-                } else {
-                    let mut problems = ret_problems;
+            if arg_problems.is_empty() && ret_problems.is_empty() {
+                merge(subs, ctx, Structure(Func((*r_args).clone(), *r_ret)))
+            } else {
+                let mut problems = ret_problems;
 
-                    problems.extend(arg_problems);
+                problems.extend(arg_problems);
 
-                    problems
-                }
+                problems
             }
-        },
+        }
         _ => mismatch(),
     }
 }

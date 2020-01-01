@@ -340,8 +340,6 @@ pub enum Problem {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Mismatch {
     TypeMismatch,
-    ExtraArguments { expected: usize, actual: usize },
-    MissingArguments { expected: usize, actual: usize },
     IfConditionNotBool,
     InconsistentIfElse,
     InconsistentWhenBranches,
