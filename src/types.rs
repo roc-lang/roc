@@ -332,13 +332,17 @@ pub struct LetConstraint {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Problem {
-    GenericMismatch,
-    ExtraArguments,
-    MissingArguments,
+    CanonicalizationProblem,
+    Mismatch(Mismatch, ErrorType, ErrorType),
+    CircularType(Symbol, ErrorType, Region),
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum Mismatch {
+    TypeMismatch,
     IfConditionNotBool,
     InconsistentIfElse,
     InconsistentWhenBranches,
-    CircularType(Symbol, ErrorType, Region),
     CanonicalizationProblem,
 }
 

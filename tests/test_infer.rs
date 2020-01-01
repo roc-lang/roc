@@ -282,7 +282,7 @@ mod test_infer {
                 [ [ 1 ], [ [] ] ]
             "#
             ),
-            "List (List <type mismatch>)",
+            "List <type mismatch>",
         );
     }
 

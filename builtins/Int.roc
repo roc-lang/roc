@@ -8,14 +8,14 @@ interface Int
 
 ## A 64-bit signed integer. All number literals without decimal points are #Int values.
 ##
-## > 1
+## >>> 1
 ##
-## > 0
+## >>> 0
 ##
 ## You can optionally put underscores in your #Int literals.
 ## They have no effect on the number's value, but can make large numbers easier to read.
 ##
-## > 1_000_000
+## >>> 1_000_000
 ##
 ## See #Int.highest and #Int.lowest for the highest and
 ## lowest values that can be held in an #Int.
@@ -31,13 +31,13 @@ interface Int
 ##
 ## `a // b` is shorthand for `Int.divFloor a b`.
 ##
-## > 5 // 7
+## >>> 5 // 7
 ##
-## > Int.divFloor 5 7
+## >>> Int.divFloor 5 7
 ##
-## > -8 // -3
+## >>> -8 // -3
 ##
-## > Int.divFloor -8 -3
+## >>> Int.divFloor -8 -3
 ##
 ## This is the same as the #// operator.
 #divFloor : Int, Int -> Result DivByZero Int
@@ -55,13 +55,13 @@ interface Int
 ##
 ## `a %% b` is shorthand for `Int.modFloor a b`.
 ##
-## > 5 %% 7
+## >>> 5 %% 7
 ##
-## > Int.modFloor 5 7
+## >>> Int.modFloor 5 7
 ##
-## > -8 %% -3
+## >>> -8 %% -3
 ##
-## > Int.modFloor -8 -3
+## >>> Int.modFloor -8 -3
 #modFloor : Int, Int -> Result DivByZero Int
 
 
