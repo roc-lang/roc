@@ -127,11 +127,6 @@ impl Variable {
     const NULL: Variable = Variable(0);
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(1);
-
-    pub fn new_for_testing_only(num: usize) -> Self {
-        // This is a hack that should only ever be used for testing!
-        Variable(num)
-    }
 }
 
 impl fmt::Debug for Variable {
