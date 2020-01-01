@@ -1,3 +1,4 @@
+use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
 use crate::can::ident::Lowercase;
@@ -24,7 +25,7 @@ use crate::types::{LetConstraint, PExpected, Reason};
 pub type Rigids = ImMap<Lowercase, Type>;
 
 /// This is for constraining Defs
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Info {
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
@@ -392,7 +393,7 @@ pub fn constrain_expr(
                 ),
             )
         }
-        Defs(defs, loc_ret) => constrain_defs_with_return(
+        LetRec(defs, loc_ret) => constrain_defs_with_return(
             rigids,
             defs,
             expected,
@@ -400,6 +401,34 @@ pub fn constrain_expr(
             Info::with_capacity(defs.len()),
             loc_ret,
         ),
+        LetNonRec(def, loc_ret) => {
+            let mut found_rigids = SendMap::default();
+            let mut flex_info = Info::default();
+            constrain_def(rigids, &mut found_rigids, def, &mut flex_info);
+
+            let rigid_vars = found_rigids.keys().copied().collect();
+
+            let mut new_rigids = rigids.clone();
+            for (k, v) in found_rigids {
+                new_rigids.insert(v, Type::Variable(k));
+            }
+
+            let ret_con = constrain_expr(&new_rigids, loc_ret.region, &loc_ret.value, expected);
+
+            Let(Box::new(LetConstraint {
+                rigid_vars,
+                flex_vars: Vec::new(),
+                def_types: flex_info.def_types.clone(),
+                defs_constraint: Let(Box::new(LetConstraint {
+                    rigid_vars: Vec::new(),
+                    flex_vars: Vec::new(),
+                    def_types: SendMap::default(),
+                    defs_constraint: And(flex_info.constraints),
+                    ret_constraint: True,
+                })),
+                ret_constraint: ret_con,
+            }))
+        }
         Tag(_, _) => {
             panic!("TODO constrain Tag");
         }
@@ -455,6 +484,26 @@ fn constrain_field(
 #[inline(always)]
 fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constraint {
     Eq(EmptyRec, expected, region)
+}
+
+#[inline(always)]
+pub fn constrain_decls(
+    rigids: &Rigids,
+    found_rigids: &mut SendMap<Variable, Lowercase>,
+    decls: &[Declaration],
+    flex_info: &mut Info,
+) {
+    for decl in decls {
+        match decl {
+            Declaration::Declare(def) => constrain_def(rigids, found_rigids, def, flex_info),
+            Declaration::DeclareRec(defs) => {
+                for def in defs {
+                    constrain_def(rigids, found_rigids, def, flex_info)
+                }
+            }
+            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+        }
+    }
 }
 
 #[inline(always)]
@@ -554,13 +603,21 @@ fn constrain_def(
         ),
     };
 
-    flex_info.constraints.push(Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars: pattern_state.vars,
-        def_types: pattern_state.headers,
-        defs_constraint: And(pattern_state.constraints),
-        ret_constraint,
-    })));
+    // No Let is introduced when there are no pattern constraints
+    // This is only the case for literal patterns
+    //
+    // foo = ...
+    if pattern_state.constraints.is_empty() {
+        flex_info.constraints.push(ret_constraint);
+    } else {
+        flex_info.constraints.push(Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: pattern_state.vars,
+            def_types: pattern_state.headers,
+            defs_constraint: And(pattern_state.constraints),
+            ret_constraint,
+        })));
+    }
 }
 
 #[inline(always)]

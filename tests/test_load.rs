@@ -14,6 +14,7 @@ mod helpers;
 #[cfg(test)]
 mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
+    use roc::can::def::Declaration::*;
     use roc::can::module::Module;
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
@@ -68,8 +69,13 @@ mod test_load {
         test_async(async {
             let module = expect_module(load(src_dir, filename, &mut deps, first_var()).await);
 
+            let def_count: usize = module
+                .declarations
+                .iter()
+                .map(|decl| decl.def_count())
+                .sum();
             assert_eq!(module.name, Some("Primary".into()));
-            assert_eq!(module.defs.len(), 6);
+            assert_eq!(def_count, 6);
 
             let module_names: Vec<Option<Box<str>>> = deps
                 .into_iter()
@@ -96,8 +102,13 @@ mod test_load {
         test_async(async {
             let module = expect_module(load(src_dir, filename, &mut deps, first_var()).await);
 
+            let def_count: usize = module
+                .declarations
+                .iter()
+                .map(|decl| decl.def_count())
+                .sum();
             assert_eq!(module.name, Some("Defaults".into()));
-            assert_eq!(module.defs.len(), 0);
+            assert_eq!(def_count, 0);
 
             let module_names: Vec<Option<Box<str>>> = deps
                 .into_iter()
@@ -126,8 +137,13 @@ mod test_load {
             let filename = src_dir.join("Primary.roc");
             let module = expect_module(load(src_dir, filename, &mut deps, next_var).await);
 
+            let def_count: usize = module
+                .declarations
+                .iter()
+                .map(|decl| decl.def_count())
+                .sum();
             assert_eq!(module.name, Some("Primary".into()));
-            assert_eq!(module.defs.len(), 6);
+            assert_eq!(def_count, 6);
 
             let module_names: Vec<Option<Box<str>>> = deps
                 .into_iter()
@@ -178,9 +194,22 @@ mod test_load {
                 "WithBuiltins.fromDep2" => "Float",
             };
 
-            assert_eq!(expected_types.len(), module.defs.len());
+            assert_eq!(expected_types.len(), module.declarations.len());
 
-            for def in module.defs {
+            for decl in module.declarations {
+                let def = match decl {
+                    Declare(def) => def,
+                    rec_decl @ DeclareRec(_) => {
+                        panic!(
+                            "Unexpected recursive def in module declarations: {:?}",
+                            rec_decl
+                        );
+                    }
+                    cycle @ InvalidCycle(_, _) => {
+                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                    }
+                };
+
                 for (symbol, expr_var) in def.pattern_vars {
                     let content = subs.get(expr_var).content;
 

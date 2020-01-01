@@ -1,7 +1,7 @@
-use crate::can::def::Def;
+use crate::can::def::Declaration;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
-use crate::constrain::expr::{constrain_defs, Info};
+use crate::constrain::expr::{constrain_decls, Info};
 use crate::region::Region;
 use crate::subs::Variable;
 use crate::types::Constraint::{self, *};
@@ -9,7 +9,10 @@ use crate::types::Expected::*;
 use crate::types::Type;
 
 #[inline(always)]
-pub fn constrain_module(defs: &[Def], lookups: Vec<(Symbol, Variable, Region)>) -> Constraint {
+pub fn constrain_module(
+    decls: &[Declaration],
+    lookups: Vec<(Symbol, Variable, Region)>,
+) -> Constraint {
     let mut flex_info = Info::default();
 
     for (symbol, expr_var, region) in lookups {
@@ -20,10 +23,10 @@ pub fn constrain_module(defs: &[Def], lookups: Vec<(Symbol, Variable, Region)>) 
         flex_info.constraints.push(Lookup(symbol, expected, region));
     }
 
-    constrain_defs(
+    constrain_decls(
         &ImMap::default(),
         &mut SendMap::default(),
-        &defs,
+        &decls,
         &mut flex_info,
     );
 

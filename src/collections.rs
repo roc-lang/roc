@@ -1,6 +1,6 @@
 use bumpalo::collections::String;
 use bumpalo::Bump;
-use std::hash::BuildHasherDefault;
+use std::hash::{BuildHasherDefault, Hash};
 
 pub use wyhash::WyHash;
 
@@ -46,4 +46,15 @@ where
     }
 
     buf
+}
+
+pub fn insert_all<K, V, I>(map: &mut ImMap<K, V>, elems: I)
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+    I: Iterator<Item = (K, V)>,
+{
+    for (k, v) in elems {
+        map.insert(k, v);
+    }
 }

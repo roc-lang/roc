@@ -475,11 +475,25 @@ pub fn canonicalize_expr(
                 ),
             )
         }
-
-        Defs(defs, loc_ret) => (
+        LetRec(defs, loc_ret) => (
             Output::default(),
             can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
         ),
+        LetNonRec(def, loc_ret) => {
+            // TODO do this properly once we know how to do it in the first type checker.
+            let defs = vec![*def.clone()];
+            (
+                Output::default(),
+                can_defs(
+                    rigids,
+                    var_store,
+                    var_usage,
+                    defs.as_slice(),
+                    expected,
+                    loc_ret,
+                ),
+            )
+        }
         When {
             cond_var,
             loc_cond,
