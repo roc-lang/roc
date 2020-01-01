@@ -389,7 +389,7 @@ pub fn solve_loaded(
     // to solve, looking up qualified idents gets the correct answer.
     //
     // TODO filter these by what's actually exposed; don't add it to the Env
-    // unless the module actually exposes it!
+    // unless the other module actually exposes it!
     for loaded_dep in loaded_deps {
         match loaded_dep {
             Valid(valid_dep) => {
