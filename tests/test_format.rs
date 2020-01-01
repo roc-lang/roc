@@ -544,7 +544,7 @@ mod test_format {
     #[test]
     fn empty_list() {
         expr_formats_same("[]");
-        //        expr_formats_to("[     ]", "[]");
+        expr_formats_to("[     ]", "[]");
     }
 
     #[test]
