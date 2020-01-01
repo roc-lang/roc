@@ -16,7 +16,7 @@ use crate::can::procedure::References;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImSet, MutMap, MutSet, SendMap};
-use crate::graph::{strongly_connected_component, topological_sort_into_groups};
+use crate::graph::topological_sort_into_groups;
 use crate::ident::Ident;
 use crate::parse::ast;
 use crate::region::{Located, Region};
