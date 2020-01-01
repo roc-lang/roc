@@ -41,7 +41,7 @@ jobs:
           args: --release
 
   fmt:
-    name: rustfmt
+    name: cargo fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1

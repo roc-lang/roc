@@ -50,15 +50,24 @@ impl fmt::Debug for Subs {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct VarStore {
     next: AtomicUsize,
 }
 
+impl Default for VarStore {
+    fn default() -> Self {
+        VarStore::new(Variable::FIRST_USER_SPACE_VAR)
+    }
+}
+
 impl VarStore {
-    pub fn new(vars_already_created: usize) -> Self {
+    #[inline(always)]
+    pub fn new(next_var: Variable) -> Self {
+        debug_assert!(next_var.0 >= Variable::FIRST_USER_SPACE_VAR.0);
+
         VarStore {
-            next: AtomicUsize::new(vars_already_created),
+            next: AtomicUsize::new(next_var.0),
         }
     }
 
@@ -72,9 +81,38 @@ impl VarStore {
     }
 }
 
-impl Into<usize> for VarStore {
-    fn into(self) -> usize {
-        self.next.into_inner()
+impl Into<Variable> for VarStore {
+    fn into(self) -> Variable {
+        Variable(self.next.into_inner())
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+pub struct OptVariable(usize);
+
+impl OptVariable {
+    pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
+
+    pub fn is_none(self) -> bool {
+        self == OptVariable::NONE
+    }
+
+    pub fn is_some(self) -> bool {
+        self != OptVariable::NONE
+    }
+
+    pub fn into_variable(self) -> Option<Variable> {
+        if self.is_none() {
+            None
+        } else {
+            Some(Variable(self.0))
+        }
+    }
+}
+
+impl Into<Option<Variable>> for OptVariable {
+    fn into(self) -> Option<Variable> {
+        self.into_variable()
     }
 }
 
@@ -82,10 +120,13 @@ impl Into<usize> for VarStore {
 pub struct Variable(usize);
 
 impl Variable {
-    pub fn new_for_testing_only(num: usize) -> Self {
-        // This is a hack that should only ever be used for testing!
-        Variable(num)
-    }
+    // Reserved for indicating the absence of a variable.
+    // This lets us avoid using Option<Variable> for the Descriptor's
+    // copy field, which is a relevant space savings because we make
+    // a *ton* of Descriptors.
+    const NULL: Variable = Variable(0);
+
+    const FIRST_USER_SPACE_VAR: Variable = Variable(1);
 }
 
 impl fmt::Debug for Variable {
@@ -111,7 +152,8 @@ impl UnifyKey for Variable {
 }
 
 impl Subs {
-    pub fn new(entries: usize) -> Self {
+    pub fn new(next_var: Variable) -> Self {
+        let entries = next_var.0;
         let mut subs = Subs {
             utable: UnificationTable::default(),
         };
@@ -300,7 +342,7 @@ pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
     pub mark: Mark,
-    pub copy: Option<Variable>,
+    pub copy: OptVariable,
 }
 
 impl fmt::Debug for Descriptor {
@@ -308,7 +350,10 @@ impl fmt::Debug for Descriptor {
         write!(
             f,
             "{:?}, r: {:?}, m: {:?} c: {:?}",
-            self.content, self.rank, self.mark, self.copy
+            self.content,
+            self.rank,
+            self.mark,
+            self.copy.into_variable()
         )
     }
 }
@@ -325,7 +370,7 @@ impl From<Content> for Descriptor {
             content,
             rank: Rank::NONE,
             mark: Mark::NONE,
-            copy: None,
+            copy: OptVariable::NONE,
         }
     }
 }
