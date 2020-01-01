@@ -15,6 +15,7 @@ mod helpers;
 mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
     use roc::can::module::Module;
+    use roc::can::def::Declaration::*;
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -183,9 +184,18 @@ mod test_load {
                 "WithBuiltins.fromDep2" => "Float",
             };
 
-            assert_eq!(expected_types.len(), module.defs.len());
+            dbg!(module.declarations.clone());
 
-            for def in module.defs {
+            assert_eq!(expected_types.len(), module.declarations.len());
+
+            for decl in module.declarations {
+                let def = match decl {
+                    Declare(def) => def,
+                    rec_decl@DeclareRec(_) => {
+                        panic!("Unexpected recursive def in module declarations: {:?}", rec_decl);
+                    }
+                };
+
                 for (symbol, expr_var) in def.pattern_vars {
                     let content = subs.get(expr_var).content;
 
