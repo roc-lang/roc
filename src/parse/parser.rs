@@ -654,12 +654,26 @@ macro_rules! collection {
     ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr) => {
         skip_first!(
             $opening_brace,
-            skip_second!(
-                $crate::parse::parser::sep_by0(
-                    $delimiter,
-                    $crate::parse::blankspace::space0_around($elem, $min_indent)
-                ),
-                $closing_brace
+            skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `[  ]` can be successfully parsed as an empty list, and then
+                // changed by the formatter back into `[]`.
+                //
+                // We don't allow newlines or comments in the middle of empty
+                // collections because those are normally stored in an Expr,
+                // and there's no Expr in which to store them in an empty collection!
+                //
+                // We could change the AST to add extra storage specifically to
+                // support empty literals containing newlines or comments, but this
+                // does not seem worth even the tiniest regression in compiler performance.
+                zero_or_more!(char(' ')),
+                skip_second!(
+                    $crate::parse::parser::sep_by0(
+                        $delimiter,
+                        $crate::parse::blankspace::space0_around($elem, $min_indent)
+                    ),
+                    $closing_brace
+                )
             )
         )
     };
