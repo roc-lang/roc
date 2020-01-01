@@ -82,7 +82,6 @@ pub fn fmt_pattern<'a>(
                 buf.push_str(line)
             }
         }
-        EmptyRecordLiteral => buf.push_str("{}"),
         Underscore => buf.push('_'),
 
         // Space

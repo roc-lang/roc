@@ -1,8 +1,9 @@
 use crate::can::def::Def;
-use crate::can::module::{canonicalize_module_defs, Module};
+use crate::can::module::{canonicalize_module_defs, Module, ModuleOutput};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap, SendSet};
+use crate::constrain::module::constrain_module;
 use crate::ident::Ident;
 use crate::module::ModuleName;
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
@@ -217,8 +218,7 @@ fn load_filename(
 
                     let mut scope =
                         Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
-
-                    let (defs, exposed_imports, constraint) = parse_and_canonicalize_defs(
+                    let (defs, exposed_imports, constraint) = process_defs(
                         &arena,
                         state,
                         declared_name.clone(),
@@ -259,7 +259,7 @@ fn load_filename(
                     let mut scope = Scope::new(".".into(), scope_from_imports);
 
                     // The app module has no declared name. Pass it as "".
-                    let (defs, exposed_imports, constraint) = parse_and_canonicalize_defs(
+                    let (defs, exposed_imports, constraint) = process_defs(
                         &arena,
                         state,
                         "".into(),
@@ -288,7 +288,7 @@ fn load_filename(
     }
 }
 
-fn parse_and_canonicalize_defs<'a, I>(
+fn process_defs<'a, I>(
     arena: &'a Bump,
     state: State<'a>,
     home: Box<str>,
@@ -303,7 +303,15 @@ where
         .parse(arena, state)
         .expect("TODO gracefully handle parse error on module defs");
 
-    canonicalize_module_defs(arena, parsed_defs, home, exposes, scope, var_store)
+    let ModuleOutput {
+        defs,
+        exposed_imports,
+        lookups,
+    } = canonicalize_module_defs(arena, parsed_defs, home, exposes, scope, var_store);
+
+    let constraint = constrain_module(&defs, lookups);
+
+    (defs, exposed_imports, constraint)
 }
 
 fn load_import(
@@ -362,17 +370,17 @@ pub fn solve_loaded(
     use LoadedModule::*;
 
     let mut vars_by_symbol: ImMap<Symbol, Variable> = ImMap::default();
-    let mut constraints = Vec::with_capacity(loaded_deps.len() + 1);
+    let mut dep_constraints = Vec::with_capacity(loaded_deps.len());
 
     // All the exposed imports should be available in the solver's vars_by_symbol
-    for (symbol, var) in module.exposed_imports.iter() {
-        vars_by_symbol.insert(symbol.clone(), var.clone());
+    for (symbol, expr_var) in im::HashMap::clone(&module.exposed_imports) {
+        vars_by_symbol.insert(symbol, expr_var);
     }
 
     // All the top-level defs should also be available in vars_by_symbol
     for def in module.defs.iter() {
-        for (symbol, var) in def.variables_by_symbol.iter() {
-            vars_by_symbol.insert(symbol.clone(), var.clone());
+        for (symbol, var) in im::HashMap::clone(&def.pattern_vars) {
+            vars_by_symbol.insert(symbol, var);
         }
     }
 
@@ -380,7 +388,7 @@ pub fn solve_loaded(
     // to solve, looking up qualified idents gets the correct answer.
     //
     // TODO filter these by what's actually exposed; don't add it to the Env
-    // unless the module actually exposes it!
+    // unless the other module actually exposes it!
     for loaded_dep in loaded_deps {
         match loaded_dep {
             Valid(valid_dep) => {
@@ -388,18 +396,18 @@ pub fn solve_loaded(
                 // in the solver's vars_by_symbol. (The map's keys are
                 // fully qualified, so there won't be any collisions
                 // with the primary module's exposed imports!)
-                for (symbol, var) in valid_dep.exposed_imports {
-                    vars_by_symbol.insert(symbol, var);
+                for (symbol, expr_var) in valid_dep.exposed_imports {
+                    vars_by_symbol.insert(symbol, expr_var);
                 }
-
-                constraints.push(valid_dep.constraint);
 
                 // All its top-level defs should also be available in vars_by_symbol
                 for def in valid_dep.defs {
-                    for (symbol, var) in def.variables_by_symbol {
+                    for (symbol, var) in def.pattern_vars {
                         vars_by_symbol.insert(symbol, var);
                     }
                 }
+
+                dep_constraints.push(valid_dep.constraint);
             }
 
             broken @ FileProblem { .. } => {
@@ -412,8 +420,8 @@ pub fn solve_loaded(
         }
     }
 
-    for constraint in constraints {
-        solve::run(&vars_by_symbol, problems, subs, &constraint);
+    for dep_constraint in dep_constraints {
+        solve::run(&vars_by_symbol, problems, subs, &dep_constraint);
     }
 
     solve::run(&vars_by_symbol, problems, subs, &module.constraint);

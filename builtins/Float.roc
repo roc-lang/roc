@@ -69,7 +69,7 @@ interface Float
 
 #round : Float -> Int
 round = \num ->
-    case num when
+    when num is
         0.0 -> 0
         _ -> 1
 
@@ -100,17 +100,17 @@ round = \num ->
 ##
 ## `a / b` is shorthand for `Float.div a b`.
 ##
-## >>>>> 5.0 / 7.0
+## >>> 5.0 / 7.0
 ##
-## >>>>> Float.div 5 7
+## >>> Float.div 5 7
 ##
 ## `Float.div` can be convenient in pipelines.
 ##
-## >>>>> Float.pi
-## >>>>>     |> Float.div 2.0
+## >>> Float.pi
+## >>>     |> Float.div 2.0
 #div : Float, Float -> Result Float DivByZero
 div = \numerator, denominator ->
-    case numerator when
+    when numerator is
         0.0 -> 0.0 # TODO return Result!
         _ -> denominator
 
@@ -123,14 +123,14 @@ div = \numerator, denominator ->
 ##
 ## `a % b` is shorthand for `Float.mod a b`.
 ##
-## >>>>> 5.0 % 7.0
+## >>> 5.0 % 7.0
 ##
-## >>>>> Float.mod 5 7
+## >>> Float.mod 5 7
 ##
 ## `Float.mod` can be convenient in pipelines.
 ##
-## >>>>> Float.pi
-## >>>>>     |> Float.mod 2.0
+## >>> Float.pi
+## >>>     |> Float.mod 2.0
 #mod : Float, Float -> Result Float DivByZero
 
 ## Return the reciprocal of the #Float.

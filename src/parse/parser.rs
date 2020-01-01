@@ -652,17 +652,28 @@ macro_rules! skip_second {
 #[macro_export]
 macro_rules! collection {
     ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr) => {
-        // TODO allow trailing commas before the closing delimiter, *but* without
-        // losing any comments or newlines! This will require parsing them and then,
-        // if they are present, merging them into the final Spaceable.
         skip_first!(
             $opening_brace,
-            skip_second!(
-                $crate::parse::parser::sep_by0(
-                    $delimiter,
-                    $crate::parse::blankspace::space0_around($elem, $min_indent)
-                ),
-                $closing_brace
+            skip_first!(
+                // We specifically allow space characters inside here, so that
+                // `[  ]` can be successfully parsed as an empty list, and then
+                // changed by the formatter back into `[]`.
+                //
+                // We don't allow newlines or comments in the middle of empty
+                // collections because those are normally stored in an Expr,
+                // and there's no Expr in which to store them in an empty collection!
+                //
+                // We could change the AST to add extra storage specifically to
+                // support empty literals containing newlines or comments, but this
+                // does not seem worth even the tiniest regression in compiler performance.
+                zero_or_more!(char(' ')),
+                skip_second!(
+                    $crate::parse::parser::sep_by0(
+                        $delimiter,
+                        $crate::parse::blankspace::space0_around($elem, $min_indent)
+                    ),
+                    $closing_brace
+                )
             )
         )
     };
@@ -887,6 +898,10 @@ macro_rules! record_field {
 
             // You must have a field name, e.g. "email"
             let (loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
+
+            let (opt_field, state) =
+                $crate::parse::parser::optional(char('?')).parse(arena, state)?;
+
             let (spaces, state) = space0($min_indent).parse(arena, state)?;
             // Having a value is optional; both `{ email }` and `{ email: blah }` work.
             // (This is true in both literals and types.)
@@ -896,16 +911,20 @@ macro_rules! record_field {
             ))
             .parse(arena, state)?;
 
-            let answer = match opt_loc_val {
-                Some(loc_val) => LabeledValue(loc_label, spaces, arena.alloc(loc_val)),
+            let answer = match (opt_loc_val, opt_field) {
+                (Some(loc_val), None) => LabeledValue(loc_label, spaces, arena.alloc(loc_val)),
+                (Some(loc_val), Some(_)) => OptionalField(loc_label, spaces, arena.alloc(loc_val)),
                 // If no value was provided, record it as a Var.
                 // Canonicalize will know what to do with a Var later.
-                None => {
+                (None, None) => {
                     if !spaces.is_empty() {
                         SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
                     } else {
                         LabelOnly(loc_label)
                     }
+                }
+                (None, Some(_)) => {
+                    panic!("TODO should `{ x? }` be valid? realistically, how of often does `{ a : a }` occur in a type?");
                 }
             };
 

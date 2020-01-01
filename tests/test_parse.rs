@@ -670,6 +670,17 @@ mod test_parse {
     }
 
     #[test]
+    fn spaces_inside_empty_list() {
+        // This is a regression test!
+        let arena = Bump::new();
+        let elems = Vec::new_in(&arena);
+        let expected = List(elems);
+        let actual = parse_with(&arena, "[  ]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn packed_singleton_list() {
         let arena = Bump::new();
         let elems = bumpalo::vec![in &arena; &*arena.alloc(Located::new(0, 0, 1, 2, Int("1")))];
@@ -1296,10 +1307,10 @@ mod test_parse {
         );
     }
 
-    // CASE
+    // WHEN
 
     #[test]
-    fn two_branch_case() {
+    fn two_branch_when() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline];
         let pattern1 =
@@ -1317,12 +1328,12 @@ mod test_parse {
         let branch2 = &*arena.alloc((loc_pattern2, loc_expr2));
         let branches = bumpalo::vec![in &arena; branch1, branch2];
         let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
-        let expected = Expr::Case(arena.alloc(loc_cond), branches);
+        let expected = Expr::When(arena.alloc(loc_cond), branches);
         let actual = parse_with(
             &arena,
             indoc!(
                 r#"
-                case x when
+                when x is
                  "blah" -> 1
                  "mise" -> 2
                 "#
@@ -1333,7 +1344,7 @@ mod test_parse {
     }
 
     #[test]
-    fn case_with_numbers() {
+    fn when_with_numbers() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline];
         let pattern1 =
@@ -1351,12 +1362,12 @@ mod test_parse {
         let branch2 = &*arena.alloc((loc_pattern2, loc_expr2));
         let branches = bumpalo::vec![in &arena; branch1, branch2];
         let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
-        let expected = Expr::Case(arena.alloc(loc_cond), branches);
+        let expected = Expr::When(arena.alloc(loc_cond), branches);
         let actual = parse_with(
             &arena,
             indoc!(
                 r#"
-                case x when
+                when x is
                  1 -> 2
                  3 -> 4
                 "#
@@ -1367,7 +1378,7 @@ mod test_parse {
     }
 
     #[test]
-    fn case_with_records() {
+    fn when_with_records() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline];
         let identifiers1 = bumpalo::vec![in &arena; Located::new(1, 1, 3, 4, Identifier("y")) ];
@@ -1391,12 +1402,12 @@ mod test_parse {
         let branch2 = &*arena.alloc((loc_pattern2, loc_expr2));
         let branches = bumpalo::vec![in &arena; branch1, branch2];
         let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
-        let expected = Expr::Case(arena.alloc(loc_cond), branches);
+        let expected = Expr::When(arena.alloc(loc_cond), branches);
         let actual = parse_with(
             &arena,
             indoc!(
                 r#"
-                case x when
+                when x is
                  { y } -> 2
                  { z, w } -> 4
                 "#

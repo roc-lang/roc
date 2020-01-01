@@ -9,13 +9,14 @@ use roc::can::problem::Problem;
 use roc::can::scope::Scope;
 use roc::can::symbol::Symbol;
 use roc::collections::{ImMap, MutMap, SendSet};
+use roc::constrain::expr::constrain_expr;
 use roc::ident::Ident;
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
 use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
-use roc::subs::{VarStore, Variable};
+use roc::subs::{Subs, VarStore, Variable};
 use roc::types::{Constraint, Expected, Type};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -91,9 +92,9 @@ pub fn uniq_expr(
     Output,
     Output,
     Vec<Problem>,
-    VarStore,
+    Subs,
     Variable,
-    VarStore,
+    Subs,
     Variable,
     Constraint,
     Constraint,
@@ -110,9 +111,9 @@ pub fn uniq_expr_with(
     Output,
     Output,
     Vec<Problem>,
-    VarStore,
+    Subs,
     Variable,
-    VarStore,
+    Subs,
     Variable,
     Constraint,
     Constraint,
@@ -121,8 +122,10 @@ pub fn uniq_expr_with(
     let (loc_expr, output, problems, var_store1, variable, constraint1) =
         can_expr_with(arena, home, expr_str, &ImMap::default());
 
+    let var_count: usize = var_store1.into();
+    let subs1 = Subs::new(var_count);
     // double check
-    let var_store2 = VarStore::default();
+    let var_store2 = VarStore::new(var_count);
 
     let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
@@ -134,13 +137,15 @@ pub fn uniq_expr_with(
         expected2,
     );
 
+    let subs2 = Subs::new(var_store2.into());
+
     (
         output2,
         output,
         problems,
-        var_store1,
+        subs1,
         variable,
-        var_store2,
+        subs2,
         variable2,
         constraint1,
         constraint2,
@@ -187,12 +192,17 @@ pub fn can_expr_with(
     let scope_prefix = format!("{}.{}$", home, name).into();
     let mut scope = Scope::new(scope_prefix, declared_idents.clone());
     let mut env = Env::new(home.into());
-    let (loc_expr, output, constraint) = canonicalize_expr(
-        &ImMap::default(),
+    let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &var_store,
         &mut scope,
         Region::zero(),
+        &loc_expr.value,
+    );
+
+    let constraint = constrain_expr(
+        &ImMap::default(),
+        loc_expr.region,
         &loc_expr.value,
         expected,
     );

@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
-use crate::types::{name_type_var, ErrorType, Problem, RecordExt};
+use crate::types::{name_type_var, ErrorType, Problem, RecordExt, RecordFieldLabel};
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -9,20 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub struct Mark(i32);
 
 impl Mark {
-    #[inline(always)]
-    pub fn none() -> Mark {
-        Mark(2)
-    }
-
-    #[inline(always)]
-    pub fn occurs() -> Mark {
-        Mark(1)
-    }
-
-    #[inline(always)]
-    pub fn get_var_names() -> Mark {
-        Mark(0)
-    }
+    pub const NONE: Mark = Mark(2);
+    pub const OCCURS: Mark = Mark(1);
+    pub const GET_VAR_NAMES: Mark = Mark(1);
 
     #[inline(always)]
     pub fn next(self) -> Mark {
@@ -32,11 +21,11 @@ impl Mark {
 
 impl fmt::Debug for Mark {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self == &Mark::none() {
+        if self == &Mark::NONE {
             write!(f, "none")
-        } else if self == &Mark::occurs() {
+        } else if self == &Mark::OCCURS {
             write!(f, "occurs")
-        } else if self == &Mark::get_var_names() {
+        } else if self == &Mark::GET_VAR_NAMES {
             write!(f, "get_var_names")
         } else {
             write!(f, "Mark({})", self.0)
@@ -50,9 +39,15 @@ struct NameState {
     normals: u32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
+}
+
+impl fmt::Debug for Subs {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.utable.fmt(f)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -209,12 +204,6 @@ impl Subs {
         });
     }
 
-    pub fn copy_var(&mut self, var: Variable) -> Variable {
-        // TODO understand the purpose of using a "deep copy" approach here,
-        // and perform it if necessary. (Seems to be about setting maxRank?)
-        var
-    }
-
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
         self.utable.unioned(left, right)
     }
@@ -239,6 +228,18 @@ impl Subs {
 
         var_to_err_type(self, &mut state, var)
     }
+
+    pub fn restore(&mut self, var: Variable) {
+        let desc = self.get(var);
+
+        if desc.copy.is_some() {
+            let content = desc.content;
+
+            self.set(var, content.clone().into());
+
+            restore_content(self, &content);
+        }
+    }
 }
 
 #[inline(always)]
@@ -251,15 +252,13 @@ fn unnamed_flex_var() -> Content {
     Content::FlexVar(None)
 }
 
-#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Rank(usize);
 
 impl Rank {
-    pub fn none() -> Self {
-        Rank(0)
-    }
+    pub const NONE: Rank = Rank(0);
 
-    pub fn outermost() -> Self {
+    pub fn toplevel() -> Self {
         Rank(1)
     }
 
@@ -278,6 +277,12 @@ impl fmt::Display for Rank {
     }
 }
 
+impl fmt::Debug for Rank {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl Into<usize> for Rank {
     fn into(self) -> usize {
         self.0
@@ -290,12 +295,22 @@ impl From<usize> for Rank {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
     pub mark: Mark,
     pub copy: Option<Variable>,
+}
+
+impl fmt::Debug for Descriptor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:?}, r: {:?}, m: {:?} c: {:?}",
+            self.content, self.rank, self.mark, self.copy
+        )
+    }
 }
 
 impl Default for Descriptor {
@@ -308,22 +323,20 @@ impl From<Content> for Descriptor {
     fn from(content: Content) -> Descriptor {
         Descriptor {
             content,
-            rank: Rank::none(),
-            mark: Mark::none(),
+            rank: Rank::NONE,
+            mark: Mark::NONE,
             copy: None,
         }
     }
 }
 
 impl Descriptor {
-    pub fn error() -> Self {
-        Descriptor {
-            content: Content::Error,
-            rank: Rank::none(),
-            mark: Mark::none(),
-            copy: None,
-        }
-    }
+    pub const ERROR: Descriptor = Descriptor {
+        content: Content::Error,
+        rank: Rank::NONE,
+        mark: Mark::NONE,
+        copy: None,
+    };
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -350,7 +363,7 @@ pub enum FlatType {
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
-    Record(ImMap<Lowercase, Variable>, Variable),
+    Record(ImMap<RecordFieldLabel, Variable>, Variable),
     Erroneous(Problem),
     EmptyRecord,
 }
@@ -413,10 +426,10 @@ fn get_var_names(
     use self::Content::*;
     let desc = subs.get(var);
 
-    if desc.mark == Mark::get_var_names() {
+    if desc.mark == Mark::GET_VAR_NAMES {
         taken_names
     } else {
-        subs.set_mark(var, Mark::get_var_names());
+        subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
             Error | FlexVar(None) => taken_names,
@@ -511,10 +524,10 @@ where
 fn var_to_err_type(subs: &mut Subs, state: &mut NameState, var: Variable) -> ErrorType {
     let desc = subs.get(var);
 
-    if desc.mark == Mark::occurs() {
+    if desc.mark == Mark::OCCURS {
         ErrorType::Infinite
     } else {
-        subs.set_mark(var, Mark::occurs());
+        subs.set_mark(var, Mark::OCCURS);
 
         let err_type = content_to_err_type(subs, state, var, desc.content);
 
@@ -632,4 +645,47 @@ fn get_fresh_var_name(state: &mut NameState) -> Lowercase {
     state.normals = new_index;
 
     name
+}
+
+fn restore_content(subs: &mut Subs, content: &Content) {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match content {
+        FlexVar(_) | RigidVar(_) | Error => (),
+
+        Structure(flat_type) => match flat_type {
+            Apply { args, .. } => {
+                for &var in args {
+                    subs.restore(var);
+                }
+            }
+
+            Func(arg_vars, ret_var) => {
+                for &var in arg_vars {
+                    subs.restore(var);
+                }
+
+                subs.restore(*ret_var);
+            }
+
+            EmptyRecord => (),
+
+            Record(fields, ext_var) => {
+                for (_, var) in fields {
+                    subs.restore(*var);
+                }
+
+                subs.restore(*ext_var);
+            }
+            Erroneous(_) => (),
+        },
+        Alias(_, _, args, var) => {
+            for (_, arg_var) in args {
+                subs.restore(*arg_var);
+            }
+
+            subs.restore(*var);
+        }
+    }
 }

@@ -13,7 +13,6 @@ mod test_infer_uniq {
     use crate::helpers::uniq_expr;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
-    use roc::subs::Subs;
 
     // HELPERS
 
@@ -22,16 +21,13 @@ mod test_infer_uniq {
             _output2,
             _output1,
             _,
-            var_store1,
+            mut subs1,
             variable1,
-            var_store2,
+            mut subs2,
             variable2,
             constraint1,
             constraint2,
         ) = uniq_expr(src);
-
-        let mut subs1 = Subs::new(var_store1.into());
-        let mut subs2 = Subs::new(var_store2.into());
 
         let mut unify_problems = Vec::new();
         let content1 = infer_expr(&mut subs1, &mut unify_problems, &constraint1, variable1);
@@ -513,6 +509,39 @@ mod test_infer_uniq {
         );
     }
 
+    // #[test]
+    // fn identity_infers_principal_type() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             identity = \a -> a
+
+    //             x = identity 5
+
+    //             identity
+    //             "#
+    //         ),
+    //         "Attr.Attr * (a -> a)",
+    //     );
+    // }
+
+    // #[test]
+    // fn identity_works_on_incompatible_types() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             identity = \a -> a
+
+    //             x = identity 5
+    //             y = identity "hi"
+
+    //             x
+    //             "#
+    //         ),
+    //         "Attr.Attr Int",
+    //     );
+    // }
+
     #[test]
     fn call_returns_list() {
         infer_eq(
@@ -826,11 +855,11 @@ mod test_infer_uniq {
     // }
 
     #[test]
-    fn case_with_int_literals() {
+    fn when_with_int_literals() {
         infer_eq(
             indoc!(
                 r#"
-                case 1 when
+                when 1 is
                  1 -> 2
                  3 -> 4
             "#
@@ -838,6 +867,49 @@ mod test_infer_uniq {
             "Attr.Attr * Int",
         );
     }
-    /*
-     */
+
+    #[test]
+    fn accessor_function() {
+        infer_eq(".foo", "Attr.Attr * { foo : a }* -> a");
+    }
+
+    #[test]
+    fn record() {
+        infer_eq("{ foo: 42 }", "Attr.Attr * { foo : (Attr.Attr * Int) }");
+    }
+
+    #[test]
+    fn record_access() {
+        infer_eq("{ foo: 42 }.foo", "Attr.Attr * Int");
+    }
+
+    #[test]
+    fn record_pattern_match_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when foo is
+                        { x: 4 }-> x
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn empty_record_pattern() {
+        infer_eq(
+            indoc!(
+                r#"
+                # technically, an empty record can be destructured
+                {} = {}
+                bar = \{} -> 42
+
+                when foo is
+                    { x: {} } -> x
+            "#
+            ),
+            "Attr.Attr * {}*",
+        );
+    }
 }

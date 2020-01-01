@@ -173,10 +173,10 @@ mod test_load {
             assert_eq!(expected_types.len(), module.defs.len());
 
             for def in module.defs {
-                for (symbol, var) in def.variables_by_symbol {
-                    let content = subs.get(var).content;
+                for (symbol, expr_var) in def.pattern_vars {
+                    let content = subs.get(expr_var).content;
 
-                    name_all_type_vars(var, &mut subs);
+                    name_all_type_vars(expr_var, &mut subs);
 
                     let actual_str = content_to_string(content, &mut subs);
                     let expected_type = expected_types

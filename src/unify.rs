@@ -2,6 +2,7 @@ use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::ImMap;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, Subs, Variable};
+use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
 use std::cmp::Ordering;
 
@@ -15,7 +16,7 @@ struct Context {
 }
 
 struct RecordStructure {
-    fields: ImMap<Lowercase, Variable>,
+    fields: ImMap<RecordFieldLabel, Variable>,
     ext: Variable,
 }
 
@@ -35,7 +36,7 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> Unified {
             let type1 = subs.var_to_error_type(var1);
             let type2 = subs.var_to_error_type(var2);
 
-            subs.union(var1, var2, Descriptor::error());
+            subs.union(var1, var2, Descriptor::ERROR);
 
             Problem::Mismatch(problem, type1, type2)
         })
@@ -160,6 +161,7 @@ fn unify_record(
     rec1: RecordStructure,
     rec2: RecordStructure,
 ) -> Outcome {
+    // This is a bit more complicated because of optional fields
     let fields1 = rec1.fields;
     let fields2 = rec2.fields;
     let shared_fields = fields1
@@ -224,8 +226,8 @@ fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: ImMap<Lowercase, (Variable, Variable)>,
-    other_fields: ImMap<Lowercase, Variable>,
+    shared_fields: ImMap<RecordFieldLabel, (Variable, Variable)>,
+    other_fields: ImMap<RecordFieldLabel, Variable>,
     ext: Variable,
 ) -> Outcome {
     let mut matching_fields = ImMap::default();
@@ -389,7 +391,7 @@ fn unify_flex(
 
 fn gather_fields(
     subs: &mut Subs,
-    fields: ImMap<Lowercase, Variable>,
+    fields: ImMap<RecordFieldLabel, Variable>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::FlatType::*;
@@ -413,7 +415,7 @@ fn merge(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome {
     let desc = Descriptor {
         content,
         rank,
-        mark: Mark::none(),
+        mark: Mark::NONE,
         copy: None,
     };
 
@@ -436,7 +438,7 @@ fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> V
         Descriptor {
             content,
             rank: ctx.first_desc.rank.min(ctx.second_desc.rank),
-            mark: Mark::none(),
+            mark: Mark::NONE,
             copy: None,
         },
         pool,

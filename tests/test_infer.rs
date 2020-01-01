@@ -495,6 +495,39 @@ mod test_infer {
         );
     }
 
+    // #[test]
+    // fn identity_infers_principal_type() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             identity = \a -> a
+
+    //             x = identity 5
+
+    //             identity
+    //             "#
+    //         ),
+    //         "a -> a",
+    //     );
+    // }
+
+    // #[test]
+    // fn identity_works_on_incompatible_types() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             identity = \a -> a
+
+    //             x = identity 5
+    //             y = identity "hi"
+
+    //             x
+    //             "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
+
     #[test]
     fn call_returns_list() {
         infer_eq(
@@ -796,11 +829,11 @@ mod test_infer {
     // }
 
     #[test]
-    fn case_with_int_literals() {
+    fn when_with_int_literals() {
         infer_eq(
             indoc!(
                 r#"
-                case 1 when
+                when 1 is
                  1 -> 2
                  3 -> 4
             "#
@@ -871,7 +904,110 @@ mod test_infer {
     }
 
     #[test]
+    fn type_signature_without_body() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo: Int -> Bool
+
+            foo 2
+            "#
+            ),
+            "Bool",
+        );
+    }
+
+    #[test]
+    fn type_signature_without_body_rigid() {
+        infer_eq(
+            indoc!(
+                r#"
+            foo : Int -> custom
+
+            foo 2
+            "#
+            ),
+            "custom",
+        );
+    }
+
+    #[test]
     fn accessor_function() {
         infer_eq(".foo", "{ foo : a }* -> a");
+    }
+
+    #[test]
+    fn type_signature_without_body_record() {
+        infer_eq(
+            indoc!(
+                r#"
+            { x, y } : { x : (Int -> custom) , y : Int }
+
+            x
+            "#
+            ),
+            "Int -> custom",
+        );
+    }
+
+    #[test]
+    fn record_pattern_match_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                when foo is
+                    { x: 4 }-> x
+            "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn empty_record_pattern() {
+        infer_eq(
+            indoc!(
+                r#"
+                # technically, an empty record can be destructured
+                {} = {}
+                bar = \{} -> 42
+
+                when foo is
+                    { x: {} } -> x
+            "#
+            ),
+            "{}*",
+        );
+    }
+
+    #[test]
+    fn record_type_annotation() {
+        // check that a closed record remains closed
+        infer_eq(
+            indoc!(
+                r#"
+                foo : { x : custom } -> custom
+                foo = \{ x } -> x
+
+                foo
+            "#
+            ),
+            "{ x : custom } -> custom",
+        );
+    }
+
+    #[test]
+    fn optional_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                foo : { x? : Int } -> Int 
+                foo = \_ -> 42
+
+                foo
+            "#
+            ),
+            "{ x? : Int } -> Int",
+        );
     }
 }

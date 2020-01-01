@@ -38,7 +38,7 @@ mod test_format {
             Ok(actual) => {
                 let mut buf = String::new_in(&arena);
 
-                fmt_expr(&mut buf, &actual, 0, false);
+                fmt_expr(&mut buf, &actual, 0, false, true);
 
                 assert_eq!(buf, expected)
             },
@@ -467,7 +467,7 @@ mod test_format {
     // fn record_field_destructuring() {
     //     expr_formats_same(indoc!(
     //         r#"
-    //         case foo when
+    //         when foo is
     //             { x: 5 } -> 42
     //         "#
     //     ));
@@ -538,6 +538,24 @@ mod test_format {
             identity 43
             "#
         ));
+    }
+
+    // LIST
+    #[test]
+    fn empty_list() {
+        expr_formats_same("[]");
+        expr_formats_to("[     ]", "[]");
+    }
+
+    #[test]
+    fn one_item_list() {
+        expr_formats_same(indoc!("[ 4 ] "));
+    }
+
+    #[test]
+    fn two_item_list() {
+        expr_formats_same(indoc!("[ 7, 8 ] "));
+        expr_formats_to(indoc!("[   7  ,   8  ] "), indoc!("[ 7, 8 ] "));
     }
 
     // RECORD LITERALS
@@ -618,13 +636,187 @@ mod test_format {
         ));
     }
 
-    // CASE
-
     #[test]
-    fn integer_case() {
+    fn multi_line_if_condition() {
+        //        expr_formats_same(indoc!(
+        //            r#"
+        //            if
+        //                waterWillBoil pressure temperature
+        //            then
+        //                turnOnAc
+        //
+        //            else
+        //                identity
+        //            "#
+        //        ));
+
+        //        expr_formats_to(
+        //            indoc!(
+        //                r#"
+        //                if
+        //
+        //
+        //                    willBoil home water
+        //
+        //
+        //                then
+        //                    \_ -> leave
+        //
+        //                else
+        //                    identity
+        //                "#
+        //            ),
+        //            indoc!(
+        //                r#"
+        //                if
+        //                    willBoil home water
+        //                then
+        //                    \_ -> leave
+        //
+        //                else
+        //                    identity
+        //                "#
+        //            ),
+        //        );
+        //    }
+
+        //    #[test]
+        //    fn if_removes_newlines() {
+        //        expr_formats_to(
+        //            indoc!(
+        //                r#"
+        //                if
+        //
+        //                    # You never know!
+        //                    isPrime 8
+        //
+        //                    # Top Comment
+        //
+        //                    # Bottom Comment
+        //
+        //
+        //                then
+        //
+        //                    # A
+        //
+        //                    # B
+        //
+        //                    nothing
+        //
+        //                    # B again
+        //
+        //                else
+        //
+        //                    # C
+        //                    # D
+        //
+        //                    # E
+        //                    # F
+        //
+        //                    just (div 1 8)
+        //                "#
+        //            ),
+        //            indoc!(
+        //                r#"
+        //                if
+        //                    # You never know!
+        //                    isPrime 8
+        //                    # Top Comment
+        //                    # Bottom Comment
+        //                then
+        //                    # A
+        //                    # B
+        //                    nothing
+        //                    # B again
+        //
+        //                else
+        //                    # C
+        //                    # D
+        //                    # E
+        //                    # F
+        //                    just (div 1 8)
+        //                "#
+        //            ),
+        //        );
+    }
+    #[test]
+    fn multi_line_if() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                if lessThan four five then
+                    four
+                else
+                    five
+                "#
+            ),
+            indoc!(
+                r#"
+                if lessThan four five then
+                    four
+
+                else
+                    five
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                if lessThan three four then
+
+
+                    three
+
+
+
+
+                else
+
+
+                    four
+                "#
+            ),
+            indoc!(
+                r#"
+                if lessThan three four then
+                    three
+
+                else
+                    four
+                "#
+            ),
+        );
+
         expr_formats_same(indoc!(
             r#"
-            case b when
+            if foo bar then
+                a b c
+
+            else
+                d e f
+            "#
+        ));
+    }
+
+    //    fn multi_line_application() {
+    //        expr_formats_same(indoc!(
+    //            r#"
+    //            combine
+    //                peanutButter
+    //                chocolate
+    //            "#
+    //        ));
+    //    }
+
+    // WHEN
+
+    #[test]
+    fn integer_when() {
+        expr_formats_same(indoc!(
+            r#"
+            when b is
                 1 ->
                     1
 
@@ -635,13 +827,44 @@ mod test_format {
     }
 
     #[test]
-    fn case_with_comments() {
+    fn integer_when_with_space() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            when year is
+                1999 ->
+
+
+                    1
+
+
+
+                _ ->
+
+                    0
+        "#
+            ),
+            indoc!(
+                r#"
+            when year is
+                1999 ->
+                    1
+
+                _ ->
+                    0
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn when_with_comments() {
         expr_formats_same(indoc!(
             r#"
-            case b when
+            when b is
                 # look at cases
                 1 ->
-                    # case 1
+                    # when 1
                     1
 
                 # important
@@ -656,12 +879,12 @@ mod test_format {
     }
 
     #[test]
-    fn nested_case() {
+    fn nested_when() {
         expr_formats_same(indoc!(
             r#"
-            case b when
+            when b is
                 _ ->
-                    case c when
+                    when c is
                         _ ->
                             1
         "#
@@ -669,13 +892,13 @@ mod test_format {
     }
 
     #[test]
-    fn case_with_moving_comments() {
+    fn when_with_moving_comments() {
         expr_formats_to(
             indoc!(
                 r#"
-            case b when
+            when b is
                 1 ->
-                    1 # case 1
+                    1 # when 1
 
                 # fall through
                 _ ->
@@ -684,11 +907,11 @@ mod test_format {
             ),
             indoc!(
                 r#"
-            case b when
+            when b is
                 1 ->
                     1
 
-                # case 1
+                # when 1
                 # fall through
                 _ ->
                     2

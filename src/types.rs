@@ -1,4 +1,5 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{MutSet, SendMap};
 use crate::operator::{ArgSide, BinOp};
@@ -27,7 +28,7 @@ pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Record(SendMap<Lowercase, Type>, Box<Type>),
+    Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
@@ -40,11 +41,37 @@ pub enum Type {
     Erroneous(Problem),
 }
 
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RecordFieldLabel {
+    Required(Lowercase),
+    Optional(Lowercase),
+}
+
+impl Into<Lowercase> for RecordFieldLabel {
+    fn into(self) -> Lowercase {
+        match self {
+            RecordFieldLabel::Required(label) => label,
+            RecordFieldLabel::Optional(label) => label,
+        }
+    }
+}
+
+impl fmt::Debug for RecordFieldLabel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RecordFieldLabel::Required(label) => write!(f, "{}", label),
+            RecordFieldLabel::Optional(label) => write!(f, "{}?", label),
+        }
+    }
+}
+
 impl fmt::Debug for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
             Type::Function(args, ret) => {
+                write!(f, "Fn(")?;
+
                 for (index, arg) in args.iter().enumerate() {
                     if index > 0 {
                         ", ".fmt(f)?;
@@ -55,7 +82,9 @@ impl fmt::Debug for Type {
 
                 write!(f, " -> ")?;
 
-                ret.fmt(f)
+                ret.fmt(f)?;
+
+                write!(f, ")")
             }
             Type::Variable(var) => write!(f, "<{:?}>", var),
 
@@ -100,7 +129,7 @@ impl fmt::Debug for Type {
                 let mut any_written_yet = false;
 
                 for (label, field_type) in fields {
-                    write!(f, "{} : {:?}", label, field_type)?;
+                    write!(f, "{:?} : {:?}", label, field_type)?;
 
                     if any_written_yet {
                         write!(f, ", ")?;
@@ -179,12 +208,20 @@ impl Type {
             args: Vec::new(),
         }
     }
+
+    pub fn arity(&self) -> usize {
+        if let Type::Function(args, _) = self {
+            args.len()
+        } else {
+            0
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expected<T> {
     NoExpectation(T),
-    FromAnnotation(String, usize, AnnotationSource, T),
+    FromAnnotation(Located<Pattern>, usize, AnnotationSource, T),
     ForReason(Reason, T, Region),
 }
 
@@ -202,12 +239,19 @@ impl<T> PExpected<T> {
             PExpected::ForReason(_, val, _) => val,
         }
     }
+
+    pub fn get_type_ref(&self) -> &T {
+        match self {
+            PExpected::NoExpectation(val) => val,
+            PExpected::ForReason(_, val, _) => val,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PReason {
     TypedArg { name: Box<str>, index: usize },
-    CaseMatch { index: usize },
+    WhenMatch { index: usize },
     CtorArg { name: Box<str>, index: usize },
     ListEntry { index: usize },
     Tail,
@@ -221,12 +265,20 @@ impl<T> Expected<T> {
             Expected::FromAnnotation(_, _, _, val) => val,
         }
     }
+
+    pub fn get_type_ref(&self) -> &T {
+        match self {
+            Expected::NoExpectation(val) => val,
+            Expected::ForReason(_, val, _) => val,
+            Expected::FromAnnotation(_, _, _, val) => val,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationSource {
     TypedIfBranch(usize /* index */),
-    TypedCaseBranch(usize /* index */),
+    TypedWhenBranch(usize /* index */),
     TypedBody,
 }
 
@@ -241,11 +293,11 @@ pub enum Reason {
     FloatLiteral,
     IntLiteral,
     InterpolatedStringVar,
-    CaseBranch { index: usize },
+    WhenBranch { index: usize },
     ElemInList,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
@@ -269,7 +321,7 @@ pub enum PatternCategory {
     Float,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
@@ -292,7 +344,7 @@ pub enum Mismatch {
     MissingArguments { expected: usize, actual: usize },
     IfConditionNotBool,
     InconsistentIfElse,
-    InconsistentCaseBranches,
+    InconsistentWhenBranches,
     CanonicalizationProblem,
 }
 
@@ -302,7 +354,7 @@ pub enum ErrorType {
     Type(ModuleName, Uppercase, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    Record(SendMap<Lowercase, ErrorType>, RecordExt),
+    Record(SendMap<RecordFieldLabel, ErrorType>, RecordExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(
         ModuleName,
