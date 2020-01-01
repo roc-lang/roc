@@ -374,14 +374,14 @@ pub fn solve_loaded(
     let mut dep_constraints = Vec::with_capacity(loaded_deps.len());
 
     // All the exposed imports should be available in the solver's vars_by_symbol
-    for (symbol, expr_var) in module.exposed_imports.iter() {
-        vars_by_symbol.insert(symbol.clone(), expr_var.clone());
+    for (symbol, expr_var) in im::HashMap::clone(&module.exposed_imports) {
+        vars_by_symbol.insert(symbol, expr_var);
     }
 
     // All the top-level defs should also be available in vars_by_symbol
     for def in module.defs.iter() {
-        for (symbol, var) in def.pattern_vars.iter() {
-            vars_by_symbol.insert(symbol.clone(), var.clone());
+        for (symbol, var) in im::HashMap::clone(&def.pattern_vars) {
+            vars_by_symbol.insert(symbol, var);
         }
     }
 
