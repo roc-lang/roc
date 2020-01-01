@@ -255,16 +255,16 @@ pub fn sort_can_defs(
                 // if the current symbol is a closure, peek into its body
                 if let Some(References { locals, .. }) = env.closures.get(symbol) {
                     for s in locals.clone() {
-                        loc_succ.insert(s);
+                        if s != *symbol {
+                            // DONT register a self-call behind a lambda
+                            // we allow `boom = \_ -> boom {}`, but not `x = x`
+                            loc_succ.insert(s);
+                        }
                     }
                 }
 
                 // remove anything that is not defined in the current block
                 loc_succ.retain(|key| defined_symbols_set.contains(key));
-
-                // direct recursion doesn't count here. Whether a symbol is self-recursive
-                // doesn't influence the order that definitions must occur in.
-                loc_succ.remove(symbol);
 
                 loc_succ
             }

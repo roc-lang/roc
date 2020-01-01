@@ -15,10 +15,13 @@ mod test_canonicalize {
     use roc::can::expr::Expr::{self, *};
     use roc::can::expr::Output;
     use roc::can::expr::Recursive;
+    use roc::can::problem::Problem;
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
     use roc::can::symbol::Symbol;
     use roc::collections::{ImMap, ImSet, SendMap};
+    use roc::ident::Ident;
+    use roc::region::{Located, Region};
     use std::{f64, i64};
 
     fn sym(name: &str) -> Symbol {
@@ -367,7 +370,6 @@ mod test_canonicalize {
 
     #[test]
     fn when_condition_is_no_tail_call() {
-        // TODO when a case witn no branches parses, remove the pattern wildcard here
         let src = indoc!(
             r#"
             q = \x ->
@@ -388,7 +390,6 @@ mod test_canonicalize {
     #[test]
     fn mutual_recursion() {
         with_larger_debug_stack(|| {
-            // TODO when a case with no branches parses, remove the pattern wildcard here
             let src = indoc!(
                 r#"
             q = \x ->
@@ -413,6 +414,105 @@ mod test_canonicalize {
 
             let detected = get_closure(&actual.value, 1);
             assert_eq!(detected, Recursive::Recursive);
+        });
+    }
+
+    #[test]
+    fn valid_self_recursion() {
+        with_larger_debug_stack(|| {
+            let src = indoc!(
+                r#"
+                boom = \_ -> boom {}
+
+                boom
+                "#
+            );
+            let arena = Bump::new();
+            let (actual, _output, _problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
+
+            let is_circular_def =
+                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
+                    true
+                } else {
+                    false
+                };
+
+            assert_eq!(is_circular_def, false);
+        });
+    }
+
+    #[test]
+    fn invalid_self_recursion() {
+        with_larger_debug_stack(|| {
+            let src = indoc!(
+                r#"
+                x = x
+
+                x
+                "#
+            );
+            let arena = Bump::new();
+            let (actual, _output, problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
+
+            let is_circular_def =
+                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
+                    true
+                } else {
+                    false
+                };
+
+            let problem = Problem::CircularAssignment(vec![Located::at(
+                Region::new(0, 0, 0, 1),
+                Ident::Unqualified(format!("x").into()),
+            )]);
+
+            assert_eq!(is_circular_def, true);
+            assert_eq!(problems, vec![problem]);
+        });
+    }
+
+    #[test]
+    fn invalid_mutual_recursion() {
+        with_larger_debug_stack(|| {
+            let src = indoc!(
+                r#"
+                x = y
+                y = z
+                z = x
+
+                x
+                "#
+            );
+            let arena = Bump::new();
+            let (actual, _output, problems, _var_store, _vars, _constraint) =
+                can_expr_with(&arena, "Blah", src, &ImMap::default());
+
+            let is_circular_def =
+                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
+                    true
+                } else {
+                    false
+                };
+
+            let problem = Problem::CircularAssignment(vec![
+                Located::at(
+                    Region::new(1, 1, 0, 1),
+                    Ident::Unqualified(format!("y").into()),
+                ),
+                Located::at(
+                    Region::new(0, 0, 0, 1),
+                    Ident::Unqualified(format!("x").into()),
+                ),
+                Located::at(
+                    Region::new(2, 2, 0, 1),
+                    Ident::Unqualified(format!("z").into()),
+                ),
+            ]);
+
+            assert_eq!(is_circular_def, true);
+            assert_eq!(problems, vec![problem]);
         });
     }
 
