@@ -316,8 +316,6 @@ mod test_canonicalize {
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
                 can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-            dbg!(&actual.value);
-
             let detected = get_closure(&actual.value, 0);
             assert_eq!(detected, Recursive::TailRecursive);
 

@@ -603,8 +603,11 @@ fn constrain_def(
         ),
     };
 
+    // No Let is introduced when there are no pattern constraints
+    // This is only the case for literal patterns
+    //
+    // foo = ...
     if pattern_state.constraints.is_empty() {
-        // small optimization
         flex_info.constraints.push(ret_constraint);
     } else {
         flex_info.constraints.push(Let(Box::new(LetConstraint {
