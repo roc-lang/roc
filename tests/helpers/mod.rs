@@ -122,10 +122,10 @@ pub fn uniq_expr_with(
     let (loc_expr, output, problems, var_store1, variable, constraint1) =
         can_expr_with(arena, home, expr_str, &ImMap::default());
 
-    let var_count: usize = var_store1.into();
-    let subs1 = Subs::new(var_count);
+    let next_var = var_store1.into();
+    let subs1 = Subs::new(next_var);
     // double check
-    let var_store2 = VarStore::new(var_count);
+    let var_store2 = VarStore::new(next_var);
 
     let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
