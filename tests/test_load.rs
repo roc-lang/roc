@@ -248,9 +248,21 @@ mod test_load {
                 "Principal.identity" => "a -> a",
             };
 
-            assert_eq!(expected_types.len(), module.defs.len());
+            assert_eq!(expected_types.len(), module.declarations.len());
 
-            for def in module.defs {
+            for decl in module.declarations {
+                let def = match decl {
+                    Declare(def) => def,
+                    rec_decl @ DeclareRec(_) => {
+                        panic!(
+                            "Unexpected recursive def in module declarations: {:?}",
+                            rec_decl
+                        );
+                    }
+                    cycle @ InvalidCycle(_, _) => {
+                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                    }
+                };
                 for (symbol, expr_var) in def.pattern_vars {
                     let content = subs.get(expr_var).content;
 
