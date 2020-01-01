@@ -12,6 +12,7 @@ im-rc = "14.0.0" # im and im-rc should always have the same version!
 wyhash = "0.3"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = "2.6"
+inlinable_string = "0.1.0"
 # NOTE: Breaking API changes get pushed directly to this Inkwell branch, so be
 # very careful when running `cargo update` to get a new revision into Cargo.lock.
 #
