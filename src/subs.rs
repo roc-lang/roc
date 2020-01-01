@@ -129,6 +129,12 @@ impl Variable {
     const FIRST_USER_SPACE_VAR: Variable = Variable(1);
 }
 
+impl Into<OptVariable> for Variable {
+    fn into(self) -> OptVariable {
+        OptVariable(self.0)
+    }
+}
+
 impl fmt::Debug for Variable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
