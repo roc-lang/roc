@@ -170,9 +170,9 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
     use crate::subs::Content::*;
 
     match content {
-        FlexVar(Some(name)) => buf.push_str(&name.into_str()),
+        FlexVar(Some(name)) => buf.push_str(name.as_str()),
         FlexVar(None) => buf.push_str(WILDCARD),
-        RigidVar(name) => buf.push_str(&name.into_str()),
+        RigidVar(name) => buf.push_str(name.as_str()),
         Structure(flat_type) => write_flat_type(flat_type, subs, buf, parens),
         Alias(_, _, _, _) => {
             panic!("TODO write_content Alias");
@@ -217,9 +217,9 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     }
 
                     match label {
-                        RecordFieldLabel::Required(l) => buf.push_str(&l.into_str()),
+                        RecordFieldLabel::Required(l) => buf.push_str(l.as_str()),
                         RecordFieldLabel::Optional(l) => {
-                            buf.push_str(&l.into_str());
+                            buf.push_str(l.as_str());
                             buf.push('?')
                         }
                     }

@@ -46,10 +46,10 @@ pub fn content_to_basic_type<'ctx>(
                 name,
                 args,
             } => {
-                let module_name = module_name.into_str();
-                let name = name.into_str();
+                let module_name = module_name.as_str();
+                let name = name.as_str();
 
-                if &*module_name == types::MOD_NUM && &*name == types::TYPE_NUM {
+                if module_name == types::MOD_NUM && name == types::TYPE_NUM {
                     num_to_basic_type(subs.get(*args.iter().next().unwrap()).content, context)
                 } else {
                     panic!(
@@ -72,13 +72,13 @@ pub fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTyp
                 name,
                 args,
             } => {
-                let module_name = module_name.into_str();
-                let name = name.into_str();
+                let module_name = module_name.as_str();
+                let name = name.as_str();
 
-                if &*module_name == types::MOD_FLOAT && &*name == types::TYPE_FLOATINGPOINT && args.is_empty() {
+                if module_name == types::MOD_FLOAT && name == types::TYPE_FLOATINGPOINT && args.is_empty() {
                     debug_assert!(args.is_empty());
                     Ok(BasicTypeEnum::FloatType(context.f64_type()))
-                } else if &*module_name == types::MOD_INT && &*name == types::TYPE_INTEGER && args.is_empty() {
+                } else if module_name == types::MOD_INT && name == types::TYPE_INTEGER && args.is_empty() {
                     debug_assert!(args.is_empty());
                     Ok(BasicTypeEnum::IntType(context.i64_type()))
                 } else {
