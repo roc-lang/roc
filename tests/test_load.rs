@@ -14,8 +14,8 @@ mod helpers;
 #[cfg(test)]
 mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
-    use roc::can::module::Module;
     use roc::can::def::Declaration::*;
+    use roc::can::module::Module;
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -173,6 +173,8 @@ mod test_load {
             let mut unify_problems = Vec::new();
             solve_loaded(&module, &mut unify_problems, &mut subs, deps);
 
+            assert_eq!(unify_problems, Vec::new());
+
             let expected_types = hashmap! {
                 "WithBuiltins.floatTest" => "Float",
                 "WithBuiltins.divisionFn" => "Float, Float -> Float",
@@ -191,8 +193,11 @@ mod test_load {
             for decl in module.declarations {
                 let def = match decl {
                     Declare(def) => def,
-                    rec_decl@DeclareRec(_) => {
-                        panic!("Unexpected recursive def in module declarations: {:?}", rec_decl);
+                    rec_decl @ DeclareRec(_) => {
+                        panic!(
+                            "Unexpected recursive def in module declarations: {:?}",
+                            rec_decl
+                        );
                     }
                 };
 

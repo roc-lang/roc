@@ -6,7 +6,7 @@ use crate::subs::{Content, Descriptor, FlatType, Mark, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
-use crate::unify::{unify, Problems};
+use crate::unify::{unify, Unified};
 
 type Env = ImMap<Symbol, Variable>;
 
@@ -66,7 +66,7 @@ struct State {
 
 pub fn run(
     vars_by_symbol: &Env,
-    problems: &mut Problems,
+    problems: &mut Vec<Problem>,
     subs: &mut Subs,
     constraint: &Constraint,
 ) {
@@ -93,7 +93,7 @@ fn solve(
     state: State,
     rank: Rank,
     pools: &mut Pools,
-    problems: &mut Problems,
+    problems: &mut Vec<Problem>,
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
@@ -102,9 +102,10 @@ fn solve(
         Eq(typ, expected_type, _region) => {
             let actual = type_to_var(subs, rank, pools, typ);
             let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
+            let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
-            let vars = unify(subs, problems, actual, expected);
+            problems.extend(mismatches);
 
             introduce(subs, rank, pools, &vars);
 
@@ -138,9 +139,10 @@ fn solve(
             // having mutated the original.
             let actual = var; // TODO deep copy this var
             let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
+            let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
-            let vars = unify(subs, problems, actual, expected);
+            problems.extend(mismatches);
 
             introduce(subs, rank, pools, &vars);
 
@@ -164,10 +166,12 @@ fn solve(
             state
         }
         Pattern(_region, _category, typ, expected) => {
-            // TODO use region?
             let actual = type_to_var(subs, rank, pools, typ);
             let expected = type_to_var(subs, rank, pools, expected.get_type_ref());
-            let vars = unify(subs, problems, actual, expected);
+            let Unified { vars, mismatches } = unify(subs, actual, expected);
+
+            // TODO use region when reporting a problem
+            problems.extend(mismatches);
 
             introduce(subs, rank, pools, &vars);
 
@@ -439,7 +443,7 @@ fn type_to_variable(
 
 fn check_for_infinite_type(
     subs: &mut Subs,
-    problems: &mut Problems,
+    problems: &mut Vec<Problem>,
     symbol: Symbol,
     loc_var: Located<Variable>,
 ) {
@@ -449,7 +453,7 @@ fn check_for_infinite_type(
         let error_type = subs.var_to_error_type(var);
         let problem = Problem::CircularType(symbol, error_type, loc_var.region);
 
-        subs.set_content(var, Content::Error(problem.clone()));
+        subs.set_content(var, Content::Error);
 
         problems.push(problem);
     }
@@ -586,7 +590,7 @@ fn adjust_rank_content(
     use crate::subs::FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | Error(_) => group_rank,
+        FlexVar(_) | RigidVar(_) | Error => group_rank,
 
         Structure(flat_type) => {
             match flat_type {

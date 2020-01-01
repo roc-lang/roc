@@ -38,13 +38,13 @@ all : Str, Str -> Bool
 
 ## Combine a list of strings into a single string.
 ##
-## > Str.join [ "a", "bc", "def" ]
+## >>> Str.join [ "a", "bc", "def" ]
 join : List Str -> Str
 
 ## Combine a list of strings into a single string, with a separator
 ## string in between each.
 ##
-## > Str.joinWith [ "one", "two", "three" ] ", "
+## >>> Str.joinWith [ "one", "two", "three" ] ", "
 joinWith : List Str, Str -> Str
 
 
