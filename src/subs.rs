@@ -343,7 +343,7 @@ pub enum Content {
     RigidVar(Lowercase),
     Structure(FlatType),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Variable),
-    Error(Problem),
+    Error,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,7 +375,7 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
         true
     } else {
         match subs.get(var).content {
-            FlexVar(_) | RigidVar(_) | Error(_) => false,
+            FlexVar(_) | RigidVar(_) | Error => false,
 
             Structure(flat_type) => {
                 let mut new_seen = seen.clone();
@@ -423,7 +423,7 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error(_) | FlexVar(None) => taken_names,
+            Error | FlexVar(None) => taken_names,
             FlexVar(Some(name)) => {
                 add_name(subs, 0, name, var, |name| FlexVar(Some(name)), taken_names)
             }
@@ -568,7 +568,7 @@ fn content_to_err_type(
             ErrorType::Alias(module_name, name, err_args, Box::new(err_type))
         }
 
-        Error(_) => ErrorType::Error,
+        Error => ErrorType::Error,
     }
 }
 
@@ -643,7 +643,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
     use crate::subs::FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | Error(_) => (),
+        FlexVar(_) | RigidVar(_) | Error => (),
 
         Structure(flat_type) => match flat_type {
             Apply { args, .. } => {

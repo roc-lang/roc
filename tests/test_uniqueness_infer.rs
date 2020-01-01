@@ -271,7 +271,7 @@ mod test_infer_uniq {
                 [ "foo", 5 ]
             "#
             ),
-            "Attr.Attr * (List (Attr.Attr * <type mismatch>))",
+            "Attr.Attr * (List <type mismatch>)",
         );
     }
 
@@ -283,7 +283,7 @@ mod test_infer_uniq {
                 [ [ "foo", 5 ] ]
             "#
             ),
-            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * <type mismatch>))))",
+            "Attr.Attr * (List (Attr.Attr * (List <type mismatch>)))",
         );
     }
 
@@ -295,7 +295,7 @@ mod test_infer_uniq {
                 [ [ 1 ], [ [] ] ]
             "#
             ),
-            "Attr.Attr * (List (Attr.Attr * (List (Attr.Attr * <type mismatch>))))",
+            "Attr.Attr * (List <type mismatch>)",
         );
     }
 

@@ -157,6 +157,8 @@ mod test_load {
             let mut unify_problems = Vec::new();
             solve_loaded(&module, &mut unify_problems, &mut subs, deps);
 
+            assert_eq!(unify_problems, Vec::new());
+
             let expected_types = hashmap! {
                 "WithBuiltins.floatTest" => "Float",
                 "WithBuiltins.divisionFn" => "Float, Float -> Float",

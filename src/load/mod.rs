@@ -13,8 +13,7 @@ use crate::region::{Located, Region};
 use crate::solve;
 use crate::subs::VarStore;
 use crate::subs::{Subs, Variable};
-use crate::types::Constraint;
-use crate::unify::Problems;
+use crate::types::{Constraint, Problem};
 use bumpalo::Bump;
 use futures::future::join_all;
 use std::fs::read_to_string;
@@ -364,7 +363,7 @@ fn expose(
 
 pub fn solve_loaded(
     module: &Module,
-    problems: &mut Problems,
+    problems: &mut Vec<Problem>,
     subs: &mut Subs,
     loaded_deps: LoadedDeps,
 ) {
