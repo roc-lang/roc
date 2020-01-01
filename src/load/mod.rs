@@ -375,8 +375,8 @@ pub fn solve_loaded(
     let mut dep_constraints = Vec::with_capacity(loaded_deps.len());
 
     // All the exposed imports should be available in the solver's vars_by_symbol
-    for (symbol, expr_var) in module.exposed_imports.iter() {
-        vars_by_symbol.insert(symbol.clone(), expr_var.clone());
+    for (symbol, expr_var) in im::HashMap::clone(&module.exposed_imports) {
+        vars_by_symbol.insert(symbol, expr_var);
     }
 
     // All the top-level defs should also be available in vars_by_symbol
@@ -399,7 +399,7 @@ pub fn solve_loaded(
     // to solve, looking up qualified idents gets the correct answer.
     //
     // TODO filter these by what's actually exposed; don't add it to the Env
-    // unless the module actually exposes it!
+    // unless the other module actually exposes it!
     for loaded_dep in loaded_deps {
         match loaded_dep {
             Valid(valid_dep) => {

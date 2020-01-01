@@ -547,7 +547,7 @@ fn constrain_def(
 ) {
     use crate::types::AnnotationSource;
 
-    let expr_var = def.body_var;
+    let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
     flex_info.vars.push(expr_var);

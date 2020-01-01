@@ -29,7 +29,7 @@ use std::fmt::Debug;
 pub struct Def {
     pub loc_pattern: Located<Pattern>,
     pub loc_expr: Located<Expr>,
-    pub body_var: Variable,
+    pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
     pub annotation: Option<(Type, SendMap<Variable, Lowercase>)>,
 }
@@ -448,7 +448,7 @@ fn canonicalize_def<'a>(
                 can_defs_by_symbol.insert(
                     symbol,
                     Def {
-                        body_var: var_store.fresh(),
+                        expr_var,
                         // TODO try to remove this .clone()!
                         loc_pattern: loc_can_pattern.clone(),
                         loc_expr: Located {
@@ -578,7 +578,7 @@ fn canonicalize_def<'a>(
                 can_defs_by_symbol.insert(
                     symbol,
                     Def {
-                        body_var: var_store.fresh(),
+                        expr_var,
                         // TODO try to remove this .clone()!
                         loc_pattern: loc_can_pattern.clone(),
                         loc_expr: Located {
@@ -705,7 +705,7 @@ fn canonicalize_def<'a>(
                 can_defs_by_symbol.insert(
                     symbol,
                     Def {
-                        body_var: var_store.fresh(),
+                        expr_var,
                         // TODO try to remove this .clone()!
                         loc_pattern: loc_can_pattern.clone(),
                         loc_expr: Located {
