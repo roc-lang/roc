@@ -55,13 +55,6 @@ impl Declaration {
             DeclareRec(defs) => defs.len(),
         }
     }
-
-    pub fn into_let(self, loc_ret: Located<Expr>) -> Expr {
-        match self {
-            Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
-            Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret)),
-        }
-    }
 }
 
 #[inline(always)]
@@ -821,13 +814,20 @@ pub fn can_defs_with_return<'a>(
             for declaration in decls.into_iter().rev() {
                 loc_expr = Located {
                     region: Region::zero(),
-                    value: declaration.into_let(loc_expr),
+                    value: decl_to_let(declaration, loc_expr),
                 };
             }
 
             (loc_expr.value, output)
         }
         Err(err) => (RuntimeError(err), output),
+    }
+}
+
+fn decl_to_let(decl: Declaration, loc_ret: Located<Expr>) -> Expr {
+    match decl {
+        Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
+        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret)),
     }
 }
 
