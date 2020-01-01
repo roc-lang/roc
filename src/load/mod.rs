@@ -2,7 +2,7 @@ use crate::can::def::Declaration;
 use crate::can::module::{canonicalize_module_defs, Module, ModuleOutput};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, SendMap, SendSet};
+use crate::collections::{insert_all, ImMap, SendMap, SendSet};
 use crate::constrain::module::constrain_module;
 use crate::ident::Ident;
 use crate::module::ModuleName;
@@ -385,15 +385,11 @@ pub fn solve_loaded(
         // couldn't get it to work with the borrow checker
         match decl {
             Declare(def) => {
-                for (symbol, var) in def.pattern_vars.iter() {
-                    vars_by_symbol.insert(symbol.clone(), var.clone());
-                }
+                insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
             }
             DeclareRec(defs) => {
                 for def in defs {
-                    for (symbol, var) in def.pattern_vars.iter() {
-                        vars_by_symbol.insert(symbol.clone(), var.clone());
-                    }
+                    insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
                 }
             }
         }
@@ -417,9 +413,15 @@ pub fn solve_loaded(
 
                 // All its top-level defs should also be available in vars_by_symbol
                 for decl in valid_dep.declarations {
-                    for def in decl.into_iter() {
-                        for (symbol, var) in def.pattern_vars {
-                            vars_by_symbol.insert(symbol, var);
+                    match decl {
+                        Declare(def) => {
+                            insert_all(&mut vars_by_symbol, def.pattern_vars.into_iter());
+                        }
+
+                        DeclareRec(defs) => {
+                            for def in defs {
+                                insert_all(&mut vars_by_symbol, def.pattern_vars.into_iter());
+                            }
                         }
                     }
                 }

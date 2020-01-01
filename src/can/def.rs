@@ -57,20 +57,6 @@ impl Declaration {
     }
 }
 
-impl IntoIterator for Declaration {
-    type Item = Def;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        use Declaration::*;
-        match self {
-            // TODO remove singleton vec?
-            Declare(def) => vec![def].into_iter(),
-            DeclareRec(defs) => defs.into_iter(),
-        }
-    }
-}
-
 #[inline(always)]
 pub fn canonicalize_defs<'a>(
     env: &mut Env,
