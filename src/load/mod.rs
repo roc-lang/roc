@@ -380,8 +380,6 @@ pub fn solve_loaded(
 
     // All the top-level defs should also be available in vars_by_symbol
     for decl in &module.declarations {
-        // TODO use Declaration::IntoIter here
-        // couldn't get it to work with the borrow checker
         match decl {
             Declare(def) => {
                 insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
@@ -391,6 +389,7 @@ pub fn solve_loaded(
                     insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
                 }
             }
+            InvalidCycle(_, _) => panic!("TODO handle invalid cycles"),
         }
     }
 
@@ -422,6 +421,8 @@ pub fn solve_loaded(
                                 insert_all(&mut vars_by_symbol, def.pattern_vars.into_iter());
                             }
                         }
+
+                        InvalidCycle(_, _) => panic!("TODO handle invalid cycles"),
                     }
                 }
 

@@ -266,10 +266,10 @@ mod test_canonicalize {
                 }
                 None => panic!("Looking for assignment at {} but the list is too short", i),
             },
-            LetNonRec(def, _) => {
+            LetNonRec(def, body) => {
                 if i > 0 {
-                    // recurse in the chain
-                    get_closure(&def.loc_expr.value, i - 1)
+                    // recurse in the body (not the def!)
+                    get_closure(&body.value, i - 1)
                 } else {
                     match &def.loc_expr.value {
                         Closure(_, recursion, _, _) => recursion.clone(),
@@ -279,6 +279,7 @@ mod test_canonicalize {
                     }
                 }
             }
+            // Closure(_, recursion, _, _) if i == 0 => recursion.clone(),
             _ => panic!("expression is not a Defs, but a {:?}", expr),
         }
     }
@@ -304,12 +305,15 @@ mod test_canonicalize {
                     1 -> g (x - 1)
                     _ -> p (x - 1)
 
-            0
+            # variables must be (indirectly) refernced in the body for analysis to work
+            { x: p, y: h }
         "#
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
                 can_expr_with(&arena, "Blah", src, &ImMap::default());
+
+            dbg!(&actual.value);
 
             let detected = get_closure(&actual.value, 0);
             assert_eq!(detected, Recursive::TailRecursive);
@@ -397,7 +401,7 @@ mod test_canonicalize {
                         0 -> 0
                         _ -> q (x - 1)
 
-            0
+            p
         "#
             );
             let arena = Bump::new();

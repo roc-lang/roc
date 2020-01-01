@@ -16,7 +16,7 @@ use crate::can::procedure::References;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImSet, MutMap, MutSet, SendMap};
-use crate::graph::topological_sort_into_groups;
+use crate::graph::{strongly_connected_components, topological_sort_into_groups};
 use crate::ident::Ident;
 use crate::parse::ast;
 use crate::region::{Located, Region};
@@ -46,6 +46,10 @@ pub struct CanDefs {
 pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>),
+    InvalidCycle(
+        Vec<Located<Ident>>,
+        Vec<(Region /* pattern */, Region /* expr */)>,
+    ),
 }
 
 impl Declaration {
@@ -54,6 +58,7 @@ impl Declaration {
         match self {
             Declare(_) => 1,
             DeclareRec(defs) => defs.len(),
+            InvalidCycle(_, _) => 0,
         }
     }
 }
@@ -220,8 +225,11 @@ pub fn sort_can_defs(
     // Use topological sort to reorder the defs based on their dependencies to one another.
     // This way, during code gen, no def will refer to a value that hasn't been initialized yet.
     // As a bonus, the topological sort also reveals any cycles between the defs, allowing
-    // us to give a CircularAssignment error.
-    let successors = |symbol: &Symbol| -> ImSet<Symbol> {
+    // us to give a CircularAssignment error for invalid (mutual) recursion, and a `DeclareRec` for mutually
+    // recursive definitions.
+
+    // All successors that occur in the body of a symbol.
+    let mut all_successors = |symbol: &Symbol| -> ImSet<Symbol> {
         // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
         //
         // f = \z -> z
@@ -243,7 +251,42 @@ pub fn sort_can_defs(
                 // In the above example, `f` cannot reference `a`, and in the closure
                 // a call to `f` cannot cycle back to `a`.
                 let mut loc_succ = local_successors(&references, &env.closures);
+
+                // if the current symbol is a closure, peek into its body
+                if let Some(References { locals, .. }) = env.closures.get(symbol) {
+                    for s in locals.clone() {
+                        loc_succ.insert(s);
+                    }
+                }
+
+                // remove anything that is not defined in the current block
                 loc_succ.retain(|key| defined_symbols_set.contains(key));
+
+                // direct recursion doesn't count here. Whether a symbol is self-recursive
+                // doesn't influence the order that definitions must occur in.
+                loc_succ.remove(symbol);
+
+                loc_succ
+            }
+            None => ImSet::default(),
+        }
+    };
+
+    // If a symbol is a direct successor of itself, there is an invalid cycle.
+    // The difference with the function above is that this one does not look behind lambdas,
+    // but does consider direct self-recursion.
+    let direct_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+        match refs_by_symbol.get(symbol) {
+            Some((_, references)) => {
+                let mut loc_succ = local_successors(&references, &env.closures);
+
+                // NOTE: if the symbol is a closure we DONT look into its body
+
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| defined_symbols_set.contains(key));
+
+                // NOTE: direct recursion does matter here: `x = x` is invalid recursion!
+
                 loc_succ
             }
             None => ImSet::default(),
@@ -252,105 +295,168 @@ pub fn sort_can_defs(
 
     // TODO also do the same `addDirects` check elm/compiler does, so we can
     // report an error if a recursive definition can't possibly terminate!
-    match topological_sort_into_groups(defined_symbols.as_slice(), successors) {
+    match topological_sort_into_groups(defined_symbols.as_slice(), all_successors) {
         Ok(groups) => {
             let mut declarations = Vec::new();
             // groups are in reversed order
-            for group in groups.iter().rev() {
-                // TODO remove this clone
-                group_to_declaration(group.clone(), env, &can_defs_by_symbol, &mut declarations);
+            for group in groups.into_iter().rev() {
+                group_to_declaration(
+                    group,
+                    &env.closures,
+                    &mut all_successors,
+                    &can_defs_by_symbol,
+                    &mut declarations,
+                );
             }
 
             (Ok(declarations), output)
         }
-        Err((_groups, _nodes_in_cycle)) => {
-            // TODO handle invalid cycles
-            /*
-            if let Some(node_in_cycle) = nodes_in_cycle.iter().next() {
-                // We have one node we know is in the cycle.
-                // We want to show the entire cycle in the error message, so expand it out.
-                let mut loc_idents_in_cycle: Vec<Located<Ident>> = Vec::new();
+        Err((groups, nodes_in_cycle)) => {
+            let mut declarations = Vec::new();
+            let mut problems = Vec::new();
 
-                for symbol in strongly_connected_component(&node_in_cycle, successors)
-                    .into_iter()
-                    // Strongly connected component gives us the reverse of the sorting we want!
-                    .rev()
-                {
-                    let refs = refs_by_symbol.get(&symbol).unwrap_or_else(|| {
-                        panic!(
+            // groups are in reversed order
+            for group in groups.into_iter().rev() {
+                group_to_declaration(
+                    group,
+                    &env.closures,
+                    &mut all_successors,
+                    &can_defs_by_symbol,
+                    &mut declarations,
+                );
+            }
+
+            // nodes_in_cycle are symbols that form a syntactic cycle. That isn't always a problem,
+            // and in general it's impossible to decide whether it is. So we use a crude heuristic:
+            //
+            // Definitions where the cycle occurs behind a lambda are OK
+            //
+            // boom = \_ -> boom {}
+            //
+            // But otherwise we report an error, e.g.
+            //
+            // foo = if b then foo else bar
+
+            for cycle in strongly_connected_components(&nodes_in_cycle, all_successors) {
+                // check whether the cycle is faulty, which is when has a direct successor in the
+                // current cycle. This catches things like:
+                //
+                // x = x
+                //
+                // or
+                //
+                // p = q
+                // q = p
+                let is_invalid_cycle = cycle
+                    .get(0)
+                    .map(|symbol| {
+                        let mut succs = direct_successors(symbol);
+                        succs.retain(|key| cycle.contains(key));
+                        !succs.is_empty()
+                    })
+                    .unwrap_or(false);
+
+                if is_invalid_cycle {
+                    // We want to show the entire cycle in the error message, so expand it out.
+                    let mut loc_idents_in_cycle: Vec<Located<Ident>> = Vec::new();
+                    for symbol in cycle {
+                        let refs = refs_by_symbol.get(&symbol).unwrap_or_else(|| {
+                            panic!(
                             "Symbol not found in refs_by_symbol: {:?} - refs_by_symbol was: {:?}",
                             symbol, refs_by_symbol
                         )
-                    });
+                        });
 
-                    loc_idents_in_cycle.push(refs.0.clone());
+                        loc_idents_in_cycle.push(refs.0.clone());
+                    }
+
+                    // Sort them to make the report more helpful.
+                    loc_idents_in_cycle = sort_cyclic_idents(
+                        loc_idents_in_cycle,
+                        &mut defined_idents.iter().map(|(ident, _)| ident),
+                    );
+
+                    problems.push(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
+
+                    let mut regions = Vec::with_capacity(can_defs_by_symbol.len());
+                    for def in can_defs_by_symbol.values() {
+                        regions.push((def.loc_pattern.region, def.loc_expr.region));
+                    }
+
+                    declarations.push(Declaration::InvalidCycle(loc_idents_in_cycle, regions));
+                } else {
+                    // slightly inefficient, because we know this becomes exactly one DeclareRec already
+                    group_to_declaration(
+                        cycle,
+                        &env.closures,
+                        &mut all_successors,
+                        &can_defs_by_symbol,
+                        &mut declarations,
+                    );
                 }
-
-                // Sort them to make the report more helpful.
-                loc_idents_in_cycle = sort_cyclic_idents(
-                    loc_idents_in_cycle,
-                    &mut defined_idents.iter().map(|(ident, _)| ident),
-                );
-
-                env.problem(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
-
-                let mut regions = Vec::with_capacity(can_defs_by_symbol.len());
-
-                for def in can_defs_by_symbol.values() {
-                    regions.push((def.loc_pattern.region, def.loc_expr.region));
-                }
-
-                (
-                    Err(RuntimeError::CircularDef(loc_idents_in_cycle, regions)),
-                    output,
-                )
             }
-            */
-            panic!("Err");
+
+            for problem in problems {
+                env.problem(problem);
+            }
+
+            (Ok(declarations), output)
         }
     }
 }
 
 fn group_to_declaration(
     group: Vec<Symbol>,
-    env: &mut Env,
+    closures: &MutMap<Symbol, References>,
+    successors: &mut dyn FnMut(&Symbol) -> ImSet<Symbol>,
     can_defs_by_symbol: &MutMap<Symbol, Def>,
     declarations: &mut Vec<Declaration>,
 ) {
     use Declaration::*;
 
-    if group.len() == 1 {
-        let symbol = &group[0];
-        if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
-            let mut new_def = can_def.clone();
+    // We want only successors in the current group, otherwise definitions get duplicated
+    let filtered_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+        let mut result = successors(symbol);
+        result.retain(|key| group.contains(key));
+        result
+    };
 
-            // Determine recursivity of closures that are not tail-recursive
-            if let Closure(name, Recursive::NotRecursive, args, body) = new_def.loc_expr.value {
-                let recursion = closure_recursivity(symbol.clone(), &env.closures);
-
-                new_def.loc_expr.value = Closure(name, recursion, args, body);
-            }
-
-            declarations.push(Declare(new_def));
-        }
-    } else {
-        // Topological sort gives us the reverse of the sorting we want!
-        let mut can_defs = Vec::new();
-        for symbol in group.into_iter().rev() {
+    for cycle in strongly_connected_components(&group, filtered_successors) {
+        if cycle.len() == 1 {
+            let symbol = &cycle[0];
             if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
                 let mut new_def = can_def.clone();
 
                 // Determine recursivity of closures that are not tail-recursive
                 if let Closure(name, Recursive::NotRecursive, args, body) = new_def.loc_expr.value {
-                    let recursion = closure_recursivity(symbol.clone(), &env.closures);
+                    let recursion = closure_recursivity(symbol.clone(), closures);
 
                     new_def.loc_expr.value = Closure(name, recursion, args, body);
                 }
 
-                can_defs.push(new_def);
+                declarations.push(Declare(new_def));
             }
+        } else {
+            // Topological sort gives us the reverse of the sorting we want!
+            let mut can_defs = Vec::new();
+            for symbol in cycle.into_iter().rev() {
+                if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
+                    let mut new_def = can_def.clone();
+
+                    // Determine recursivity of closures that are not tail-recursive
+                    if let Closure(name, Recursive::NotRecursive, args, body) =
+                        new_def.loc_expr.value
+                    {
+                        let recursion = closure_recursivity(symbol.clone(), closures);
+
+                        new_def.loc_expr.value = Closure(name, recursion, args, body);
+                    }
+
+                    can_defs.push(new_def);
+                }
+            }
+            declarations.push(DeclareRec(can_defs));
         }
-        declarations.push(DeclareRec(can_defs));
     }
 }
 
@@ -829,6 +935,9 @@ fn decl_to_let(decl: Declaration, loc_ret: Located<Expr>) -> Expr {
     match decl {
         Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
         Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret)),
+        Declaration::InvalidCycle(symbols, regions) => {
+            Expr::RuntimeError(RuntimeError::CircularDef(symbols, regions))
+        }
     }
 }
 

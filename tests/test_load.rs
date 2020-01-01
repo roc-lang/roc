@@ -186,8 +186,6 @@ mod test_load {
                 "WithBuiltins.fromDep2" => "Float",
             };
 
-            dbg!(module.declarations.clone());
-
             assert_eq!(expected_types.len(), module.declarations.len());
 
             for decl in module.declarations {
@@ -198,6 +196,9 @@ mod test_load {
                             "Unexpected recursive def in module declarations: {:?}",
                             rec_decl
                         );
+                    }
+                    cycle @ InvalidCycle(_, _) => {
+                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
                     }
                 };
 

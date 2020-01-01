@@ -493,7 +493,6 @@ pub fn constrain_decls(
     decls: &[Declaration],
     flex_info: &mut Info,
 ) {
-    // TODO simplify iteration with IntoIter
     for decl in decls {
         match decl {
             Declaration::Declare(def) => constrain_def(rigids, found_rigids, def, flex_info),
@@ -502,6 +501,7 @@ pub fn constrain_decls(
                     constrain_def(rigids, found_rigids, def, flex_info)
                 }
             }
+            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
         }
     }
 }
