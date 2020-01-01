@@ -371,10 +371,7 @@ pub fn sort_can_defs(
                     }
 
                     // Sort them to make the report more helpful.
-                    loc_idents_in_cycle = sort_cyclic_idents(
-                        loc_idents_in_cycle,
-                        &mut defined_idents.iter().map(|(ident, _)| ident),
-                    );
+                    loc_idents_in_cycle.sort();
 
                     problems.push(Problem::CircularAssignment(loc_idents_in_cycle.clone()));
 
@@ -844,54 +841,6 @@ fn canonicalize_def<'a>(
             panic!("Somehow a space in a Def was not removed before canonicalization!")
         }
     };
-}
-
-/// When we get a list of cyclic idents, the first node listed is a matter of chance.
-/// This reorders the list such that the first node listed is always alphabetically the lowest,
-/// while preserving the overall order of the cycle.
-///
-/// Example: the cycle  (c ---> a ---> b)  becomes  (a ---> b ---> c)
-pub fn sort_cyclic_idents<'a, I>(
-    loc_idents: Vec<Located<Ident>>,
-    ordered_idents: &mut I,
-) -> Vec<Located<Ident>>
-where
-    I: Iterator<Item = &'a Ident>,
-{
-    // Find the first ident in ordered_idents that also appears in loc_idents.
-    let first_ident = ordered_idents
-        .find(|ident| {
-            loc_idents
-                .iter()
-                .any(|loc_ident| &&loc_ident.value == ident)
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "Could not find any idents that appear in both loc_idents {:?} and ordered_idents",
-                loc_idents
-            )
-        });
-
-    let mut answer = Vec::with_capacity(loc_idents.len());
-    let mut end = Vec::with_capacity(loc_idents.len());
-    let mut encountered_first_ident = false;
-
-    for loc_ident in loc_idents {
-        if encountered_first_ident {
-            answer.push(loc_ident);
-        } else if &loc_ident.value == first_ident {
-            encountered_first_ident = true;
-
-            answer.push(loc_ident);
-        } else {
-            end.push(loc_ident);
-        }
-    }
-
-    // Add the contents of `end` to the end of the answer.
-    answer.extend_from_slice(end.as_slice());
-
-    answer
 }
 
 #[inline(always)]
