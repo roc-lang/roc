@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::ImMap;
 use crate::subs::Content::{self, *};
-use crate::subs::{Descriptor, FlatType, Mark, Subs, Variable};
+use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
 
@@ -397,7 +397,7 @@ fn merge(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome {
         content,
         rank,
         mark: Mark::NONE,
-        copy: None,
+        copy: OptVariable::NONE,
     };
 
     subs.union(ctx.first, ctx.second, desc);
@@ -420,7 +420,7 @@ fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> V
             content,
             rank: ctx.first_desc.rank.min(ctx.second_desc.rank),
             mark: Mark::NONE,
-            copy: None,
+            copy: OptVariable::NONE,
         },
         pool,
     )

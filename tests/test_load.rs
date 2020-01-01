@@ -17,7 +17,13 @@ mod test_load {
     use roc::can::module::Module;
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
-    use roc::subs::Subs;
+    use roc::subs::{Subs, VarStore, Variable};
+
+    // HELPERS
+
+    fn first_var() -> Variable {
+        VarStore::default().into()
+    }
 
     fn test_async<F: std::future::Future>(future: F) -> F::Output {
         use tokio::runtime::Runtime;
@@ -43,13 +49,15 @@ mod test_load {
         }
     }
 
-    async fn load_builtins(deps: &mut Vec<LoadedModule>) -> usize {
+    async fn load_builtins(deps: &mut Vec<LoadedModule>) -> Variable {
         let src_dir = builtins_dir();
         let filename = src_dir.join("Defaults.roc");
-        let loaded = load(src_dir, filename, deps, 0).await;
+        let loaded = load(src_dir, filename, deps, first_var()).await;
 
-        loaded.vars_created
+        loaded.next_var
     }
+
+    // TESTS
 
     #[test]
     fn interface_with_deps() {
@@ -58,7 +66,7 @@ mod test_load {
         let filename = src_dir.join("Primary.roc");
 
         test_async(async {
-            let module = expect_module(load(src_dir, filename, &mut deps, 0).await);
+            let module = expect_module(load(src_dir, filename, &mut deps, first_var()).await);
 
             assert_eq!(module.name, Some("Primary".into()));
             assert_eq!(module.defs.len(), 6);
@@ -86,7 +94,7 @@ mod test_load {
         let filename = src_dir.join("Defaults.roc");
 
         test_async(async {
-            let module = expect_module(load(src_dir, filename, &mut deps, 0).await);
+            let module = expect_module(load(src_dir, filename, &mut deps, first_var()).await);
 
             assert_eq!(module.name, Some("Defaults".into()));
             assert_eq!(module.defs.len(), 0);
@@ -113,10 +121,10 @@ mod test_load {
         let mut deps = Vec::new();
 
         test_async(async {
-            let vars_created = load_builtins(&mut deps).await;
+            let next_var = load_builtins(&mut deps).await;
             let src_dir = fixtures_dir().join("interface_with_deps");
             let filename = src_dir.join("Primary.roc");
-            let module = expect_module(load(src_dir, filename, &mut deps, vars_created).await);
+            let module = expect_module(load(src_dir, filename, &mut deps, next_var).await);
 
             assert_eq!(module.name, Some("Primary".into()));
             assert_eq!(module.defs.len(), 6);
@@ -145,11 +153,11 @@ mod test_load {
     fn load_and_infer() {
         test_async(async {
             let mut deps = Vec::new();
-            let vars_created = load_builtins(&mut deps).await;
+            let next_var = load_builtins(&mut deps).await;
             let src_dir = fixtures_dir().join("interface_with_deps");
             let filename = src_dir.join("WithBuiltins.roc");
-            let loaded = load(src_dir, filename, &mut deps, vars_created).await;
-            let mut subs = Subs::new(loaded.vars_created);
+            let loaded = load(src_dir, filename, &mut deps, next_var).await;
+            let mut subs = Subs::new(loaded.next_var);
             let module = expect_module(loaded);
 
             assert_eq!(module.name, Some("WithBuiltins".into()));

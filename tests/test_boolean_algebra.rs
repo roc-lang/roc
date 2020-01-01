@@ -8,7 +8,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_boolean_algebra {
-    use roc::subs;
+    use roc::subs::VarStore;
     use roc::uniqueness::boolean_algebra;
     use roc::uniqueness::boolean_algebra::BooleanAlgebra::{self, *};
 
@@ -19,40 +19,41 @@ mod test_boolean_algebra {
 
     #[test]
     fn true_in_or() {
+        let var_store = VarStore::default();
+        let var = var_store.fresh();
+
         simplify_eq(
-            Disjunction(
-                Box::new(Ground(true)),
-                Box::new(Variable(subs::Variable::new_for_testing_only(0))),
-            ),
+            Disjunction(Box::new(Ground(true)), Box::new(Variable(var))),
             Ground(true),
         );
     }
 
     #[test]
     fn false_in_or() {
+        let var_store = VarStore::default();
+        let var = var_store.fresh();
+
         simplify_eq(
-            Disjunction(
-                Box::new(Ground(false)),
-                Box::new(Variable(subs::Variable::new_for_testing_only(0))),
-            ),
-            Variable(subs::Variable::new_for_testing_only(0)),
+            Disjunction(Box::new(Ground(false)), Box::new(Variable(var))),
+            Variable(var),
         );
     }
 
     #[test]
     fn false_in_and() {
+        let var_store = VarStore::default();
+        let var = var_store.fresh();
+
         simplify_eq(
-            Conjunction(
-                Box::new(Ground(false)),
-                Box::new(Variable(subs::Variable::new_for_testing_only(0))),
-            ),
+            Conjunction(Box::new(Ground(false)), Box::new(Variable(var))),
             Ground(false),
         );
     }
 
     #[test]
     fn unify_single_var() {
-        let var = subs::Variable::new_for_testing_only(0);
+        let var_store = VarStore::default();
+        let var = var_store.fresh();
 
         let result = boolean_algebra::unify(&Variable(var), &Ground(true));
 
@@ -65,8 +66,9 @@ mod test_boolean_algebra {
 
     #[test]
     fn unify_or() {
-        let a = subs::Variable::new_for_testing_only(0);
-        let b = subs::Variable::new_for_testing_only(1);
+        let var_store = VarStore::default();
+        let a = var_store.fresh();
+        let b = var_store.fresh();
 
         let result = boolean_algebra::unify(
             &Disjunction(Box::new(Variable(a)), Box::new(Variable(b))),
