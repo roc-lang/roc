@@ -175,16 +175,16 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-                    i1 = 33
-                    i2 = i1
-                    i3 = i2
                     x = i1
+                    i3 = i2
+                    i1 = 1337
+                    i2 = i1
                     y = 12.4
 
                     i3
                 "#
             ),
-            33,
+            1337,
             i64
         );
     }
