@@ -138,4 +138,35 @@ mod test_gen {
             f64
         );
     }
+
+    #[test]
+    fn gen_multiple_defs() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    answer = 42
+
+                    pi = 3.14
+
+                    answer
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    answer = 42
+
+                    pi = 3.14
+
+                    pi
+                "#
+            ),
+            3.14,
+            f64
+        );
+    }
 }
