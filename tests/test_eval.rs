@@ -111,4 +111,31 @@ mod test_gen {
             i64
         );
     }
+
+    #[test]
+    fn gen_basic_def() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    answer = 42
+
+                    answer
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    pi = 3.14
+
+                    pi
+                "#
+            ),
+            3.14,
+            f64
+        );
+    }
 }
