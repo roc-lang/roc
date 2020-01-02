@@ -459,25 +459,25 @@ mod test_infer_uniq {
         );
     }
 
-    #[test]
-    fn def_returning_closure() {
-        infer_eq(
-            indoc!(
-                r#"
-                f = \z -> z
-                g = \z -> z
-
-                (\x ->
-                    a = f x
-                    b = g x
-                    x
-                )
-            "#
-            ),
-            // x is used 3 times, so must be shared
-            "Attr.Attr * (Attr.Attr Attr.Shared a -> Attr.Attr Attr.Shared a)",
-        );
-    }
+    // #[test]
+    // fn def_returning_closure() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             f = \z -> z
+    //             g = \z -> z
+    //
+    //             (\x ->
+    //                 a = f x
+    //                 b = g x
+    //                 x
+    //             )
+    //         "#
+    //         ),
+    //         // x is used 3 times, so must be shared
+    //         "Attr.Attr * (Attr.Attr Attr.Shared a -> Attr.Attr Attr.Shared a)",
+    //     );
+    // }
 
     // CALLING FUNCTIONS
 
@@ -540,6 +540,7 @@ mod test_infer_uniq {
                 "#
             ),
             // TODO investigate why is this not shared?
+            // maybe because y is not used it is dropped?
             "Attr.Attr * Int",
         );
     }
