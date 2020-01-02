@@ -19,6 +19,7 @@ mod test_load {
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::{Subs, VarStore, Variable};
+    use std::collections::HashMap;
 
     // HELPERS
 
@@ -56,6 +57,47 @@ mod test_load {
         let loaded = load(src_dir, filename, deps, first_var()).await;
 
         loaded.next_var
+    }
+
+    fn expect_types(
+        module: Module,
+        subs: &mut Subs,
+        deps: Vec<LoadedModule>,
+        expected_types: HashMap<&str, &str>,
+    ) {
+        let mut unify_problems = Vec::new();
+        solve_loaded(&module, &mut unify_problems, subs, deps);
+
+        assert_eq!(unify_problems, Vec::new());
+        assert_eq!(expected_types.len(), module.declarations.len());
+
+        for decl in module.declarations {
+            let def = match decl {
+                Declare(def) => def,
+                rec_decl @ DeclareRec(_) => {
+                    panic!(
+                        "Unexpected recursive def in module declarations: {:?}",
+                        rec_decl
+                    );
+                }
+                cycle @ InvalidCycle(_, _) => {
+                    panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                }
+            };
+
+            for (symbol, expr_var) in def.pattern_vars {
+                let content = subs.get(expr_var).content;
+
+                name_all_type_vars(expr_var, subs);
+
+                let actual_str = content_to_string(content, subs);
+                let expected_type = expected_types
+                    .get(&*symbol.clone().into_boxed_str())
+                    .unwrap_or_else(|| panic!("Defs included an unexpected symbol: {:?}", symbol));
+
+                assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
+            }
+        }
     }
 
     // TESTS
@@ -178,53 +220,21 @@ mod test_load {
 
             assert_eq!(module.name, Some("WithBuiltins".into()));
 
-            let mut unify_problems = Vec::new();
-            solve_loaded(&module, &mut unify_problems, &mut subs, deps);
-
-            assert_eq!(unify_problems, Vec::new());
-
-            let expected_types = hashmap! {
-                "WithBuiltins.floatTest" => "Float",
-                "WithBuiltins.divisionFn" => "Float, Float -> Float",
-                "WithBuiltins.divisionTest" => "Float",
-                "WithBuiltins.intTest" => "Int",
-                "WithBuiltins.x" => "Float",
-                "WithBuiltins.constantInt" => "Int",
-                "WithBuiltins.divDep1ByDep2" => "Float",
-                "WithBuiltins.fromDep2" => "Float",
-            };
-
-            assert_eq!(expected_types.len(), module.declarations.len());
-
-            for decl in module.declarations {
-                let def = match decl {
-                    Declare(def) => def,
-                    rec_decl @ DeclareRec(_) => {
-                        panic!(
-                            "Unexpected recursive def in module declarations: {:?}",
-                            rec_decl
-                        );
-                    }
-                    cycle @ InvalidCycle(_, _) => {
-                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
-                    }
-                };
-
-                for (symbol, expr_var) in def.pattern_vars {
-                    let content = subs.get(expr_var).content;
-
-                    name_all_type_vars(expr_var, &mut subs);
-
-                    let actual_str = content_to_string(content, &mut subs);
-                    let expected_type = expected_types
-                        .get(&*symbol.clone().into_boxed_str())
-                        .unwrap_or_else(|| {
-                            panic!("Defs included an unexpected symbol: {:?}", symbol)
-                        });
-
-                    assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
-                }
-            }
+            expect_types(
+                module,
+                &mut subs,
+                deps,
+                hashmap! {
+                    "WithBuiltins.floatTest" => "Float",
+                    "WithBuiltins.divisionFn" => "Float, Float -> Float",
+                    "WithBuiltins.divisionTest" => "Float",
+                    "WithBuiltins.intTest" => "Int",
+                    "WithBuiltins.x" => "Float",
+                    "WithBuiltins.constantInt" => "Int",
+                    "WithBuiltins.divDep1ByDep2" => "Float",
+                    "WithBuiltins.fromDep2" => "Float",
+                },
+            );
         });
     }
 
@@ -240,44 +250,15 @@ mod test_load {
 
             assert_eq!(module.name, Some("Principal".into()));
 
-            let mut unify_problems = Vec::new();
-            solve_loaded(&module, &mut unify_problems, &mut subs, deps);
-
-            let expected_types = hashmap! {
-                "Principal.intVal" => "Int",
-                "Principal.identity" => "a -> a",
-            };
-
-            assert_eq!(expected_types.len(), module.declarations.len());
-
-            for decl in module.declarations {
-                let def = match decl {
-                    Declare(def) => def,
-                    rec_decl @ DeclareRec(_) => {
-                        panic!(
-                            "Unexpected recursive def in module declarations: {:?}",
-                            rec_decl
-                        );
-                    }
-                    cycle @ InvalidCycle(_, _) => {
-                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
-                    }
-                };
-                for (symbol, expr_var) in def.pattern_vars {
-                    let content = subs.get(expr_var).content;
-
-                    name_all_type_vars(expr_var, &mut subs);
-
-                    let actual_str = content_to_string(content, &mut subs);
-                    let expected_type = expected_types
-                        .get(&*symbol.clone().into_boxed_str())
-                        .unwrap_or_else(|| {
-                            panic!("Defs included an unexpected symbol: {:?}", symbol)
-                        });
-
-                    assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
-                }
-            }
+            expect_types(
+                module,
+                &mut subs,
+                deps,
+                hashmap! {
+                    "Principal.intVal" => "Int",
+                    "Principal.identity" => "a -> a",
+                },
+            );
         });
     }
 }
