@@ -286,7 +286,6 @@ mod test_load {
                     "WithoutBuiltins.answer" => "Int",
                     "WithoutBuiltins.fromDep2" => "Float",
                     "WithoutBuiltins.identity" => "a -> a",
-                    "WithoutBuiltins.divDep1ByDep2" => "Float",
                     "WithoutBuiltins.threePointZero" => "Float",
                 },
             );

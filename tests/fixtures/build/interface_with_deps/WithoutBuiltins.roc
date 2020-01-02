@@ -8,8 +8,6 @@ answer = 42
 
 fromDep2 = two
 
-divDep1ByDep2 = Dep1.three / fromDep2
-
 identity = \a -> a
 
 threePointZero = identity (alwaysThreePointZero {}) 
