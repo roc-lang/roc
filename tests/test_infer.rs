@@ -1010,18 +1010,4 @@ mod test_infer {
             "{ x? : Int } -> Int",
         );
     }
-
-    #[test]
-    fn invalid_record() {
-        infer_eq(
-            indoc!(
-                r#"
-                foo = \{ x } -> x
-
-                foo  {} 
-            "#
-            ),
-            "<type mismatch>",
-        );
-    }
 }

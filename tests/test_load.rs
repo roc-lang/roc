@@ -16,6 +16,7 @@ mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
     use roc::can::def::Declaration::*;
     use roc::can::module::Module;
+    use roc::collections::SendMap;
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::{Subs, VarStore, Variable};
@@ -283,18 +284,32 @@ mod test_load {
     #[test]
     fn load_records() {
         test_async(async {
+            use roc::types::{ErrorType, Mismatch, Problem, RecordExt, RecordFieldLabel};
+
             let mut deps = Vec::new();
             let (module, mut subs) =
                 load_without_builtins("interface_with_deps", "Records", &mut deps).await;
 
+            // NOTE: `a` here is unconstrained, so unifies with <type error>
             let expected_types = hashmap! {
-                "Records.intVal" => "<type mismatch>",
+                "Records.intVal" => "a",
             };
 
             let mut unify_problems = Vec::new();
             solve_loaded(&module, &mut unify_problems, &mut subs, deps);
 
-            // assert_eq!(unify_problems, Vec::new());
+            let a = ErrorType::FlexVar("a".into());
+
+            let mut record = SendMap::default();
+            record.insert(RecordFieldLabel::Required("x".into()), a);
+
+            let problem = Problem::Mismatch(
+                Mismatch::TypeMismatch,
+                ErrorType::Record(SendMap::default(), RecordExt::Closed),
+                ErrorType::Record(record, RecordExt::FlexOpen("b".into())),
+            );
+
+            assert_eq!(unify_problems, vec![problem]);
             assert_eq!(expected_types.len(), module.declarations.len());
 
             for decl in module.declarations {
