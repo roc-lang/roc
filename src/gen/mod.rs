@@ -16,6 +16,15 @@ use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs, Variable};
 use crate::types;
 
+pub struct Env<'ctx, 'env> {
+    pub procedures: MutMap<Symbol, Procedure>,
+    pub subs: Subs,
+
+    pub context: &'ctx Context,
+    pub builder: &'env Builder<'ctx>,
+    pub module: &'env Module<'ctx>,
+}
+
 enum TypedVal<'ctx> {
     FloatConst(FloatValue<'ctx>),
     IntConst(IntValue<'ctx>),
@@ -23,8 +32,8 @@ enum TypedVal<'ctx> {
     Typed(Variable, BasicValueEnum<'ctx>),
 }
 
-impl<'ctx> Into<BasicValueEnum<'ctx>> for TypedVal<'ctx> {
-    fn into(self) -> BasicValueEnum<'ctx> {
+impl<'ctx> TypedVal<'ctx> {
+    fn into_basic_value(self) -> BasicValueEnum<'ctx> {
         use self::TypedVal::*;
 
         match self {
@@ -32,6 +41,12 @@ impl<'ctx> Into<BasicValueEnum<'ctx>> for TypedVal<'ctx> {
             IntConst(val) => val.into(),
             Typed(_, val) => val,
         }
+    }
+}
+
+impl<'ctx> Into<BasicValueEnum<'ctx>> for TypedVal<'ctx> {
+    fn into(self) -> BasicValueEnum<'ctx> {
+        self.into_basic_value()
     }
 }
 pub fn content_to_basic_type<'ctx>(
@@ -151,13 +166,7 @@ fn compile_expr<'ctx, 'env>(
     }
 }
 
-pub struct Env<'ctx, 'env> {
-    pub procedures: MutMap<Symbol, Procedure>,
-    pub subs: Subs,
 
-    pub context: &'ctx Context,
-    pub builder: &'env Builder<'ctx>,
-    pub module: &'env Module<'ctx>,
 }
 
 fn compile_when_branch<'ctx, 'env>(
