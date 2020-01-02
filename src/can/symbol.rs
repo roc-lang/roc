@@ -51,6 +51,10 @@ impl Symbol {
     pub fn into_boxed_str(self) -> Box<str> {
         self.0
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl Into<Box<str>> for Symbol {
