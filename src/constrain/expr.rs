@@ -541,7 +541,7 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
     state
 }
 
-fn constrain_def(
+pub fn constrain_def(
     rigids: &Rigids,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     def: &Def,
@@ -642,7 +642,7 @@ pub fn constrain_defs_with_return<'a>(
     create_letrec_constraint(rigid_info, flex_info, ret_con)
 }
 
-fn create_letnonrec_constraint(
+pub fn create_letnonrec_constraint(
     rigid_vars: Vec<Variable>,
     flex_info: Info,
     ret_constraint: Constraint,
@@ -662,7 +662,7 @@ fn create_letnonrec_constraint(
     }))
 }
 
-fn create_letrec_constraint(
+pub fn create_letrec_constraint(
     rigid_info: Info,
     flex_info: Info,
     ret_constraint: Constraint,
