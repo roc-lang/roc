@@ -1,11 +1,14 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Output;
+use crate::can::ident::Lowercase;
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::can::procedure::{Procedure, References};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
+use crate::constrain::expr;
+use crate::constrain::expr::{Info, Rigids};
 use crate::ident::Ident;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
@@ -105,6 +108,7 @@ fn canonicalize_pattern(
         }
 
         RecordDestructure(ext_var, patterns) => {
+            state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
             let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
@@ -160,11 +164,6 @@ fn canonicalize_pattern(
         }
     }
 }
-
-/// Whenever we encounter a user-defined type variable (a "rigid" var for short),
-/// for example `a` in the annotation `identity : a -> a`, we add it to this
-/// map so that expressions within that annotation can share these vars.
-type Rigids = ImMap<Box<str>, Type>;
 
 pub fn canonicalize_expr(
     rigids: &Rigids,
@@ -480,7 +479,38 @@ pub fn canonicalize_expr(
             can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
         ),
         LetNonRec(def, loc_ret) => {
-            // TODO do this properly once we know how to do it in the first type checker.
+            let mut found_rigids = SendMap::default();
+            let mut flex_info = Info::default();
+            constrain_def(
+                rigids,
+                &mut found_rigids,
+                var_store,
+                var_usage,
+                def,
+                &mut flex_info,
+            );
+
+            let rigid_vars = found_rigids.keys().copied().collect();
+
+            let mut new_rigids = rigids.clone();
+            for (k, v) in found_rigids {
+                new_rigids.insert(v, Type::Variable(k));
+            }
+
+            let (_, ret_con) = canonicalize_expr(
+                &new_rigids,
+                var_store,
+                var_usage,
+                loc_ret.region,
+                &loc_ret.value,
+                expected,
+            );
+
+            (
+                Output::default(),
+                expr::create_letnonrec_constraint(rigid_vars, flex_info, ret_con),
+            )
+            /*
             let defs = vec![*def.clone()];
             (
                 Output::default(),
@@ -492,7 +522,9 @@ pub fn canonicalize_expr(
                     expected,
                     loc_ret,
                 ),
+
             )
+                */
         }
         When {
             cond_var,
@@ -736,22 +768,6 @@ fn canonicalize_when_branch(
     }))
 }
 
-struct Info {
-    pub vars: Vec<Variable>,
-    pub constraints: Vec<Constraint>,
-    pub def_types: SendMap<Symbol, Located<Type>>,
-}
-
-impl Info {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Info {
-            vars: Vec::with_capacity(capacity),
-            constraints: Vec::with_capacity(capacity),
-            def_types: SendMap::default(),
-        }
-    }
-}
-
 fn add_pattern_to_lookup_types(
     loc_pattern: Located<Pattern>,
     lookup_types: &mut SendMap<Symbol, Located<Type>>,
@@ -844,27 +860,116 @@ fn can_defs(
         var_usage.unregister(symbol);
     }
 
-    Let(Box::new(LetConstraint {
-        rigid_vars: rigid_info.vars,
-        flex_vars: Vec::new(),
-        def_types: rigid_info.def_types,
-        defs_constraint:
-            // Flex constraint
-            Let(Box::new(LetConstraint {
-                rigid_vars: Vec::new(),
-                flex_vars: flex_info.vars,
-                def_types: flex_info.def_types.clone(),
-                defs_constraint:
-                    // Final flex constraints
-                    Let(Box::new(LetConstraint {
-                        rigid_vars: Vec::new(),
-                        flex_vars: Vec::new(),
-                        def_types: flex_info.def_types,
-                        defs_constraint: True,
-                        ret_constraint: And(flex_info.constraints)
-                    })),
-                ret_constraint: And(vec![And(rigid_info.constraints), ret_con])
-            })),
-        ret_constraint: True,
-    }))
+    expr::create_letrec_constraint(rigid_info, flex_info, ret_con)
+}
+
+fn constrain_def_pattern(
+    var_store: &VarStore,
+    loc_pattern: &Located<Pattern>,
+    expr_type: Type,
+) -> PatternState {
+    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
+    // (However, still include it in scope, because you *can* recursively refer to yourself.)
+    let pattern_expected = PExpected::NoExpectation(expr_type);
+
+    let mut state = PatternState {
+        headers: SendMap::default(),
+        vars: Vec::with_capacity(1),
+        constraints: Vec::with_capacity(1),
+    };
+
+    canonicalize_pattern(var_store, &mut state, loc_pattern, pattern_expected);
+
+    state
+}
+
+pub fn constrain_def(
+    rigids: &Rigids,
+    found_rigids: &mut SendMap<Variable, Lowercase>,
+    var_store: &VarStore,
+    var_usage: &mut VarUsage,
+    def: &Def,
+    flex_info: &mut Info,
+) {
+    use crate::types::AnnotationSource;
+
+    let expr_var = def.expr_var;
+    let expr_type = Type::Variable(expr_var);
+
+    flex_info.vars.push(expr_var);
+
+    let pattern_state = constrain_def_pattern(var_store, &def.loc_pattern, expr_type.clone());
+
+    for (k, v) in &pattern_state.headers {
+        flex_info.def_types.insert(k.clone(), v.clone());
+    }
+
+    let ret_constraint = match &def.annotation {
+        Some((annotation, seen_rigids)) => {
+            let mut ftv: Rigids = rigids.clone();
+
+            for (var, name) in seen_rigids {
+                // if the rigid is known already, nothing needs to happen
+                // otherwise register it.
+                if !rigids.contains_key(name) {
+                    // possible use this rigid in nested def's
+                    ftv.insert(name.clone(), Type::Variable(*var));
+
+                    // mark this variable as a rigid
+                    found_rigids.insert(*var, name.clone());
+                }
+            }
+
+            let annotation_expected = Expected::FromAnnotation(
+                def.loc_pattern.clone(),
+                annotation.arity(),
+                AnnotationSource::TypedBody,
+                annotation.clone(),
+            );
+
+            // ensure expected type unifies with annotated type
+            flex_info.constraints.push(Eq(
+                expr_type,
+                annotation_expected.clone(),
+                def.loc_expr.region,
+            ));
+
+            canonicalize_expr(
+                &ftv,
+                var_store,
+                var_usage,
+                def.loc_expr.region,
+                &def.loc_expr.value,
+                annotation_expected,
+            )
+            .1
+        }
+        None => {
+            canonicalize_expr(
+                rigids,
+                var_store,
+                var_usage,
+                def.loc_expr.region,
+                &def.loc_expr.value,
+                Expected::NoExpectation(expr_type),
+            )
+            .1
+        }
+    };
+
+    // No Let is introduced when there are no pattern constraints
+    // This is only the case for literal patterns
+    //
+    // foo = ...
+    if pattern_state.constraints.is_empty() {
+        flex_info.constraints.push(ret_constraint);
+    } else {
+        flex_info.constraints.push(Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: pattern_state.vars,
+            def_types: pattern_state.headers,
+            defs_constraint: And(pattern_state.constraints),
+            ret_constraint,
+        })));
+    }
 }
