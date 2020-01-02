@@ -160,13 +160,43 @@ fn compile_expr<'ctx, 'env>(
                 panic!("TODO support when-expressions of more than 2 branches.");
             }
         }
+        LetNonRec(ref def, ref loc_ret) => match &def.loc_pattern.value {
+            Pattern::Identifier(symbol) => {
+                let var_name = symbol.as_str();
+                let val = compile_expr(env, parent, &def.loc_expr.value, vars).into_basic_value();
+                let alloca = create_entry_block_alloca(env, parent, var_name);
+
+                env.builder.build_store(alloca, val);
+
+                vars.insert(symbol.clone(), alloca);
+
+                compile_expr(env, parent, &loc_ret.value, vars)
+            }
+            pat => {
+                panic!("TODO code gen Def pattern {:?}", pat);
+            }
+        },
         _ => {
             panic!("I don't yet know how to compile {:?}", expr);
         }
     }
 }
 
+/// Creates a new stack allocation instruction in the entry block of the function.
+fn create_entry_block_alloca<'ctx>(
+    env: &Env<'ctx, '_>,
+    parent: &FunctionValue<'_>,
+    name: &str,
+) -> PointerValue<'ctx> {
+    let builder = env.context.create_builder();
+    let entry = parent.get_first_basic_block().unwrap();
 
+    match entry.get_first_instruction() {
+        Some(first_instr) => builder.position_before(&first_instr),
+        None => builder.position_at_end(&entry),
+    }
+
+    builder.build_alloca(env.context.f64_type(), name)
 }
 
 fn compile_when_branch<'ctx, 'env>(
