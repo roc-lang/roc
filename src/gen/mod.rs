@@ -2,7 +2,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::BasicTypeEnum;
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
@@ -19,13 +19,14 @@ use crate::types;
 pub struct Env<'ctx, 'env> {
     pub procedures: MutMap<Symbol, Procedure>,
     pub subs: Subs,
+    pub resolved_vars: ImMap<Symbol, Variable>,
 
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
     pub module: &'env Module<'ctx>,
 }
 
-enum TypedVal<'ctx> {
+pub enum TypedVal<'ctx> {
     FloatConst(FloatValue<'ctx>),
     IntConst(IntValue<'ctx>),
     #[allow(unused)]
@@ -33,6 +34,39 @@ enum TypedVal<'ctx> {
 }
 
 impl<'ctx> TypedVal<'ctx> {
+    pub fn new(
+        content: Content,
+        bv_enum: BasicValueEnum<'ctx>,
+        subs: &Subs,
+    ) -> Result<Self, String> {
+        match content {
+            Content::Structure(flat_type) => match flat_type {
+                Apply {
+                    module_name,
+                    name,
+                    args,
+                } => {
+                    let module_name = module_name.as_str();
+                    let name = name.as_str();
+
+                    if module_name == types::MOD_NUM && name == types::TYPE_NUM {
+                        let arg = *args.iter().next().unwrap();
+                        let arg_content = subs.get_without_compacting(arg).content;
+
+                        num_to_typed_val(arg_content, bv_enum)
+                    } else {
+                        panic!(
+                            "TODO handle content_to_basic_type for flat_type {}.{} with args {:?}",
+                            module_name, name, args
+                        );
+                    }
+                }
+                other => panic!("TODO handle content_to_basic_type for {:?}", other),
+            },
+            other => Err(format!("Cannot convert {:?} to BasicTypeEnum", other)),
+        }
+    }
+
     fn into_basic_value(self) -> BasicValueEnum<'ctx> {
         use self::TypedVal::*;
 
@@ -116,6 +150,46 @@ pub fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTyp
     }
 }
 
+pub fn num_to_typed_val<'ctx>(
+    content: Content,
+    bv_enum: BasicValueEnum<'ctx>,
+) -> Result<TypedVal<'ctx>, String> {
+    use TypedVal::*;
+
+    match content {
+        Content::Structure(flat_type) => match flat_type {
+            Apply {
+                module_name,
+                name,
+                args,
+            } => {
+                let module_name = module_name.as_str();
+                let name = name.as_str();
+
+                if module_name == types::MOD_FLOAT && name == types::TYPE_FLOATINGPOINT && args.is_empty() {
+                    debug_assert!(args.is_empty());
+                    Ok(FloatConst(bv_enum.into_float_value()))
+                } else if module_name == types::MOD_INT && name == types::TYPE_INTEGER && args.is_empty() {
+                    debug_assert!(args.is_empty());
+
+                    Ok(IntConst(bv_enum.into_int_value()))
+                } else {
+                    Err(format!("Unrecognized numeric type: {}.{} with args {:?}", module_name, name, args))
+                }
+            }
+            other => panic!(
+                "TODO handle content_to_basic_type (branch 0) for {:?} which is NESTED inside Num.Num",
+                other
+            ),
+        },
+
+        other => panic!(
+            "TODO handle content_to_basic_type (branch 1) for {:?} which is NESTED inside Num.Num",
+            other
+        ),
+    }
+}
+
 pub fn compile_standalone_expr<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
     parent: &FunctionValue<'ctx>,
@@ -167,7 +241,21 @@ fn compile_expr<'ctx, 'env>(
             Pattern::Identifier(symbol) => {
                 let var_name = symbol.as_str();
                 let val = compile_expr(env, parent, &def.loc_expr.value, vars).into_basic_value();
-                let alloca = create_entry_block_alloca(env, parent, var_name);
+                let var = env.resolved_vars.get(symbol).unwrap_or_else(|| {
+                    panic!(
+                        "Could not find var for symbol {:?} in resolved_vars {:?}",
+                        symbol, env.resolved_vars
+                    )
+                });
+                let content = env.subs.get_without_compacting(*var).content;
+                let basic_type = content_to_basic_type(content, &env.subs, env.context)
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "Error converting symbol {:?} to basic type: {:?}",
+                            symbol, err
+                        )
+                    });
+                let alloca = create_entry_block_alloca(env, parent, basic_type, var_name);
 
                 env.builder.build_store(alloca, val);
 
@@ -179,6 +267,27 @@ fn compile_expr<'ctx, 'env>(
                 panic!("TODO code gen Def pattern {:?}", pat);
             }
         },
+        Var {
+            ref resolved_symbol,
+            ..
+        } => match vars.get(resolved_symbol) {
+            Some(ptr) => {
+                let bv_enum = env.builder.build_load(*ptr, resolved_symbol.as_str());
+                let var = env
+                    .resolved_vars
+                    .get(resolved_symbol)
+                    .unwrap_or_else(|| panic!("Somehow a Lookup did not get its copy_var set."));
+                let content = env.subs.get_without_compacting(*var).content;
+
+                TypedVal::new(content, bv_enum, &env.subs).unwrap_or_else(|err| {
+                    panic!(
+                        "Error creating TypedVal for lookup on {:?}: {:?} - vars were: {:?}",
+                        resolved_symbol, err, vars
+                    )
+                })
+            }
+            None => panic!("Could not find a var for {:?}", resolved_symbol),
+        },
         _ => {
             panic!("I don't yet know how to compile {:?}", expr);
         }
@@ -186,11 +295,15 @@ fn compile_expr<'ctx, 'env>(
 }
 
 /// Creates a new stack allocation instruction in the entry block of the function.
-fn create_entry_block_alloca<'ctx>(
+fn create_entry_block_alloca<'ctx, BT>(
     env: &Env<'ctx, '_>,
     parent: &FunctionValue<'_>,
+    basic_type: BT,
     name: &str,
-) -> PointerValue<'ctx> {
+) -> PointerValue<'ctx>
+where
+    BT: BasicType<'ctx>,
+{
     let builder = env.context.create_builder();
     let entry = parent.get_first_basic_block().unwrap();
 
@@ -199,7 +312,7 @@ fn create_entry_block_alloca<'ctx>(
         None => builder.position_at_end(&entry),
     }
 
-    builder.build_alloca(env.context.f64_type(), name)
+    builder.build_alloca(basic_type, name)
 }
 
 fn compile_when_branch<'ctx, 'env>(
