@@ -109,6 +109,18 @@ impl OptVariable {
         }
     }
 
+    pub fn unwrap_or_else<F>(self, or_else: F) -> Variable
+    where
+        F: Fn() -> Variable,
+    {
+        if self.is_none() {
+            or_else()
+        } else {
+            Variable(self.0)
+        }
+    }
+}
+
 impl fmt::Debug for OptVariable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.clone().into_variable().fmt(f)
