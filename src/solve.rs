@@ -61,7 +61,6 @@ impl Pools {
 
 struct State {
     vars_by_symbol: Env,
-    resolved_vars: Env,
     mark: Mark,
 }
 
@@ -70,13 +69,11 @@ pub fn run(
     problems: &mut Vec<Problem>,
     subs: &mut Subs,
     constraint: &Constraint,
-    resolved_vars: Env,
-) -> Env {
+) {
     let mut pools = Pools::default();
     let state = State {
         vars_by_symbol: vars_by_symbol.clone(),
         mark: Mark::NONE.next(),
-        resolved_vars,
     };
     let rank = Rank::toplevel();
 
@@ -88,13 +85,12 @@ pub fn run(
         problems,
         subs,
         constraint,
-    )
-    .resolved_vars
+    );
 }
 
 fn solve(
     vars_by_symbol: &Env,
-    mut state: State,
+    state: State,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<Problem>,
@@ -149,8 +145,6 @@ fn solve(
             problems.extend(mismatches);
 
             introduce(subs, rank, pools, &vars);
-
-            state.resolved_vars.insert(symbol.clone(), actual);
 
             state
         }
@@ -326,7 +320,6 @@ fn solve(
                         let temp_state = State {
                             vars_by_symbol: new_state.vars_by_symbol,
                             mark: final_mark,
-                            resolved_vars: new_state.resolved_vars,
                         };
 
                         // Now solve the body, using the new vars_by_symbol which includes

@@ -26,7 +26,7 @@ mod test_infer {
         }
 
         let mut unify_problems = Vec::new();
-        let (content, _) = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
+        let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
 
         name_all_type_vars(variable, &mut subs);
 

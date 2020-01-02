@@ -365,7 +365,7 @@ pub fn solve_loaded(
     problems: &mut Vec<Problem>,
     subs: &mut Subs,
     loaded_deps: LoadedDeps,
-) -> ImMap<Symbol, Variable> {
+) {
     use Declaration::*;
     use LoadedModule::*;
 
@@ -438,23 +438,9 @@ pub fn solve_loaded(
         }
     }
 
-    let mut resolved_vars = ImMap::default();
-
     for dep_constraint in dep_constraints {
-        resolved_vars = solve::run(
-            &vars_by_symbol,
-            problems,
-            subs,
-            &dep_constraint,
-            resolved_vars,
-        );
+        solve::run(&vars_by_symbol, problems, subs, &dep_constraint);
     }
 
-    solve::run(
-        &vars_by_symbol,
-        problems,
-        subs,
-        &module.constraint,
-        resolved_vars,
-    )
+    solve::run(&vars_by_symbol, problems, subs, &module.constraint);
 }

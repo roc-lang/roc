@@ -30,8 +30,8 @@ mod test_infer_uniq {
         ) = uniq_expr(src);
 
         let mut unify_problems = Vec::new();
-        let (content1, _) = infer_expr(&mut subs1, &mut unify_problems, &constraint1, variable1);
-        let (content2, _) = infer_expr(&mut subs2, &mut unify_problems, &constraint2, variable2);
+        let content1 = infer_expr(&mut subs1, &mut unify_problems, &constraint1, variable1);
+        let content2 = infer_expr(&mut subs2, &mut unify_problems, &constraint2, variable2);
 
         name_all_type_vars(variable1, &mut subs1);
         name_all_type_vars(variable2, &mut subs2);

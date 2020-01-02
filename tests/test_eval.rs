@@ -26,7 +26,7 @@ mod test_gen {
             let (expr, _output, _problems, var_store, variable, constraint) = can_expr($src);
             let mut subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, _) = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
+            let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
 
             let context = Context::create();
             let builder = context.create_builder();
