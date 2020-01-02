@@ -35,7 +35,7 @@ mod test_gen {
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("errored");
 
-            let fn_type = content_to_basic_type(content, &mut subs, &context)
+            let fn_type = content_to_basic_type(&content, &mut subs, &context)
                 .expect("Unable to infer type for test expr")
                 .fn_type(&[], false);
             let function = module.add_function("main", fn_type, None);
