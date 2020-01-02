@@ -150,10 +150,10 @@ pub fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTyp
     }
 }
 
-pub fn num_to_typed_val<'ctx>(
+pub fn num_to_typed_val(
     content: Content,
-    bv_enum: BasicValueEnum<'ctx>,
-) -> Result<TypedVal<'ctx>, String> {
+    bv_enum: BasicValueEnum<'_>,
+) -> Result<TypedVal<'_>, String> {
     use TypedVal::*;
 
     match content {
@@ -192,7 +192,7 @@ pub fn num_to_typed_val<'ctx>(
 
 pub fn compile_standalone_expr<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
-    parent: &FunctionValue<'ctx>,
+    parent: FunctionValue<'ctx>,
     expr: &Expr,
 ) -> BasicValueEnum<'ctx> {
     compile_expr(env, parent, expr, &mut ImMap::default()).into()
@@ -200,7 +200,7 @@ pub fn compile_standalone_expr<'ctx, 'env>(
 
 fn compile_expr<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
-    parent: &FunctionValue<'ctx>,
+    parent: FunctionValue<'ctx>,
     expr: &Expr,
     vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
 ) -> TypedVal<'ctx> {
@@ -297,7 +297,7 @@ fn compile_expr<'ctx, 'env>(
 /// Creates a new stack allocation instruction in the entry block of the function.
 fn create_entry_block_alloca<'ctx, BT>(
     env: &Env<'ctx, '_>,
-    parent: &FunctionValue<'_>,
+    parent: FunctionValue<'_>,
     basic_type: BT,
     name: &str,
 ) -> PointerValue<'ctx>
@@ -317,7 +317,7 @@ where
 
 fn compile_when_branch<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
-    parent: &FunctionValue<'ctx>,
+    parent: FunctionValue<'ctx>,
     cond_expr: &Expr,
     pattern: Pattern,
     branch_expr: &Expr,
@@ -340,7 +340,7 @@ fn compile_when_branch<'ctx, 'env>(
                 );
 
                 let (then_bb, else_bb, then_val, else_val) =
-                    two_way_branch(env, *parent, comparison, branch_expr, else_expr, vars);
+                    two_way_branch(env, parent, comparison, branch_expr, else_expr, vars);
                 let phi = builder.build_phi(context.f64_type(), "casetmp");
 
                 phi.add_incoming(&[
@@ -364,7 +364,7 @@ fn compile_when_branch<'ctx, 'env>(
                 );
 
                 let (then_bb, else_bb, then_val, else_val) =
-                    two_way_branch(env, *parent, comparison, branch_expr, else_expr, vars);
+                    two_way_branch(env, parent, comparison, branch_expr, else_expr, vars);
                 let phi = builder.build_phi(context.i64_type(), "casetmp");
 
                 phi.add_incoming(&[
@@ -402,14 +402,14 @@ fn two_way_branch<'ctx, 'env>(
 
     // build then block
     builder.position_at_end(&then_bb);
-    let then_val = compile_expr(env, &parent, branch_expr, vars);
+    let then_val = compile_expr(env, parent, branch_expr, vars);
     builder.build_unconditional_branch(&cont_bb);
 
     let then_bb = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(&else_bb);
-    let else_val = compile_expr(env, &parent, else_expr, vars);
+    let else_val = compile_expr(env, parent, else_expr, vars);
     builder.build_unconditional_branch(&cont_bb);
 
     let else_bb = builder.get_insert_block().unwrap();

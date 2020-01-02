@@ -54,7 +54,7 @@ mod test_gen {
                 module: &module,
                 resolved_vars,
             };
-            let ret = compile_standalone_expr(&env, &function, &expr);
+            let ret = compile_standalone_expr(&env, function, &expr);
 
             builder.build_return(Some(&ret));
 
