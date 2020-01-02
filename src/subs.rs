@@ -11,7 +11,7 @@ pub struct Mark(i32);
 impl Mark {
     pub const NONE: Mark = Mark(2);
     pub const OCCURS: Mark = Mark(1);
-    pub const GET_VAR_NAMES: Mark = Mark(1);
+    pub const GET_VAR_NAMES: Mark = Mark(0);
 
     #[inline(always)]
     pub fn next(self) -> Mark {
@@ -283,7 +283,14 @@ impl Subs {
         if desc.copy.is_some() {
             let content = desc.content;
 
-            self.set(var, content.clone().into());
+            let desc = Descriptor {
+                content: content.clone(),
+                rank: Rank::NONE,
+                mark: Mark::NONE,
+                copy: OptVariable::NONE,
+            };
+
+            self.set(var, desc);
 
             restore_content(self, &content);
         }

@@ -303,6 +303,7 @@ pub enum Constraint {
     Lookup(Symbol, Expected<Type>, Region),
     Pattern(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
+    SaveTheEnvironment,
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
 }

@@ -497,7 +497,7 @@ pub fn canonicalize_expr(
                 new_rigids.insert(v, Type::Variable(k));
             }
 
-            let (_, ret_con) = canonicalize_expr(
+            let (_, body_con) = canonicalize_expr(
                 &new_rigids,
                 var_store,
                 var_usage,
@@ -508,7 +508,7 @@ pub fn canonicalize_expr(
 
             (
                 Output::default(),
-                expr::create_letnonrec_constraint(rigid_vars, flex_info, ret_con),
+                expr::create_letnonrec_constraint(rigid_vars, flex_info, body_con, True),
             )
             /*
             let defs = vec![*def.clone()];
