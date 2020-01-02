@@ -169,4 +169,23 @@ mod test_gen {
             f64
         );
     }
+
+    #[test]
+    fn gen_chained_defs() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    i1 = 33
+                    i2 = i1
+                    i3 = i2
+                    x = i1
+                    y = 12.4
+
+                    i3
+                "#
+            ),
+            33,
+            i64
+        );
+    }
 }
