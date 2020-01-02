@@ -70,24 +70,33 @@ pub fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTyp
                 let module_name = module_name.as_str();
                 let name = name.as_str();
 
-                if module_name == types::MOD_FLOAT && name == types::TYPE_FLOATINGPOINT && args.is_empty() {
+                if module_name == types::MOD_FLOAT
+                    && name == types::TYPE_FLOATINGPOINT
+                    && args.is_empty()
+                {
                     debug_assert!(args.is_empty());
                     Ok(BasicTypeEnum::FloatType(context.f64_type()))
-                } else if module_name == types::MOD_INT && name == types::TYPE_INTEGER && args.is_empty() {
+                } else if module_name == types::MOD_INT
+                    && name == types::TYPE_INTEGER
+                    && args.is_empty()
+                {
                     debug_assert!(args.is_empty());
                     Ok(BasicTypeEnum::IntType(context.i64_type()))
                 } else {
-                    Err(format!("Unrecognized numeric type: {}.{} with args {:?}", module_name, name, args))
+                    Err(format!(
+                        "Unrecognized numeric type: {}.{} with args {:?}",
+                        module_name, name, args
+                    ))
                 }
             }
             other => panic!(
-                "TODO handle content_to_basic_type (branch 0) for {:?} which is NESTED inside Num.Num",
+                "TODO handle num_to_basic_type (branch 0) for {:?} which is NESTED inside Num.Num",
                 other
             ),
         },
 
         other => panic!(
-            "TODO handle content_to_basic_type (branch 1) for {:?} which is NESTED inside Num.Num",
+            "TODO handle num_to_basic_type (branch 1) for {:?} which is NESTED inside Num.Num",
             other
         ),
     }
@@ -107,25 +116,34 @@ pub fn num_to_bv(
                 let module_name = module_name.as_str();
                 let name = name.as_str();
 
-                if module_name == types::MOD_FLOAT && name == types::TYPE_FLOATINGPOINT && args.is_empty() {
+                if module_name == types::MOD_FLOAT
+                    && name == types::TYPE_FLOATINGPOINT
+                    && args.is_empty()
+                {
                     debug_assert!(args.is_empty());
                     Ok(bv_enum.into_float_value().into())
-                } else if module_name == types::MOD_INT && name == types::TYPE_INTEGER && args.is_empty() {
+                } else if module_name == types::MOD_INT
+                    && name == types::TYPE_INTEGER
+                    && args.is_empty()
+                {
                     debug_assert!(args.is_empty());
 
                     Ok(bv_enum.into_int_value().into())
                 } else {
-                    Err(format!("Unrecognized numeric type: {}.{} with args {:?}", module_name, name, args))
+                    Err(format!(
+                        "Unrecognized numeric type: {}.{} with args {:?}",
+                        module_name, name, args
+                    ))
                 }
             }
             other => panic!(
-                "TODO handle content_to_basic_type (branch 0) for {:?} which is NESTED inside Num.Num",
+                "TODO handle num_to_bv (branch 0) for {:?} which is NESTED inside Num.Num",
                 other
             ),
         },
 
         other => panic!(
-            "TODO handle content_to_basic_type (branch 1) for {:?} which is NESTED inside Num.Num",
+            "TODO handle num_to_bv (branch 1) for {:?} which is NESTED inside Num.Num",
             other
         ),
     }
