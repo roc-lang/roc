@@ -270,4 +270,26 @@ mod test_load {
             );
         });
     }
+
+    #[test]
+    fn load_and_infer_without_builtins() {
+        test_async(async {
+            let mut deps = Vec::new();
+            let (module, mut subs) = load_without_builtins("interface_with_deps", "WithoutBuiltins", &mut deps).await;
+
+            expect_types(
+                module,
+                &mut subs,
+                deps,
+                hashmap! {
+                    "WithoutBuiltins.alwaysThreePointZero" => "* -> Float",
+                    "WithoutBuiltins.answer" => "Int",
+                    "WithoutBuiltins.fromDep2" => "Float",
+                    "WithoutBuiltins.identity" => "a -> a",
+                    "WithoutBuiltins.divDep1ByDep2" => "Float",
+                    "WithoutBuiltins.threePointZero" => "Float",
+                },
+            );
+        });
+    }
 }
