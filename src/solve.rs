@@ -137,7 +137,7 @@ fn solve(
             // successfully (in this case, to `Int -> Int`), we can use that to
             // infer the type of this lookup (in this case, `Int`) without ever
             // having mutated the original.
-            let actual = var; // TODO deep copy this var
+            let actual = deep_copy_var(subs, rank, pools, var);
             let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
@@ -655,6 +655,134 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
     }
 
     pool.extend(vars);
+}
+
+fn deep_copy_var_help(
+    subs: &mut Subs,
+    max_rank: Rank,
+    pools: &mut Pools,
+    var: Variable,
+) -> Variable {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    let desc = subs.get(var);
+
+    if let Some(copy) = desc.copy.into_variable() {
+        return copy;
+    } else if desc.rank != Rank::NONE {
+        return var;
+    }
+
+    let make_descriptor = |content| Descriptor {
+        content,
+        rank: max_rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    let content = desc.content;
+    let copy = subs.fresh(make_descriptor(content.clone()));
+
+    pools.get_mut(max_rank).push(copy);
+
+    // Link the original variable to the new variable. This lets us
+    // avoid making multiple copies of the variable we are instantiating.
+    //
+    // Need to do this before recursively copying to avoid looping.
+    subs.set(
+        var,
+        Descriptor {
+            content: content.clone(),
+            rank: desc.rank,
+            mark: Mark::NONE,
+            copy: copy.into(),
+        },
+    );
+
+    // Now we recursively copy the content of the variable.
+    // We have already marked the variable as copied, so we
+    // will not repeat this work or crawl this variable again.
+    match content {
+        Structure(flat_type) => {
+            let new_flat_type = match flat_type {
+                Apply {
+                    module_name,
+                    name,
+                    args,
+                } => {
+                    let args = args
+                        .into_iter()
+                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                        .collect();
+
+                    Apply {
+                        module_name,
+                        name,
+                        args,
+                    }
+                }
+
+                Func(arg_vars, ret_var) => {
+                    let new_ret_var = deep_copy_var_help(subs, max_rank, pools, ret_var);
+                    let arg_vars = arg_vars
+                        .into_iter()
+                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                        .collect();
+
+                    Func(arg_vars, new_ret_var)
+                }
+
+                same @ EmptyRecord | same @ Erroneous(_) => same,
+
+                Record(fields, ext_var) => {
+                    let mut new_fields = ImMap::default();
+
+                    for (label, var) in fields {
+                        new_fields.insert(label, deep_copy_var_help(subs, max_rank, pools, var));
+                    }
+
+                    Record(
+                        new_fields,
+                        deep_copy_var_help(subs, max_rank, pools, ext_var),
+                    )
+                }
+            };
+
+            subs.set(copy, make_descriptor(Structure(new_flat_type)));
+
+            copy
+        }
+
+        FlexVar(_) | Error => copy,
+
+        RigidVar(name) => {
+            subs.set(copy, make_descriptor(FlexVar(Some(name))));
+
+            copy
+        }
+
+        Alias(module_name, name, args, real_type_var) => {
+            let new_args = args
+                .into_iter()
+                .map(|(name, var)| (name, deep_copy_var_help(subs, max_rank, pools, var)))
+                .collect();
+            let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
+            let new_content = Alias(module_name, name, new_args, new_real_type_var);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+    }
+}
+
+fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
+    let copy = deep_copy_var_help(subs, rank, pools, var);
+
+    subs.restore(var);
+
+    copy
 }
 
 fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) -> Variable {

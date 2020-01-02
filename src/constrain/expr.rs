@@ -415,19 +415,7 @@ pub fn constrain_expr(
 
             let ret_con = constrain_expr(&new_rigids, loc_ret.region, &loc_ret.value, expected);
 
-            Let(Box::new(LetConstraint {
-                rigid_vars,
-                flex_vars: Vec::new(),
-                def_types: flex_info.def_types.clone(),
-                defs_constraint: Let(Box::new(LetConstraint {
-                    rigid_vars: Vec::new(),
-                    flex_vars: Vec::new(),
-                    def_types: SendMap::default(),
-                    defs_constraint: And(flex_info.constraints),
-                    ret_constraint: True,
-                })),
-                ret_constraint: ret_con,
-            }))
+            create_letnonrec_constraint(rigid_vars, flex_info, ret_con)
         }
         Tag(_, _) => {
             panic!("TODO constrain Tag");
@@ -491,19 +479,33 @@ pub fn constrain_decls(
     rigids: &Rigids,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     decls: &[Declaration],
-    flex_info: &mut Info,
+    outer_flex_info: &mut Info,
 ) {
-    for decl in decls {
+    let mut constraint = Constraint::True;
+    for decl in decls.iter().rev() {
+        let mut flex_info = Info::default();
         match decl {
-            Declaration::Declare(def) => constrain_def(rigids, found_rigids, def, flex_info),
+            Declaration::Declare(def) => {
+                constrain_def(rigids, found_rigids, def, &mut flex_info);
+
+                // rigids is empty here: a top-level definition's rigids cannot influence
+                // or use the rigids outside of their body
+                constraint = create_letnonrec_constraint(vec![], flex_info, constraint);
+            }
             Declaration::DeclareRec(defs) => {
                 for def in defs {
-                    constrain_def(rigids, found_rigids, def, flex_info)
+                    constrain_def(rigids, found_rigids, def, &mut flex_info);
                 }
+                // rigids is empty here: a top-level definition's rigids cannot influence
+                // or use the rigids outside of their body
+                let rigid_info = Info::default();
+                constraint = create_letrec_constraint(rigid_info, flex_info, constraint);
             }
             Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
         }
     }
+
+    outer_flex_info.constraints = vec![constraint]
 }
 
 #[inline(always)]
@@ -539,7 +541,7 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
     state
 }
 
-fn constrain_def(
+pub fn constrain_def(
     rigids: &Rigids,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     def: &Def,
@@ -637,6 +639,34 @@ pub fn constrain_defs_with_return<'a>(
     // Use its output as a starting point because its tail_call already has the right answer!
     let ret_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected);
 
+    create_letrec_constraint(rigid_info, flex_info, ret_con)
+}
+
+pub fn create_letnonrec_constraint(
+    rigid_vars: Vec<Variable>,
+    flex_info: Info,
+    ret_constraint: Constraint,
+) -> Constraint {
+    Let(Box::new(LetConstraint {
+        rigid_vars, // TODO is that correct?
+        flex_vars: flex_info.vars,
+        def_types: flex_info.def_types.clone(),
+        defs_constraint: Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: Vec::new(),
+            def_types: SendMap::default(),
+            defs_constraint: And(flex_info.constraints),
+            ret_constraint: True,
+        })),
+        ret_constraint,
+    }))
+}
+
+pub fn create_letrec_constraint(
+    rigid_info: Info,
+    flex_info: Info,
+    ret_constraint: Constraint,
+) -> Constraint {
     // Rigid constraint for the def expr as a whole.
     // This is a "LetRec" constraint; it supports recursion.
     // (The only advantage of "Let" over "LetRec" is if you want to
@@ -657,7 +687,7 @@ pub fn constrain_defs_with_return<'a>(
                 defs_constraint: True,
                 ret_constraint: And(flex_info.constraints),
             })),
-            ret_constraint: And(vec![And(rigid_info.constraints), ret_con]),
+            ret_constraint: And(vec![And(rigid_info.constraints), ret_constraint]),
         })),
     }))
 }
