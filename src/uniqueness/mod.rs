@@ -108,6 +108,7 @@ fn canonicalize_pattern(
         }
 
         RecordDestructure(ext_var, patterns) => {
+            state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
             let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
