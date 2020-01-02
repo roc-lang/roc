@@ -3,7 +3,8 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
+use inkwell::values::BasicValueEnum::{self, *};
+use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::can::expr::Expr;
@@ -13,76 +14,18 @@ use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::collections::MutMap;
 use crate::subs::FlatType::*;
-use crate::subs::{Content, Subs, Variable};
+use crate::subs::{Content, Subs};
 use crate::types;
 
 pub struct Env<'ctx, 'env> {
     pub procedures: MutMap<Symbol, Procedure>,
     pub subs: Subs,
-    pub resolved_vars: ImMap<Symbol, Variable>,
 
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
     pub module: &'env Module<'ctx>,
 }
 
-pub enum TypedVal<'ctx> {
-    FloatConst(FloatValue<'ctx>),
-    IntConst(IntValue<'ctx>),
-    #[allow(unused)]
-    Typed(Variable, BasicValueEnum<'ctx>),
-}
-
-impl<'ctx> TypedVal<'ctx> {
-    pub fn new(
-        content: Content,
-        bv_enum: BasicValueEnum<'ctx>,
-        subs: &Subs,
-    ) -> Result<Self, String> {
-        match content {
-            Content::Structure(flat_type) => match flat_type {
-                Apply {
-                    module_name,
-                    name,
-                    args,
-                } => {
-                    let module_name = module_name.as_str();
-                    let name = name.as_str();
-
-                    if module_name == types::MOD_NUM && name == types::TYPE_NUM {
-                        let arg = *args.iter().next().unwrap();
-                        let arg_content = subs.get_without_compacting(arg).content;
-
-                        num_to_typed_val(arg_content, bv_enum)
-                    } else {
-                        panic!(
-                            "TODO handle content_to_basic_type for flat_type {}.{} with args {:?}",
-                            module_name, name, args
-                        );
-                    }
-                }
-                other => panic!("TODO handle content_to_basic_type for {:?}", other),
-            },
-            other => Err(format!("Cannot convert {:?} to BasicTypeEnum", other)),
-        }
-    }
-
-    fn into_basic_value(self) -> BasicValueEnum<'ctx> {
-        use self::TypedVal::*;
-
-        match self {
-            FloatConst(val) => val.into(),
-            IntConst(val) => val.into(),
-            Typed(_, val) => val,
-        }
-    }
-}
-
-impl<'ctx> Into<BasicValueEnum<'ctx>> for TypedVal<'ctx> {
-    fn into(self) -> BasicValueEnum<'ctx> {
-        self.into_basic_value()
-    }
-}
 pub fn content_to_basic_type<'ctx>(
     content: Content,
     subs: &Subs,
@@ -150,12 +93,10 @@ pub fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTyp
     }
 }
 
-pub fn num_to_typed_val(
+pub fn num_to_bv(
     content: Content,
     bv_enum: BasicValueEnum<'_>,
-) -> Result<TypedVal<'_>, String> {
-    use TypedVal::*;
-
+) -> Result<BasicValueEnum<'_>, String> {
     match content {
         Content::Structure(flat_type) => match flat_type {
             Apply {
@@ -168,11 +109,11 @@ pub fn num_to_typed_val(
 
                 if module_name == types::MOD_FLOAT && name == types::TYPE_FLOATINGPOINT && args.is_empty() {
                     debug_assert!(args.is_empty());
-                    Ok(FloatConst(bv_enum.into_float_value()))
+                    Ok(bv_enum.into_float_value().into())
                 } else if module_name == types::MOD_INT && name == types::TYPE_INTEGER && args.is_empty() {
                     debug_assert!(args.is_empty());
 
-                    Ok(IntConst(bv_enum.into_int_value()))
+                    Ok(bv_enum.into_int_value().into())
                 } else {
                     Err(format!("Unrecognized numeric type: {}.{} with args {:?}", module_name, name, args))
                 }
@@ -203,13 +144,12 @@ fn compile_expr<'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     expr: &Expr,
     vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
-) -> TypedVal<'ctx> {
-    use self::TypedVal::*;
+) -> BasicValueEnum<'ctx> {
     use crate::can::expr::Expr::*;
 
     match *expr {
-        Int(_, num) => IntConst(env.context.i64_type().const_int(num as u64, false)),
-        Float(_, num) => FloatConst(env.context.f64_type().const_float(num)),
+        Int(_, num) => env.context.i64_type().const_int(num as u64, false).into(),
+        Float(_, num) => env.context.f64_type().const_float(num).into(),
         When {
             ref loc_cond,
             ref branches,
@@ -239,23 +179,11 @@ fn compile_expr<'ctx, 'env>(
         }
         LetNonRec(ref def, ref loc_ret) => match &def.loc_pattern.value {
             Pattern::Identifier(symbol) => {
-                let var_name = symbol.as_str();
-                let val = compile_expr(env, parent, &def.loc_expr.value, vars).into_basic_value();
-                let var = env.resolved_vars.get(symbol).unwrap_or_else(|| {
-                    panic!(
-                        "Could not find var for symbol {:?} in resolved_vars {:?}",
-                        symbol, env.resolved_vars
-                    )
-                });
-                let content = env.subs.get_without_compacting(*var).content;
-                let basic_type = content_to_basic_type(content, &env.subs, env.context)
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "Error converting symbol {:?} to basic type: {:?}",
-                            symbol, err
-                        )
-                    });
-                let alloca = create_entry_block_alloca(env, parent, basic_type, var_name);
+                let expr = &def.loc_expr.value;
+                let expr_bt = basic_type_from_expr(env.context, &env.subs, expr);
+                let val = compile_expr(env, parent, &expr, vars);
+
+                let alloca = create_entry_block_alloca(env, parent, expr_bt, symbol.as_str());
 
                 env.builder.build_store(alloca, val);
 
@@ -271,26 +199,26 @@ fn compile_expr<'ctx, 'env>(
             ref resolved_symbol,
             ..
         } => match vars.get(resolved_symbol) {
-            Some(ptr) => {
-                let bv_enum = env.builder.build_load(*ptr, resolved_symbol.as_str());
-                let var = env
-                    .resolved_vars
-                    .get(resolved_symbol)
-                    .unwrap_or_else(|| panic!("Somehow a Lookup did not get its copy_var set."));
-                let content = env.subs.get_without_compacting(*var).content;
-
-                TypedVal::new(content, bv_enum, &env.subs).unwrap_or_else(|err| {
-                    panic!(
-                        "Error creating TypedVal for lookup on {:?}: {:?} - vars were: {:?}",
-                        resolved_symbol, err, vars
-                    )
-                })
-            }
+            Some(ptr) => env.builder.build_load(*ptr, resolved_symbol.as_str()),
             None => panic!("Could not find a var for {:?}", resolved_symbol),
         },
         _ => {
             panic!("I don't yet know how to compile {:?}", expr);
         }
+    }
+}
+
+fn basic_type_from_expr<'ctx>(
+    context: &'ctx Context,
+    _subs: &Subs,
+    expr: &Expr,
+) -> BasicTypeEnum<'ctx> {
+    use crate::can::expr::Expr::*;
+
+    match expr {
+        Int(_, _) => context.i64_type().into(),
+        Float(_, _) => context.f64_type().into(),
+        other => panic!("TODO basic_type_from_expr for {:?}", other),
     }
 }
 
@@ -323,20 +251,18 @@ fn compile_when_branch<'ctx, 'env>(
     branch_expr: &Expr,
     else_expr: &Expr,
     vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
-) -> TypedVal<'ctx> {
-    use self::TypedVal::*;
-
+) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let context = env.context;
 
     match compile_expr(env, parent, cond_expr, vars) {
-        FloatConst(float_val) => match pattern {
+        FloatValue(float_val) => match pattern {
             FloatLiteral(target_val) => {
                 let comparison = builder.build_float_compare(
                     FloatPredicate::OEQ,
                     float_val,
                     context.f64_type().const_float(target_val),
-                    "casecond",
+                    "whencond",
                 );
 
                 let (then_bb, else_bb, then_val, else_val) =
@@ -348,19 +274,19 @@ fn compile_when_branch<'ctx, 'env>(
                     (&Into::<BasicValueEnum>::into(else_val), &else_bb),
                 ]);
 
-                FloatConst(phi.as_basic_value().into_float_value())
+                phi.as_basic_value().into_float_value().into()
             }
 
             _ => panic!("TODO support pattern matching on floats other than literals."),
         },
 
-        IntConst(int_val) => match pattern {
+        IntValue(int_val) => match pattern {
             IntLiteral(target_val) => {
                 let comparison = builder.build_int_compare(
                     IntPredicate::EQ,
                     int_val,
                     context.i64_type().const_int(target_val as u64, false),
-                    "casecond",
+                    "whencond",
                 );
 
                 let (then_bb, else_bb, then_val, else_val) =
@@ -372,11 +298,11 @@ fn compile_when_branch<'ctx, 'env>(
                     (&Into::<BasicValueEnum>::into(else_val), &else_bb),
                 ]);
 
-                IntConst(phi.as_basic_value().into_int_value())
+                phi.as_basic_value().into_int_value().into()
             }
             _ => panic!("TODO support pattern matching on ints other than literals."),
         },
-        Typed(_var, _basic_value_enum) => panic!(
+        _ => panic!(
             "TODO handle pattern matching on conditionals other than int and float literals."
         ),
     }
@@ -389,7 +315,12 @@ fn two_way_branch<'ctx, 'env>(
     branch_expr: &Expr,
     else_expr: &Expr,
     vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
-) -> (BasicBlock, BasicBlock, TypedVal<'ctx>, TypedVal<'ctx>) {
+) -> (
+    BasicBlock,
+    BasicBlock,
+    BasicValueEnum<'ctx>,
+    BasicValueEnum<'ctx>,
+) {
     let builder = env.builder;
     let context = env.context;
 
