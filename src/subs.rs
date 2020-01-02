@@ -108,6 +108,11 @@ impl OptVariable {
             Some(Variable(self.0))
         }
     }
+
+impl fmt::Debug for OptVariable {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.clone().into_variable().fmt(f)
+    }
 }
 
 impl Into<Option<Variable>> for OptVariable {
