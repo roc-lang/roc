@@ -17,7 +17,7 @@ use crate::subs::FlatType::*;
 use crate::subs::{Content, FlatType, Subs};
 use crate::types;
 
-type Scope = ImMap<Symbol, Content>;
+type Scope<'ctx> = ImMap<Symbol, (Content, PointerValue<'ctx>)>;
 
 pub struct Env<'ctx, 'env> {
     pub procedures: MutMap<Symbol, Procedure>,
@@ -156,15 +156,14 @@ pub fn compile_standalone_expr<'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     expr: &Expr,
 ) -> BasicValueEnum<'ctx> {
-    compile_expr(env, &ImMap::default(), parent, expr, &mut ImMap::default()).into()
+    compile_expr(env, &ImMap::default(), parent, expr)
 }
 
 fn compile_expr<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
-    scope: &Scope,
+    scope: &Scope<'ctx>,
     parent: FunctionValue<'ctx>,
     expr: &Expr,
-    vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
 ) -> BasicValueEnum<'ctx> {
     use crate::can::expr::Expr::*;
 
@@ -193,7 +192,6 @@ fn compile_expr<'ctx, 'env>(
                     pattern.value.clone(),
                     &branch_expr.value,
                     &else_expr.value,
-                    vars,
                 )
             } else {
                 panic!("TODO support when-expressions of more than 2 branches.");
@@ -206,22 +204,20 @@ fn compile_expr<'ctx, 'env>(
                     let subs = &env.subs;
                     let context = &env.context;
                     let content = content_from_expr(scope, subs, expr);
-                    let val = compile_expr(env, &scope, parent, &expr, vars);
+                    let val = compile_expr(env, &scope, parent, &expr);
                     let expr_bt = content_to_basic_type(&content, subs, context).unwrap_or_else(|err| panic!("Error converting symbol {:?} to basic type: {:?} - scope was: {:?}", symbol, err, scope));
                     let alloca = create_entry_block_alloca(env, parent, expr_bt, symbol.as_str());
 
                     env.builder.build_store(alloca, val);
-
-                    vars.insert(symbol.clone(), alloca);
 
                     // Make a new scope which includes the binding we just encountered.
                     // This should be done *after* compiling the bound expr, since this is a
                     // LetNonRec rather than a LetRec. It shouldn't need to access itself!
                     let mut scope = scope.clone();
 
-                    scope.insert(symbol.clone(), content.clone());
+                    scope.insert(symbol.clone(), (content.clone(), alloca));
 
-                    compile_expr(env, &scope, parent, &loc_ret.value, vars)
+                    compile_expr(env, &scope, parent, &loc_ret.value)
                 }
                 pat => {
                     panic!("TODO code gen Def pattern {:?}", pat);
@@ -231,8 +227,8 @@ fn compile_expr<'ctx, 'env>(
         Var {
             ref resolved_symbol,
             ..
-        } => match vars.get(resolved_symbol) {
-            Some(ptr) => env.builder.build_load(*ptr, resolved_symbol.as_str()),
+        } => match scope.get(resolved_symbol) {
+            Some((_, ptr)) => env.builder.build_load(*ptr, resolved_symbol.as_str()),
             None => panic!("Could not find a var for {:?}", resolved_symbol),
         },
         _ => {
@@ -241,7 +237,7 @@ fn compile_expr<'ctx, 'env>(
     }
 }
 
-fn content_from_expr(scope: &Scope, subs: &Subs, expr: &Expr) -> Content {
+fn content_from_expr(scope: &Scope<'_>, subs: &Subs, expr: &Expr) -> Content {
     use crate::can::expr::Expr::*;
 
     match expr {
@@ -255,10 +251,13 @@ fn content_from_expr(scope: &Scope, subs: &Subs, expr: &Expr) -> Content {
         Var {
             ref resolved_symbol,
             ..
-        } => scope
-            .get(resolved_symbol)
-            .unwrap_or_else(|| panic!("Couldn't find {:?} in scope {:?}", resolved_symbol, scope))
-            .clone(),
+        } => {
+            let (content, _) = scope.get(resolved_symbol).unwrap_or_else(|| {
+                panic!("Couldn't find {:?} in scope {:?}", resolved_symbol, scope)
+            });
+
+            content.clone()
+        }
         other => panic!("TODO handle content_from_expr for {:?}", other),
     }
 }
@@ -286,18 +285,17 @@ where
 
 fn compile_when_branch<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
-    scope: &Scope,
+    scope: &Scope<'ctx>,
     parent: FunctionValue<'ctx>,
     cond_expr: &Expr,
     pattern: Pattern,
     branch_expr: &Expr,
     else_expr: &Expr,
-    vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let context = env.context;
 
-    match compile_expr(env, scope, parent, cond_expr, vars) {
+    match compile_expr(env, scope, parent, cond_expr) {
         FloatValue(float_val) => match pattern {
             FloatLiteral(target_val) => {
                 let comparison = builder.build_float_compare(
@@ -308,7 +306,7 @@ fn compile_when_branch<'ctx, 'env>(
                 );
 
                 let (then_bb, else_bb, then_val, else_val) =
-                    two_way_branch(env, scope, parent, comparison, branch_expr, else_expr, vars);
+                    two_way_branch(env, scope, parent, comparison, branch_expr, else_expr);
                 let phi = builder.build_phi(context.f64_type(), "casetmp");
 
                 phi.add_incoming(&[
@@ -332,7 +330,7 @@ fn compile_when_branch<'ctx, 'env>(
                 );
 
                 let (then_bb, else_bb, then_val, else_val) =
-                    two_way_branch(env, scope, parent, comparison, branch_expr, else_expr, vars);
+                    two_way_branch(env, scope, parent, comparison, branch_expr, else_expr);
                 let phi = builder.build_phi(context.i64_type(), "casetmp");
 
                 phi.add_incoming(&[
@@ -352,12 +350,11 @@ fn compile_when_branch<'ctx, 'env>(
 
 fn two_way_branch<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
-    scope: &Scope,
+    scope: &Scope<'ctx>,
     parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
     branch_expr: &Expr,
     else_expr: &Expr,
-    vars: &mut ImMap<Symbol, PointerValue<'ctx>>,
 ) -> (
     BasicBlock,
     BasicBlock,
@@ -376,14 +373,14 @@ fn two_way_branch<'ctx, 'env>(
 
     // build then block
     builder.position_at_end(&then_bb);
-    let then_val = compile_expr(env, scope, parent, branch_expr, vars);
+    let then_val = compile_expr(env, scope, parent, branch_expr);
     builder.build_unconditional_branch(&cont_bb);
 
     let then_bb = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(&else_bb);
-    let else_val = compile_expr(env, scope, parent, else_expr, vars);
+    let else_val = compile_expr(env, scope, parent, else_expr);
     builder.build_unconditional_branch(&cont_bb);
 
     let else_bb = builder.get_insert_block().unwrap();
