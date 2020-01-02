@@ -31,7 +31,6 @@ pub fn constrain_module(
         &mut flex_info,
     );
 
-    // Constraint::And(flex_info.constraints)
     Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
         flex_vars: flex_info.vars,
