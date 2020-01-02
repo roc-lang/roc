@@ -59,6 +59,32 @@ mod test_load {
         loaded.next_var
     }
 
+    async fn load_without_builtins(dir_name: &str, module_name: &str, deps: &mut Vec<LoadedModule>) -> (Module, Subs) {
+
+            let src_dir = fixtures_dir().join(dir_name);
+            let filename = src_dir.join(format!("{}.roc", module_name));
+            let loaded = load(src_dir, filename, deps, first_var()).await;
+            let subs = Subs::new(loaded.next_var);
+            let module = expect_module(loaded);
+
+            assert_eq!(module.name, Some(module_name.into()));
+
+            (module, subs)
+    }
+
+    async fn load_with_builtins(dir_name: &str, module_name: &str, deps: &mut Vec<LoadedModule>) -> (Module, Subs) {
+            let next_var = load_builtins(deps).await;
+            let src_dir = fixtures_dir().join(dir_name);
+            let filename = src_dir.join(format!("{}.roc", module_name));
+            let loaded = load(src_dir, filename, deps, next_var).await;
+            let subs = Subs::new(loaded.next_var);
+            let module = expect_module(loaded);
+
+            assert_eq!(module.name, Some(module_name.into()));
+
+            (module, subs)
+    }
+
     fn expect_types(
         module: Module,
         subs: &mut Subs,
@@ -136,7 +162,7 @@ mod test_load {
     }
 
     #[test]
-    fn builtins() {
+    fn load_only_builtins() {
         let mut deps = Vec::new();
         let src_dir = builtins_dir();
         let filename = src_dir.join("Defaults.roc");
@@ -171,13 +197,9 @@ mod test_load {
 
     #[test]
     fn interface_with_builtins() {
-        let mut deps = Vec::new();
-
         test_async(async {
-            let next_var = load_builtins(&mut deps).await;
-            let src_dir = fixtures_dir().join("interface_with_deps");
-            let filename = src_dir.join("Primary.roc");
-            let module = expect_module(load(src_dir, filename, &mut deps, next_var).await);
+            let mut deps = Vec::new();
+            let (module, _subs) = load_with_builtins("interface_with_deps", "WithBuiltins", &mut deps).await;
 
             let def_count: usize = module
                 .declarations
@@ -208,17 +230,10 @@ mod test_load {
     }
 
     #[test]
-    fn load_and_infer() {
+    fn load_and_infer_with_builtins() {
         test_async(async {
             let mut deps = Vec::new();
-            let next_var = load_builtins(&mut deps).await;
-            let src_dir = fixtures_dir().join("interface_with_deps");
-            let filename = src_dir.join("WithBuiltins.roc");
-            let loaded = load(src_dir, filename, &mut deps, next_var).await;
-            let mut subs = Subs::new(loaded.next_var);
-            let module = expect_module(loaded);
-
-            assert_eq!(module.name, Some("WithBuiltins".into()));
+            let (module, mut subs) = load_with_builtins("interface_with_deps", "WithBuiltins", &mut deps).await;
 
             expect_types(
                 module,
@@ -242,13 +257,7 @@ mod test_load {
     fn load_principal_types() {
         test_async(async {
             let mut deps = Vec::new();
-            let src_dir = fixtures_dir().join("interface_with_deps");
-            let filename = src_dir.join("Principal.roc");
-            let loaded = load(src_dir, filename, &mut deps, first_var()).await;
-            let mut subs = Subs::new(loaded.next_var);
-            let module = expect_module(loaded);
-
-            assert_eq!(module.name, Some("Principal".into()));
+            let (module, mut subs) = load_without_builtins("interface_with_deps", "Principal", &mut deps).await;
 
             expect_types(
                 module,
