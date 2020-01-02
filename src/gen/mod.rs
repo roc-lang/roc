@@ -51,7 +51,7 @@ impl<'ctx> Into<BasicValueEnum<'ctx>> for TypedVal<'ctx> {
 }
 pub fn content_to_basic_type<'ctx>(
     content: Content,
-    subs: &mut Subs,
+    subs: &Subs,
     context: &'ctx Context,
 ) -> Result<BasicTypeEnum<'ctx>, String> {
     match content {
@@ -65,7 +65,10 @@ pub fn content_to_basic_type<'ctx>(
                 let name = name.as_str();
 
                 if module_name == types::MOD_NUM && name == types::TYPE_NUM {
-                    num_to_basic_type(subs.get(*args.iter().next().unwrap()).content, context)
+                    let arg = *args.iter().next().unwrap();
+                    let arg_content = subs.get_without_compacting(arg).content;
+
+                    num_to_basic_type(arg_content, context)
                 } else {
                     panic!(
                         "TODO handle content_to_basic_type for flat_type {}.{} with args {:?}",
