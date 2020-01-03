@@ -3,7 +3,7 @@ use inkwell::module::Linkage;
 use inkwell::types::BasicType;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicValue, FunctionValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::can::expr::Expr;
@@ -11,6 +11,7 @@ use crate::can::ident::Lowercase;
 use crate::can::pattern::Pattern::{self, *};
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
+use crate::collections::MutMap;
 use crate::gen::convert::content_to_basic_type;
 use crate::gen::env::Env;
 use crate::subs::{Content, FlatType, Subs};
@@ -23,7 +24,7 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
-type Procs<'ctx> = Vec<Proc<'ctx>>;
+type Procs<'ctx> = MutMap<Symbol, (Content, FunctionValue<'ctx>)>;
 
 type Scope<'ctx> = ImMap<Symbol, (Content, PointerValue<'ctx>)>;
 
@@ -31,8 +32,8 @@ pub fn compile_standalone_expr<'ctx, 'env>(
     env: &Env<'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     expr: &Expr,
-) -> (BasicValueEnum<'ctx>, Procs<'ctx>) {
-    compile_expr(env, &ImMap::default(), parent, expr)
+) -> BasicValueEnum<'ctx> {
+    compile_expr(env, &ImMap::default(), parent, expr, &mut MutMap::default())
 }
 
 fn compile_expr<'ctx, 'env>(
@@ -40,10 +41,11 @@ fn compile_expr<'ctx, 'env>(
     scope: &Scope<'ctx>,
     parent: FunctionValue<'ctx>,
     expr: &Expr,
-) -> (BasicValueEnum<'ctx>, Procs<'ctx>) {
+    procs: &mut Procs,
+) -> BasicValueEnum<'ctx> {
     use crate::can::expr::Expr::*;
-    let mut procs = Vec::new();
-    let bv_enum = match *expr {
+
+    match *expr {
         Int(_, num) => env.context.i64_type().const_int(num as u64, false).into(),
         Float(_, num) => env.context.f64_type().const_float(num).into(),
         When {
@@ -60,7 +62,7 @@ fn compile_expr<'ctx, 'env>(
                 let (pattern, branch_expr) = iter.next().unwrap();
                 let (_, else_expr) = iter.next().unwrap();
 
-                return compile_when_branch(
+                compile_when_branch(
                     env,
                     scope,
                     parent,
@@ -68,7 +70,8 @@ fn compile_expr<'ctx, 'env>(
                     pattern.value.clone(),
                     &branch_expr.value,
                     &else_expr.value,
-                );
+                    procs,
+                )
             } else {
                 panic!("TODO support when-expressions of more than 2 branches.");
             }
@@ -80,7 +83,7 @@ fn compile_expr<'ctx, 'env>(
                     let subs = &env.subs;
                     let context = &env.context;
                     let content = content_from_expr(scope, subs, expr);
-                    let (val, expr_procs) = compile_expr(env, &scope, parent, &expr);
+                    let val = compile_expr(env, &scope, parent, &expr, procs);
                     let expr_bt = content_to_basic_type(&content, subs, context).unwrap_or_else(|err| panic!("Error converting symbol {:?} to basic type: {:?} - scope was: {:?}", symbol, err, scope));
                     let alloca = create_entry_block_alloca(env, parent, expr_bt, symbol.as_str());
 
@@ -93,13 +96,7 @@ fn compile_expr<'ctx, 'env>(
 
                     scope.insert(symbol.clone(), (content.clone(), alloca));
 
-                    let (val, ret_procs) = compile_expr(env, &scope, parent, &loc_ret.value);
-
-                    procs.reserve(expr_procs.len() + ret_procs.len());
-                    procs.extend(expr_procs);
-                    procs.extend(ret_procs);
-
-                    val
+                    compile_expr(env, &scope, parent, &loc_ret.value, procs)
                 }
                 pat => {
                     panic!("TODO code gen Def pattern {:?}", pat);
@@ -144,15 +141,29 @@ fn compile_expr<'ctx, 'env>(
                 procs,
                 None,
             );
+
+            if fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
+                // TODO call pass_manager.run_on(&fn_val) to optimize it!
+
+                // The closure evaluates to a pointer to the function.
+                fn_val
+                    .as_global_value()
+                    .as_pointer_value()
+                    .as_basic_value_enum()
+            } else {
+                unsafe {
+                    fn_val.delete();
+                }
+
+                panic!("Invalid generated fn_val.")
+            }
         }
         Call(ref boxed, ref loc_args, _) => {
             let (_, ref loc_expr, _) = **boxed;
             let mut arg_vars: Vec<BasicValueEnum> = Vec::with_capacity(loc_args.len());
 
             for (_var, loc_arg) in loc_args.iter() {
-                let (arg, new_procs) = compile_expr(env, scope, parent, &loc_arg.value);
-
-                procs.extend(new_procs);
+                let arg = compile_expr(env, scope, parent, &loc_arg.value, procs);
 
                 arg_vars.push(arg.into());
             }
@@ -179,11 +190,7 @@ fn compile_expr<'ctx, 'env>(
                 // }
                 expr => {
                     // Call by pointer - the closure was anonymous, e.g. ((\a -> a) 5)
-                    let (ptr, new_procs) = compile_expr(env, scope, parent, expr);
-
-                    procs.extend(new_procs);
-
-                    match ptr {
+                    match compile_expr(env, scope, parent, expr, procs) {
                         BasicValueEnum::PointerValue(ptr) => {
                             env.builder.build_call(ptr, arg_vars.as_slice(), "tmp")
                         }
@@ -215,9 +222,7 @@ fn compile_expr<'ctx, 'env>(
         _ => {
             panic!("I don't yet know how to compile {:?}", expr);
         }
-    };
-
-    (bv_enum, procs)
+    }
 }
 
 fn content_from_expr(scope: &Scope<'_>, subs: &Subs, expr: &Expr) -> Content {
@@ -260,12 +265,12 @@ fn compile_when_branch<'ctx, 'env>(
     pattern: Pattern,
     branch_expr: &Expr,
     else_expr: &Expr,
-) -> (BasicValueEnum<'ctx>, Procs<'ctx>) {
+    procs: &mut Procs,
+) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let context = env.context;
 
-    let (val, mut procs) = compile_expr(env, scope, parent, cond_expr);
-    let bv_enum = match val {
+    match compile_expr(env, scope, parent, cond_expr, procs) {
         FloatValue(float_val) => match pattern {
             FloatLiteral(target_val) => {
                 let comparison = builder.build_float_compare(
@@ -275,11 +280,16 @@ fn compile_when_branch<'ctx, 'env>(
                     "whencond",
                 );
 
-                let (then_bb, else_bb, then_val, else_val, new_procs) =
-                    two_way_branch(env, scope, parent, comparison, branch_expr, else_expr);
+                let (then_bb, else_bb, then_val, else_val) = two_way_branch(
+                    env,
+                    scope,
+                    parent,
+                    comparison,
+                    branch_expr,
+                    else_expr,
+                    procs,
+                );
                 let phi = builder.build_phi(context.f64_type(), "whenbranch");
-
-                procs.extend(new_procs);
 
                 phi.add_incoming(&[
                     (&Into::<BasicValueEnum>::into(then_val), &then_bb),
@@ -301,11 +311,16 @@ fn compile_when_branch<'ctx, 'env>(
                     "whencond",
                 );
 
-                let (then_bb, else_bb, then_val, else_val, new_procs) =
-                    two_way_branch(env, scope, parent, comparison, branch_expr, else_expr);
+                let (then_bb, else_bb, then_val, else_val) = two_way_branch(
+                    env,
+                    scope,
+                    parent,
+                    comparison,
+                    branch_expr,
+                    else_expr,
+                    procs,
+                );
                 let phi = builder.build_phi(context.i64_type(), "whenbranch");
-
-                procs.extend(new_procs);
 
                 phi.add_incoming(&[
                     (&Into::<BasicValueEnum>::into(then_val), &then_bb),
@@ -319,9 +334,7 @@ fn compile_when_branch<'ctx, 'env>(
         _ => panic!(
             "TODO handle pattern matching on conditionals other than int and float literals."
         ),
-    };
-
-    (bv_enum, procs)
+    }
 }
 
 fn two_way_branch<'ctx, 'env>(
@@ -331,12 +344,12 @@ fn two_way_branch<'ctx, 'env>(
     comparison: IntValue<'ctx>,
     branch_expr: &Expr,
     else_expr: &Expr,
+    procs: &mut Procs,
 ) -> (
     BasicBlock,
     BasicBlock,
     BasicValueEnum<'ctx>,
     BasicValueEnum<'ctx>,
-    Procs<'ctx>,
 ) {
     let builder = env.builder;
     let context = env.context;
@@ -350,15 +363,14 @@ fn two_way_branch<'ctx, 'env>(
 
     // build then block
     builder.position_at_end(&then_bb);
-    let (then_val, mut procs) = compile_expr(env, scope, parent, branch_expr);
+    let then_val = compile_expr(env, scope, parent, branch_expr, procs);
     builder.build_unconditional_branch(&cont_bb);
 
     let then_bb = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(&else_bb);
-    let (else_val, new_procs) = compile_expr(env, scope, parent, else_expr);
-    procs.extend(new_procs);
+    let else_val = compile_expr(env, scope, parent, else_expr, procs);
     builder.build_unconditional_branch(&cont_bb);
 
     let else_bb = builder.get_insert_block().unwrap();
@@ -366,7 +378,7 @@ fn two_way_branch<'ctx, 'env>(
     // emit merge block
     builder.position_at_end(&cont_bb);
 
-    (then_bb, else_bb, then_val, else_val, procs)
+    (then_bb, else_bb, then_val, else_val)
 }
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
@@ -381,27 +393,20 @@ fn set_name(bv_enum: BasicValueEnum<'_>, name: &str) {
     }
 }
 
-struct Proc<'ctx> {
+pub fn compile_closure<'ctx, BT>(
+    env: &Env<'ctx, '_>,
     name: Lowercase,
     arg_types: Vec<Content>,
-    arg_names: Vec<Lowercase>,
-    ret_type: BasicTypeEnum<'ctx>,
-    body_expr: Expr,
-    scope: Scope<'ctx>,
+    arg_names: &[Lowercase],
+    ret_type: BT,
+    body_expr: &Expr,
+    scope: &Scope<'ctx>,
+    procs: &mut Procs,
     linkage: Option<Linkage>,
-}
-
-pub fn compile_proc<'ctx>(
-    env: &Env<'ctx, '_>,
-    proc: Proc<'ctx>,
-) -> (FunctionValue<'ctx>, Procs<'ctx>) {
-    let Proc {
-        arg_types,
-        arg_names,
-        ret_type,
-        ..
-    } = proc;
-    let name = proc.name.as_str();
+) -> FunctionValue<'ctx>
+where
+    BT: BasicType<'ctx>,
+{
     // We need these to be separate, but they must have the same length!
     debug_assert!(arg_types.len() == arg_names.len());
 
@@ -420,14 +425,14 @@ pub fn compile_proc<'ctx>(
     }
 
     let fn_type = ret_type.fn_type(arg_basic_types.as_slice(), false);
-    let fn_val = env.module.add_function(name, fn_type, proc.linkage);
+    let fn_val = env.module.add_function(name.as_str(), fn_type, linkage);
 
     let entry = env.context.append_basic_block(fn_val, "entry");
     let builder = env.builder;
 
     builder.position_at_end(&entry);
 
-    let mut scope = proc.scope.clone();
+    let mut scope = scope.clone();
 
     // Add args to scope
     for (((arg_val, arg_name), arg_type), content) in fn_val
@@ -447,27 +452,11 @@ pub fn compile_proc<'ctx>(
         scope.insert(arg_name.into(), (content, alloca));
     }
 
-    let (body, procs) = compile_expr(env, &scope, fn_val, &proc.body_expr);
+    let body = compile_expr(env, &scope, fn_val, body_expr, procs);
 
     builder.build_return(Some(&body));
 
-    let bv_enum = if fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
-        // TODO call pass_manager.run_on(&fn_val) to optimize it!
-
-        // The closure evaluates to a pointer to the function.
-        fn_val
-            .as_global_value()
-            .as_pointer_value()
-            .as_basic_value_enum()
-    } else {
-        unsafe {
-            fn_val.delete();
-        }
-
-        panic!("Invalid generated fn_val.")
-    };
-
-    (bv_enum, procs)
+    fn_val
 }
 
 /// Creates a new stack allocation instruction in the entry block of the function.
