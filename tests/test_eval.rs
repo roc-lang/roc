@@ -188,4 +188,45 @@ mod test_gen {
             i64
         );
     }
+
+    #[test]
+    fn gen_nested_defs() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x = 5
+
+                    answer =
+                        i3 = i2
+
+                        nested =
+                            a = 1.0
+                            b = 5
+
+                            i1
+
+                        i1 = 1337
+                        i2 = i1
+
+
+                        nested
+
+                    # None of this should affect anything, even though names
+                    # overlap with the previous nested defs
+                    unused =
+                        nested = 17
+
+                        i1 = 84.2
+
+                        nested
+
+                    y = 12.4
+
+                    answer
+                "#
+            ),
+            1337,
+            i64
+        );
+    }
 }
