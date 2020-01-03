@@ -197,7 +197,7 @@ fn compile_expr<'ctx, 'env>(
                 panic!("TODO support when-expressions of more than 2 branches.");
             }
         }
-        LetNonRec(ref def, ref loc_ret) => {
+        LetNonRec(ref def, ref loc_ret, _) => {
             match &def.loc_pattern.value {
                 Pattern::Identifier(symbol) => {
                     let expr = &def.loc_expr.value;
@@ -241,8 +241,11 @@ fn content_from_expr(scope: &Scope<'_>, subs: &Subs, expr: &Expr) -> Content {
     use crate::can::expr::Expr::*;
 
     match expr {
-        Int(var, _) => subs.get_without_compacting(*var).content,
-        Float(var, _) => subs.get_without_compacting(*var).content,
+        Int(var, _)
+        | Float(var, _)
+        | When { expr_var: var, .. }
+        | LetNonRec(_, _, var)
+        | LetRec(_, _, var) => subs.get_without_compacting(*var).content,
         Str(_) | BlockStr(_) => Content::Structure(FlatType::Apply {
             module_name: "Str".into(),
             name: "Str".into(),
@@ -253,7 +256,10 @@ fn content_from_expr(scope: &Scope<'_>, subs: &Subs, expr: &Expr) -> Content {
             ..
         } => {
             let (content, _) = scope.get(resolved_symbol).unwrap_or_else(|| {
-                panic!("Couldn't find {:?} in scope {:?}", resolved_symbol, scope)
+                panic!(
+                    "Code gen problem: Couldn't find {:?} in scope {:?}",
+                    resolved_symbol, scope
+                )
             });
 
             content.clone()

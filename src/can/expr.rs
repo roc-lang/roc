@@ -56,8 +56,8 @@ pub enum Expr {
         loc_cond: Box<Located<Expr>>,
         branches: Vec<(Located<Pattern>, Located<Expr>)>,
     },
-    LetRec(Vec<Def>, Box<Located<Expr>>),
-    LetNonRec(Box<Def>, Box<Located<Expr>>),
+    LetRec(Vec<Def>, Box<Located<Expr>>, Variable),
+    LetNonRec(Box<Def>, Box<Located<Expr>>, Variable),
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.

@@ -474,11 +474,11 @@ pub fn canonicalize_expr(
                 ),
             )
         }
-        LetRec(defs, loc_ret) => (
+        LetRec(defs, loc_ret, _) => (
             Output::default(),
             can_defs(rigids, var_store, var_usage, defs, expected, loc_ret),
         ),
-        LetNonRec(def, loc_ret) => {
+        LetNonRec(def, loc_ret, _) => {
             let (_, body_con) = canonicalize_expr(
                 rigids,
                 var_store,
