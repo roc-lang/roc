@@ -35,7 +35,7 @@ mod test_gen {
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("errored");
 
-            let fn_type = content_to_basic_type(content, &mut subs, &context)
+            let fn_type = content_to_basic_type(&content, &mut subs, &context)
                 .expect("Unable to infer type for test expr")
                 .fn_type(&[], false);
             let function = module.add_function("main", fn_type, None);
@@ -52,7 +52,7 @@ mod test_gen {
                 context: &context,
                 module: &module,
             };
-            let ret = compile_standalone_expr(&env, &function, &expr);
+            let ret = compile_standalone_expr(&env, function, &expr);
 
             builder.build_return(Some(&ret));
 
@@ -108,6 +108,83 @@ mod test_gen {
             "#
             ),
             48,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_basic_def() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    answer = 42
+
+                    answer
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    pi = 3.14
+
+                    pi
+                "#
+            ),
+            3.14,
+            f64
+        );
+    }
+
+    #[test]
+    fn gen_multiple_defs() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    answer = 42
+
+                    pi = 3.14
+
+                    answer
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    answer = 42
+
+                    pi = 3.14
+
+                    pi
+                "#
+            ),
+            3.14,
+            f64
+        );
+    }
+
+    #[test]
+    fn gen_chained_defs() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x = i1
+                    i3 = i2
+                    i1 = 1337
+                    i2 = i1
+                    y = 12.4
+
+                    i3
+                "#
+            ),
+            1337,
             i64
         );
     }
