@@ -59,6 +59,7 @@ impl Pools {
     }
 }
 
+#[derive(Clone)]
 struct State {
     vars_by_symbol: Env,
     mark: Mark,
@@ -99,6 +100,11 @@ fn solve(
 ) -> State {
     match constraint {
         True => state,
+        SaveTheEnvironment => {
+            let mut copy = state;
+            copy.vars_by_symbol = vars_by_symbol.clone();
+            copy
+        }
         Eq(typ, expected_type, _region) => {
             let actual = type_to_var(subs, rank, pools, typ);
             let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
@@ -560,6 +566,8 @@ fn adjust_rank(
 
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
         marked_desc.rank = max_rank;
+
+        debug_assert_eq!(marked_desc.mark, visit_mark);
 
         subs.set(var, marked_desc);
 

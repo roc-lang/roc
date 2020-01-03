@@ -402,20 +402,8 @@ pub fn constrain_expr(
             loc_ret,
         ),
         LetNonRec(def, loc_ret) => {
-            let mut found_rigids = SendMap::default();
-            let mut flex_info = Info::default();
-            constrain_def(rigids, &mut found_rigids, def, &mut flex_info);
-
-            let rigid_vars = found_rigids.keys().copied().collect();
-
-            let mut new_rigids = rigids.clone();
-            for (k, v) in found_rigids {
-                new_rigids.insert(v, Type::Variable(k));
-            }
-
-            let ret_con = constrain_expr(&new_rigids, loc_ret.region, &loc_ret.value, expected);
-
-            create_letnonrec_constraint(rigid_vars, flex_info, ret_con)
+            let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected);
+            constrain_def(rigids, &mut SendMap::default(), def, body_con)
         }
         Tag(_, _) => {
             panic!("TODO constrain Tag");
@@ -476,25 +464,19 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 
 #[inline(always)]
 pub fn constrain_decls(
-    rigids: &Rigids,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     decls: &[Declaration],
-    outer_flex_info: &mut Info,
-) {
-    let mut constraint = Constraint::True;
+) -> Constraint {
+    let mut constraint = Constraint::SaveTheEnvironment;
     for decl in decls.iter().rev() {
         let mut flex_info = Info::default();
         match decl {
             Declaration::Declare(def) => {
-                constrain_def(rigids, found_rigids, def, &mut flex_info);
-
-                // rigids is empty here: a top-level definition's rigids cannot influence
-                // or use the rigids outside of their body
-                constraint = create_letnonrec_constraint(vec![], flex_info, constraint);
+                constraint = constrain_def(&ImMap::default(), found_rigids, def, constraint);
             }
             Declaration::DeclareRec(defs) => {
                 for def in defs {
-                    constrain_def(rigids, found_rigids, def, &mut flex_info);
+                    constrain_def_old(&ImMap::default(), found_rigids, def, &mut flex_info);
                 }
                 // rigids is empty here: a top-level definition's rigids cannot influence
                 // or use the rigids outside of their body
@@ -505,7 +487,7 @@ pub fn constrain_decls(
         }
     }
 
-    outer_flex_info.constraints = vec![constraint]
+    constraint
 }
 
 #[inline(always)]
@@ -516,7 +498,7 @@ pub fn constrain_defs(
     flex_info: &mut Info,
 ) {
     for def in defs {
-        constrain_def(rigids, found_rigids, def, flex_info)
+        constrain_def_old(rigids, found_rigids, def, flex_info)
     }
 }
 
@@ -542,6 +524,84 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
 }
 
 pub fn constrain_def(
+    rigids: &Rigids,
+    found_rigids: &mut SendMap<Variable, Lowercase>,
+    def: &Def,
+    body_con: Constraint,
+) -> Constraint {
+    use crate::types::AnnotationSource;
+
+    let expr_var = def.expr_var;
+    let expr_type = Type::Variable(expr_var);
+
+    let mut pattern_state = constrain_def_pattern(&def.loc_pattern, expr_type.clone());
+
+    pattern_state.vars.push(expr_var);
+
+    let mut new_rigids = Vec::new();
+
+    let expr_con = match &def.annotation {
+        Some((annotation, free_vars)) => {
+            let mut ftv: Rigids = rigids.clone();
+
+            for (var, name) in free_vars {
+                // if the rigid is known already, nothing needs to happen
+                // otherwise register it.
+                if !rigids.contains_key(name) {
+                    // possible use this rigid in nested def's
+                    ftv.insert(name.clone(), Type::Variable(*var));
+
+                    // mark this variable as a rigid
+                    found_rigids.insert(*var, name.clone());
+
+                    new_rigids.push(*var);
+                }
+            }
+
+            let annotation_expected = FromAnnotation(
+                def.loc_pattern.clone(),
+                annotation.arity(),
+                AnnotationSource::TypedBody,
+                annotation.clone(),
+            );
+
+            pattern_state.constraints.push(Eq(
+                expr_type,
+                annotation_expected.clone(),
+                Region::zero(),
+            ));
+
+            constrain_expr(
+                &ftv,
+                def.loc_expr.region,
+                &def.loc_expr.value,
+                annotation_expected,
+            )
+        }
+        None => constrain_expr(
+            rigids,
+            def.loc_expr.region,
+            &def.loc_expr.value,
+            NoExpectation(expr_type),
+        ),
+    };
+
+    Let(Box::new(LetConstraint {
+        rigid_vars: new_rigids,
+        flex_vars: pattern_state.vars,
+        def_types: pattern_state.headers,
+        defs_constraint: Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),        // always empty
+            flex_vars: Vec::new(),         // empty, because our functions have no arguments
+            def_types: SendMap::default(), // empty, because our functions have no arguments!
+            defs_constraint: And(pattern_state.constraints),
+            ret_constraint: expr_con,
+        })),
+        ret_constraint: body_con,
+    }))
+}
+
+pub fn constrain_def_old(
     rigids: &Rigids,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     def: &Def,
@@ -605,21 +665,13 @@ pub fn constrain_def(
         ),
     };
 
-    // No Let is introduced when there are no pattern constraints
-    // This is only the case for literal patterns
-    //
-    // foo = ...
-    if pattern_state.constraints.is_empty() {
-        flex_info.constraints.push(ret_constraint);
-    } else {
-        flex_info.constraints.push(Let(Box::new(LetConstraint {
-            rigid_vars: Vec::new(),
-            flex_vars: pattern_state.vars,
-            def_types: pattern_state.headers,
-            defs_constraint: And(pattern_state.constraints),
-            ret_constraint,
-        })));
-    }
+    flex_info.constraints.push(Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars: pattern_state.vars,
+        def_types: pattern_state.headers,
+        defs_constraint: And(pattern_state.constraints),
+        ret_constraint,
+    })));
 }
 
 #[inline(always)]
@@ -643,12 +695,13 @@ pub fn constrain_defs_with_return<'a>(
 }
 
 pub fn create_letnonrec_constraint(
-    rigid_vars: Vec<Variable>,
+    new_rigids: Vec<Variable>,
     flex_info: Info,
+    expr_con: Constraint,
     ret_constraint: Constraint,
 ) -> Constraint {
     Let(Box::new(LetConstraint {
-        rigid_vars, // TODO is that correct?
+        rigid_vars: new_rigids,
         flex_vars: flex_info.vars,
         def_types: flex_info.def_types.clone(),
         defs_constraint: Let(Box::new(LetConstraint {
@@ -656,7 +709,7 @@ pub fn create_letnonrec_constraint(
             flex_vars: Vec::new(),
             def_types: SendMap::default(),
             defs_constraint: And(flex_info.constraints),
-            ret_constraint: True,
+            ret_constraint: expr_con,
         })),
         ret_constraint,
     }))

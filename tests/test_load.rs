@@ -16,6 +16,7 @@ mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
     use roc::can::def::Declaration::*;
     use roc::can::module::Module;
+    use roc::collections::SendMap;
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::{Subs, VarStore, Variable};
@@ -277,6 +278,69 @@ mod test_load {
                     "Principal.identity" => "a -> a",
                 },
             );
+        });
+    }
+
+    #[test]
+    fn load_records() {
+        test_async(async {
+            use roc::types::{ErrorType, Mismatch, Problem, RecordExt, RecordFieldLabel};
+
+            let mut deps = Vec::new();
+            let (module, mut subs) =
+                load_without_builtins("interface_with_deps", "Records", &mut deps).await;
+
+            // NOTE: `a` here is unconstrained, so unifies with <type error>
+            let expected_types = hashmap! {
+                "Records.intVal" => "a",
+            };
+
+            let mut unify_problems = Vec::new();
+            solve_loaded(&module, &mut unify_problems, &mut subs, deps);
+
+            let a = ErrorType::FlexVar("a".into());
+
+            let mut record = SendMap::default();
+            record.insert(RecordFieldLabel::Required("x".into()), a);
+
+            let problem = Problem::Mismatch(
+                Mismatch::TypeMismatch,
+                ErrorType::Record(SendMap::default(), RecordExt::Closed),
+                ErrorType::Record(record, RecordExt::FlexOpen("b".into())),
+            );
+
+            assert_eq!(unify_problems, vec![problem]);
+            assert_eq!(expected_types.len(), module.declarations.len());
+
+            for decl in module.declarations {
+                let def = match decl {
+                    Declare(def) => def,
+                    rec_decl @ DeclareRec(_) => {
+                        panic!(
+                            "Unexpected recursive def in module declarations: {:?}",
+                            rec_decl
+                        );
+                    }
+                    cycle @ InvalidCycle(_, _) => {
+                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                    }
+                };
+
+                for (symbol, expr_var) in def.pattern_vars {
+                    let content = subs.get(expr_var).content;
+
+                    name_all_type_vars(expr_var, &mut subs);
+
+                    let actual_str = content_to_string(content, &mut subs);
+                    let expected_type = expected_types
+                        .get(&*symbol.clone().into_boxed_str())
+                        .unwrap_or_else(|| {
+                            panic!("Defs included an unexpected symbol: {:?}", symbol)
+                        });
+
+                    assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
+                }
+            }
         });
     }
 
