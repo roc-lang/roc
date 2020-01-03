@@ -126,7 +126,7 @@ mod test_load {
 
                 let actual_str = content_to_string(content, subs);
                 let expected_type = expected_types
-                    .get(&*symbol.clone().into_boxed_str())
+                    .get(symbol.as_str())
                     .unwrap_or_else(|| panic!("Defs included an unexpected symbol: {:?}", symbol));
 
                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
@@ -332,11 +332,9 @@ mod test_load {
                     name_all_type_vars(expr_var, &mut subs);
 
                     let actual_str = content_to_string(content, &mut subs);
-                    let expected_type = expected_types
-                        .get(&*symbol.clone().into_boxed_str())
-                        .unwrap_or_else(|| {
-                            panic!("Defs included an unexpected symbol: {:?}", symbol)
-                        });
+                    let expected_type = expected_types.get(symbol.as_str()).unwrap_or_else(|| {
+                        panic!("Defs included an unexpected symbol: {:?}", symbol)
+                    });
 
                     assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
                 }

@@ -1,10 +1,11 @@
 use crate::module::ModuleName;
+use inlinable_string::InlinableString;
 use std::fmt;
 
 /// A globally unique identifier, used for both vars and tags.
 /// It will be used directly in code gen.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Symbol(Box<str>);
+pub struct Symbol(InlinableString);
 
 /// Rather than displaying as this:
 ///
@@ -48,17 +49,7 @@ impl Symbol {
         Symbol(format!("{}.{}", module_name, ident).into())
     }
 
-    pub fn into_boxed_str(self) -> Box<str> {
-        self.0
-    }
-
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-impl Into<Box<str>> for Symbol {
-    fn into(self) -> Box<str> {
-        self.0
     }
 }
