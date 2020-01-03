@@ -393,17 +393,28 @@ pub fn constrain_expr(
                 ),
             )
         }
-        LetRec(defs, loc_ret) => constrain_defs_with_return(
-            rigids,
-            defs,
-            expected,
-            Info::with_capacity(defs.len()),
-            Info::with_capacity(defs.len()),
-            loc_ret,
-        ),
-        LetNonRec(def, loc_ret) => {
-            let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected);
-            constrain_def(rigids, &mut SendMap::default(), def, body_con)
+        LetRec(defs, loc_ret, var) => And(vec![
+            constrain_defs_with_return(
+                rigids,
+                defs,
+                expected.clone(),
+                Info::with_capacity(defs.len()),
+                Info::with_capacity(defs.len()),
+                loc_ret,
+            ),
+            // Record the type of tne entire def-expression in the variable.
+            // Code gen will need that later!
+            Eq(Type::Variable(*var), expected, loc_ret.region),
+        ]),
+        LetNonRec(def, loc_ret, var) => {
+            let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
+
+            And(vec![
+                constrain_def(rigids, &mut SendMap::default(), def, body_con),
+                // Record the type of tne entire def-expression in the variable.
+                // Code gen will need that later!
+                Eq(Type::Variable(*var), expected, loc_ret.region),
+            ])
         }
         Tag(_, _) => {
             panic!("TODO constrain Tag");
