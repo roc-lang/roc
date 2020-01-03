@@ -16,6 +16,7 @@ mod test_gen {
     use inkwell::execution_engine::JitFunction;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
+    use roc::collections::MutMap;
     use roc::gen::compile::compile_standalone_expr;
     use roc::gen::convert::content_to_basic_type;
     use roc::gen::env::Env;
@@ -51,7 +52,8 @@ mod test_gen {
                 context: &context,
                 module: &module,
             };
-            let ret = compile_standalone_expr(&env, function, &expr);
+            let mut procs = MutMap::default();
+            let ret = compile_standalone_expr(&env, function, &expr, &mut procs);
 
             builder.build_return(Some(&ret));
 
