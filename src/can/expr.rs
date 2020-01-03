@@ -68,6 +68,7 @@ pub enum Expr {
     ),
 
     Closure(
+        Variable,
         Symbol,
         Recursive,
         Vec<(Variable, Located<Pattern>)>,
@@ -382,6 +383,7 @@ pub fn canonicalize_expr(
 
             (
                 Closure(
+                    var_store.fresh(),
                     symbol,
                     Recursive::NotRecursive,
                     can_args,

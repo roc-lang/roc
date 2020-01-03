@@ -192,7 +192,7 @@ pub fn constrain_expr(
         Var {
             symbol_for_lookup, ..
         } => Lookup(symbol_for_lookup.clone(), expected, region),
-        Closure(_symbol, _recursive, args, boxed) => {
+        Closure(fn_var, _symbol, _recursive, args, boxed) => {
             let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
                 headers: SendMap::default(),
@@ -222,7 +222,7 @@ pub fn constrain_expr(
                 vars.push(*pattern_var);
             }
 
-            let fn_typ = Type::Function(pattern_types, Box::new(ret_type.clone()));
+            let fn_type = Type::Function(pattern_types, Box::new(ret_type.clone()));
             let body_type = NoExpectation(ret_type);
             let ret_constraint = constrain_expr(
                 rigids,
@@ -244,7 +244,9 @@ pub fn constrain_expr(
                         ret_constraint,
                     })),
                     // "the closure's type is equal to expected type"
-                    Eq(fn_typ, expected, region),
+                    Eq(fn_type.clone(), expected, region),
+                    // "fn_var is equal to the closure's type" - fn_var is used in code gen
+                    Eq(Type::Variable(*fn_var), NoExpectation(fn_type), region),
                 ]),
             )
         }
