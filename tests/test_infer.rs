@@ -995,19 +995,4 @@ mod test_infer {
             "{ x : custom } -> custom",
         );
     }
-
-    #[test]
-    fn optional_field() {
-        infer_eq(
-            indoc!(
-                r#"
-                foo : { x? : Int } -> Int 
-                foo = \_ -> 42
-
-                foo
-            "#
-            ),
-            "{ x? : Int } -> Int",
-        );
-    }
 }

@@ -301,7 +301,7 @@ mod test_load {
             let a = ErrorType::FlexVar("a".into());
 
             let mut record = SendMap::default();
-            record.insert(RecordFieldLabel::Required("x".into()), a);
+            record.insert("x".into(), a);
 
             let problem = Problem::Mismatch(
                 Mismatch::TypeMismatch,

@@ -138,7 +138,7 @@ fn canonicalize_pattern(
                 }
 
                 state.vars.push(*var);
-                field_types.insert(RecordFieldLabel::Required(label.clone()), pat_type);
+                field_types.insert(label.clone(), pat_type);
             }
 
             let record_type =
@@ -216,7 +216,7 @@ pub fn canonicalize_expr(
                 );
 
                 field_vars.push(field_var);
-                field_types.insert(RecordFieldLabel::Required(label.clone()), field_type);
+                field_types.insert(label.clone(), field_type);
 
                 constraints.push(field_con);
                 output.references = output.references.union(field_out.references);
@@ -646,10 +646,7 @@ pub fn canonicalize_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            rec_field_types.insert(
-                RecordFieldLabel::Required(field.clone()),
-                field_type.clone(),
-            );
+            rec_field_types.insert(field.clone(), field_type.clone());
 
             let record_type =
                 constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));
@@ -681,10 +678,7 @@ pub fn canonicalize_expr(
             let field_type = Variable(*field_var);
             let mut field_types = SendMap::default();
 
-            field_types.insert(
-                RecordFieldLabel::Required(field.clone()),
-                field_type.clone(),
-            );
+            field_types.insert(field.clone(), field_type.clone());
 
             let record_type =
                 constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));

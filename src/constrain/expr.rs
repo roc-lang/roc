@@ -15,7 +15,6 @@ use crate::types::AnnotationSource::*;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
 use crate::types::PReason;
-use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::types::{LetConstraint, PExpected, Reason};
 
@@ -80,7 +79,7 @@ pub fn constrain_expr(
 
                     field_vars.push(*field_var);
                     field_exprs.insert(label.clone(), loc_field_expr);
-                    field_types.insert(RecordFieldLabel::Required(label.clone()), field_type);
+                    field_types.insert(label.clone(), field_type);
 
                     constraints.push(field_con);
                 }
@@ -355,7 +354,7 @@ pub fn constrain_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            let label = RecordFieldLabel::Required(field.clone());
+            let label = field.clone();
             rec_field_types.insert(label, field_type.clone());
 
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
@@ -380,7 +379,7 @@ pub fn constrain_expr(
             let field_type = Variable(field_var);
 
             let mut field_types = SendMap::default();
-            let label = RecordFieldLabel::Required(field.clone());
+            let label = field.clone();
             field_types.insert(label, field_type.clone());
             let record_type = Type::Record(field_types, Box::new(ext_type));
 
