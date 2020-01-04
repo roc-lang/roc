@@ -4,7 +4,7 @@ use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
 use crate::region::{Located, Region};
 use crate::subs::Variable;
-use crate::types::{Constraint, PExpected, PatternCategory, RecordFieldLabel, Type};
+use crate::types::{Constraint, Fields, PExpected, PatternCategory, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
@@ -65,7 +65,7 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
-            let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
+            let mut field_types = Fields::default();
 
             for RecordDestruct {
                 var,
@@ -83,7 +83,7 @@ pub fn constrain_pattern(
                         .insert(symbol.clone(), Located::at(region, pat_type.clone()));
                 }
 
-                field_types.insert(RecordFieldLabel::Required(label.clone()), pat_type.clone());
+                field_types.required.insert(label.clone(), pat_type.clone());
 
                 // TODO investigate: shouldn't guard_var be constrained somewhere?
                 if let Some((_guard_var, loc_guard)) = guard {

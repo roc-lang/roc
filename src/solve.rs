@@ -2,7 +2,9 @@ use crate::can::ident::Lowercase;
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::region::Located;
-use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
+use crate::subs::{
+    Content, Descriptor, FlatFields, FlatType, Mark, OptVariable, Rank, Subs, Variable,
+};
 use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
@@ -409,12 +411,19 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         Record(fields, ext) => {
-            let mut field_vars = ImMap::default();
+            let mut field_vars = FlatFields::default();
 
-            for (field, field_type) in fields {
-                field_vars.insert(
+            for (field, field_type) in fields.required {
+                field_vars.required.insert(
                     field.clone(),
-                    type_to_variable(subs, rank, pools, aliases, field_type),
+                    type_to_variable(subs, rank, pools, aliases, &field_type),
+                );
+            }
+
+            for (field, field_type) in fields.optional {
+                field_vars.optional.insert(
+                    field.clone(),
+                    type_to_variable(subs, rank, pools, aliases, &field_type),
                 );
             }
 
@@ -630,8 +639,9 @@ fn adjust_rank_content(
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var);
 
-                    for (_, var) in fields {
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                    for var in fields.variables() {
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
                     }
 
                     rank
@@ -744,10 +754,18 @@ fn deep_copy_var_help(
                 same @ EmptyRecord | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
-                    let mut new_fields = ImMap::default();
+                    let mut new_fields = FlatFields::default();
 
-                    for (label, var) in fields {
-                        new_fields.insert(label, deep_copy_var_help(subs, max_rank, pools, var));
+                    for (label, var) in fields.required {
+                        new_fields
+                            .required
+                            .insert(label, deep_copy_var_help(subs, max_rank, pools, var));
+                    }
+
+                    for (label, var) in fields.optional {
+                        new_fields
+                            .optional
+                            .insert(label, deep_copy_var_help(subs, max_rank, pools, var));
                     }
 
                     Record(

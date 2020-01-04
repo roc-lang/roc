@@ -1,8 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::ImMap;
 use crate::subs::Content::{self, *};
-use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use crate::types::RecordFieldLabel;
+use crate::subs::{Descriptor, FlatFields, FlatType, Mark, OptVariable, Subs, Variable};
 use crate::types::{Mismatch, Problem};
 
 type Pool = Vec<Variable>;
@@ -15,7 +14,7 @@ struct Context {
 }
 
 struct RecordStructure {
-    fields: ImMap<RecordFieldLabel, Variable>,
+    fields: FlatFields,
     ext: Variable,
 }
 
@@ -155,9 +154,11 @@ fn unify_record(
     // This is a bit more complicated because of optional fields
     let fields1 = rec1.fields;
     let fields2 = rec2.fields;
-    let shared_fields = fields1
+    let shared_fields = /*fields1
         .clone()
         .intersection_with(fields2.clone(), |one, two| (one, two));
+                        */
+        panic!();
     let unique_fields1 = fields1.clone().difference(fields2.clone());
     let unique_fields2 = fields2.difference(fields1);
 
@@ -217,8 +218,8 @@ fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: ImMap<RecordFieldLabel, (Variable, Variable)>,
-    other_fields: ImMap<RecordFieldLabel, Variable>,
+    shared_fields: ImMap<Lowercase, (Variable, Variable)>,
+    other_fields: ImMap<Lowercase, Variable>,
     ext: Variable,
 ) -> Outcome {
     let mut matching_fields = ImMap::default();
@@ -233,7 +234,11 @@ fn unify_shared_fields(
     }
 
     if num_shared_fields == matching_fields.len() {
-        let flat_type = FlatType::Record(matching_fields.union(other_fields), ext);
+        let fields = FlatFields {
+            required: matching_fields.union(other_fields),
+            optional: ImMap::default(),
+        };
+        let flat_type = FlatType::Record(fields, ext);
 
         merge(subs, ctx, Structure(flat_type))
     } else {
@@ -254,11 +259,11 @@ fn unify_flat_type(
     match (left, right) {
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
 
-        (Record(fields, ext), EmptyRecord) if fields.is_empty() => {
+        (Record(fields, ext), EmptyRecord) if fields.required.is_empty() => {
             unify_pool(subs, pool, *ext, ctx.second)
         }
 
-        (EmptyRecord, Record(fields, ext)) if fields.is_empty() => {
+        (EmptyRecord, Record(fields, ext)) if fields.required.is_empty() => {
             unify_pool(subs, pool, ctx.first, *ext)
         }
 
@@ -370,11 +375,7 @@ fn unify_flex(
     }
 }
 
-fn gather_fields(
-    subs: &mut Subs,
-    fields: ImMap<RecordFieldLabel, Variable>,
-    var: Variable,
-) -> RecordStructure {
+fn gather_fields(subs: &mut Subs, fields: FlatFields, var: Variable) -> RecordStructure {
     use crate::subs::FlatType::*;
 
     match subs.get(var).content {

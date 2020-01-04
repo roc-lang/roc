@@ -28,7 +28,7 @@ pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Record(RecordFields, Box<Type>),
+    Record(Fields, Box<Type>),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
@@ -41,13 +41,19 @@ pub enum Type {
     Erroneous(Problem),
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct RecordFields {
-    pub required: SendMap<Lowercase, Variable>,
-    pub optional: SendMap<Lowercase, Variable>,
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct Fields {
+    pub required: SendMap<Lowercase, Type>,
+    pub optional: SendMap<Lowercase, Type>,
 }
 
-impl fmt::Debug for RecordFields {
+impl Fields {
+    pub fn count(&self) -> usize {
+        self.required.len() + self.optional.len()
+    }
+}
+
+impl fmt::Debug for Fields {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let field_count = self.required.len() + self.optional.len();
 
@@ -354,7 +360,7 @@ pub enum ErrorType {
     Type(ModuleName, Uppercase, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    Record(RecordFields, RecordExt),
+    Record(ErrorFields, RecordExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(
         ModuleName,
@@ -363,6 +369,21 @@ pub enum ErrorType {
         Box<ErrorType>,
     ),
     Error,
+}
+
+#[derive(Clone, PartialEq, Eq, Default, Debug)]
+pub struct ErrorFields {
+    pub required: SendMap<Lowercase, ErrorType>,
+    pub optional: SendMap<Lowercase, ErrorType>,
+}
+
+impl ErrorFields {
+    pub fn union(self, other: Self) -> Self {
+        ErrorFields {
+            required: self.required.union(other.required),
+            optional: self.optional.union(other.optional),
+        }
+    }
 }
 
 impl ErrorType {

@@ -2,7 +2,7 @@ use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, SendMap};
 use crate::parse::ast::{AssignedField, TypeAnnotation};
 use crate::subs::{VarStore, Variable};
-use crate::types::RecordFieldLabel;
+use crate::types::Fields;
 use crate::types::Type;
 
 pub fn canonicalize_annotation(
@@ -74,7 +74,7 @@ fn can_annotation_help(
             }
         }
         Record(fields) => {
-            let mut field_types = SendMap::default();
+            let mut field_types = Fields::default();
             for field in fields {
                 can_assigned_field(&field.value, var_store, rigids, &mut field_types);
             }
@@ -85,7 +85,7 @@ fn can_annotation_help(
             Type::Record(field_types, Box::new(fragment_type))
         }
         RecordFragment(fields, fragment) => {
-            let mut field_types = SendMap::default();
+            let mut field_types = Fields::default();
             for field in fields {
                 can_assigned_field(&field.value, var_store, rigids, &mut field_types);
             }
@@ -108,20 +108,20 @@ fn can_assigned_field<'a>(
     field: &AssignedField<'a, TypeAnnotation<'a>>,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    field_types: &mut SendMap<RecordFieldLabel, Type>,
+    fields: &mut Fields,
 ) {
     use crate::parse::ast::AssignedField::*;
 
     match field {
         LabeledValue(field_name, _, annotation) => {
             let field_type = can_annotation_help(&annotation.value, var_store, rigids);
-            let label = RecordFieldLabel::Required(Lowercase::from(field_name.value));
-            field_types.insert(label, field_type);
+            let label = Lowercase::from(field_name.value);
+            fields.required.insert(label, field_type);
         }
         OptionalField(field_name, _, annotation) => {
             let field_type = can_annotation_help(&annotation.value, var_store, rigids);
-            let label = RecordFieldLabel::Optional(Lowercase::from(field_name.value));
-            field_types.insert(label, field_type);
+            let label = Lowercase::from(field_name.value);
+            fields.optional.insert(label, field_type);
         }
         LabelOnly(loc_field_name) => {
             // Interpret { a, b } as { a : a, b : b }
@@ -135,11 +135,10 @@ fn can_assigned_field<'a>(
                     Type::Variable(field_var)
                 }
             };
-            let label = RecordFieldLabel::Required(field_name);
-            field_types.insert(label, field_type);
+            fields.required.insert(field_name, field_type);
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            can_assigned_field(nested, var_store, rigids, field_types)
+            can_assigned_field(nested, var_store, rigids, fields)
         }
         Malformed(_) => {}
     }

@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{MutMap, MutSet};
 use crate::subs::{Content, FlatType, Subs, Variable};
-use crate::types::{self, name_type_var, RecordFieldLabel};
+use crate::types::{self, name_type_var};
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -90,8 +90,8 @@ fn find_names_needed(
             find_names_needed(ret_var, subs, roots, root_appearances, names_taken);
         }
         Structure(Record(fields, ext_var)) => {
-            for (_, var) in fields {
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            for var in fields.variables() {
+                find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
@@ -198,10 +198,13 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
             } else {
                 buf.push_str("{ ");
 
-                // Sort the fields so they always end up in the same order.
-                let mut sorted_fields = Vec::with_capacity(fields.len());
+                let count = std::cmp::max(fields.required.len(), fields.optional.len());
 
-                for (label, field_var) in fields {
+                // Sort the fields so they always end up in the same order.
+                let mut sorted_fields = Vec::with_capacity(count);
+
+                // TODO put all optional fields at the front?
+                for (label, field_var) in fields.optional {
                     sorted_fields.push((label, field_var));
                 }
 
@@ -216,13 +219,31 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                         any_written_yet = true;
                     }
 
-                    match label {
-                        RecordFieldLabel::Required(l) => buf.push_str(l.as_str()),
-                        RecordFieldLabel::Optional(l) => {
-                            buf.push_str(l.as_str());
-                            buf.push('?')
-                        }
+                    buf.push_str(label.as_str());
+                    buf.push('?');
+
+                    buf.push_str(" : ");
+                    write_content(subs.get(field_var).content, subs, buf, parens);
+                }
+
+                // reset the vector
+                sorted_fields.clear();
+
+                for (label, field_var) in fields.required {
+                    sorted_fields.push((label, field_var));
+                }
+
+                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+                for (label, field_var) in sorted_fields {
+                    if any_written_yet {
+                        buf.push_str(", ");
+                    } else {
+                        any_written_yet = true;
                     }
+
+                    buf.push_str(label.as_str());
+
                     buf.push_str(" : ");
                     write_content(subs.get(field_var).content, subs, buf, parens);
                 }

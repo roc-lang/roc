@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
-use crate::collections::{ImMap, ImSet, MutSet, SendMap};
+use crate::collections::{ImMap, ImSet, MutSet};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
-use crate::types::{name_type_var, ErrorType, Problem, RecordExt, RecordFieldLabel};
+use crate::types::{name_type_var, ErrorFields, ErrorType, Problem, RecordExt};
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -429,9 +429,69 @@ pub enum FlatType {
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
-    Record(ImMap<RecordFieldLabel, Variable>, Variable),
+    Record(FlatFields, Variable),
     Erroneous(Problem),
     EmptyRecord,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct FlatFields {
+    pub required: ImMap<Lowercase, Variable>,
+    pub optional: ImMap<Lowercase, Variable>,
+}
+
+impl FlatFields {
+    pub fn count(&self) -> usize {
+        self.required.len() + self.optional.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.required.is_empty() && self.optional.is_empty()
+    }
+
+    pub fn variables(
+        &self,
+    ) -> std::iter::Chain<
+        im_rc::hashmap::Values<'_, Lowercase, Variable>,
+        im_rc::hashmap::Values<'_, Lowercase, Variable>,
+    > {
+        self.optional.values().chain(self.required.values())
+    }
+
+    pub fn vars_by_field(
+        &self,
+    ) -> std::iter::Chain<
+        im_rc::hashmap::Iter<'_, Lowercase, Variable>,
+        im_rc::hashmap::Iter<'_, Lowercase, Variable>,
+    > {
+        self.optional.iter().chain(self.required.iter())
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        FlatFields {
+            required: self.required.union(other.required),
+            optional: self.optional.union(other.optional),
+        }
+    }
+
+    pub fn difference(self, other: Self) -> Self {
+        // TODO how should required and optional fields interact here?
+        FlatFields {
+            required: self.required.difference(other.required),
+            optional: self.optional.difference(other.optional),
+        }
+    }
+
+    pub fn intersection_with<F>(self, other: Self, f: F) -> Self
+    where
+        F: FnMut(Variable, Variable) -> Variable,
+    {
+        // TODO how should required and optional fields interact here?
+        FlatFields {
+            required: self.required.intersection_with(other.required, f),
+            optional: self.optional.intersection_with(other.optional, f),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -463,11 +523,9 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                         occurs(subs, &new_seen, ret_var)
                             || arg_vars.into_iter().any(|var| occurs(subs, &new_seen, var))
                     }
-                    Record(vars_by_field, ext_var) => {
+                    Record(fields, ext_var) => {
                         occurs(subs, &new_seen, ext_var)
-                            || vars_by_field
-                                .into_iter()
-                                .any(|(_, var)| occurs(subs, &new_seen, var))
+                            || fields.variables().any(|var| occurs(subs, &new_seen, *var))
                     }
                     EmptyRecord | Erroneous(_) => false,
                 }
@@ -525,13 +583,14 @@ fn get_var_names(
 
                 FlatType::EmptyRecord | FlatType::Erroneous(_) => taken_names,
 
-                FlatType::Record(vars_by_field, ext_var) => {
+                FlatType::Record(fields, ext_var) => {
                     let taken_names = get_var_names(subs, ext_var, taken_names);
 
-                    vars_by_field
+                    fields
+                        .vars_by_field()
                         .into_iter()
                         .fold(taken_names, |answer, (_, arg_var)| {
-                            get_var_names(subs, arg_var, answer)
+                            get_var_names(subs, *arg_var, answer)
                         })
                 }
             },
@@ -674,13 +733,21 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
             ErrorType::Function(args, Box::new(ret))
         }
 
-        EmptyRecord => ErrorType::Record(SendMap::default(), RecordExt::Closed),
+        EmptyRecord => ErrorType::Record(ErrorFields::default(), RecordExt::Closed),
 
         Record(vars_by_field, ext_var) => {
-            let mut err_fields = SendMap::default();
+            let mut err_fields = ErrorFields::default();
 
-            for (field, var) in vars_by_field.into_iter() {
-                err_fields.insert(field, var_to_err_type(subs, state, var));
+            for (field, var) in vars_by_field.required.into_iter() {
+                err_fields
+                    .required
+                    .insert(field, var_to_err_type(subs, state, var));
+            }
+
+            for (field, var) in vars_by_field.optional.into_iter() {
+                err_fields
+                    .optional
+                    .insert(field, var_to_err_type(subs, state, var));
             }
 
             match var_to_err_type(subs, state, ext_var).unwrap_alias() {
@@ -738,7 +805,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             EmptyRecord => (),
 
             Record(fields, ext_var) => {
-                for (_, var) in fields {
+                for var in fields.variables() {
                     subs.restore(*var);
                 }
 
