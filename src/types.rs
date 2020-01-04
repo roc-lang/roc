@@ -28,7 +28,7 @@ pub enum Type {
     EmptyRec,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
+    Record(RecordFields, Box<Type>),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
@@ -41,27 +41,47 @@ pub enum Type {
     Erroneous(Problem),
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum RecordFieldLabel {
-    Required(Lowercase),
-    Optional(Lowercase),
+#[derive(Clone, PartialEq, Eq)]
+pub struct RecordFields {
+    pub required: SendMap<Lowercase, Variable>,
+    pub optional: SendMap<Lowercase, Variable>,
 }
 
-impl Into<Lowercase> for RecordFieldLabel {
-    fn into(self) -> Lowercase {
-        match self {
-            RecordFieldLabel::Required(label) => label,
-            RecordFieldLabel::Optional(label) => label,
-        }
-    }
-}
-
-impl fmt::Debug for RecordFieldLabel {
+impl fmt::Debug for RecordFields {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RecordFieldLabel::Required(label) => write!(f, "{}", label),
-            RecordFieldLabel::Optional(label) => write!(f, "{}?", label),
+        let field_count = self.required.len() + self.optional.len();
+
+        if field_count != 0 {
+            write!(f, " ")?;
         }
+
+        let mut any_written_yet = false;
+
+        for (label, field_type) in self.optional {
+            write!(f, "{:?}? : {:?}", label, field_type)?;
+
+            if any_written_yet {
+                write!(f, ", ")?;
+            } else {
+                any_written_yet = true;
+            }
+        }
+
+        for (label, field_type) in self.required {
+            write!(f, "{:?} : {:?}", label, field_type)?;
+
+            if any_written_yet {
+                write!(f, ", ")?;
+            } else {
+                any_written_yet = true;
+            }
+        }
+
+        if field_count != 0 {
+            write!(f, " ")?;
+        }
+
+        write!(f, "")
     }
 }
 
@@ -122,25 +142,7 @@ impl fmt::Debug for Type {
             Type::Record(fields, ext) => {
                 write!(f, "{{")?;
 
-                if !fields.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                let mut any_written_yet = false;
-
-                for (label, field_type) in fields {
-                    write!(f, "{:?} : {:?}", label, field_type)?;
-
-                    if any_written_yet {
-                        write!(f, ", ")?;
-                    } else {
-                        any_written_yet = true;
-                    }
-                }
-
-                if !fields.is_empty() {
-                    write!(f, " ")?;
-                }
+                write!(f, "{:?}", fields)?;
 
                 write!(f, "}}")?;
 
@@ -352,7 +354,7 @@ pub enum ErrorType {
     Type(ModuleName, Uppercase, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    Record(SendMap<RecordFieldLabel, ErrorType>, RecordExt),
+    Record(RecordFields, RecordExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(
         ModuleName,
