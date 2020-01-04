@@ -174,43 +174,51 @@ pub fn fmt_expr<'a>(
             }
         }
         List(loc_items) => {
-            buf.push('[');
-
-            let mut iter = loc_items.iter().peekable();
-
-            let is_multiline = loc_items.iter().any(|item| is_multiline_expr(&item.value));
-
-            let item_indent = if is_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            while let Some(item) = iter.next() {
-                if is_multiline {
-                    newline(buf, item_indent);
-                } else {
-                    buf.push(' ');
-                }
-
-                fmt_expr(buf, &item.value, item_indent, false, false);
-
-                if iter.peek().is_some() {
-                    buf.push(',');
-                }
-            }
-
-            if is_multiline {
-                newline(buf, indent);
-            }
-
-            if !loc_items.is_empty() && !is_multiline {
-                buf.push(' ');
-            }
-            buf.push(']');
+            fmt_list(buf, &loc_items, indent);
         }
         other => panic!("TODO implement Display for AST variant {:?}", other),
     }
+}
+
+pub fn fmt_list<'a>(
+    buf: &mut String<'a>,
+    loc_items: &'a Vec<'a, &'a Located<Expr<'a>>>,
+    indent: u16,
+) {
+    buf.push('[');
+
+    let mut iter = loc_items.iter().peekable();
+
+    let is_multiline = loc_items.iter().any(|item| is_multiline_expr(&item.value));
+
+    let item_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    while let Some(item) = iter.next() {
+        if is_multiline {
+            newline(buf, item_indent);
+        } else {
+            buf.push(' ');
+        }
+
+        fmt_expr(buf, &item.value, item_indent, false, false);
+
+        if iter.peek().is_some() {
+            buf.push(',');
+        }
+    }
+
+    if is_multiline {
+        newline(buf, indent);
+    }
+
+    if !loc_items.is_empty() && !is_multiline {
+        buf.push(' ');
+    }
+    buf.push(']');
 }
 
 pub fn fmt_field<'a>(
