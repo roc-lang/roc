@@ -413,14 +413,14 @@ fn type_to_variable(
         Record(fields, ext) => {
             let mut field_vars = FlatFields::default();
 
-            for (field, field_type) in fields.required {
+            for (field, field_type) in &fields.required {
                 field_vars.required.insert(
                     field.clone(),
                     type_to_variable(subs, rank, pools, aliases, &field_type),
                 );
             }
 
-            for (field, field_type) in fields.optional {
+            for (field, field_type) in &fields.optional {
                 field_vars.optional.insert(
                     field.clone(),
                     type_to_variable(subs, rank, pools, aliases, &field_type),

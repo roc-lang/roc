@@ -481,17 +481,6 @@ impl FlatFields {
             optional: self.optional.difference(other.optional),
         }
     }
-
-    pub fn intersection_with<F>(self, other: Self, f: F) -> Self
-    where
-        F: FnMut(Variable, Variable) -> Variable,
-    {
-        // TODO how should required and optional fields interact here?
-        FlatFields {
-            required: self.required.intersection_with(other.required, f),
-            optional: self.optional.intersection_with(other.optional, f),
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -588,7 +577,6 @@ fn get_var_names(
 
                     fields
                         .vars_by_field()
-                        .into_iter()
                         .fold(taken_names, |answer, (_, arg_var)| {
                             get_var_names(subs, *arg_var, answer)
                         })

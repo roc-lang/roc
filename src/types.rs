@@ -63,7 +63,7 @@ impl fmt::Debug for Fields {
 
         let mut any_written_yet = false;
 
-        for (label, field_type) in self.optional {
+        for (label, field_type) in &self.optional {
             write!(f, "{:?}? : {:?}", label, field_type)?;
 
             if any_written_yet {
@@ -73,7 +73,7 @@ impl fmt::Debug for Fields {
             }
         }
 
-        for (label, field_type) in self.required {
+        for (label, field_type) in &self.required {
             write!(f, "{:?} : {:?}", label, field_type)?;
 
             if any_written_yet {

@@ -154,13 +154,15 @@ fn unify_record(
     // This is a bit more complicated because of optional fields
     let fields1 = rec1.fields;
     let fields2 = rec2.fields;
-    let shared_fields = /*fields1
+    let shared_fields = fields1
+        .required
         .clone()
-        .intersection_with(fields2.clone(), |one, two| (one, two));
-                        */
-        panic!();
-    let unique_fields1 = fields1.clone().difference(fields2.clone());
-    let unique_fields2 = fields2.difference(fields1);
+        .intersection_with(fields2.required.clone(), |one, two| (one, two));
+    let unique_fields1 = fields1
+        .required
+        .clone()
+        .difference(fields2.required.clone());
+    let unique_fields2 = fields2.required.difference(fields1.required);
 
     if unique_fields1.is_empty() {
         if unique_fields2.is_empty() {
@@ -172,7 +174,11 @@ fn unify_record(
 
             field_problems
         } else {
-            let flat_type = FlatType::Record(unique_fields2, rec2.ext);
+            let fields = FlatFields {
+                required: unique_fields2,
+                optional: ImMap::default(),
+            };
+            let flat_type = FlatType::Record(fields, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
             let mut field_problems =
@@ -183,7 +189,11 @@ fn unify_record(
             field_problems
         }
     } else if unique_fields2.is_empty() {
-        let flat_type = FlatType::Record(unique_fields1, rec1.ext);
+        let fields = FlatFields {
+            required: unique_fields1,
+            optional: ImMap::default(),
+        };
+        let flat_type = FlatType::Record(fields, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
         let mut field_problems =
@@ -194,10 +204,20 @@ fn unify_record(
         field_problems
     } else {
         let other_fields = unique_fields1.clone().union(unique_fields2.clone());
+
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
-        let flat_type1 = FlatType::Record(unique_fields1, rec1.ext);
+        let fields = FlatFields {
+            required: unique_fields1,
+            optional: ImMap::default(),
+        };
+        let flat_type1 = FlatType::Record(fields, rec1.ext);
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
-        let flat_type2 = FlatType::Record(unique_fields2, rec2.ext);
+
+        let fields = FlatFields {
+            required: unique_fields2,
+            optional: ImMap::default(),
+        };
+        let flat_type2 = FlatType::Record(fields, rec2.ext);
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
         let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);

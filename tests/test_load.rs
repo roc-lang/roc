@@ -16,7 +16,6 @@ mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
     use roc::can::def::Declaration::*;
     use roc::can::module::Module;
-    use roc::collections::SendMap;
     use roc::load::{load, solve_loaded, Loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::{Subs, VarStore, Variable};
@@ -284,7 +283,7 @@ mod test_load {
     #[test]
     fn load_records() {
         test_async(async {
-            use roc::types::{ErrorType, Mismatch, Problem, RecordExt, RecordFieldLabel};
+            use roc::types::{ErrorFields, ErrorType, Mismatch, Problem, RecordExt};
 
             let mut deps = Vec::new();
             let (module, mut subs) =
@@ -300,12 +299,12 @@ mod test_load {
 
             let a = ErrorType::FlexVar("a".into());
 
-            let mut record = SendMap::default();
-            record.insert(RecordFieldLabel::Required("x".into()), a);
+            let mut record = ErrorFields::default();
+            record.required.insert("x".into(), a);
 
             let problem = Problem::Mismatch(
                 Mismatch::TypeMismatch,
-                ErrorType::Record(SendMap::default(), RecordExt::Closed),
+                ErrorType::Record(ErrorFields::default(), RecordExt::Closed),
                 ErrorType::Record(record, RecordExt::FlexOpen("b".into())),
             );
 

@@ -212,7 +212,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
 
                 let mut any_written_yet = false;
 
-                for (label, field_var) in sorted_fields {
+                for (label, field_var) in &sorted_fields {
                     if any_written_yet {
                         buf.push_str(", ");
                     } else {
@@ -223,7 +223,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     buf.push('?');
 
                     buf.push_str(" : ");
-                    write_content(subs.get(field_var).content, subs, buf, parens);
+                    write_content(subs.get(*field_var).content, subs, buf, parens);
                 }
 
                 // reset the vector
