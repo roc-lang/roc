@@ -396,7 +396,7 @@ pub fn constrain_expr(
         LetRec(defs, loc_ret, var) => {
             let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
             And(vec![
-                constrain_recursive_defs(rigids, &mut SendMap::default(), defs, body_con),
+                constrain_recursive_defs(rigids, defs, body_con),
                 // Record the type of tne entire def-expression in the variable.
                 // Code gen will need that later!
                 Eq(Type::Variable(*var), expected, loc_ret.region),
@@ -406,7 +406,7 @@ pub fn constrain_expr(
             let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
 
             And(vec![
-                constrain_def(rigids, &mut SendMap::default(), def, body_con),
+                constrain_def(rigids, def, body_con),
                 // Record the type of tne entire def-expression in the variable.
                 // Code gen will need that later!
                 Eq(Type::Variable(*var), expected, loc_ret.region),
@@ -470,24 +470,16 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 }
 
 #[inline(always)]
-pub fn constrain_decls(
-    found_rigids: &mut SendMap<Variable, Lowercase>,
-    decls: &[Declaration],
-) -> Constraint {
+pub fn constrain_decls(decls: &[Declaration]) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
         match decl {
             Declaration::Declare(def) => {
-                constraint = constrain_def(&ImMap::default(), found_rigids, def, constraint);
+                constraint = constrain_def(&ImMap::default(), def, constraint);
             }
             Declaration::DeclareRec(defs) => {
-                constraint = constrain_recursive_defs(
-                    &ImMap::default(),
-                    &mut SendMap::default(),
-                    defs,
-                    constraint,
-                );
+                constraint = constrain_recursive_defs(&ImMap::default(), defs, constraint);
             }
             Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
         }
@@ -517,12 +509,7 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
     state
 }
 
-pub fn constrain_def(
-    rigids: &Rigids,
-    found_rigids: &mut SendMap<Variable, Lowercase>,
-    def: &Def,
-    body_con: Constraint,
-) -> Constraint {
+pub fn constrain_def(rigids: &Rigids, def: &Def, body_con: Constraint) -> Constraint {
     use crate::types::AnnotationSource;
 
     let expr_var = def.expr_var;
@@ -544,9 +531,6 @@ pub fn constrain_def(
                 if !rigids.contains_key(name) {
                     // possible use this rigid in nested def's
                     ftv.insert(name.clone(), Type::Variable(*var));
-
-                    // mark this variable as a rigid
-                    found_rigids.insert(*var, name.clone());
 
                     new_rigids.push(*var);
                 }
@@ -595,15 +579,9 @@ pub fn constrain_def(
     }))
 }
 
-fn constrain_recursive_defs(
-    rigids: &Rigids,
-    found_rigids: &mut SendMap<Variable, Lowercase>,
-    defs: &[Def],
-    body_con: Constraint,
-) -> Constraint {
+fn constrain_recursive_defs(rigids: &Rigids, defs: &[Def], body_con: Constraint) -> Constraint {
     rec_defs_help(
         rigids,
-        &mut SendMap::default(),
         defs,
         body_con,
         Info::with_capacity(defs.len()),
@@ -613,7 +591,6 @@ fn constrain_recursive_defs(
 
 pub fn rec_defs_help(
     rigids: &Rigids,
-    found_rigids: &mut SendMap<Variable, Lowercase>,
     defs: &[Def],
     body_con: Constraint,
     mut rigid_info: Info,
@@ -674,9 +651,6 @@ pub fn rec_defs_help(
                     if !rigids.contains_key(name) {
                         // possible use this rigid in nested def's
                         ftv.insert(name.clone(), Type::Variable(*var));
-
-                        // mark this variable as a rigid
-                        found_rigids.insert(*var, name.clone());
 
                         new_rigids.push(*var);
                     }

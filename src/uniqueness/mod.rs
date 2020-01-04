@@ -490,14 +490,7 @@ pub fn canonicalize_expr(
 
             (
                 Output::default(),
-                constrain_def(
-                    rigids,
-                    &mut SendMap::default(),
-                    var_store,
-                    var_usage,
-                    def,
-                    body_con,
-                ),
+                constrain_def(rigids, var_store, var_usage, def, body_con),
             )
         }
         When {
@@ -859,7 +852,6 @@ fn constrain_def_pattern(
 
 pub fn constrain_def(
     rigids: &Rigids,
-    found_rigids: &mut SendMap<Variable, Lowercase>,
     var_store: &VarStore,
     var_usage: &mut VarUsage,
     def: &Def,
@@ -886,9 +878,6 @@ pub fn constrain_def(
                 if !rigids.contains_key(name) {
                     // possible use this rigid in nested def's
                     ftv.insert(name.clone(), Type::Variable(*var));
-
-                    // mark this variable as a rigid
-                    found_rigids.insert(*var, name.clone());
 
                     new_rigids.push(*var);
                 }
