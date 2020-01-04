@@ -6,6 +6,6 @@ use inkwell::module::Module;
 pub struct Env<'ctx, 'env> {
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
-    pub module: &'env Module<'ctx>,
+    pub module: &'ctx Module<'ctx>,
     pub subs: Subs,
 }
