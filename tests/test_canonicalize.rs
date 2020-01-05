@@ -308,7 +308,7 @@ mod test_canonicalize {
                     1 -> g (x - 1)
                     _ -> p (x - 1)
 
-            # variables must be (indirectly) refernced in the body for analysis to work
+            # variables must be (indirectly) referenced in the body for analysis to work
             { x: p, y: h }
         "#
             );
