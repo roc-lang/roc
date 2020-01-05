@@ -331,7 +331,7 @@ pub fn canonicalize_expr(
                 None => panic!("symbol not analyzed"),
             }
         }
-        Closure(_symbol, _recursion, args, boxed_body) => {
+        Closure(_fn_var, _symbol, _recursion, args, boxed_body) => {
             let (body, ret_var) = &**boxed_body;
 
             // first, generate constraints for the arguments

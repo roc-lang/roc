@@ -425,10 +425,12 @@ fn group_to_declaration(
                 let mut new_def = can_def.clone();
 
                 // Determine recursivity of closures that are not tail-recursive
-                if let Closure(name, Recursive::NotRecursive, args, body) = new_def.loc_expr.value {
+                if let Closure(fn_var, name, Recursive::NotRecursive, args, body) =
+                    new_def.loc_expr.value
+                {
                     let recursion = closure_recursivity(symbol.clone(), closures);
 
-                    new_def.loc_expr.value = Closure(name, recursion, args, body);
+                    new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                 }
 
                 declarations.push(Declare(new_def));
@@ -441,12 +443,12 @@ fn group_to_declaration(
                     let mut new_def = can_def.clone();
 
                     // Determine recursivity of closures that are not tail-recursive
-                    if let Closure(name, Recursive::NotRecursive, args, body) =
+                    if let Closure(fn_var, name, Recursive::NotRecursive, args, body) =
                         new_def.loc_expr.value
                     {
                         let recursion = closure_recursivity(symbol.clone(), closures);
 
-                        new_def.loc_expr.value = Closure(name, recursion, args, body);
+                        new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                     }
 
                     can_defs.push(new_def);
@@ -542,7 +544,13 @@ fn canonicalize_def<'a>(
                 let body = Box::new((body_expr, var_store.fresh()));
 
                 Located {
-                    value: Closure(symbol, Recursive::NotRecursive, underscores, body),
+                    value: Closure(
+                        var_store.fresh(),
+                        symbol,
+                        Recursive::NotRecursive,
+                        underscores,
+                        body,
+                    ),
                     region: loc_annotation.region,
                 }
             };
@@ -606,7 +614,7 @@ fn canonicalize_def<'a>(
             if let (
                 &ast::Pattern::Identifier(ref _name),
                 &Pattern::Identifier(ref defined_symbol),
-                &Closure(ref symbol, _, ref arguments, ref body),
+                &Closure(fn_var, ref symbol, _, ref arguments, ref body),
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
@@ -645,6 +653,7 @@ fn canonicalize_def<'a>(
 
                 // renamed_closure_def = Some(&defined_symbol);
                 loc_can_expr.value = Closure(
+                    fn_var,
                     symbol.clone(),
                     is_recursive,
                     arguments.clone(),
@@ -733,7 +742,7 @@ fn canonicalize_def<'a>(
             if let (
                 &ast::Pattern::Identifier(ref _name),
                 &Pattern::Identifier(ref defined_symbol),
-                &Closure(ref symbol, _, ref arguments, ref body),
+                &Closure(fn_var, ref symbol, _, ref arguments, ref body),
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
@@ -772,6 +781,7 @@ fn canonicalize_def<'a>(
 
                 // renamed_closure_def = Some(&defined_symbol);
                 loc_can_expr.value = Closure(
+                    fn_var,
                     symbol.clone(),
                     is_recursive,
                     arguments.clone(),

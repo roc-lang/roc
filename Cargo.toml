@@ -21,6 +21,7 @@ inlinable_string = "0.1.0"
 # but after several hours of trying unsuccessfully to fix it, `branch` is it.)
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "llvm8-0" }
 futures = "0.3"
+lazy_static = "1.4"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
