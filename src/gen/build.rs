@@ -1,53 +1,31 @@
-use bumpalo::Bump;
-use inkwell::module::Linkage;
-use inkwell::types::BasicType;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
-
-use crate::can;
-use crate::collections::{ImMap, MutMap};
-use crate::gen::convert::content_to_basic_type;
-use crate::gen::env::Env;
-use crate::ll::expr::{Expr, Procs};
-use crate::subs::Variable;
 use inlinable_string::InlinableString;
+
+use crate::collections::ImMap;
+use crate::gen::convert::{content_to_basic_type, layout_to_basic_type};
+use crate::gen::env::Env;
+use crate::ll::expr::{Expr, Proc, Procs};
+use crate::subs::Variable;
+
+/// This is for Inkwell's FunctionValue::verify - we want to know the verification
+/// output in debug builds, but we don't want it to print to stdout in release builds!
+#[cfg(debug_assertions)]
+const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
+
+#[cfg(not(debug_assertions))]
+const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
 type Scope<'ctx> = ImMap<InlinableString, (Variable, PointerValue<'ctx>)>;
 
-pub fn build_can_expr<'ctx, 'env>(
-    env: &Env<'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    can_expr: can::expr::Expr,
-) -> BasicValueEnum<'ctx> {
-    let arena = Bump::new();
-
-    let mut procs = MutMap::default();
-    let expr = Expr::new(
-        &arena,
-        &env.subs,
-        env.module,
-        env.context,
-        can_expr,
-        &mut procs,
-    );
-
-    build_expr(
-        env,
-        &ImMap::default(),
-        parent,
-        &expr,
-        &mut MutMap::default(),
-    )
-}
-
-fn build_expr<'a, 'ctx, 'env>(
+pub fn build_expr<'a, 'ctx, 'env>(
     env: &Env<'ctx, 'env>,
     scope: &Scope<'ctx>,
     parent: FunctionValue<'ctx>,
     expr: &Expr<'a>,
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &Procs<'a, 'ctx>,
 ) -> BasicValueEnum<'ctx> {
     use crate::ll::expr::Expr::*;
 
@@ -106,7 +84,7 @@ fn build_expr<'a, 'ctx, 'env>(
             build_expr(env, &scope, parent, ret, procs)
         }
         CallByName(ref name, ref args) => {
-            // TODO try one of these alternative strategies:
+            // TODO try one of these alternative strategies (preferably the latter):
             //
             // 1. use SIMD string comparison to compare these strings faster
             // 2. pre-register Bool.or using module.add_function, and see if LLVM inlines it
@@ -182,7 +160,7 @@ fn build_cond<'a, 'ctx, 'env>(
     scope: &Scope<'ctx>,
     parent: FunctionValue<'ctx>,
     cond: Cond2<'a>,
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &Procs<'a, 'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let context = env.context;
@@ -230,7 +208,7 @@ fn build_cond<'a, 'ctx, 'env>(
 //     cond_lhs: &'a Expr<'a>,
 //     branches: &'a [(Expr<'a>, Expr<'a>, Expr<'a>)],
 //     ret_type: BasicValueEnum<'ctx>,
-//     procs: &mut Procs<'a, 'ctx>,
+//     procs: &Procs<'a, 'ctx>,
 // ) -> BasicValueEnum<'ctx> {
 //     let builder = env.builder;
 //     let context = env.context;
@@ -271,7 +249,7 @@ fn build_phi2<'a, 'ctx, 'env>(
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
     ret_type: BasicTypeEnum<'ctx>,
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &Procs<'a, 'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let context = env.context;
@@ -322,76 +300,6 @@ fn set_name(bv_enum: BasicValueEnum<'_>, name: &str) {
     }
 }
 
-// TODO trim down these arguments
-#[allow(clippy::too_many_arguments)]
-pub fn build_closure<'a, 'ctx, BT>(
-    env: &Env<'ctx, '_>,
-    name: InlinableString,
-    arg_vars: Vec<Variable>,
-    arg_names: &[InlinableString],
-    ret_type: BT,
-    body_expr: &Expr<'a>,
-    scope: &Scope<'ctx>,
-    procs: &mut Procs<'a, 'ctx>,
-    linkage: Option<Linkage>,
-) -> FunctionValue<'ctx>
-where
-    BT: BasicType<'ctx>,
-{
-    // We need these to be separate, but they must have the same length!
-    debug_assert!(arg_vars.len() == arg_names.len());
-
-    let subs = &env.subs;
-
-    // Register the function value in the module
-    let mut arg_basic_types = Vec::with_capacity(arg_vars.len());
-
-    for var in arg_vars.iter() {
-        let content = subs.get_without_compacting(*var).content;
-
-        arg_basic_types.push(
-            content_to_basic_type(&content, &env.subs, env.context).unwrap_or_else(|err| {
-                panic!(
-                    "Error converting function arg content to basic type: {:?}",
-                    err
-                )
-            }),
-        );
-    }
-
-    let fn_type = ret_type.fn_type(arg_basic_types.as_slice(), false);
-    let fn_val = env.module.add_function(&name, fn_type, linkage);
-
-    let entry = env.context.append_basic_block(fn_val, "entry");
-    let builder = env.builder;
-
-    builder.position_at_end(&entry);
-
-    let mut scope = scope.clone();
-
-    // Add args to scope
-    for (((arg_val, arg_name), arg_type), var) in fn_val
-        .get_param_iter()
-        .zip(arg_names)
-        .zip(arg_basic_types)
-        .zip(arg_vars.into_iter())
-    {
-        set_name(arg_val, arg_name);
-
-        let alloca = create_entry_block_alloca(env, fn_val, arg_type, arg_name);
-
-        builder.build_store(alloca, arg_val);
-
-        scope.insert(arg_name.clone(), (var, alloca));
-    }
-
-    let body = build_expr(env, &scope, fn_val, body_expr, procs);
-
-    builder.build_return(Some(&body));
-
-    fn_val
-}
-
 /// Creates a new stack allocation instruction in the entry block of the function.
 pub fn create_entry_block_alloca<'ctx>(
     env: &Env<'ctx, '_>,
@@ -408,4 +316,66 @@ pub fn create_entry_block_alloca<'ctx>(
     }
 
     builder.build_alloca(basic_type, name)
+}
+
+pub fn build_proc<'a, 'ctx, 'env>(
+    env: &Env<'ctx, 'env>,
+    scope: &Scope<'ctx>,
+    name: InlinableString,
+    proc: Proc<'a>,
+    procs: &Procs<'a, 'ctx>,
+) {
+    let args = proc.args;
+    let mut arg_names = Vec::new();
+    let mut arg_basic_types = Vec::with_capacity(args.len());
+
+    for (layout, name, _var) in args.iter() {
+        let arg_type = layout_to_basic_type(&layout, &env.subs, env.context);
+
+        arg_basic_types.push(arg_type);
+        arg_names.push(name);
+    }
+
+    // Retrieve the function value from the module
+    let fn_val = env.module.get_function(&name).unwrap_or_else(|| {
+        panic!(
+            "Function {:?} should have been registered in the LLVM module, but it was not!",
+            name
+        )
+    });
+
+    // Add a basic block for the entry point
+    let entry = env.context.append_basic_block(fn_val, "entry");
+    let builder = env.builder;
+
+    builder.position_at_end(&entry);
+
+    let mut scope = scope.clone();
+
+    // Add args to scope
+    for ((arg_val, arg_type), (_, arg_name, var)) in
+        fn_val.get_param_iter().zip(arg_basic_types).zip(args)
+    {
+        set_name(arg_val, arg_name);
+
+        let alloca = create_entry_block_alloca(env, fn_val, arg_type, arg_name);
+
+        builder.build_store(alloca, arg_val);
+
+        scope.insert(arg_name.clone(), (*var, alloca));
+    }
+
+    let body = build_expr(env, &scope, fn_val, &proc.body, procs);
+
+    builder.build_return(Some(&body));
+
+    if fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
+        // TODO call pass_manager.run_on(&fn_val) to optimize it!
+    } else {
+        unsafe {
+            fn_val.delete();
+        }
+
+        panic!("Invalid generated fn_val.")
+    }
 }
