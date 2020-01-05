@@ -14,14 +14,6 @@ use crate::ll::expr::{Expr, Procs};
 use crate::subs::Variable;
 use inlinable_string::InlinableString;
 
-/// This is for Inkwell's FunctionValue::verify - we want to know the verification
-/// output in debug builds, but we don't want it to print to stdout in release builds!
-#[cfg(debug_assertions)]
-const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
-
-#[cfg(not(debug_assertions))]
-const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
-
 type Scope<'ctx> = ImMap<InlinableString, (Variable, PointerValue<'ctx>)>;
 
 pub fn build_can_expr<'ctx, 'env>(
@@ -413,59 +405,3 @@ pub fn create_entry_block_alloca<'ctx>(
 
     builder.build_alloca(basic_type, name)
 }
-
-// fn build_proc() {
-//     let (ref loc_body_expr, ret_var) = **body;
-//     let subs = &env.subs;
-//     let mut arg_types = Vec::new();
-//     let mut arg_names = Vec::new();
-//     let ret_content = subs.get_without_compacting(ret_var).content;
-//     let ret_type =
-//         content_to_basic_type(&ret_content, &env.subs, env.context).unwrap_or_else(|err| {
-//             panic!(
-//                 "Error converting symbol {:?} to basic type: {:?} - scope was: {:?}",
-//                 symbol, err, scope
-//             )
-//         });
-
-//     for (var, loc_pat) in args {
-//         let content = subs.get_without_compacting(*var).content;
-//         let name = match &loc_pat.value {
-//             Pattern::Identifier(ident) => ident.as_str().into(),
-//             pat => {
-//                 panic!("TODO code gen function arg for pattern {:?}", pat);
-//             }
-//         };
-
-//         arg_types.push(content);
-//         arg_names.push(name);
-//     }
-
-//     let fn_val = build_closure(
-//         env,
-//         symbol.as_str().into(),
-//         arg_types,
-//         arg_names.as_slice(),
-//         ret_type,
-//         &loc_body_expr.value,
-//         scope,
-//         procs,
-//         None,
-//     );
-
-//     if fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
-//         // TODO call pass_manager.run_on(&fn_val) to optimize it!
-
-//         // The closure evaluates to a pointer to the function.
-//         fn_val
-//             .as_global_value()
-//             .as_pointer_value()
-//             .as_basic_value_enum()
-//     } else {
-//         unsafe {
-//             fn_val.delete();
-//         }
-
-//         panic!("Invalid generated fn_val.")
-//     }
-// }
