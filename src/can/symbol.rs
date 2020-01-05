@@ -20,6 +20,24 @@ impl fmt::Debug for Symbol {
     }
 }
 
+impl Into<InlinableString> for Symbol {
+    fn into(self) -> InlinableString {
+        self.0
+    }
+}
+
+impl From<InlinableString> for Symbol {
+    fn from(string: InlinableString) -> Self {
+        Symbol(string)
+    }
+}
+
+impl From<&str> for Symbol {
+    fn from(string: &str) -> Self {
+        Symbol(string.into())
+    }
+}
+
 impl Symbol {
     pub fn new(prefix: &str, name: &str) -> Symbol {
         Symbol(format!("{}{}", prefix, name).into())

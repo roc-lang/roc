@@ -610,6 +610,87 @@ mod test_format {
         expr_formats_to(indoc!("[   7  ,   8  ] "), indoc!("[ 7, 8 ] "));
     }
 
+    #[test]
+    fn multi_line_list() {
+        expr_formats_same(indoc!(
+            r#"
+            [
+                7,
+                8,
+                9
+            ]
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                [ 17
+                , 18
+                , 19
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    17,
+                    18,
+                    19
+                ]
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                [ 27
+
+                , 28
+
+
+                , 29
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    27,
+                    28,
+                    29
+                ]
+                "#
+            ),
+        );
+
+        //        expr_formats_to(indoc!(
+        //            r#"
+        //            [
+        //            # Thirty Seven
+        //
+        //            37
+        //            # Thirty Eight
+        //            , 38
+        //
+        //
+        //            , 39
+        //            ]
+        //            "#
+        //        ), indoc!(
+        //            r#"
+        //            [
+        //                # Thirty Seven
+        //                37,
+        //                # Thirty Eight
+        //                38,
+        //                39
+        //            ]
+        //            "#
+        //        ));
+    }
+
     // RECORD LITERALS
 
     #[test]

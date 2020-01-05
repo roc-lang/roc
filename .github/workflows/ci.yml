@@ -4,75 +4,43 @@ name: CI
 
 jobs:
   test:
-    name: cargo test
+    name: fmt, clippy, test, test --release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
       - name: Install LLVM
         run: sudo ./ci/install-llvm.sh 8
-      - uses: actions-rs/toolchain@v1
-        name: Install Rust Toolchain
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - uses: actions-rs/cargo@v1
-        name: cargo test
-        with:
-          command: test
 
-  test-release:
-    name: cargo test --release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v1
-      - name: Install LLVM
-        run: sudo ./ci/install-llvm.sh 8
       - uses: actions-rs/toolchain@v1
         name: Install Rust Toolchain
         with:
           profile: minimal
           toolchain: stable
           override: true
-      - uses: actions-rs/cargo@v1
-        name: cargo test
-        with:
-          command: test
-          args: --release
 
-  fmt:
-    name: cargo fmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v1
-      - uses: actions-rs/toolchain@v1
-        name: Install Rust Toolchain
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
       - run: rustup component add rustfmt
+
       - uses: actions-rs/cargo@v1
         name: cargo fmt --check
         with:
           command: fmt
           args: --all -- --check
 
-  clippy:
-    name: cargo clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v1
-      - name: Install LLVM
-        run: sudo ./ci/install-llvm.sh 8
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
       - run: rustup component add clippy
+
       - uses: actions-rs/cargo@v1
         name: cargo clippy
         with:
           command: clippy
           args: -- -D warnings
+
+      - uses: actions-rs/cargo@v1
+        name: cargo test
+        with:
+          command: test
+
+      - uses: actions-rs/cargo@v1
+        name: cargo test --release
+        with:
+          command: test
+          args: --release

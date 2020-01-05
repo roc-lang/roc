@@ -44,7 +44,7 @@ Rust](https://doc.rust-lang.org/std/primitive.str.html) very quickly.)
 Rather than a `type alias` keyword, in Roc you define type aliases with `:` like so:
 
 ```elm
-Username : String
+Username : Str
 ```
 
 Separately, Roc also allows standalone type annotations with no corresponding implementation.

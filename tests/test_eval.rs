@@ -12,17 +12,20 @@ mod helpers;
 #[cfg(test)]
 mod test_gen {
     use crate::helpers::can_expr;
+    use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc::collections::MutMap;
-    use roc::gen::{compile_standalone_expr, content_to_basic_type, Env};
+    use roc::gen::build::build_can_expr;
+    use roc::gen::convert::content_to_basic_type;
+    use roc::gen::env::Env;
     use roc::infer::infer_expr;
     use roc::subs::Subs;
 
     macro_rules! assert_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
+            let arena = Bump::new();
             let (expr, _output, _problems, var_store, variable, constraint) = can_expr($src);
             let mut subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
@@ -38,33 +41,31 @@ mod test_gen {
             let fn_type = content_to_basic_type(&content, &mut subs, &context)
                 .expect("Unable to infer type for test expr")
                 .fn_type(&[], false);
-            let function = module.add_function("main", fn_type, None);
+            let main_fn_name = "$test_main";
+            let function = module.add_function(main_fn_name, fn_type, None);
             let basic_block = context.append_basic_block(function, "entry");
 
             builder.position_at_end(&basic_block);
 
-            let procedures = MutMap::default();
-
             let env = Env {
-                procedures,
                 subs,
                 builder: &builder,
                 context: &context,
-                module: &module,
+                module: arena.alloc(module),
             };
-            let ret = compile_standalone_expr(&env, function, &expr);
+            let ret = build_can_expr(&env, function, expr);
 
             builder.build_return(Some(&ret));
 
             if !function.verify(true) {
-                panic!("Test function did not pass LLVM verification.");
+                panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
             unsafe {
                 let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
-                    .get_function("main")
+                    .get_function(main_fn_name)
                     .ok()
-                    .ok_or("Unable to JIT compile `main`")
+                    .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
                     .expect("errored");
 
                 assert_eq!(main.call(), $expected);
@@ -87,10 +88,10 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-            when 1 is
-                1 -> 12
-                _ -> 34
-            "#
+                    when 1 is
+                        1 -> 12
+                        _ -> 34
+                "#
             ),
             12,
             i64
@@ -102,12 +103,25 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-            when 2 is
-                1 -> 63
-                _ -> 48
-            "#
+                    when 2 is
+                        1 -> 63
+                        _ -> 48
+                "#
             ),
             48,
+            i64
+        );
+    }
+    #[test]
+    fn gen_when_one_branch() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when 3.14 is
+                        _ -> 23
+                "#
+            ),
+            23,
             i64
         );
     }
@@ -229,4 +243,67 @@ mod test_gen {
             i64
         );
     }
+
+    // #[test]
+    // fn gen_basic_fn() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 always42 : Num.Num Int.Integer -> Num.Num Int.Integer
+    //                 always42 = \num -> 42
+
+    //                 always42 5
+    //             "#
+    //         ),
+    //         42,
+    //         i64
+    //     );
+    // }
+
+    // #[test]
+    // fn gen_when_fn() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 limitedNegate = \num ->
+    //                     when num is
+    //                         1 -> -1
+    //                         0 -> 0
+
+    //                 limitedNegate 1
+    //             "#
+    //         ),
+    //         42,
+    //         i64
+    //     );
+    // }
+
+    // #[test]
+    // fn apply_unnamed_fn() {
+    //     assert_evals_to!(
+    //         // We could improve the perf of this scenario by
+    //         indoc!(
+    //             r#"
+    //                 (\a -> a) 5
+    //             "#
+    //         ),
+    //         5,
+    //         i64
+    //     );
+    // }
+
+    // #[test]
+    // fn return_unnamed_fn() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 alwaysIdentity = \_ -> (\a -> a)
+
+    //                 (alwaysIdentity 1) 3.14
+    //             "#
+    //         ),
+    //         3.14,
+    //         f64
+    //     );
+    // }
 }

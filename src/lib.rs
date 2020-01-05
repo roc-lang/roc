@@ -27,6 +27,7 @@ pub mod ena;
 pub mod fmt;
 pub mod gen;
 pub mod infer;
+pub mod ll;
 pub mod load;
 pub mod module;
 pub mod pretty_print_types;
@@ -37,3 +38,6 @@ pub mod unify;
 
 #[macro_use]
 extern crate log;
+
+// #[macro_use]
+// extern crate lazy_static;
