@@ -433,7 +433,7 @@ pub enum FlatType {
     Record(ImMap<RecordFieldLabel, Variable>, Variable),
     // Within a tag union, a tag can occur multiple times, e.g. [ Foo, Foo Int, Foo Bool Int ], but
     // only once for every arity, so not [ Foo Int, Foo Bool ]
-    TagUnion(ImMap<Symbol, ImMap<usize, Vec<Variable>>>, Variable),
+    TagUnion(ImMap<Symbol, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,
@@ -476,10 +476,8 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                     }
                     TagUnion(tags, ext_var) => {
                         occurs(subs, &new_seen, ext_var)
-                            || tags.values().any(|arities| {
-                                arities.values().any(|vars| {
-                                    vars.into_iter().any(|var| occurs(subs, &new_seen, *var))
-                                })
+                            || tags.values().any(|vars| {
+                                vars.into_iter().any(|var| occurs(subs, &new_seen, *var))
                             })
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => false,
@@ -552,11 +550,9 @@ fn get_var_names(
                 FlatType::TagUnion(tags, ext_var) => {
                     let mut taken_names = get_var_names(subs, ext_var, taken_names);
 
-                    for arities in tags.values() {
-                        for arity in arities.values() {
-                            for arg_var in arity {
-                                taken_names = get_var_names(subs, *arg_var, taken_names)
-                            }
+                    for vars in tags.values() {
+                        for arg_var in vars {
+                            taken_names = get_var_names(subs, *arg_var, taken_names)
                         }
                     }
 
@@ -703,7 +699,7 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
         }
 
         EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),
-        EmptyTagUnion => ErrorType::TagUnion(Vec::new(), TypeExt::Closed),
+        EmptyTagUnion => ErrorType::TagUnion(SendMap::default(), TypeExt::Closed),
 
         Record(vars_by_field, ext_var) => {
             let mut err_fields = SendMap::default();
@@ -730,8 +726,35 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
             }
         }
 
-        TagUnion(_tags, _ext_var) => {
-            panic!("TODO implement error type for TagUnion");
+        TagUnion(tags, ext_var) => {
+            let mut err_tags = SendMap::default();
+
+            for (tag, vars) in tags.into_iter() {
+                let mut err_vars = Vec::with_capacity(vars.len());
+
+                for var in vars {
+                    err_vars.push(var_to_err_type(subs, state, var));
+                }
+
+                err_tags.insert(tag, err_vars);
+            }
+
+            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+                ErrorType::TagUnion(sub_tags, sub_ext) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+                }
+
+                ErrorType::FlexVar(var) => {
+                    ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var))
+                }
+
+                ErrorType::RigidVar(var) => {
+                    ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var))
+                }
+
+                other =>
+                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+            }
         }
 
         Erroneous(_) => ErrorType::Error,
@@ -779,12 +802,8 @@ fn restore_content(subs: &mut Subs, content: &Content) {
                 subs.restore(*ext_var);
             }
             TagUnion(tags, ext_var) => {
-                for arities in tags.values() {
-                    for arity in arities.values() {
-                        for var in arity {
-                            subs.restore(*var);
-                        }
-                    }
+                for var in tags.values().flatten() {
+                    subs.restore(*var);
                 }
 
                 subs.restore(*ext_var);

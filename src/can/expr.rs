@@ -108,7 +108,7 @@ pub enum Expr {
         variant_var: Variable,
         ext_var: Variable,
         name: Symbol,
-        arguments: Vec<Located<Expr>>,
+        arguments: Vec<(Variable, Located<Expr>)>,
     },
 
     // Compiles, but will crash if reached
@@ -280,6 +280,17 @@ pub fn canonicalize_expr(
                     // We can't call a runtime error; bail out by propagating it!
                     return (fn_expr, output);
                 }
+                Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    ..
+                } => Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    arguments: args,
+                },
                 _ => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
                     Call(

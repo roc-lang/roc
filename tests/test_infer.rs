@@ -1028,7 +1028,7 @@ mod test_infer {
                 r#"\Foo -> 42
                 "#
             ),
-            "[ Foo ] -> Int",
+            "[ Foo ]* -> Int",
         );
     }
 
@@ -1042,7 +1042,18 @@ mod test_infer {
                         False -> 0
                 "#
             ),
-            "[ True, False ] -> Int",
+            "[ False, True ]* -> Int",
+        );
+    }
+
+    #[test]
+    fn tag_application() {
+        infer_eq(
+            indoc!(
+                r#"Foo "happy" 2020
+                "#
+            ),
+            "[ Foo Str Int ]*",
         );
     }
 }

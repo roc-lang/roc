@@ -381,7 +381,7 @@ pub enum ErrorType {
     FlexVar(Lowercase),
     RigidVar(Lowercase),
     Record(SendMap<RecordFieldLabel, ErrorType>, TypeExt),
-    TagUnion(Vec<(Uppercase, Vec<ErrorType>)>, TypeExt),
+    TagUnion(SendMap<Symbol, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(
         ModuleName,

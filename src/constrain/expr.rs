@@ -462,18 +462,44 @@ pub fn constrain_expr(
             ])
         }
         Tag {
-            variant_var: _,
+            variant_var,
             ext_var,
             name,
-            arguments: _,
-        } => Eq(
-            Type::TagUnion(
-                vec![(name.clone(), vec![])],
-                Box::new(Type::Variable(*ext_var)),
-            ),
-            expected,
-            region,
-        ),
+            arguments,
+        } => {
+            let mut vars = Vec::with_capacity(arguments.len());
+            let mut types = Vec::with_capacity(arguments.len());
+            let mut arg_cons = Vec::with_capacity(arguments.len());
+
+            for (var, loc_expr) in arguments.into_iter() {
+                let arg_con = constrain_expr(
+                    rigids,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    Expected::NoExpectation(Type::Variable(*var)),
+                );
+
+                arg_cons.push(arg_con);
+                vars.push(*var);
+                types.push(Type::Variable(*var));
+            }
+
+            let union_con = Eq(
+                Type::TagUnion(
+                    vec![(name.clone(), types)],
+                    Box::new(Type::Variable(*ext_var)),
+                ),
+                expected.clone(),
+                region,
+            );
+            let ast_con = Eq(Type::Variable(*variant_var), expected, region);
+
+            vars.push(*variant_var);
+            arg_cons.push(union_con);
+            arg_cons.push(ast_con);
+
+            exists(vars, And(arg_cons))
+        }
         RuntimeError(_) => True,
     }
 }

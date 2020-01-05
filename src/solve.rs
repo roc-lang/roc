@@ -438,18 +438,7 @@ fn type_to_variable(
                     tag_argument_vars.push(type_to_variable(subs, rank, pools, aliases, arg_type));
                 }
 
-                let f = |opt_value: Option<ImMap<usize, Vec<Variable>>>| -> Option<ImMap<usize, Vec<Variable>>>  {
-                    if let Some(mut current) = opt_value {
-                        current.insert(tag_argument_vars.len(), tag_argument_vars);
-                        Some(current)
-                    } else {
-                        let mut new = ImMap::default();
-                        new.insert(tag_argument_vars.len(), tag_argument_vars);
-                        Some(new)
-                    }
-                };
-
-                tag_vars = tag_vars.alter(f, tag.clone())
+                tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
             let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
@@ -676,14 +665,9 @@ fn adjust_rank_content(
                 TagUnion(tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var);
 
-                    for arities in tags.values() {
-                        for arity in arities.values() {
-                            for var in arity {
-                                rank = rank.max(adjust_rank(
-                                    subs, young_mark, visit_mark, group_rank, *var,
-                                ));
-                            }
-                        }
+                    for var in tags.values().flatten() {
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
                     }
 
                     rank
@@ -812,16 +796,12 @@ fn deep_copy_var_help(
                 TagUnion(tags, ext_var) => {
                     let mut new_tags = ImMap::default();
 
-                    for (tag, arities) in tags {
-                        let mut tag_at_arity = ImMap::default();
-                        for (arity, vars) in arities {
-                            let new_vars: Vec<Variable> = vars
-                                .into_iter()
-                                .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
-                                .collect();
-                            tag_at_arity.insert(arity, new_vars);
-                        }
-                        new_tags.insert(tag, tag_at_arity);
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                            .collect();
+                        new_tags.insert(tag, new_vars);
                     }
 
                     TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))

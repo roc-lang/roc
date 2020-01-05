@@ -98,12 +98,8 @@ fn find_names_needed(
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            for arities in tags.values() {
-                for arity in arities.values() {
-                    for var in arity {
-                        find_names_needed(*var, subs, roots, root_appearances, names_taken);
-                    }
-                }
+            for var in tags.values().flatten() {
+                find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
@@ -260,10 +256,8 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                 // Sort the fields so they always end up in the same order.
                 let mut sorted_fields = Vec::with_capacity(tags.len());
 
-                for (label, arities) in tags {
-                    for (_, vars) in arities {
-                        sorted_fields.push((label.clone(), vars));
-                    }
+                for (label, vars) in tags {
+                    sorted_fields.push((label.clone(), vars));
                 }
 
                 sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
