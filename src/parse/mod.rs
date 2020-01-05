@@ -1410,10 +1410,7 @@ fn private_tag<'a>() -> impl Parser<'a, &'a str> {
 
 /// This is mainly for matching tags in closure params, e.g. \Foo -> ...
 fn global_tag<'a>() -> impl Parser<'a, &'a str> {
-    skip_first!(
-        char('@'),
-        global_tag_or_ident(|first_char| first_char.is_uppercase())
-    )
+    global_tag_or_ident(|first_char| first_char.is_uppercase())
 }
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
