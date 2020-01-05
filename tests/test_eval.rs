@@ -90,6 +90,9 @@ mod test_gen {
                 .expect("errored");
 
             unsafe {
+                // Uncomment this to see the module's LLVM instruction output:
+                // env.module.print_to_stderr();
+
                 let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
                     .get_function(main_fn_name)
                     .ok()
