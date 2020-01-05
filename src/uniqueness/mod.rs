@@ -1,6 +1,8 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
+use crate::can::expr::Field;
 use crate::can::expr::Output;
+use crate::can::ident::Lowercase;
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::can::procedure::{Procedure, References};
@@ -636,7 +638,64 @@ pub fn canonicalize_expr(
             (output, And(constraints))
         }
 
-        Update { .. } => panic!("TODO implement record update for uniq"),
+        Update {
+            record_var,
+            ext_var,
+            ident,
+            symbol,
+            updates,
+        } => {
+            let mut fields: SendMap<Lowercase, Type> = SendMap::default();
+            let mut vars = Vec::with_capacity(updates.len() + 2);
+            let mut cons = Vec::with_capacity(updates.len() + 1);
+            for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
+                let (var, tipe, con) = constrain_field_update(
+                    rigids,
+                    var_store,
+                    var_usage,
+                    var,
+                    region,
+                    field_name.clone(),
+                    &loc_expr,
+                );
+                fields.insert(field_name, tipe);
+                vars.push(var);
+                cons.push(con);
+            }
+
+            let fields_type = constrain::lift(
+                var_store,
+                Type::Record(fields.clone(), Box::new(Type::Variable(*ext_var))),
+            );
+            let record_type = Type::Variable(*record_var);
+
+            // NOTE from elm compiler: fields_type is separate so that Error propagates better
+            let fields_con = Eq(
+                record_type.clone(),
+                Expected::NoExpectation(fields_type),
+                region,
+            );
+            let record_con = Eq(record_type.clone(), expected, region);
+
+            vars.push(*record_var);
+            vars.push(*ext_var);
+
+            let con = Lookup(
+                symbol.clone(),
+                Expected::ForReason(
+                    Reason::RecordUpdateKeys(ident.clone(), fields),
+                    record_type,
+                    region,
+                ),
+                region,
+            );
+
+            cons.push(con);
+            cons.push(fields_con);
+            cons.push(record_con);
+
+            (Output::default(), exists(vars, And(cons)))
+        }
 
         Access {
             ext_var,
@@ -1000,4 +1059,29 @@ pub fn rec_defs_help(
             ret_constraint: And(vec![And(rigid_info.constraints), body_con]),
         })),
     }))
+}
+
+#[inline(always)]
+fn constrain_field_update(
+    rigids: &Rigids,
+    var_store: &VarStore,
+    var_usage: &mut VarUsage,
+    var: Variable,
+    region: Region,
+    field: Lowercase,
+    loc_expr: &Located<Expr>,
+) -> (Variable, Type, Constraint) {
+    let field_type = Type::Variable(var);
+    let reason = Reason::RecordUpdateValue(field);
+    let expected = Expected::ForReason(reason, field_type.clone(), region);
+    let (_, con) = canonicalize_expr(
+        rigids,
+        var_store,
+        var_usage,
+        loc_expr.region,
+        &loc_expr.value,
+        expected,
+    );
+
+    (var, field_type, con)
 }
