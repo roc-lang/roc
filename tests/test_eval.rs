@@ -36,9 +36,6 @@ mod test_gen {
             let context = Context::create();
             let builder = context.create_builder();
             let module = context.create_module("app");
-            let execution_engine = module
-                .create_jit_execution_engine(OptimizationLevel::None)
-                .expect("errored");
 
             // Compute main_fn_type before moving subs to Env
             let main_fn_type = content_to_basic_type(&content, &mut subs, &context)
@@ -86,6 +83,11 @@ mod test_gen {
             if !main_fn.verify(true) {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
+
+            let execution_engine = env
+                .module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .expect("errored");
 
             unsafe {
                 let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
