@@ -17,10 +17,12 @@ mod test_gen {
     use inkwell::execution_engine::JitFunction;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc::gen::build::build_can_expr;
+    use roc::collections::{ImMap, MutMap};
+    use roc::gen::build::{build_expr, build_proc};
     use roc::gen::convert::content_to_basic_type;
     use roc::gen::env::Env;
     use roc::infer::infer_expr;
+    use roc::ll::expr::Expr;
     use roc::subs::Subs;
 
     macro_rules! assert_evals_to {
@@ -38,26 +40,50 @@ mod test_gen {
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("errored");
 
-            let fn_type = content_to_basic_type(&content, &mut subs, &context)
+            // Compute main_fn_type before moving subs to Env
+            let main_fn_type = content_to_basic_type(&content, &mut subs, &context)
                 .expect("Unable to infer type for test expr")
                 .fn_type(&[], false);
-            let main_fn_name = "$test_main";
-            let function = module.add_function(main_fn_name, fn_type, None);
-            let basic_block = context.append_basic_block(function, "entry");
+            let main_fn_name = "$Test.main";
 
-            builder.position_at_end(&basic_block);
-
+            // Compile and add all the Procs before adding main
+            let mut procs = MutMap::default();
             let env = Env {
                 subs,
                 builder: &builder,
                 context: &context,
                 module: arena.alloc(module),
             };
-            let ret = build_can_expr(&env, function, expr);
+
+            // Populate Procs and get the low-level Expr from the canonical Expr
+            let main_body = Expr::new(&arena, &env.subs, &env.module, &context, expr, &mut procs);
+
+            // Add all the Procs to the module
+            for (name, (opt_proc, _fn_val)) in procs.clone() {
+                if let Some(proc) = opt_proc {
+                    build_proc(&env, &ImMap::default(), name, proc, &procs);
+                }
+            }
+
+            // Add main to the module.
+            let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+
+            // Add main's body
+            let basic_block = context.append_basic_block(main_fn, "entry");
+
+            builder.position_at_end(&basic_block);
+
+            let ret = build_expr(
+                &env,
+                &ImMap::default(),
+                main_fn,
+                &main_body,
+                &mut MutMap::default(),
+            );
 
             builder.build_return(Some(&ret));
 
-            if !function.verify(true) {
+            if !main_fn.verify(true) {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
@@ -244,66 +270,37 @@ mod test_gen {
         );
     }
 
-    // #[test]
-    // fn gen_basic_fn() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 always42 : Num.Num Int.Integer -> Num.Num Int.Integer
-    //                 always42 = \num -> 42
+    #[test]
+    fn gen_basic_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    always42 : Num.Num Int.Integer -> Num.Num Int.Integer
+                    always42 = \num -> 42
 
-    //                 always42 5
-    //             "#
-    //         ),
-    //         42,
-    //         i64
-    //     );
-    // }
+                    always42 5
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn gen_when_fn() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 limitedNegate = \num ->
-    //                     when num is
-    //                         1 -> -1
-    //                         0 -> 0
+    #[test]
+    fn gen_when_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    limitedNegate = \num ->
+                        when num is
+                            1 -> -1
+                            _ -> 0
 
-    //                 limitedNegate 1
-    //             "#
-    //         ),
-    //         42,
-    //         i64
-    //     );
-    // }
-
-    // #[test]
-    // fn apply_unnamed_fn() {
-    //     assert_evals_to!(
-    //         // We could improve the perf of this scenario by
-    //         indoc!(
-    //             r#"
-    //                 (\a -> a) 5
-    //             "#
-    //         ),
-    //         5,
-    //         i64
-    //     );
-    // }
-
-    // #[test]
-    // fn return_unnamed_fn() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 alwaysIdentity = \_ -> (\a -> a)
-
-    //                 (alwaysIdentity 1) 3.14
-    //             "#
-    //         ),
-    //         3.14,
-    //         f64
-    //     );
-    // }
+                    limitedNegate 1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
 }

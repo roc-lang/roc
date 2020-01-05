@@ -17,9 +17,10 @@ pub type Procs<'a, 'ctx> = MutMap<InlinableString, (Option<Proc<'a>>, FunctionVa
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
-    args: &'a [(Layout<'a>, InlinableString)],
-    body: Expr<'a>,
-    closes_over: Layout<'a>,
+    pub args: &'a [(Layout<'a>, InlinableString, Variable)],
+    pub body: Expr<'a>,
+    pub closes_over: Layout<'a>,
+    pub ret_var: Variable,
 }
 
 struct Env<'a, 'ctx> {
@@ -328,7 +329,7 @@ fn add_closure<'a, 'ctx>(
         };
 
         arg_names.push(arg_name.clone());
-        proc_args.push((layout, arg_name));
+        proc_args.push((layout, arg_name, *arg_var));
     }
 
     let fn_type = ret_type.fn_type(arg_basic_types.into_bump_slice(), false);
@@ -336,7 +337,8 @@ fn add_closure<'a, 'ctx>(
     let proc = Proc {
         args: proc_args.into_bump_slice(),
         body: from_can(env, can_body, procs, None),
-        closes_over: Layout::ZeroSized,
+        closes_over: Layout::Struct(&[]),
+        ret_var,
     };
 
     procs.insert(name.clone(), (Some(proc), fn_val));

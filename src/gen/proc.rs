@@ -16,8 +16,6 @@ use crate::gen::convert::content_to_basic_type;
 use crate::gen::env::Env;
 use crate::subs::{Content, FlatType, Subs};
 
-type Procs<'ctx> = MutMap<Symbol, (Content, FunctionValue<'ctx>)>;
-
 fn extract_procs(loc_expr: Located<Expr>, module: &Module<'ctx>, name: Option<Lowercase>, procs, &mut Procs<'ctx>) -> Located<Expr> {
     let mut procs = Vec::new();
 
