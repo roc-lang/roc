@@ -299,7 +299,7 @@ mod test_gen {
                     limitedNegate = \num ->
                         when num is
                             1 -> -1
-                            _ -> 0
+                            _ -> num
 
                     limitedNegate 1
                 "#
