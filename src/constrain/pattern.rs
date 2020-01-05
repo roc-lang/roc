@@ -83,7 +83,7 @@ pub fn constrain_pattern(
                         .insert(symbol.clone(), Located::at(region, pat_type.clone()));
                 }
 
-                field_types.insert(RecordFieldLabel::Required(label.clone()), pat_type.clone());
+                field_types.insert(label.clone(), pat_type.clone());
 
                 // TODO investigate: shouldn't guard_var be constrained somewhere?
                 if let Some((_guard_var, loc_guard)) = guard {

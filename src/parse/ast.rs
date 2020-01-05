@@ -130,7 +130,10 @@ pub enum Expr<'a> {
 
     // Collection Literals
     List(Vec<'a, &'a Loc<Expr<'a>>>),
-    Record(Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>),
+    Record {
+        update: Option<&'a Loc<Expr<'a>>>,
+        fields: Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    },
 
     // Lookups
     Var(&'a [&'a str], &'a str),

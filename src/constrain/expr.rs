@@ -1,6 +1,7 @@
 use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
+use crate::can::expr::Field;
 use crate::can::ident::Lowercase;
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
@@ -15,7 +16,6 @@ use crate::types::AnnotationSource::*;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
 use crate::types::PReason;
-use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::types::{LetConstraint, PExpected, Reason};
 
@@ -71,16 +71,19 @@ pub fn constrain_expr(
                 let mut field_types = SendMap::default();
                 let mut field_vars = Vec::with_capacity(fields.len());
 
-                // Constraints need capacity for each field + 1 for the record itself.
-                let mut constraints = Vec::with_capacity(1 + fields.len());
+                // Constraints need capacity for each field
+                // + 1 for the record itself + 1 for record var
+                let mut constraints = Vec::with_capacity(2 + fields.len());
 
-                for (label, (field_var, loc_field_expr)) in fields {
+                for (label, field) in fields {
+                    let field_var = field.var;
+                    let loc_field_expr = &field.loc_expr;
                     let (field_type, field_con) =
-                        constrain_field(rigids, *field_var, loc_field_expr);
+                        constrain_field(rigids, field_var, &*loc_field_expr);
 
-                    field_vars.push(*field_var);
+                    field_vars.push(field_var);
                     field_exprs.insert(label.clone(), loc_field_expr);
-                    field_types.insert(RecordFieldLabel::Required(label.clone()), field_type);
+                    field_types.insert(label.clone(), field_type);
 
                     constraints.push(field_con);
                 }
@@ -103,6 +106,50 @@ pub fn constrain_expr(
 
                 exists(field_vars, And(constraints))
             }
+        }
+        Update {
+            record_var,
+            ext_var,
+            ident,
+            symbol,
+            updates,
+        } => {
+            let mut fields: SendMap<Lowercase, Type> = SendMap::default();
+            let mut vars = Vec::with_capacity(updates.len() + 2);
+            let mut cons = Vec::with_capacity(updates.len() + 1);
+            for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
+                let (var, tipe, con) =
+                    constrain_field_update(rigids, var, region, field_name.clone(), &loc_expr);
+                fields.insert(field_name, tipe);
+                vars.push(var);
+                cons.push(con);
+            }
+
+            let fields_type = Type::Record(fields.clone(), Box::new(Type::Variable(*ext_var)));
+            let record_type = Type::Variable(*record_var);
+
+            // NOTE from elm compiler: fields_type is separate so that Error propagates better
+            let fields_con = Eq(record_type.clone(), NoExpectation(fields_type), region);
+            let record_con = Eq(record_type.clone(), expected, region);
+
+            vars.push(*record_var);
+            vars.push(*ext_var);
+
+            let con = Lookup(
+                symbol.clone(),
+                ForReason(
+                    Reason::RecordUpdateKeys(ident.clone(), fields),
+                    record_type,
+                    region,
+                ),
+                region,
+            );
+
+            cons.push(con);
+            cons.push(fields_con);
+            cons.push(record_con);
+
+            exists(vars, And(cons))
         }
         Str(_) | BlockStr(_) => Eq(str_type(), expected, region),
         List(list_var, loc_elems) => {
@@ -357,7 +404,7 @@ pub fn constrain_expr(
 
             let mut rec_field_types = SendMap::default();
 
-            let label = RecordFieldLabel::Required(field.clone());
+            let label = field.clone();
             rec_field_types.insert(label, field_type.clone());
 
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
@@ -382,7 +429,7 @@ pub fn constrain_expr(
             let field_type = Variable(field_var);
 
             let mut field_types = SendMap::default();
-            let label = RecordFieldLabel::Required(field.clone());
+            let label = field.clone();
             field_types.insert(label, field_type.clone());
             let record_type = Type::Record(field_types, Box::new(ext_type));
 
@@ -721,53 +768,18 @@ pub fn rec_defs_help(
     }))
 }
 
-pub fn create_letnonrec_constraint(
-    new_rigids: Vec<Variable>,
-    flex_info: Info,
-    expr_con: Constraint,
-    ret_constraint: Constraint,
-) -> Constraint {
-    Let(Box::new(LetConstraint {
-        rigid_vars: new_rigids,
-        flex_vars: flex_info.vars,
-        def_types: flex_info.def_types.clone(),
-        defs_constraint: Let(Box::new(LetConstraint {
-            rigid_vars: Vec::new(),
-            flex_vars: Vec::new(),
-            def_types: SendMap::default(),
-            defs_constraint: And(flex_info.constraints),
-            ret_constraint: expr_con,
-        })),
-        ret_constraint,
-    }))
-}
+#[inline(always)]
+fn constrain_field_update(
+    rigids: &Rigids,
+    var: Variable,
+    region: Region,
+    field: Lowercase,
+    loc_expr: &Located<Expr>,
+) -> (Variable, Type, Constraint) {
+    let field_type = Type::Variable(var);
+    let reason = Reason::RecordUpdateValue(field);
+    let expected = ForReason(reason, field_type.clone(), region);
+    let con = constrain_expr(rigids, loc_expr.region, &loc_expr.value, expected);
 
-pub fn create_letrec_constraint(
-    rigid_info: Info,
-    flex_info: Info,
-    ret_constraint: Constraint,
-) -> Constraint {
-    // Rigid constraint for the def expr as a whole.
-    // This is a "LetRec" constraint; it supports recursion.
-    // (The only advantage of "Let" over "LetRec" is if you want to
-    // shadow things, and Roc disallows shadowing anyway.)
-    Let(Box::new(LetConstraint {
-        rigid_vars: rigid_info.vars,
-        flex_vars: Vec::new(),
-        def_types: rigid_info.def_types,
-        defs_constraint: True,
-        ret_constraint: Let(Box::new(LetConstraint {
-            rigid_vars: Vec::new(),
-            flex_vars: flex_info.vars,
-            def_types: flex_info.def_types.clone(),
-            defs_constraint: Let(Box::new(LetConstraint {
-                flex_vars: Vec::new(),
-                rigid_vars: Vec::new(),
-                def_types: flex_info.def_types,
-                defs_constraint: True,
-                ret_constraint: And(flex_info.constraints),
-            })),
-            ret_constraint: And(vec![And(rigid_info.constraints), ret_constraint]),
-        })),
-    }))
+    (var, field_type, con)
 }

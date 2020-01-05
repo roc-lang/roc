@@ -556,7 +556,7 @@ better way to write that code.
 The unnatural-looking syntax is the language's way of nudging you to reconsider,
 to search a little further for a better way to express things.
 
-## Record Update and Optional Fields
+## Record Update
 
 Elm has "record update" syntax like this:
 
@@ -564,82 +564,23 @@ Elm has "record update" syntax like this:
 { user | firstName = "Sam", lastName = "Sample" }
 ```
 
-Instead, Roc has "record merge" syntax like this:
+Roc has the same feature, but its syntax looks like this:
 
 ```elm
-user...{ firstName: "Sam", lastName: "Sample" }
+{ user & firstName: "Sam", lastName: "Sample" }
 ```
 
-This merges all the fields from `user` and the record after the `...`.
-
-This works even if their fields do not overlap perfectly. So this works:
-
-```
-{ x: 1, y: 2 }...{ a: 1, b: 2, x: 3 }
-
-# { x: 3, y: 2, a: 1, b: 2 }
-```
-
-If any fields *do* overlap, their values must have compatible types.
-So `{ x: 1 }...{ x: "foo" }` would not compile, but `{ nums: [ 1.1, 2.2 ] }...{ nums: [] }` would - because `List Float` is compatible with `List *`.
-
-> This is different from the Elm 0.13 "extensible records" feature. That feature
-> let you say "given this record, whose shape I may not know at all, add this field."
-> Roc's `...` merge syntax does not offer that.
-
-This "record merge" feature is designed to make "config records" nicer, by allowing this:
-
-```
-foo = \opts ->
-    config = { timeZone: utc, language: en, encoding: utf8 }...opts
-
-    …
-```
-
-I can call `foo` in any of these ways:
-
-```
-foo { timeZone: cet }
-
-foo { timeZone: cet, lang: nl }
-
-foo { language: nl }
-
-foo { timeZone: cet, lang: nl, encoding: utf16 }
-
-foo {}
-```
-
-These all compile and work, because `foo` accepts a record with *optional fields*,
-and its implementation fills in any missing fields with default values.
-
-The type of `foo` could be written as:
+The record before the `&` can be qualified, like so:
 
 ```elm
-foo : { timeZone? : Time.Zone, lang? : Lang, encoding? : Encoding }* -> …
+{ Foo.defaultConfig & timeZone: utc }
 ```
 
-> It could be written with or without the `*` at the end, like any other record.
-> I included it because this is the type the compiler would infer, based on
-> the usage of `...` in the implementation.
+However, it cannot involve record field access. So this would *not* compile:
 
-When a record field in an annotation ends in `?`, it is an optional field.
-Optional fields work just like normal fields, except:
-
-* They cannot be accessed with the normal `.` syntax. If a record has a type of `{ foo? : Int }`, trying to invoke `.foo` will give a compile error - because `foo` might not be present!
-* If you merge (using `...`) a record with an optional field, and the record on the other side of the merge (either side) has a non-optional version of that field, the resulting record has the field non-optional. One way or another, there *will* be a value associated with that field after the merge!
-* Optional fields can be accessed directly using `myRecord.foo?` - which returns a `Result` containing either `Ok` wrapping the value (if the field was present on the record) or `Err MissingField` if the field was missing.
-
-> The reason for this last bit of syntax is also for the sake of config records.
->
-> Without it, if you wanted to have an optional field like `{ limit? : Int }`
-> and you wanted it to default to "unlimited" if the user did not specify a `limit` field,
-> then you would have to resort to something like merging it with a record
-> that has `limit: Int.highestValue` and do a special-case check later which
-> enables the "unlimited" behavior if `limit` is set to exactly that magic number.
-
-Optional fields should not come up nearly as often as normal fields.
-In the particular situation of config records, though, they should make things nicer.
+```elm
+{ Foo.defaults.config & timeZone: utc }
+```
 
 ## Standard Data Structures
 

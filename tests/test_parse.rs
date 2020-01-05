@@ -21,6 +21,7 @@ mod test_parse {
     use roc::operator::BinOp::*;
     use roc::operator::CalledVia;
     use roc::operator::UnaryOp;
+    use roc::parse::ast::AssignedField::*;
     use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
     use roc::parse::ast::Pattern::{self, *};
@@ -243,9 +244,40 @@ mod test_parse {
     #[test]
     fn empty_record() {
         let arena = Bump::new();
-        let expected = Record(Vec::new_in(&arena));
+        let expected = Record {
+            fields: Vec::new_in(&arena),
+            update: None,
+        };
         let actual = parse_with(&arena, "{}");
 
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn record_update() {
+        let arena = Bump::new();
+        let label1 = LabeledValue(
+            Located::new(0, 0, 16, 17, "x"),
+            &[],
+            arena.alloc(Located::new(0, 0, 19, 20, Int("5"))),
+        );
+        let label2 = LabeledValue(
+            Located::new(0, 0, 22, 23, "y"),
+            &[],
+            arena.alloc(Located::new(0, 0, 25, 26, Int("0"))),
+        );
+        let fields = bumpalo::vec![in &arena;
+            Located::new(0, 0, 16, 20, label1),
+            Located::new(0, 0, 22, 26, label2)
+        ];
+        let module_parts = bumpalo::vec![in &arena; "Foo", "Bar"].into_bump_slice();
+        let update_target = Located::new(0, 0, 2, 13, Var(module_parts, "baz"));
+        let expected = Record {
+            update: Some(&*arena.alloc(update_target)),
+            fields,
+        };
+
+        let actual = parse_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
         assert_eq!(Ok(expected), actual);
     }
 
@@ -1157,10 +1189,10 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 8, RecordDestructure(fields))),
+            arena.alloc(Located::new(1, 1, 1, 8, RecordDestructure(fields))),
             arena.alloc(Located::new(1, 1, 11, 12, Int("5"))),
         );
-        let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 8, def1));
+        let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 8, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
                 arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),

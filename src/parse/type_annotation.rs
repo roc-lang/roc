@@ -44,7 +44,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
 
     map_with_arena!(
         and!(
-            record!(
+            record_without_update!(
                 move |arena, state| term(min_indent).parse(arena, state),
                 min_indent
             ),

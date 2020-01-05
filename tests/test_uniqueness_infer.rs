@@ -916,4 +916,18 @@ mod test_infer_uniq {
             "Attr.Attr * {}*",
         );
     }
+
+    #[test]
+    fn record_update() {
+        infer_eq(
+            indoc!(
+                r#"
+                user = { year: "foo", name: "Sam" }
+
+                { user & year: "foo" }
+                "#
+            ),
+            "Attr.Attr * { year : (Attr.Attr * Str) }{ name : (Attr.Attr * Str) }",
+        );
+    }
 }

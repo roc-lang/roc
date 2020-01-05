@@ -158,8 +158,9 @@ fn unify_record(
     let shared_fields = fields1
         .clone()
         .intersection_with(fields2.clone(), |one, two| (one, two));
-    let unique_fields1 = fields1.clone().difference(fields2.clone());
-    let unique_fields2 = fields2.difference(fields1);
+    // NOTE: don't use `difference` here, in contrast to Haskell, im-rc `difference` is symmetric
+    let unique_fields1 = fields1.clone().relative_complement(fields2.clone());
+    let unique_fields2 = fields2.relative_complement(fields1);
 
     if unique_fields1.is_empty() {
         if unique_fields2.is_empty() {
@@ -193,10 +194,12 @@ fn unify_record(
         field_problems
     } else {
         let other_fields = unique_fields1.clone().union(unique_fields2.clone());
+
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
         let flat_type1 = FlatType::Record(unique_fields1, rec1.ext);
-        let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let flat_type2 = FlatType::Record(unique_fields2, rec2.ext);
+
+        let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
         let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);

@@ -284,7 +284,7 @@ mod test_load {
     #[test]
     fn load_records() {
         test_async(async {
-            use roc::types::{ErrorType, Mismatch, Problem, RecordExt, RecordFieldLabel};
+            use roc::types::{ErrorType, Mismatch, Problem, RecordExt};
 
             let mut deps = Vec::new();
             let (module, mut subs) =
@@ -301,7 +301,7 @@ mod test_load {
             let a = ErrorType::FlexVar("a".into());
 
             let mut record = SendMap::default();
-            record.insert(RecordFieldLabel::Required("x".into()), a);
+            record.insert("x".into(), a);
 
             let problem = Problem::Mismatch(
                 Mismatch::TypeMismatch,

@@ -76,7 +76,7 @@ pub enum Expr {
     ),
 
     // Product Types
-    Record(Variable, SendMap<Lowercase, (Variable, Located<Expr>)>),
+    Record(Variable, SendMap<Lowercase, Field>),
 
     /// Empty record constant
     EmptyRecord,
@@ -95,11 +95,27 @@ pub enum Expr {
         field: Lowercase,
     },
 
+    Update {
+        record_var: Variable,
+        ext_var: Variable,
+        symbol: Symbol,
+        ident: Ident,
+        updates: SendMap<Lowercase, Field>,
+    },
+
     // Sum Types
     Tag(Box<str>, Vec<Expr>),
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Field {
+    pub var: Variable,
+    // The region of the full `foo: f bar`, rather than just `f bar`
+    pub region: Region,
+    pub loc_expr: Box<Located<Expr>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,26 +145,53 @@ pub fn canonicalize_expr(
 
             (answer, Output::default())
         }
-        ast::Expr::Record(fields) => {
+        ast::Expr::Record {
+            fields,
+            update: Some(loc_update),
+        } => {
+            let ident = if let ast::Expr::Var(module_parts, name) = &loc_update.value {
+                Ident::new(module_parts, name)
+            } else {
+                panic!(
+                    "TODO canonicalize invalid record update (non-Var in update position)\n{:?}",
+                    &loc_update.value
+                );
+            };
+
+            let (can_update, update_out) =
+                canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
+            if let Var {
+                resolved_symbol, ..
+            } = can_update.value
+            {
+                let (can_fields, mut output) = canonicalize_fields(env, var_store, scope, fields);
+
+                output.references = output.references.union(update_out.references);
+
+                let answer = Update {
+                    record_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    symbol: resolved_symbol,
+                    ident,
+                    updates: can_fields,
+                };
+
+                (answer, output)
+            } else {
+                panic!(
+                    "TODO canonicalize invalid record update (non-Var in update position)\n{:?}",
+                    can_update.value
+                );
+            }
+        }
+        ast::Expr::Record {
+            fields,
+            update: None,
+        } => {
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
             } else {
-                let mut can_fields = SendMap::default();
-                let mut output = Output::default();
-
-                for loc_field in fields.iter() {
-                    let (label, field_expr, field_out, field_var) = canonicalize_field(
-                        env,
-                        var_store,
-                        scope,
-                        &loc_field.value,
-                        loc_field.region,
-                    );
-
-                    can_fields.insert(label, (field_var, field_expr));
-
-                    output.references = output.references.union(field_out.references);
-                }
+                let (can_fields, output) = canonicalize_fields(env, var_store, scope, fields);
 
                 (Record(var_store.fresh(), can_fields), output)
             }
@@ -474,7 +517,8 @@ pub fn canonicalize_expr(
         | ast::Expr::MalformedClosure
         | ast::Expr::PrecedenceConflict(_, _, _) => {
             panic!(
-                "TODO restore the rest of canonicalize()'s branches {:?}",
+                "TODO restore the rest of canonicalize()'s branches {:?} {:?}",
+                &expr,
                 local_successors(&References::new(), &env.closures)
             );
         }
@@ -834,6 +878,33 @@ fn resolve_ident<'a>(
             }
         }
     }
+}
+
+fn canonicalize_fields<'a>(
+    env: &mut Env,
+    var_store: &VarStore,
+    scope: &mut Scope,
+    fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
+) -> (SendMap<Lowercase, Field>, Output) {
+    let mut can_fields = SendMap::default();
+    let mut output = Output::default();
+
+    for loc_field in fields.iter() {
+        let (label, field_expr, field_out, field_var) =
+            canonicalize_field(env, var_store, scope, &loc_field.value, loc_field.region);
+
+        let field = Field {
+            var: field_var,
+            region: loc_field.region,
+            loc_expr: Box::new(field_expr),
+        };
+
+        can_fields.insert(label, field);
+
+        output.references = output.references.union(field_out.references);
+    }
+
+    (can_fields, output)
 }
 
 fn canonicalize_field<'a>(

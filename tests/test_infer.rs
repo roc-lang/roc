@@ -997,17 +997,16 @@ mod test_infer {
     }
 
     #[test]
-    fn optional_field() {
+    fn record_update() {
         infer_eq(
             indoc!(
                 r#"
-                foo : { x? : Int } -> Int 
-                foo = \_ -> 42
+                user = { year: "foo", name: "Sam" }
 
-                foo
-            "#
+                { user & year: "foo" }
+                "#
             ),
-            "{ x? : Int } -> Int",
+            "{ year : Str }{ name : Str }",
         );
     }
 }
