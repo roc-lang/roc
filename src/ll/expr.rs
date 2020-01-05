@@ -201,10 +201,10 @@ fn from_can<'a, 'ctx>(
         }
 
         When {
+            cond_var,
             expr_var,
             loc_cond,
             branches,
-            ..
         } => {
             debug_assert!(!branches.is_empty());
 
@@ -257,13 +257,13 @@ fn from_can<'a, 'ctx>(
                 store_pattern(
                     env,
                     loc_pattern.value,
-                    loc_branch.value,
-                    expr_var,
+                    loc_cond.value,
+                    cond_var,
                     procs,
                     &mut stored,
                 );
 
-                let ret = from_can(env, loc_cond.value, procs, None);
+                let ret = from_can(env, loc_branch.value, procs, None);
 
                 Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
             } else {
