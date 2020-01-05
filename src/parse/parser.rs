@@ -666,7 +666,7 @@ macro_rules! collection {
                 // We could change the AST to add extra storage specifically to
                 // support empty literals containing newlines or comments, but this
                 // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!(char(' ')),
+                zero_or_more!($crate::parse::parser::char(' ')),
                 skip_second!(
                     $crate::parse::parser::sep_by0(
                         $delimiter,
@@ -932,9 +932,8 @@ macro_rules! record_field {
         }
     };
 }
-
 #[macro_export]
-macro_rules! record {
+macro_rules! record_without_update {
     ($val_parser:expr, $min_indent:expr) => {
         collection!(
             char('{'),
@@ -942,6 +941,57 @@ macro_rules! record {
             char(','),
             char('}'),
             $min_indent
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! record {
+    ($val_parser:expr, $min_indent:expr) => {
+        skip_first!(
+            $crate::parse::parser::char('{'),
+            and!(
+                // You can optionally have an identifier followed by an '&' to
+                // make this a record update, e.g. { Foo.user & username: "blah" }.
+                $crate::parse::parser::optional(skip_second!(
+                    $crate::parse::blankspace::space0_around(
+                        // We wrap the ident in an Expr here,
+                        // so that we have a Spaceable value to work with,
+                        // and then in canonicalization verify that it's an Expr::Var
+                        // (and not e.g. an `Expr::Access`) and extract its string.
+                        loc!(map_with_arena!(
+                            $crate::parse::ident(),
+                            $crate::parse::ident_to_expr
+                        )),
+                        $min_indent
+                    ),
+                    $crate::parse::parser::char('&')
+                )),
+                loc!(skip_first!(
+                    // We specifically allow space characters inside here, so that
+                    // `{  }` can be successfully parsed as an empty record, and then
+                    // changed by the formatter back into `{}`.
+                    //
+                    // We don't allow newlines or comments in the middle of empty
+                    // collections because those are normally stored in an Expr,
+                    // and there's no Expr in which to store them in an empty collection!
+                    //
+                    // We could change the AST to add extra storage specifically to
+                    // support empty literals containing newlines or comments, but this
+                    // does not seem worth even the tiniest regression in compiler performance.
+                    zero_or_more!($crate::parse::parser::char(' ')),
+                    skip_second!(
+                        $crate::parse::parser::sep_by0(
+                            $crate::parse::parser::char(','),
+                            $crate::parse::blankspace::space0_around(
+                                loc!(record_field!($val_parser, $min_indent)),
+                                $min_indent
+                            )
+                        ),
+                        $crate::parse::parser::char('}')
+                    )
+                ))
+            )
         )
     };
 }

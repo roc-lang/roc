@@ -94,8 +94,8 @@ pub fn fmt_expr<'a>(
 
             buf.push_str(string);
         }
-        Record(loc_fields) => {
-            fmt_record(buf, loc_fields, indent, apply_needs_parens);
+        Record { fields, update } => {
+            fmt_record(buf, update, fields, indent, apply_needs_parens);
         }
         Closure(loc_patterns, loc_ret) => {
             fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -395,7 +395,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
                     .any(|loc_pattern| is_multiline_pattern(&loc_pattern.value))
         }
 
-        Record(loc_fields) => loc_fields
+        Record { fields, .. } => fields
             .iter()
             .any(|loc_field| is_multiline_field(&loc_field.value)),
     }
@@ -530,6 +530,7 @@ pub fn fmt_closure<'a>(
 
 pub fn fmt_record<'a>(
     buf: &mut String<'a>,
+    _update: &Option<&'a Located<Expr<'a>>>,
     loc_fields: &'a Vec<'a, Located<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
     apply_needs_parens: bool,

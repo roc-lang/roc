@@ -284,7 +284,7 @@ mod test_load {
     #[test]
     fn load_records() {
         test_async(async {
-            use roc::types::{ErrorType, Mismatch, Problem, RecordExt, RecordFieldLabel};
+            use roc::types::{ErrorType, Mismatch, Problem, RecordExt};
 
             let mut deps = Vec::new();
             let (module, mut subs) =

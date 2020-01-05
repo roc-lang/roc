@@ -243,7 +243,10 @@ mod test_parse {
     #[test]
     fn empty_record() {
         let arena = Bump::new();
-        let expected = Record(Vec::new_in(&arena));
+        let expected = Record {
+            fields: Vec::new_in(&arena),
+            update: None,
+        };
         let actual = parse_with(&arena, "{}");
 
         assert_eq!(Ok(expected), actual);
@@ -1157,10 +1160,10 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 8, RecordDestructure(fields))),
+            arena.alloc(Located::new(1, 1, 1, 8, RecordDestructure(fields))),
             arena.alloc(Located::new(1, 1, 11, 12, Int("5"))),
         );
-        let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 8, def1));
+        let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 8, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
                 arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),

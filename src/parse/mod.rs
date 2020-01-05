@@ -285,10 +285,13 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
 
         Expr::ParensAround(sub_expr) | Expr::Nested(sub_expr) => expr_to_pattern(arena, sub_expr),
 
-        Expr::Record(loc_assigned_fields) => {
-            let mut loc_patterns = Vec::with_capacity_in(loc_assigned_fields.len(), arena);
+        Expr::Record {
+            fields,
+            update: None,
+        } => {
+            let mut loc_patterns = Vec::with_capacity_in(fields.len(), arena);
 
-            for loc_assigned_field in loc_assigned_fields {
+            for loc_assigned_field in fields {
                 let region = loc_assigned_field.region;
                 let value = assigned_expr_field_to_pattern(arena, &loc_assigned_field.value)?;
 
@@ -324,6 +327,9 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::When(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict(_, _, _)
+        | Expr::Record {
+            update: Some(_), ..
+        }
         | Expr::UnaryOp(_, _) => Err(Fail {
             attempting: Attempting::Def,
             reason: FailReason::InvalidPattern,
@@ -797,7 +803,7 @@ fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     then(
-        record!(loc!(pattern(min_indent)), min_indent),
+        record_without_update!(loc!(pattern(min_indent)), min_indent),
         move |arena, state, assigned_fields| {
             let mut patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
             for assigned_field in assigned_fields {
@@ -1293,17 +1299,20 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         and!(
             attempt!(
                 Attempting::Record,
-                loc!(record!(loc!(expr(min_indent)), min_indent))
+                record!(loc!(expr(min_indent)), min_indent)
             ),
             optional(and!(
                 space0(min_indent),
                 either!(equals_with_indent(), colon_with_indent())
             ))
         ),
-        move |arena, state, (loc_assigned_fields, opt_def)| match opt_def {
+        move |arena, state, ((opt_update, loc_assigned_fields), opt_def)| match opt_def {
             None => {
                 // This is a record literal, not a destructure.
-                let mut value = Expr::Record(loc_assigned_fields.value);
+                let mut value = Expr::Record {
+                    update: opt_update.map(|loc_expr| &*arena.alloc(loc_expr)),
+                    fields: loc_assigned_fields.value,
+                };
 
                 // there can be field access, e.g. `{ x : 4 }.x`
                 let (accesses, state) =
