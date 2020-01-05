@@ -760,10 +760,7 @@ fn parse_closure_param<'a>(
             char(')')
         ),
         // The least common, but still allowed, e.g. \Foo -> ...
-        loc!(one_of!(
-            map!(private_tag(), Pattern::PrivateTag),
-            map!(global_tag(), Pattern::GlobalTag)
-        ))
+        loc!(tag_pattern())
     )
     .parse(arena, state)
 }
@@ -1410,10 +1407,7 @@ fn private_tag<'a>() -> impl Parser<'a, &'a str> {
 
 /// This is mainly for matching tags in closure params, e.g. \Foo -> ...
 fn global_tag<'a>() -> impl Parser<'a, &'a str> {
-    skip_first!(
-        char('@'),
-        global_tag_or_ident(|first_char| first_char.is_uppercase())
-    )
+    global_tag_or_ident(|first_char| first_char.is_uppercase())
 }
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
