@@ -542,9 +542,15 @@ pub fn optional<'a, P, T>(parser: P) -> impl Parser<'a, Option<T>>
 where
     P: Parser<'a, T>,
 {
-    move |arena: &'a Bump, state: State<'a>| match parser.parse(arena, state) {
-        Ok((out1, state)) => Ok((Some(out1), state)),
-        Err((_, state)) => Ok((None, state)),
+    move |arena: &'a Bump, state: State<'a>| {
+        // We have to clone this because if the optional parser fails,
+        // we need to revert back to the original state.
+        let original_state = state.clone();
+
+        match parser.parse(arena, state) {
+            Ok((out1, state)) => Ok((Some(out1), state)),
+            Err(_) => Ok((None, original_state)),
+        }
     }
 }
 
