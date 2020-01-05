@@ -681,6 +681,20 @@ mod test_parse {
     // }
 
     #[test]
+    fn tag_pattern() {
+        let arena = Bump::new();
+        let pattern = Located::new(0, 0, 1, 6, Pattern::GlobalTag("Thing"));
+        let patterns = bumpalo::vec![in &arena; pattern];
+        let expected = Closure(
+            arena.alloc(patterns),
+            arena.alloc(Located::new(0, 0, 10, 12, Int("42"))),
+        );
+        let actual = parse_with(&arena, "\\Thing -> 42");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn private_qualified_tag() {
         let arena = Bump::new();
         let expected = Expr::MalformedIdent("@One.Two.Whee");
