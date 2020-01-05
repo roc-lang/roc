@@ -2,6 +2,7 @@ use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{MutSet, SendMap};
+use crate::ident::Ident;
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
 use crate::region::Region;
@@ -274,7 +275,7 @@ pub enum Reason {
     WhenBranch { index: usize },
     ElemInList,
     RecordUpdateValue(Lowercase),
-    RecordUpdateKeys(Lowercase, SendMap<Lowercase, Type>),
+    RecordUpdateKeys(Ident, SendMap<Lowercase, Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

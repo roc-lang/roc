@@ -106,7 +106,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 value,
             })
         }
-        Record(fields) | Nested(Record(fields)) => {
+        Record { fields, update } | Nested(Record { fields, update }) => {
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
             for field in fields {
@@ -120,7 +120,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             arena.alloc(Located {
                 region: loc_expr.region,
-                value: Record(new_fields),
+                value: Record {
+                    update: *update,
+                    fields: new_fields,
+                },
             })
         }
         Closure(loc_patterns, loc_ret) | Nested(Closure(loc_patterns, loc_ret)) => {

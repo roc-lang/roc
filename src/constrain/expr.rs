@@ -1,7 +1,7 @@
 use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
-use crate::can::expr::FieldUpdate;
+use crate::can::expr::Field;
 use crate::can::ident::Lowercase;
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
@@ -74,11 +74,13 @@ pub fn constrain_expr(
                 // Constraints need capacity for each field + 1 for the record itself.
                 let mut constraints = Vec::with_capacity(1 + fields.len());
 
-                for (label, (field_var, loc_field_expr)) in fields {
+                for (label, field) in fields {
+                    let field_var = field.var;
+                    let loc_field_expr = &field.loc_expr;
                     let (field_type, field_con) =
-                        constrain_field(rigids, *field_var, loc_field_expr);
+                        constrain_field(rigids, field_var, &*loc_field_expr);
 
-                    field_vars.push(*field_var);
+                    field_vars.push(field_var);
                     field_exprs.insert(label.clone(), loc_field_expr);
                     field_types.insert(label.clone(), field_type);
 
@@ -107,14 +109,14 @@ pub fn constrain_expr(
         Update {
             record_var,
             ext_var,
-            name,
+            ident,
             symbol,
             updates,
         } => {
             let mut fields: SendMap<Lowercase, Type> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
             let mut cons = Vec::with_capacity(updates.len() + 1);
-            for (field_name, FieldUpdate { var, loc_expr, .. }) in updates.clone() {
+            for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
                 let (var, tipe, con) =
                     constrain_field_update(rigids, var, region, field_name.clone(), &loc_expr);
                 fields.insert(field_name, tipe);
@@ -137,7 +139,7 @@ pub fn constrain_expr(
             let con = Lookup(
                 symbol.clone(),
                 ForReason(
-                    Reason::RecordUpdateKeys(name.clone(), fields),
+                    Reason::RecordUpdateKeys(ident.clone(), fields),
                     record_type,
                     region,
                 ),

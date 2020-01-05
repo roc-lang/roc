@@ -202,10 +202,11 @@ pub fn canonicalize_expr(
             let mut constraints = Vec::with_capacity(1 + fields.len());
             let mut output = Output::default();
 
-            for (label, (_, loc_expr)) in fields.iter() {
+            for (label, ref field) in fields.iter() {
                 let field_var = var_store.fresh();
                 let field_type = Variable(field_var);
                 let field_expected = Expected::NoExpectation(field_type.clone());
+                let loc_expr = &*field.loc_expr;
                 let (field_out, field_con) = canonicalize_expr(
                     rigids,
                     var_store,
