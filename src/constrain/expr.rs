@@ -768,57 +768,6 @@ pub fn rec_defs_help(
     }))
 }
 
-pub fn create_letnonrec_constraint(
-    new_rigids: Vec<Variable>,
-    flex_info: Info,
-    expr_con: Constraint,
-    ret_constraint: Constraint,
-) -> Constraint {
-    Let(Box::new(LetConstraint {
-        rigid_vars: new_rigids,
-        flex_vars: flex_info.vars,
-        def_types: flex_info.def_types.clone(),
-        defs_constraint: Let(Box::new(LetConstraint {
-            rigid_vars: Vec::new(),
-            flex_vars: Vec::new(),
-            def_types: SendMap::default(),
-            defs_constraint: And(flex_info.constraints),
-            ret_constraint: expr_con,
-        })),
-        ret_constraint,
-    }))
-}
-
-pub fn create_letrec_constraint(
-    rigid_info: Info,
-    flex_info: Info,
-    ret_constraint: Constraint,
-) -> Constraint {
-    // Rigid constraint for the def expr as a whole.
-    // This is a "LetRec" constraint; it supports recursion.
-    // (The only advantage of "Let" over "LetRec" is if you want to
-    // shadow things, and Roc disallows shadowing anyway.)
-    Let(Box::new(LetConstraint {
-        rigid_vars: rigid_info.vars,
-        flex_vars: Vec::new(),
-        def_types: rigid_info.def_types,
-        defs_constraint: True,
-        ret_constraint: Let(Box::new(LetConstraint {
-            rigid_vars: Vec::new(),
-            flex_vars: flex_info.vars,
-            def_types: flex_info.def_types.clone(),
-            defs_constraint: Let(Box::new(LetConstraint {
-                flex_vars: Vec::new(),
-                rigid_vars: Vec::new(),
-                def_types: flex_info.def_types,
-                defs_constraint: True,
-                ret_constraint: And(flex_info.constraints),
-            })),
-            ret_constraint: And(vec![And(rigid_info.constraints), ret_constraint]),
-        })),
-    }))
-}
-
 #[inline(always)]
 fn constrain_field_update(
     rigids: &Rigids,
