@@ -760,10 +760,7 @@ fn parse_closure_param<'a>(
             char(')')
         ),
         // The least common, but still allowed, e.g. \Foo -> ...
-        loc!(one_of!(
-            map!(private_tag(), Pattern::PrivateTag),
-            map!(global_tag(), Pattern::GlobalTag)
-        ))
+        loc!(tag_pattern())
     )
     .parse(arena, state)
 }
