@@ -1009,4 +1009,15 @@ mod test_infer {
             "{ year : Str }{ name : Str }",
         );
     }
+
+    #[test]
+    fn simple_tag() {
+        infer_eq(
+            indoc!(
+                r#"Foo
+                "#
+            ),
+            "[ Foo ]*",
+        );
+    }
 }

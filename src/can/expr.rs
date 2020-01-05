@@ -1,6 +1,6 @@
 use crate::can::def::{can_defs_with_return, Def};
 use crate::can::env::Env;
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, Uppercase};
 use crate::can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
@@ -104,7 +104,12 @@ pub enum Expr {
     },
 
     // Sum Types
-    Tag(Box<str>, Vec<Expr>),
+    Tag {
+        variant_var: Variable,
+        ext_var: Variable,
+        name: Uppercase,
+        arguments: Vec<Located<Expr>>,
+    },
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
@@ -510,8 +515,22 @@ pub fn canonicalize_expr(
                 Output::default(),
             )
         }
+        ast::Expr::GlobalTag(tag) => {
+            let variant_var = var_store.fresh();
+            let ext_var = var_store.fresh();
+            let tag_name: Uppercase = (*tag).into();
+
+            (
+                Tag {
+                    name: tag_name,
+                    arguments: vec![],
+                    variant_var,
+                    ext_var,
+                },
+                Output::default(),
+            )
+        }
         ast::Expr::If(_)
-        | ast::Expr::GlobalTag(_)
         | ast::Expr::PrivateTag(_)
         | ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure

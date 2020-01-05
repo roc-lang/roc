@@ -461,9 +461,19 @@ pub fn constrain_expr(
                 Eq(Type::Variable(*var), expected, loc_ret.region),
             ])
         }
-        Tag(_, _) => {
-            panic!("TODO constrain Tag");
-        }
+        Tag {
+            variant_var: _,
+            ext_var,
+            name,
+            arguments: _,
+        } => Eq(
+            Type::TagUnion(
+                vec![(name.clone(), vec![])],
+                Box::new(Type::Variable(*ext_var)),
+            ),
+            expected,
+            region,
+        ),
         RuntimeError(_) => True,
     }
 }

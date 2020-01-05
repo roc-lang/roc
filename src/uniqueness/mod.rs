@@ -245,8 +245,8 @@ pub fn canonicalize_expr(
 
             (output, constraint)
         }
-        Tag(name, arguments) => {
-            panic!("TODO implement tag {:?} {:?}", name, arguments);
+        Tag { .. } => {
+            panic!("TODO implement tag");
         }
         List(variable, loc_elems) => {
             if loc_elems.is_empty() {

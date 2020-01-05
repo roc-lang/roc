@@ -271,6 +271,25 @@ fn unify_flat_type(
 
             unify_record(subs, pool, ctx, rec1, rec2)
         }
+
+        (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(left.clone())),
+
+        (TagUnion(tags, ext), EmptyTagUnion) if tags.is_empty() => {
+            unify_pool(subs, pool, *ext, ctx.second)
+        }
+
+        (EmptyTagUnion, TagUnion(tags, ext)) if tags.is_empty() => {
+            unify_pool(subs, pool, ctx.first, *ext)
+        }
+
+        (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
+            // let rec1 = gather_fields(subs, fields1.clone(), *ext1);
+            // let rec2 = gather_fields(subs, fields2.clone(), *ext2);
+
+            // unify_record(subs, pool, ctx, rec1, rec2)
+            panic!("TODO");
+        }
+
         (
             Apply {
                 module_name: l_module_name,
