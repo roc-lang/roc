@@ -88,10 +88,10 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-            when 1 is
-                1 -> 12
-                _ -> 34
-            "#
+                    when 1 is
+                        1 -> 12
+                        _ -> 34
+                "#
             ),
             12,
             i64
@@ -103,12 +103,25 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-            when 2 is
-                1 -> 63
-                _ -> 48
-            "#
+                    when 2 is
+                        1 -> 63
+                        _ -> 48
+                "#
             ),
             48,
+            i64
+        );
+    }
+    #[test]
+    fn gen_when_one_branch() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when 3.14 is
+                        _ -> 23
+                "#
+            ),
+            23,
             i64
         );
     }
