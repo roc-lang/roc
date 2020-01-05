@@ -1033,6 +1033,17 @@ mod test_infer {
     }
 
     #[test]
+    fn single_private_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\@Foo -> 42
+                "#
+            ),
+            "[ Test.Foo ]* -> Int",
+        );
+    }
+
+    #[test]
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
@@ -1054,6 +1065,30 @@ mod test_infer {
                 "#
             ),
             "[ Foo Str Int ]*",
+        );
+    }
+
+    // currently doesn't work because of a parsing issue
+    // @Foo x y isn't turned into Apply(@Foo, [x,y]) currently
+    // #[test]
+    // fn private_tag_application() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"@Foo "happy" 2020
+    //             "#
+    //         ),
+    //         "[ Test.Foo Str Int ]*",
+    //     );
+    // }
+
+    #[test]
+    fn if_then_else() {
+        infer_eq(
+            indoc!(
+                r#"if True then 1 else 0
+                "#
+            ),
+            "Int",
         );
     }
 }

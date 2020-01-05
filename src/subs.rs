@@ -476,9 +476,9 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                     }
                     TagUnion(tags, ext_var) => {
                         occurs(subs, &new_seen, ext_var)
-                            || tags.values().any(|vars| {
-                                vars.into_iter().any(|var| occurs(subs, &new_seen, *var))
-                            })
+                            || tags
+                                .values()
+                                .any(|vars| vars.iter().any(|var| occurs(subs, &new_seen, *var)))
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => false,
                 }

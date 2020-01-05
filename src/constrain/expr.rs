@@ -471,7 +471,7 @@ pub fn constrain_expr(
             let mut types = Vec::with_capacity(arguments.len());
             let mut arg_cons = Vec::with_capacity(arguments.len());
 
-            for (var, loc_expr) in arguments.into_iter() {
+            for (var, loc_expr) in arguments {
                 let arg_con = constrain_expr(
                     rigids,
                     loc_expr.region,

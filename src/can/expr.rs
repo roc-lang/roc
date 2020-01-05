@@ -540,9 +540,69 @@ pub fn canonicalize_expr(
                 Output::default(),
             )
         }
-        ast::Expr::If(_)
-        | ast::Expr::PrivateTag(_)
-        | ast::Expr::MalformedIdent(_)
+        ast::Expr::PrivateTag(tag) => {
+            let variant_var = var_store.fresh();
+            let ext_var = var_store.fresh();
+
+            (
+                Tag {
+                    name: Symbol::from_private_tag(&env.home, tag),
+                    arguments: vec![],
+                    variant_var,
+                    ext_var,
+                },
+                Output::default(),
+            )
+        }
+        ast::Expr::If((condition, then_branch, else_branch)) => {
+            let (can_cond, mut output) =
+                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+            let cond_var = var_store.fresh();
+            let expr_var = var_store.fresh();
+
+            let false_pattern = Located::at(
+                Region::zero(),
+                Pattern::AppliedTag(var_store.fresh(), "False".into(), vec![]),
+            );
+            let true_pattern = Located::at(
+                Region::zero(),
+                Pattern::AppliedTag(var_store.fresh(), "True".into(), vec![]),
+            );
+
+            let (can_then_branch, then_output) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                then_branch.region,
+                &then_branch.value,
+            );
+            let (can_else_branch, else_output) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                else_branch.region,
+                &else_branch.value,
+            );
+
+            let false_branch = (false_pattern, can_else_branch);
+            let true_branch = (true_pattern, can_then_branch);
+
+            let branches: Vec<(Located<Pattern>, Located<Expr>)> = vec![false_branch, true_branch];
+
+            output.references = output.references.union(then_output.references);
+            output.references = output.references.union(else_output.references);
+
+            (
+                When {
+                    cond_var,
+                    expr_var,
+                    loc_cond: Box::new(Located::at(condition.region, can_cond.value)),
+                    branches,
+                },
+                output,
+            )
+        }
+        ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
         | ast::Expr::PrecedenceConflict(_, _, _) => {
             panic!(
