@@ -127,21 +127,15 @@ fn from_can<'a, 'ctx>(
             //
             //     identity 5
             //
-            match &loc_pattern.value {
-                Identifier(name) => {
-                    match &loc_expr.value {
-                        Closure(_, _, _, _, _) => {
-                            // Extract Procs, but discard the resulting Expr::Load.
-                            // That Load looks up the pointer, which we won't use here!
-                            from_can(env, loc_expr.value, procs, Some(name.clone().into()));
+            if let Identifier(name) = &loc_pattern.value {
+                if let Closure(_, _, _, _, _) = &loc_expr.value {
+                    // Extract Procs, but discard the resulting Expr::Load.
+                    // That Load looks up the pointer, which we won't use here!
+                    from_can(env, loc_expr.value, procs, Some(name.clone().into()));
 
-                            // Discard this LetNonRec by replacing it with its ret_expr.
-                            return from_can(env, ret_expr.value, procs, None);
-                        }
-                        _ => (),
-                    }
+                    // Discard this LetNonRec by replacing it with its ret_expr.
+                    return from_can(env, ret_expr.value, procs, None);
                 }
-                _ => (),
             }
 
             // If it wasn't specifically an Identifier & Closure, proceed as normal.

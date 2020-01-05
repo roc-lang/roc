@@ -118,7 +118,7 @@ fn build_expr<'a, 'ctx, 'env>(
                 let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity(args.len());
 
                 for arg in args.iter() {
-                    arg_vals.push(build_expr(env, scope, parent, arg, procs).into());
+                    arg_vals.push(build_expr(env, scope, parent, arg, procs));
                 }
 
                 let fn_val = env
@@ -137,7 +137,7 @@ fn build_expr<'a, 'ctx, 'env>(
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity(args.len());
 
             for arg in args.iter() {
-                arg_vals.push(build_expr(env, scope, parent, arg, procs).into());
+                arg_vals.push(build_expr(env, scope, parent, arg, procs));
             }
 
             panic!("TODO do a load(ptr) to get back the pointer, then pass *that* in here!");
@@ -261,6 +261,8 @@ fn build_cond<'a, 'ctx, 'env>(
 //     }
 // }
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 fn build_phi2<'a, 'ctx, 'env>(
     env: &Env<'ctx, 'env>,
     scope: &Scope<'ctx>,
@@ -320,6 +322,8 @@ fn set_name(bv_enum: BasicValueEnum<'_>, name: &str) {
     }
 }
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 pub fn build_closure<'a, 'ctx, BT>(
     env: &Env<'ctx, '_>,
     name: InlinableString,
