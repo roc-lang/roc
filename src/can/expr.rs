@@ -152,7 +152,10 @@ pub fn canonicalize_expr(
             let ident = if let ast::Expr::Var(module_parts, name) = &loc_update.value {
                 Ident::new(module_parts, name)
             } else {
-                panic!("TODO canonicalize invalid record update (non-Var in update position)");
+                panic!(
+                    "TODO canonicalize invalid record update (non-Var in update position)\n{:?}",
+                    &loc_update.value
+                );
             };
 
             let (can_update, update_out) =
@@ -175,7 +178,10 @@ pub fn canonicalize_expr(
 
                 (answer, output)
             } else {
-                panic!("TODO canonicalize invalid record update (non-Var in update position)");
+                panic!(
+                    "TODO canonicalize invalid record update (non-Var in update position)\n{:?}",
+                    can_update.value
+                );
             }
         }
         ast::Expr::Record {
@@ -511,7 +517,8 @@ pub fn canonicalize_expr(
         | ast::Expr::MalformedClosure
         | ast::Expr::PrecedenceConflict(_, _, _) => {
             panic!(
-                "TODO restore the rest of canonicalize()'s branches {:?}",
+                "TODO restore the rest of canonicalize()'s branches {:?} {:?}",
+                &expr,
                 local_successors(&References::new(), &env.closures)
             );
         }

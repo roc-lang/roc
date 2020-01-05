@@ -71,8 +71,9 @@ pub fn constrain_expr(
                 let mut field_types = SendMap::default();
                 let mut field_vars = Vec::with_capacity(fields.len());
 
-                // Constraints need capacity for each field + 1 for the record itself.
-                let mut constraints = Vec::with_capacity(1 + fields.len());
+                // Constraints need capacity for each field
+                // + 1 for the record itself + 1 for record var
+                let mut constraints = Vec::with_capacity(2 + fields.len());
 
                 for (label, field) in fields {
                     let field_var = field.var;
@@ -134,8 +135,6 @@ pub fn constrain_expr(
             vars.push(*record_var);
             vars.push(*ext_var);
 
-            cons.push(record_con);
-
             let con = Lookup(
                 symbol.clone(),
                 ForReason(
@@ -148,6 +147,7 @@ pub fn constrain_expr(
 
             cons.push(con);
             cons.push(fields_con);
+            cons.push(record_con);
 
             exists(vars, And(cons))
         }

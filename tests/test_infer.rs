@@ -995,4 +995,18 @@ mod test_infer {
             "{ x : custom } -> custom",
         );
     }
+
+    #[test]
+    fn record_update() {
+        infer_eq(
+            indoc!(
+                r#"
+                user = { year: "foo", name: "Sam" }
+
+                { user & year: "foo" }
+                "#
+            ),
+            "{ year : Str }{ name : Str }",
+        );
+    }
 }
