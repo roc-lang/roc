@@ -1,6 +1,7 @@
 use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
+use crate::can::expr::FieldUpdate;
 use crate::can::ident::Lowercase;
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
@@ -102,6 +103,51 @@ pub fn constrain_expr(
 
                 exists(field_vars, And(constraints))
             }
+        }
+        Update {
+            record_var,
+            ext_var,
+            name,
+            symbol,
+            updates,
+        } => {
+            let mut fields: SendMap<Lowercase, Type> = SendMap::default();
+            let mut vars = Vec::with_capacity(updates.len() + 2);
+            let mut cons = Vec::with_capacity(updates.len() + 1);
+            for (field_name, FieldUpdate { var, loc_expr, .. }) in updates.clone() {
+                let (var, tipe, con) =
+                    constrain_field_update(rigids, var, region, field_name.clone(), &loc_expr);
+                fields.insert(field_name, tipe);
+                vars.push(var);
+                cons.push(con);
+            }
+
+            let fields_type = Type::Record(fields.clone(), Box::new(Type::Variable(*ext_var)));
+            let record_type = Type::Variable(*record_var);
+
+            // NOTE from elm compiler: fields_type is separate so that Error propagates better
+            let fields_con = Eq(record_type.clone(), NoExpectation(fields_type), region);
+            let record_con = Eq(record_type.clone(), expected, region);
+
+            vars.push(*record_var);
+            vars.push(*ext_var);
+
+            cons.push(record_con);
+
+            let con = Lookup(
+                symbol.clone(),
+                ForReason(
+                    Reason::RecordUpdateKeys(name.clone(), fields),
+                    record_type,
+                    region,
+                ),
+                region,
+            );
+
+            cons.push(con);
+            cons.push(fields_con);
+
+            exists(vars, And(cons))
         }
         Str(_) | BlockStr(_) => Eq(str_type(), expected, region),
         List(list_var, loc_elems) => {
@@ -767,4 +813,20 @@ pub fn create_letrec_constraint(
             ret_constraint: And(vec![And(rigid_info.constraints), ret_constraint]),
         })),
     }))
+}
+
+#[inline(always)]
+fn constrain_field_update(
+    rigids: &Rigids,
+    var: Variable,
+    region: Region,
+    field: Lowercase,
+    loc_expr: &Located<Expr>,
+) -> (Variable, Type, Constraint) {
+    let field_type = Type::Variable(var);
+    let reason = Reason::RecordUpdateValue(field);
+    let expected = ForReason(reason, field_type.clone(), region);
+    let con = constrain_expr(rigids, loc_expr.region, &loc_expr.value, expected);
+
+    (var, field_type, con)
 }

@@ -94,11 +94,28 @@ pub enum Expr {
         field: Lowercase,
     },
 
+    Update {
+        record_var: Variable,
+        ext_var: Variable,
+        // TODO allow qualified names here
+        symbol: Symbol,
+        name: Lowercase,
+        updates: SendMap<Lowercase, FieldUpdate>,
+    },
+
     // Sum Types
     Tag(Box<str>, Vec<Expr>),
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldUpdate {
+    pub var: Variable,
+    // I assume this is the region of the full `foo = f bar`, rather than just the rhs
+    pub region: Region,
+    pub loc_expr: Box<Located<Expr>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -635,6 +635,8 @@ pub fn canonicalize_expr(
             (output, And(constraints))
         }
 
+        Update { .. } => panic!("TODO implement record update for uniq"),
+
         Access {
             ext_var,
             field_var,

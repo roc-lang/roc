@@ -273,6 +273,8 @@ pub enum Reason {
     InterpolatedStringVar,
     WhenBranch { index: usize },
     ElemInList,
+    RecordUpdateValue(Lowercase),
+    RecordUpdateKeys(Lowercase, SendMap<Lowercase, Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
