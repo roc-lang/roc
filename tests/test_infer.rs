@@ -1011,13 +1011,38 @@ mod test_infer {
     }
 
     #[test]
-    fn simple_tag() {
+    fn bare_tag() {
         infer_eq(
             indoc!(
                 r#"Foo
                 "#
             ),
             "[ Foo ]*",
+        );
+    }
+
+    #[test]
+    fn single_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\Foo -> 42
+                "#
+            ),
+            "[ Foo ] -> Int",
+        );
+    }
+
+    #[test]
+    fn two_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\x -> 
+                    when x is 
+                        True -> 1
+                        False -> 0
+                "#
+            ),
+            "[ True, False ] -> Int",
         );
     }
 }

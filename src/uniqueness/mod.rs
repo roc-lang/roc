@@ -155,7 +155,7 @@ fn canonicalize_pattern(
             state.constraints.push(record_con);
         }
 
-        Tag(_) | AppliedTag(_, _) => {
+        AppliedTag(_, _, _) => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 

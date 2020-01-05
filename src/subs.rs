@@ -1,4 +1,5 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
@@ -432,7 +433,7 @@ pub enum FlatType {
     Record(ImMap<RecordFieldLabel, Variable>, Variable),
     // Within a tag union, a tag can occur multiple times, e.g. [ Foo, Foo Int, Foo Bool Int ], but
     // only once for every arity, so not [ Foo Int, Foo Bool ]
-    TagUnion(ImMap<Uppercase, ImMap<usize, Vec<Variable>>>, Variable),
+    TagUnion(ImMap<Symbol, ImMap<usize, Vec<Variable>>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,

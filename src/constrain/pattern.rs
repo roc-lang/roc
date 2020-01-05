@@ -99,12 +99,19 @@ pub fn constrain_pattern(
 
             state.constraints.push(record_con);
         }
+        AppliedTag(ext_var, symbol, _arguments) => {
+            let tag_con = Constraint::Pattern(
+                region,
+                PatternCategory::Ctor(symbol.clone()),
+                Type::TagUnion(
+                    vec![(symbol.clone(), vec![])],
+                    Box::new(Type::Variable(*ext_var)),
+                ),
+                expected,
+            );
 
-        Tag(_) => {
-            panic!("TODO constrain Tag pattern");
-        }
-        AppliedTag(_, _) => {
-            panic!("TODO constrain AppliedTag pattern");
+            state.vars.push(*ext_var);
+            state.constraints.push(tag_con);
         }
         Shadowed(_) => {
             panic!("TODO constrain Shadowed pattern");
