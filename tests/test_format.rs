@@ -523,25 +523,31 @@ mod test_format {
             "#
         ));
 
-        expr_formats_to(indoc!(
-            r#"
-            {   shoes  &  rightShoe : nothing }
-            "#
-        ),indoc!(
-            r#"
-            { shoes & rightShoe: nothing }
-            "#
-        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+                {   shoes  &  rightShoe : nothing }
+                "#
+            ),
+            indoc!(
+                r#"
+                { shoes & rightShoe: nothing }
+                "#
+            ),
+        );
 
-        expr_formats_to(indoc!(
-            r#"
-            {   shoes  &  rightShoe : nothing }
-            "#
-        ),indoc!(
-            r#"
-            { shoes & rightShoe: nothing }
-            "#
-        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+                {   shoes  &  rightShoe : nothing }
+                "#
+            ),
+            indoc!(
+                r#"
+                { shoes & rightShoe: nothing }
+                "#
+            ),
+        );
 
         expr_formats_same(indoc!(
             r#"
@@ -552,20 +558,23 @@ mod test_format {
             "#
         ));
 
-        expr_formats_to(indoc!(
-            r#"
-            { shoes
-                & rightShoe: bareFoot
-                , leftShoe: bareFoot }
-            "#
-        ), indoc!(
-            r#"
-            { shoes &
-                rightShoe: bareFoot,
-                leftShoe: bareFoot
-            }
-            "#
-        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+                { shoes
+                    & rightShoe: bareFoot
+                    , leftShoe: bareFoot }
+                "#
+            ),
+            indoc!(
+                r#"
+                { shoes &
+                    rightShoe: bareFoot,
+                    leftShoe: bareFoot
+                }
+                "#
+            ),
+        );
     }
 
     // #[test]

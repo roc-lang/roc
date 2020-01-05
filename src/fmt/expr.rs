@@ -538,7 +538,7 @@ pub fn fmt_record<'a>(
     buf.push('{');
 
     match _update {
-        None => {},
+        None => {}
         // We are presuming this to be a Var()
         // If it wasnt a Var() we would not have made
         // it this far. For example "{ 4 & hello = 9 }"
@@ -547,7 +547,7 @@ pub fn fmt_record<'a>(
             buf.push(' ');
             fmt_expr(buf, &record_var.value, indent, false, false);
             buf.push_str(" &");
-        },
+        }
     }
 
     let is_multiline = loc_fields
