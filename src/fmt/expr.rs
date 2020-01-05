@@ -95,7 +95,7 @@ pub fn fmt_expr<'a>(
             buf.push_str(string);
         }
         Record { fields, update } => {
-            fmt_record(buf, update, fields, indent, apply_needs_parens);
+            fmt_record(buf, *update, fields, indent, apply_needs_parens);
         }
         Closure(loc_patterns, loc_ret) => {
             fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -530,7 +530,7 @@ pub fn fmt_closure<'a>(
 
 pub fn fmt_record<'a>(
     buf: &mut String<'a>,
-    _update: &Option<&'a Located<Expr<'a>>>,
+    _update: Option<&'a Located<Expr<'a>>>,
     loc_fields: &'a Vec<'a, Located<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
     apply_needs_parens: bool,
