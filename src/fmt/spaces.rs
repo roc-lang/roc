@@ -25,12 +25,14 @@ where
     let mut consecutive_newlines = 0;
     let mut iter = spaces.peekable();
 
+    let mut encountered_comment = false;
+
     while let Some(space) = iter.next() {
         match space {
             Newline => {
                 // Only ever print two newlines back to back.
                 // (Two newlines renders as one blank line.)
-                if consecutive_newlines < 2 {
+                if !encountered_comment && (consecutive_newlines < 2) {
                     if iter.peek() == Some(&&Newline) {
                         buf.push('\n');
                     } else {
@@ -45,8 +47,7 @@ where
             LineComment(comment) => {
                 fmt_comment(buf, comment, indent);
 
-                // Reset to 1 because we just printed a \n
-                consecutive_newlines = 1;
+                encountered_comment = true;
             }
         }
     }

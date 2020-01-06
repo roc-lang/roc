@@ -452,7 +452,6 @@ fn fmt_if<'a>(
     fmt_expr(buf, &loc_then.value, return_indent, false, false);
 
     if is_multiline {
-        buf.push('\n');
         newline(buf, indent);
         buf.push_str("else");
         newline(buf, return_indent);

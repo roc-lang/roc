@@ -108,24 +108,23 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-            # This variable is for greeting
+                # This variable is for greeting
 
 
 
 
-            a = "Hello"
+                a = "Hello"
 
-            a
-            "#
+                a
+                "#
             ),
             indoc!(
                 r#"
-            # This variable is for greeting
+                # This variable is for greeting
+                a = "Hello"
 
-            a = "Hello"
-
-            a
-            "#
+                a
+                "#
             ),
         );
     }
@@ -169,13 +168,13 @@ mod test_format {
 
         expr_formats_same(indoc!(
             r#"
-                f = \x, y ->
-                    a = 3
-                    b = 6
+            f = \x, y ->
+                a = 3
+                b = 6
 
-                    c
+                c
 
-                "string"
+            "string"
             "#
         ));
     }
@@ -321,22 +320,22 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-            x = 5
+                x = 5
 
 
-            y = 10
+                y = 10
 
-            42
-            "#
+                42
+                "#
             ),
             indoc!(
                 r#"
-            x = 5
+                x = 5
 
-            y = 10
+                y = 10
 
-            42
-            "#
+                42
+                "#
             ),
         );
     }
@@ -396,7 +395,6 @@ mod test_format {
             y = 10
 
             # v-- This is the return value
-
             42
             "#
         ));
@@ -404,17 +402,28 @@ mod test_format {
 
     #[test]
     fn space_between_comments() {
-        expr_formats_same(indoc!(
-            r#"
-            # 9
+        expr_formats_to(
+            indoc!(
+                r#"
+                # 9
 
-            # A
-            # B
+                # A
+                # B
 
-            # C
-            9
-            "#
-        ));
+                # C
+                9
+                "#
+            ),
+            indoc!(
+                r#"
+                # 9
+                # A
+                # B
+                # C
+                9
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -434,7 +443,6 @@ mod test_format {
             indoc!(
                 r#"
                 # First
-
                 # Second
                 x
                 "#
@@ -716,7 +724,7 @@ mod test_format {
                 x: 4,
                 y: 42
             }
-        "#
+            "#
         ));
     }
 
@@ -725,17 +733,17 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-            { x: 4,
-                y: 42
-            }
-        "#
+                { x: 4,
+                    y: 42
+                }
+                "#
             ),
             indoc!(
                 r#"
-            {
-                x: 4,
-                y: 42
-            }
+                {
+                    x: 4,
+                    y: 42
+                }
                 "#
             ),
         );
@@ -759,13 +767,13 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             if foo bar then a b c else d e f
-        "#
+            "#
         ));
 
         expr_formats_same(indoc!(
             r#"
             if foo (a b c) then a b c else d e f
-        "#
+            "#
         ));
     }
 
@@ -777,7 +785,6 @@ mod test_format {
                 waterWillBoil pressure temperature
             then
                 turnOnAc
-
             else
                 identity
             "#
@@ -805,7 +812,6 @@ mod test_format {
                     willBoil home water
                 then
                     \_ -> leave
-
                 else
                     identity
                 "#
@@ -885,6 +891,8 @@ mod test_format {
                 r#"
                 if lessThan four five then
                     four
+
+
                 else
                     five
                 "#
@@ -893,7 +901,6 @@ mod test_format {
                 r#"
                 if lessThan four five then
                     four
-
                 else
                     five
                 "#
@@ -921,7 +928,6 @@ mod test_format {
                 r#"
                 if lessThan three four then
                     three
-
                 else
                     four
                 "#
@@ -932,7 +938,6 @@ mod test_format {
             r#"
             if foo bar then
                 a b c
-
             else
                 d e f
             "#
@@ -961,7 +966,7 @@ mod test_format {
 
                 _ ->
                     2
-        "#
+            "#
         ));
     }
 
@@ -970,28 +975,28 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-            when year is
-                1999 ->
+                when year is
+                    1999 ->
 
 
-                    1
+                        1
 
 
 
-                _ ->
+                    _ ->
 
-                    0
-        "#
+                        0
+                "#
             ),
             indoc!(
                 r#"
-            when year is
-                1999 ->
-                    1
+                when year is
+                    1999 ->
+                        1
 
-                _ ->
-                    0
-            "#
+                    _ ->
+                        0
+                "#
             ),
         );
     }
@@ -1013,7 +1018,7 @@ mod test_format {
                     # more comment
                     2
 
-        "#
+            "#
         ));
     }
 
@@ -1026,7 +1031,7 @@ mod test_format {
                     when c is
                         _ ->
                             1
-        "#
+            "#
         ));
     }
 
@@ -1035,25 +1040,25 @@ mod test_format {
         expr_formats_to(
             indoc!(
                 r#"
-            when b is
-                1 ->
-                    1 # when 1
+                when b is
+                    1 ->
+                        1 # when 1
 
-                # fall through
-                _ ->
-                    2
+                    # fall through
+                    _ ->
+                        2
                 "#
             ),
             indoc!(
                 r#"
-            when b is
-                1 ->
-                    1
+                when b is
+                    1 ->
+                        1
 
-                # when 1
-                # fall through
-                _ ->
-                    2
+                    # when 1
+                    # fall through
+                    _ ->
+                        2
                 "#
             ),
         );
@@ -1093,15 +1098,15 @@ mod test_format {
     fn def_returning_closure() {
         expr_formats_same(indoc!(
             r#"
-                    f = \x -> x
-                    g = \x -> x
+            f = \x -> x
+            g = \x -> x
 
-                    \x ->
-                        a = f x
-                        b = f x
+            \x ->
+                a = f x
+                b = f x
 
-                        x
-                "#
+                x
+            "#
         ));
     }
 
