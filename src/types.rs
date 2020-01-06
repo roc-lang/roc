@@ -176,8 +176,8 @@ impl fmt::Debug for Type {
                         Ok(())
                     }
                     other => {
-                        // This is an open record, so print the variable
-                        // right after the '}'
+                        // This is an open tag union, so print the variable
+                        // right after the ']'
                         //
                         // e.g. the "*" at the end of `[ Foo ]*`
                         // or the "r" at the end of `[ DivByZero ]r`

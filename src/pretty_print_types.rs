@@ -286,8 +286,8 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     // This is a closed record. We're done!
                 }
                 content => {
-                    // This is an open record, so print the variable
-                    // right after the '}'
+                    // This is an open tag union, so print the variable
+                    // right after the ']'
                     //
                     // e.g. the "*" at the end of `{ x: Int }*`
                     // or the "r" at the end of `{ x: Int }r`
