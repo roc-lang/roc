@@ -10,11 +10,11 @@ mod helpers;
 mod test_boolean_algebra {
     use roc::subs::VarStore;
     use roc::uniqueness::boolean_algebra;
-    use roc::uniqueness::boolean_algebra::BooleanAlgebra::{self, *};
+    use roc::uniqueness::boolean_algebra::Bool::{self, *};
 
     // HELPERS
-    fn simplify_eq(mut a: BooleanAlgebra, mut b: BooleanAlgebra) {
-        assert_eq!(a.simplify(), b.simplify());
+    fn simplify_eq(a: Bool, b: Bool) {
+        assert_eq!(boolean_algebra::simplify(a), boolean_algebra::simplify(b));
     }
 
     #[test]
@@ -22,10 +22,7 @@ mod test_boolean_algebra {
         let var_store = VarStore::default();
         let var = var_store.fresh();
 
-        simplify_eq(
-            Disjunction(Box::new(Ground(true)), Box::new(Variable(var))),
-            Ground(true),
-        );
+        simplify_eq(Bool::or(One, Variable(var)), One);
     }
 
     #[test]
@@ -33,10 +30,7 @@ mod test_boolean_algebra {
         let var_store = VarStore::default();
         let var = var_store.fresh();
 
-        simplify_eq(
-            Disjunction(Box::new(Ground(false)), Box::new(Variable(var))),
-            Variable(var),
-        );
+        simplify_eq(Bool::or(Zero, Variable(var)), Variable(var));
     }
 
     #[test]
@@ -44,10 +38,7 @@ mod test_boolean_algebra {
         let var_store = VarStore::default();
         let var = var_store.fresh();
 
-        simplify_eq(
-            Conjunction(Box::new(Ground(false)), Box::new(Variable(var))),
-            Ground(false),
-        );
+        simplify_eq(Bool::and(Zero, Variable(var)), Zero);
     }
 
     #[test]
@@ -55,10 +46,10 @@ mod test_boolean_algebra {
         let var_store = VarStore::default();
         let var = var_store.fresh();
 
-        let result = boolean_algebra::unify(&Variable(var), &Ground(true));
+        let result = boolean_algebra::try_unify(Variable(var), One);
 
         if let Some(sub) = result {
-            assert_eq!(Some(&Ground(false)), sub.get(var));
+            assert_eq!(Some(&Zero), sub.get(&var));
         } else {
             panic!("result is None");
         }
@@ -70,14 +61,11 @@ mod test_boolean_algebra {
         let a = var_store.fresh();
         let b = var_store.fresh();
 
-        let result = boolean_algebra::unify(
-            &Disjunction(Box::new(Variable(a)), Box::new(Variable(b))),
-            &Ground(true),
-        );
+        let result = boolean_algebra::try_unify(Bool::or(Variable(a), Variable(b)), One);
 
         if let Some(sub) = result {
-            assert_eq!(Some(&Variable(b)), sub.get(a));
-            assert_eq!(Some(&Ground(false)), sub.get(b));
+            assert_eq!(Some(&Variable(b)), sub.get(&a));
+            assert_eq!(Some(&Zero), sub.get(&b));
         } else {
             panic!("result is None");
         }

@@ -14,19 +14,19 @@ pub enum Bool {
 use self::Bool::*;
 
 // TODO add inline pragma
-fn not(nested: Bool) -> Bool {
+pub fn not(nested: Bool) -> Bool {
     Not(Box::new(nested))
 }
 
-fn and(left: Bool, right: Bool) -> Bool {
+pub fn and(left: Bool, right: Bool) -> Bool {
     And(Box::new(left), Box::new(right))
 }
 
-fn or(left: Bool, right: Bool) -> Bool {
+pub fn or(left: Bool, right: Bool) -> Bool {
     Or(Box::new(left), Box::new(right))
 }
 
-fn any<I>(mut it: I) -> Bool
+pub fn any<I>(mut it: I) -> Bool
 where
     I: Iterator<Item = Bool>,
 {
@@ -37,7 +37,7 @@ where
     }
 }
 
-fn all(terms: Product<Bool>) -> Bool {
+pub fn all(terms: Product<Bool>) -> Bool {
     let mut it = terms.into_iter();
 
     if let Some(first) = it.next() {
@@ -104,6 +104,19 @@ impl Bool {
             Variable(_) => true,
             _ => false,
         }
+    }
+
+    // TODO add inline pragma
+    pub fn not(nested: Bool) -> Bool {
+        not(nested)
+    }
+
+    pub fn and(left: Bool, right: Bool) -> Bool {
+        and(left, right)
+    }
+
+    pub fn or(left: Bool, right: Bool) -> Bool {
+        or(left, right)
     }
 }
 
@@ -354,11 +367,11 @@ type Pos = Product<Sum<Bool>>;
 type Sop = Sum<Product<Bool>>;
 
 fn term_to_pos(term: Bool) -> Pos {
-    ImSet::default()
+    panic!("TODO term_to_pos");
 }
 
 fn term_to_sop(term: Bool) -> Sop {
-    ImSet::default()
+    panic!("TODO term_to_sop");
 }
 
 fn normalize_pos(pos: Pos) -> Pos {
@@ -443,6 +456,7 @@ fn normalize_conj(mut product: Product<Bool>) -> Product<Bool> {
         product
     }
 }
+/*
 
 fn cnf(term: &Bool) -> Bool {
     match term {
@@ -486,3 +500,4 @@ fn nnf(term: &Bool) -> Bool {
         Variable(current) => Variable(*current),
     }
 }
+*/
