@@ -104,7 +104,12 @@ pub enum Expr {
     },
 
     // Sum Types
-    Tag(Box<str>, Vec<Expr>),
+    Tag {
+        variant_var: Variable,
+        ext_var: Variable,
+        name: Symbol,
+        arguments: Vec<(Variable, Located<Expr>)>,
+    },
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
@@ -275,6 +280,17 @@ pub fn canonicalize_expr(
                     // We can't call a runtime error; bail out by propagating it!
                     return (fn_expr, output);
                 }
+                Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    ..
+                } => Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    arguments: args,
+                },
                 _ => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
                     Call(
@@ -510,9 +526,35 @@ pub fn canonicalize_expr(
                 Output::default(),
             )
         }
+        ast::Expr::GlobalTag(tag) => {
+            let variant_var = var_store.fresh();
+            let ext_var = var_store.fresh();
+
+            (
+                Tag {
+                    name: Symbol::from_global_tag(tag),
+                    arguments: vec![],
+                    variant_var,
+                    ext_var,
+                },
+                Output::default(),
+            )
+        }
+        ast::Expr::PrivateTag(tag) => {
+            let variant_var = var_store.fresh();
+            let ext_var = var_store.fresh();
+
+            (
+                Tag {
+                    name: Symbol::from_private_tag(&env.home, tag),
+                    arguments: vec![],
+                    variant_var,
+                    ext_var,
+                },
+                Output::default(),
+            )
+        }
         ast::Expr::If(_)
-        | ast::Expr::GlobalTag(_)
-        | ast::Expr::PrivateTag(_)
         | ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
         | ast::Expr::PrecedenceConflict(_, _, _) => {
