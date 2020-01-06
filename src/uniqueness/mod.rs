@@ -1,11 +1,10 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
-use crate::can::expr::Output;
 use crate::can::ident::Lowercase;
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
-use crate::can::procedure::{Procedure, References};
+use crate::can::procedure::Procedure;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::expr::{Info, Rigids};
@@ -41,7 +40,7 @@ pub fn constrain_declaration(
     loc_expr: Located<Expr>,
     _declared_idents: &ImMap<Ident, (Symbol, Region)>,
     expected: Expected<Type>,
-) -> (Output, Constraint) {
+) -> Constraint {
     let rigids = ImMap::default();
     let mut var_usage = VarUsage::default();
 
@@ -172,44 +171,32 @@ pub fn constrain_expr(
     region: Region,
     expr: &Expr,
     expected: Expected<Type>,
-) -> (Output, Constraint) {
+) -> Constraint {
     pub use crate::can::expr::Expr::*;
 
     match expr {
-        Int(_, _) => {
-            let constraint = constrain::int_literal(var_store, expected, region);
-            (Output::default(), constraint)
-        }
-        Float(_, _) => {
-            let constraint = constrain::float_literal(var_store, expected, region);
-            (Output::default(), constraint)
-        }
+        Int(_, _) => constrain::int_literal(var_store, expected, region),
+        Float(_, _) => constrain::float_literal(var_store, expected, region),
         BlockStr(_) | Str(_) => {
             let inferred = constrain::lift(var_store, constrain::str_type());
-            let constraint = Eq(inferred, expected, region);
-            (Output::default(), constraint)
+            Eq(inferred, expected, region)
         }
-        EmptyRecord => {
-            let constraint = Eq(constrain::lift(var_store, EmptyRec), expected, region);
-
-            (Output::default(), constraint)
-        }
+        EmptyRecord => Eq(constrain::lift(var_store, EmptyRec), expected, region),
         Record(variable, fields) => {
             // NOTE: canonicalization guarantees at least one field
             // zero fields generates an EmptyRecord
             let mut field_types = SendMap::default();
             let mut field_vars = Vec::with_capacity(fields.len());
 
-            // Constraints need capacity for each field + 1 for the record itself.
-            let mut constraints = Vec::with_capacity(1 + fields.len());
-            let mut output = Output::default();
+            // Constraints need capacity for each field + 1 for the record itself + 1 for ext
+            let mut constraints = Vec::with_capacity(2 + fields.len());
 
             for (label, ref field) in fields.iter() {
                 let field_var = var_store.fresh();
                 let field_type = Variable(field_var);
                 let field_expected = Expected::NoExpectation(field_type.clone());
                 let loc_expr = &*field.loc_expr;
-                let (field_out, field_con) = constrain_expr(
+                let field_con = constrain_expr(
                     rigids,
                     var_store,
                     var_usage,
@@ -222,7 +209,6 @@ pub fn constrain_expr(
                 field_types.insert(label.clone(), field_type);
 
                 constraints.push(field_con);
-                output.references = output.references.union(field_out.references);
             }
 
             let record_type = constrain::lift(
@@ -243,7 +229,7 @@ pub fn constrain_expr(
 
             let constraint = exists(field_vars, And(constraints));
 
-            (output, constraint)
+            (constraint)
         }
         Tag { .. } => {
             panic!("TODO implement tag");
@@ -252,14 +238,12 @@ pub fn constrain_expr(
             if loc_elems.is_empty() {
                 let list_var = *variable;
                 let inferred = constrain::lift(var_store, constrain::empty_list_type(list_var));
-                let constraint = Eq(inferred, expected, region);
-                (Output::default(), constraint)
+                Eq(inferred, expected, region)
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
                 let list_var = *variable; // `v` in the type (List v)
                 let list_type = Type::Variable(list_var);
                 let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
-                let mut references = References::new();
 
                 for (elem_var, loc_elem) in loc_elems.iter() {
                     let elem_type = Variable(*elem_var);
@@ -269,7 +253,7 @@ pub fn constrain_expr(
                         Expected::ForReason(Reason::ElemInList, elem_type, region),
                         region,
                     );
-                    let (elem_out, constraint) = constrain_expr(
+                    let constraint = constrain_expr(
                         rigids,
                         var_store,
                         var_usage,
@@ -280,20 +264,11 @@ pub fn constrain_expr(
 
                     constraints.push(list_elem_constraint);
                     constraints.push(constraint);
-
-                    references = references.union(elem_out.references);
                 }
                 let inferred = constrain::lift(var_store, constrain::list_type(list_type));
                 constraints.push(Eq(inferred, expected, region));
 
-                let mut output = Output::default();
-
-                output.references = references;
-
-                // A list literal is never a tail call!
-                output.tail_call = None;
-
-                (output, And(constraints))
+                And(constraints)
             }
         }
         Var {
@@ -311,30 +286,24 @@ pub fn constrain_expr(
 
                     let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
 
-                    (
-                        Output::default(),
-                        And(vec![
-                            Lookup(symbol_for_lookup.clone(), expected.clone(), region),
-                            Eq(attr_type, expected, region),
-                            Eq(
-                                uniq_type,
-                                Expected::NoExpectation(constrain::shared_type()),
-                                region,
-                            ),
-                        ]),
-                    )
+                    And(vec![
+                        Lookup(symbol_for_lookup.clone(), expected.clone(), region),
+                        Eq(attr_type, expected, region),
+                        Eq(
+                            uniq_type,
+                            Expected::NoExpectation(constrain::shared_type()),
+                            region,
+                        ),
+                    ])
                 }
                 Some(sharing::ReferenceCount::Unique) => {
                     // no additional constraints, keep uniqueness unbound
-                    (
-                        Output::default(),
-                        Lookup(symbol_for_lookup.clone(), expected.clone(), region),
-                    )
+                    Lookup(symbol_for_lookup.clone(), expected.clone(), region)
                 }
                 None => panic!("symbol not analyzed"),
             }
         }
-        Closure(_fn_var, _symbol, _recursion, args, boxed_body) => {
+        Closure(fn_var, _symbol, _recursion, args, boxed_body) => {
             let (body, ret_var) = &**boxed_body;
 
             // first, generate constraints for the arguments
@@ -371,7 +340,7 @@ pub fn constrain_expr(
                 Type::Function(arg_types, Box::new(ret_type.clone())),
             );
 
-            let (output, ret_constraint) = constrain_expr(
+            let ret_constraint = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -388,7 +357,7 @@ pub fn constrain_expr(
             }
 
             let defs_constraint = And(state.constraints);
-            let constraint = exists(
+            exists(
                 vars,
                 And(vec![
                     Let(Box::new(LetConstraint {
@@ -399,11 +368,10 @@ pub fn constrain_expr(
                         ret_constraint,
                     })),
                     // "the closure's type is equal to expected  type"
-                    Eq(fn_typ, expected, region),
+                    Eq(fn_typ, expected.clone(), region),
+                    Eq(Type::Variable(*fn_var), expected, region),
                 ]),
-            );
-
-            (output, constraint)
+            )
         }
 
         Call(boxed, loc_args, _) => {
@@ -416,7 +384,7 @@ pub fn constrain_expr(
             let mut vars = Vec::with_capacity(2 + loc_args.len());
 
             // Canonicalize the function expression and its arguments
-            let (_, fn_con) = constrain_expr(
+            let fn_con = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -442,7 +410,7 @@ pub fn constrain_expr(
                 };
 
                 let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
-                let (_, arg_con) = constrain_expr(
+                let arg_con = constrain_expr(
                     rigids,
                     var_store,
                     var_usage,
@@ -462,23 +430,20 @@ pub fn constrain_expr(
                 region,
             );
 
-            (
-                Output::default(),
-                exists(
-                    vars,
-                    And(vec![
-                        fn_con,
-                        Eq(fn_type, expected_fn_type, fn_region),
-                        And(arg_cons),
-                        Eq(ret_type, expected, region),
-                    ]),
-                ),
+            exists(
+                vars,
+                And(vec![
+                    fn_con,
+                    Eq(fn_type, expected_fn_type, fn_region),
+                    And(arg_cons),
+                    Eq(ret_type, expected, region),
+                ]),
             )
         }
         LetRec(defs, loc_ret, _) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
-            let (_, body_con) = constrain_expr(
+            let body_con = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -486,15 +451,12 @@ pub fn constrain_expr(
                 &loc_ret.value,
                 expected,
             );
-            (
-                Output::default(),
-                constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con),
-            )
+            constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con)
         }
         LetNonRec(def, loc_ret, _) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
-            let (_, body_con) = constrain_expr(
+            let body_con = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -503,10 +465,7 @@ pub fn constrain_expr(
                 expected,
             );
 
-            (
-                Output::default(),
-                constrain_def(rigids, var_store, var_usage, def, body_con),
-            )
+            constrain_def(rigids, var_store, var_usage, def, body_con)
         }
         When {
             cond_var,
@@ -516,7 +475,7 @@ pub fn constrain_expr(
         } => {
             let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
-            let (mut output, expr_con) = constrain_expr(
+            let expr_con = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -551,7 +510,6 @@ pub fn constrain_expr(
                                 TypedWhenBranch(index),
                                 typ.clone(),
                             ),
-                            &mut output,
                         );
 
                         // required for a case like
@@ -600,7 +558,6 @@ pub fn constrain_expr(
                                 branch_type.clone(),
                                 region,
                             ),
-                            &mut output,
                         );
 
                         // required for a case like
@@ -635,7 +592,7 @@ pub fn constrain_expr(
                 }
             }
 
-            (output, And(constraints))
+            And(constraints)
         }
 
         Update {
@@ -647,7 +604,7 @@ pub fn constrain_expr(
         } => {
             let mut fields: SendMap<Lowercase, Type> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
-            let mut cons = Vec::with_capacity(updates.len() + 1);
+            let mut cons = Vec::with_capacity(updates.len() + 3);
             for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
                 let (var, tipe, con) = constrain_field_update(
                     rigids,
@@ -694,7 +651,7 @@ pub fn constrain_expr(
             cons.push(fields_con);
             cons.push(record_con);
 
-            (Output::default(), exists(vars, And(cons)))
+            exists(vars, And(cons))
         }
 
         Access {
@@ -714,7 +671,7 @@ pub fn constrain_expr(
                 constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));
             let record_expected = Expected::NoExpectation(record_type);
 
-            let (output, mut constraint) = constrain_expr(
+            let mut constraint = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -728,7 +685,7 @@ pub fn constrain_expr(
                 And(vec![constraint, Eq(field_type, expected, region)]),
             );
 
-            (output, constraint)
+            constraint
         }
 
         Accessor {
@@ -745,20 +702,16 @@ pub fn constrain_expr(
             let record_type =
                 constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
 
-            (
-                Output::default(),
-                exists(
-                    vec![*field_var, *ext_var],
-                    Eq(
-                        Type::Function(vec![record_type], Box::new(field_type)),
-                        expected,
-                        region,
-                    ),
+            exists(
+                vec![*field_var, *ext_var],
+                Eq(
+                    Type::Function(vec![record_type], Box::new(field_type)),
+                    expected,
+                    region,
                 ),
             )
         }
-        RuntimeError(_) => (Output::default(), True),
-        // _ => panic!("{:?}", expr),
+        RuntimeError(_) => True,
     }
 }
 
@@ -774,9 +727,8 @@ fn constrain_when_branch(
     loc_expr: &Located<Expr>,
     pattern_expected: PExpected<Type>,
     expr_expected: Expected<Type>,
-    _output: &mut Output,
 ) -> Constraint {
-    let (_, ret_constraint) = constrain_expr(
+    let ret_constraint = constrain_expr(
         rigids,
         var_store,
         var_usage,
@@ -877,19 +829,15 @@ pub fn constrain_def(
                 &def.loc_expr.value,
                 annotation_expected,
             )
-            .1
         }
-        None => {
-            constrain_expr(
-                rigids,
-                var_store,
-                var_usage,
-                def.loc_expr.region,
-                &def.loc_expr.value,
-                Expected::NoExpectation(expr_type),
-            )
-            .1
-        }
+        None => constrain_expr(
+            rigids,
+            var_store,
+            var_usage,
+            def.loc_expr.region,
+            &def.loc_expr.value,
+            Expected::NoExpectation(expr_type),
+        ),
     };
 
     Let(Box::new(LetConstraint {
@@ -959,7 +907,7 @@ pub fn rec_defs_help(
         let mut new_rigids = Vec::new();
         match &def.annotation {
             None => {
-                let (_, expr_con) = constrain_expr(
+                let expr_con = constrain_expr(
                     rigids,
                     var_store,
                     var_usage,
@@ -1002,7 +950,7 @@ pub fn rec_defs_help(
                     AnnotationSource::TypedBody,
                     annotation.clone(),
                 );
-                let (_, expr_con) = constrain_expr(
+                let expr_con = constrain_expr(
                     &ftv,
                     var_store,
                     var_usage,
@@ -1074,7 +1022,7 @@ fn constrain_field_update(
     let field_type = Type::Variable(var);
     let reason = Reason::RecordUpdateValue(field);
     let expected = Expected::ForReason(reason, field_type.clone(), region);
-    let (_, con) = constrain_expr(
+    let con = constrain_expr(
         rigids,
         var_store,
         var_usage,

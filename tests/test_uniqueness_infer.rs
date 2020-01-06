@@ -17,17 +17,8 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (
-            _output2,
-            _output1,
-            _,
-            mut subs1,
-            variable1,
-            mut subs2,
-            variable2,
-            constraint1,
-            constraint2,
-        ) = uniq_expr(src);
+        let (_output1, _, mut subs1, variable1, mut subs2, variable2, constraint1, constraint2) =
+            uniq_expr(src);
 
         let mut unify_problems = Vec::new();
         let content1 = infer_expr(&mut subs1, &mut unify_problems, &constraint1, variable1);

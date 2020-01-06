@@ -90,7 +90,6 @@ pub fn uniq_expr(
     expr_str: &str,
 ) -> (
     Output,
-    Output,
     Vec<Problem>,
     Subs,
     Variable,
@@ -108,7 +107,6 @@ pub fn uniq_expr_with(
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
 ) -> (
-    Output,
     Output,
     Vec<Problem>,
     Subs,
@@ -129,7 +127,7 @@ pub fn uniq_expr_with(
 
     let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
-    let (output2, constraint2) = roc::uniqueness::constrain_declaration(
+    let constraint2 = roc::uniqueness::constrain_declaration(
         &var_store2,
         Region::zero(),
         loc_expr,
@@ -140,7 +138,6 @@ pub fn uniq_expr_with(
     let subs2 = Subs::new(var_store2.into());
 
     (
-        output2,
         output,
         problems,
         subs1,
