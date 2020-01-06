@@ -246,22 +246,6 @@ pub fn fmt_field<'a>(
             buf.push(' ');
             fmt_expr(buf, &value.value, indent, apply_needs_parens, true);
         }
-        OptionalField(name, spaces, value) => {
-            if is_multiline {
-                newline(buf, indent);
-            }
-
-            buf.push_str(name.value);
-            buf.push('?');
-
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-            }
-
-            buf.push(':');
-            buf.push(' ');
-            fmt_expr(buf, &value.value, indent, apply_needs_parens, true);
-        }
         LabelOnly(name) => {
             if is_multiline {
                 newline(buf, indent);
@@ -406,7 +390,6 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
 
     match field {
         LabeledValue(_, spaces, _) => !spaces.is_empty(),
-        OptionalField(_, spaces, _) => !spaces.is_empty(),
         LabelOnly(_) => false,
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
         Malformed(text) => text.chars().any(|c| c == '\n'),
