@@ -217,15 +217,20 @@ pub enum TypeAnnotation<'a> {
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
 
-    /// A plain record, e.g. `{ name: String, email: Email }`
-    Record(Vec<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>),
+    Record {
+        fields: &'a [Loc<AssignedField<'a, TypeAnnotation<'a>>>],
+        /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
+        /// This is None if it's a closed record annotation like `{ name: Str }`.
+        ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+    },
 
-    /// A record fragment, e.g. `{ name: String, email: Email }...r`
-    RecordFragment(
-        Vec<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>,
-        // the fragment type variable, e.g. the `r` in `{ name: String }...r`
-        &'a Loc<TypeAnnotation<'a>>,
-    ),
+    /// A tag union, e.g. `[
+    TagUnion {
+        tags: &'a [Loc<Tag<'a>>],
+        /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
+        /// This is None if it's a closed tag union like `[ Foo, Bar]`.
+        ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+    },
 
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
@@ -235,6 +240,26 @@ pub enum TypeAnnotation<'a> {
     SpaceAfter(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
 
     /// A malformed type annotation, which will code gen to a runtime error
+    Malformed(&'a str),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Tag<'a> {
+    Global {
+        name: Loc<&'a str>,
+        args: &'a [Loc<TypeAnnotation<'a>>],
+    },
+
+    Private {
+        name: Loc<&'a str>,
+        args: &'a [Loc<TypeAnnotation<'a>>],
+    },
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a Tag<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Tag<'a>, &'a [CommentOrNewline<'a>]),
+
+    /// A malformed tag, which will code gen to a runtime error
     Malformed(&'a str),
 }
 
@@ -491,6 +516,15 @@ impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         AssignedField::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for Tag<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Tag::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Tag::SpaceAfter(self, spaces)
     }
 }
 

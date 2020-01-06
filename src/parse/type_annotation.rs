@@ -1,9 +1,11 @@
 use crate::collections::arena_join;
-use crate::parse::ast::{Attempting, TypeAnnotation};
+use crate::parse::ast::{AssignedField, Attempting, Tag, TypeAnnotation};
 use crate::parse::blankspace::{space0_around, space0_before, space1_before};
 use crate::parse::parser::{
-    char, optional, string, unexpected, unexpected_eof, ParseResult, Parser, State,
+    allocated, char, optional, string, unexpected, unexpected_eof, Either, ParseResult, Parser,
+    State,
 };
+use crate::parse::{global_tag, private_tag};
 use crate::region::Located;
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -11,6 +13,33 @@ use bumpalo::Bump;
 
 pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     expression(min_indent)
+}
+
+macro_rules! tag_union {
+    ($min_indent:expr) => {
+        map!(
+            and!(
+                collection!(
+                    char('['),
+                    loc!(tag_type($min_indent)),
+                    char(','),
+                    char(']'),
+                    $min_indent
+                ),
+                optional(
+                    // This could be an open tag union, e.g. `[ Foo, Bar ]a`
+                    move |arena, state| allocated(term($min_indent)).parse(arena, state)
+                )
+            ),
+            |(tags, ext): (
+                Vec<'a, Located<Tag<'a>>>,
+                Option<&'a Located<TypeAnnotation<'a>>>,
+            )| TypeAnnotation::TagUnion {
+                tags: tags.into_bump_slice(),
+                ext
+            }
+        )
+    };
 }
 
 pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
@@ -21,6 +50,7 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
         }),
         loc_parenthetical_type(min_indent),
         loc!(record_type(min_indent)),
+        loc!(tag_union!(min_indent)),
         loc!(applied_type(min_indent)),
         loc!(parse_type_variable)
     )
@@ -39,24 +69,54 @@ fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAn
 }
 
 #[inline(always)]
+fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
+    map!(
+        and!(
+            either!(loc!(private_tag()), loc!(global_tag())),
+            // Optionally parse space-separated arguments for the constructor,
+            // e.g. `ok err` in `Result ok err`
+            zero_or_more!(space1_before(
+                move |arena, state| term(min_indent).parse(arena, state),
+                min_indent,
+            ))
+        ),
+        |(either_name, args): (
+            Either<Located<&'a str>, Located<&'a str>>,
+            Vec<'a, Located<TypeAnnotation<'a>>>
+        )| match either_name {
+            Either::First(name) => Tag::Private {
+                name,
+                args: args.into_bump_slice()
+            },
+            Either::Second(name) => Tag::Global {
+                name,
+                args: args.into_bump_slice()
+            },
+        }
+    )
+}
+
+#[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
     use crate::parse::type_annotation::TypeAnnotation::*;
 
-    map_with_arena!(
+    map!(
         and!(
             record_without_update!(
                 move |arena, state| term(min_indent).parse(arena, state),
                 min_indent
             ),
-            optional(skip_first!(
-                // This could be a record fragment, e.g. `{ name: String }...r`
-                string("..."),
-                move |arena, state| term(min_indent).parse(arena, state)
-            ))
+            optional(
+                // This could be an open record, e.g. `{ name: Str }r`
+                move |arena, state| allocated(term(min_indent)).parse(arena, state)
+            )
         ),
-        |arena: &'a Bump, (rec, opt_bound_var)| match opt_bound_var {
-            None => Record(rec),
-            Some(loc_bound_var) => RecordFragment(rec, arena.alloc(loc_bound_var)),
+        |(fields, ext): (
+            Vec<'a, Located<AssignedField<'a, TypeAnnotation<'a>>>>,
+            Option<&'a Located<TypeAnnotation<'a>>>,
+        )| Record {
+            fields: fields.into_bump_slice(),
+            ext
         }
     )
 }
