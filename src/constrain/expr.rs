@@ -297,6 +297,15 @@ pub fn constrain_expr(
                 ]),
             )
         }
+
+        If {
+            cond_var,
+            then_var,
+            else_var,
+            loc_cond,
+            loc_then,
+            loc_else,
+        } => panic!("TODO constrain uniq if"),
         When {
             cond_var,
             expr_var,
