@@ -819,71 +819,114 @@ mod test_format {
         );
     }
 
-    //    #[test]
-    //    fn if_removes_newlines() {
-    //        expr_formats_to(
-    //            indoc!(
-    //                r#"
-    //                if
-    //
-    //                    # You never know!
-    //                    isPrime 8
-    //
-    //                    # Top Comment
-    //
-    //                    # Bottom Comment
-    //
-    //
-    //                then
-    //
-    //                    # A
-    //
-    //                    # B
-    //
-    //                    nothing
-    //
-    //                    # B again
-    //
-    //                else
-    //
-    //                    # C
-    //                    # D
-    //
-    //                    # E
-    //                    # F
-    //
-    //                    just (div 1 8)
-    //                "#
-    //            ),
-    //            indoc!(
-    //                r#"
-    //                if
-    //                    # You never know!
-    //                    isPrime 8
+    #[test]
+    fn if_removes_newlines_from_else() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                if
+                    isPrime 8
+                then
+                    nothing
+                else
+                    # C
+                    # D
 
-    //                    # Top Comment
+                    # E
+                    # F
 
-    //                    # Bottom Comment
-    //                then
-    //                    # A
+                    just (div 1 8)
+                "#
+            ),
+            indoc!(
+                r#"
+                if
+                    isPrime 8
+                then
+                    nothing
+                else
+                    # C
+                    # D
+                    # E
+                    # F
+                    just (div 1 8)
+                "#
+            ),
+        );
+    }
 
-    //                    # B
+    #[test]
+    fn if_removes_newlines_from_then() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                if
+                    isPrime 9
+                then
+                    # EE
+                    # FF
 
-    //                    nothing
+                    nothing
 
-    //                    # B again
-    //
-    //                else
-    //                    # C
-    //                    # D
+                    # GG
 
-    //                    # E
-    //                    # F
-    //                    just (div 1 8)
-    //                "#
-    //            ),
-    //        );
-    //    }
+                else
+                    just (div 1 9)
+                "#
+            ),
+            indoc!(
+                r#"
+                if
+                    isPrime 9
+                then
+                    # EE
+                    # FF
+                    nothing
+                    # GG
+                else
+                    just (div 1 9)
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn if_removes_newlines_from_condition() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                if
+
+                    # Is
+
+                    # It
+
+                    isPrime 10
+
+                    # Prime?
+
+                then
+                    nothing
+                else
+                    just (div 1 10)
+                "#
+            ),
+            indoc!(
+                r#"
+                if
+                    # Is
+                    # It
+                    isPrime 10
+                    # Prime?
+                then
+                    nothing
+                else
+                    just (div 1 10)
+                "#
+            ),
+        );
+    }
+
     #[test]
     fn multi_line_if() {
         expr_formats_to(

@@ -53,6 +53,43 @@ where
     }
 }
 
+
+pub fn fmt_if_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
+    where
+        I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    use self::CommentOrNewline::*;
+
+    let mut iter = spaces.peekable();
+
+    let mut encountered_comment = false;
+
+    while let Some(space) = iter.next() {
+        dbg!(space);
+        match space {
+            Newline => {}
+            LineComment(comment) => {
+                buf.push('#');
+                buf.push_str(comment);
+
+
+            }
+        }
+        match iter.peek() {
+            None => {},
+            Some(next_space) => {
+                match next_space {
+                    Newline => {},
+                    LineComment(_) => {
+                        newline(buf, indent);
+                    },
+                }
+            },
+        }
+    }
+}
+
+
 /// Like format_spaces, but remove newlines and keep only comments.
 pub fn fmt_comments_only<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
 where
@@ -75,4 +112,16 @@ fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str, indent: u16) {
     buf.push_str(comment);
 
     newline(buf, indent);
+}
+
+
+pub fn is_comment<'a>(space: &'a CommentOrNewline<'a>) -> bool {
+    match space {
+        CommentOrNewline::Newline => {
+            false
+        },
+        CommentOrNewline::LineComment(_) => {
+            true
+        },
+    }
 }

@@ -1,9 +1,10 @@
 use crate::fmt::def::fmt_def;
 use crate::fmt::pattern::fmt_pattern;
-use crate::fmt::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, INDENT};
+use crate::fmt::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, INDENT, fmt_if_spaces, is_comment};
 use crate::parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern};
 use crate::region::Located;
 use bumpalo::collections::{String, Vec};
+use crate::parse::expr;
 
 pub fn fmt_expr<'a>(
     buf: &mut String<'a>,
@@ -431,28 +432,82 @@ fn fmt_if<'a>(
         indent
     };
 
+    buf.push_str("if");
+
     if is_multiline_condition {
-        buf.push_str("if");
-        newline(buf, return_indent);
-        fmt_expr(buf, &loc_condition.value, return_indent, false, false);
-        newline(buf, indent);
-        buf.push_str("then");
+        dbg!(&loc_condition.value);
+        match &loc_condition.value {
+            Expr::SpaceBefore(expr_below, spaces_below) => {
+                fmt_if_spaces(buf, spaces_below.iter(), return_indent);
+                newline(buf, return_indent);
+
+                match &expr_below {
+                    Expr::SpaceAfter(expr_above, spaces_above) => {
+                        fmt_expr(buf, &expr_above, return_indent, false, false);
+                        fmt_if_spaces(buf, spaces_above.iter(), return_indent);
+                        newline(buf, indent);
+                    }
+
+                    _ => {
+                        fmt_expr(buf, &expr_below, return_indent, false, false);
+                    }
+                }
+            }
+            _ => {
+                fmt_expr(buf, &loc_condition.value, return_indent, false, false);
+            },
+        }
     } else {
-        buf.push_str("if ");
+        buf.push(' ');
         fmt_expr(buf, &loc_condition.value, indent, false, true);
-        buf.push_str(" then");
+        buf.push(' ');
+
     }
 
+    buf.push_str("then");
+
     if is_multiline {
-        newline(buf, return_indent);
+        match &loc_then.value {
+            Expr::SpaceBefore(expr_below, spaces_below) => {
+                let any_comments_below = spaces_below.iter().any(is_comment);
+
+                if !any_comments_below {
+                    newline(buf, return_indent);
+                }
+
+                fmt_if_spaces(buf, spaces_below.iter(), return_indent);
+
+                if any_comments_below {
+                    newline(buf, return_indent);
+                }
+
+                match &expr_below {
+                    Expr::SpaceAfter(expr_above, spaces_above) => {
+                        fmt_expr(buf, &expr_above, return_indent, false, false);
+
+
+
+                        fmt_if_spaces(buf, spaces_above.iter(), return_indent);
+                        newline(buf, indent);
+                    }
+
+                    _ => {
+                        fmt_expr(buf, &expr_below, return_indent, false, false);
+                    }
+                }
+            }
+            _ => {
+                fmt_expr(buf, &loc_condition.value, return_indent, false, false);
+            },
+        }
     } else {
         buf.push_str(" ");
+        fmt_expr(buf, &loc_then.value, return_indent, false, false);
+
     }
 
-    fmt_expr(buf, &loc_then.value, return_indent, false, false);
 
     if is_multiline {
-        newline(buf, indent);
         buf.push_str("else");
         newline(buf, return_indent);
     } else {
