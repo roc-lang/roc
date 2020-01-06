@@ -1,7 +1,7 @@
 use crate::collections::{ImMap, ImSet};
 use crate::subs::Variable;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Bool {
     Zero,
     One,
@@ -11,22 +11,46 @@ pub enum Bool {
     Variable(Variable),
 }
 
+use self::Bool::*;
+
+// TODO add inline pragma
 fn not(nested: Bool) -> Bool {
-    use self::Bool::*;
     Not(Box::new(nested))
 }
 
 fn and(left: Bool, right: Bool) -> Bool {
-    use self::Bool::*;
     And(Box::new(left), Box::new(right))
 }
 
 fn or(left: Bool, right: Bool) -> Bool {
-    use self::Bool::*;
     Or(Box::new(left), Box::new(right))
 }
 
+fn any<I>(mut it: I) -> Bool
+where
+    I: Iterator<Item = Bool>,
+{
+    if let Some(first) = it.next() {
+        it.fold(first, |a, b| or(a, b))
+    } else {
+        Zero
+    }
+}
+
+fn all(terms: Product<Bool>) -> Bool {
+    let mut it = terms.into_iter();
+
+    if let Some(first) = it.next() {
+        it.fold(first, |a, b| and(a, b))
+    } else {
+        Zero
+    }
+}
+
 type Substitution = ImMap<Variable, Bool>;
+
+type Product<A> = ImSet<A>;
+type Sum<A> = ImSet<A>;
 
 impl Bool {
     pub fn variables(&self) -> ImSet<Variable> {
@@ -37,8 +61,6 @@ impl Bool {
     }
 
     fn variables_help(&self, vars: &mut ImSet<Variable>) {
-        use self::Bool::*;
-
         match self {
             Zero => (),
             One => (),
@@ -58,20 +80,18 @@ impl Bool {
     }
 
     pub fn substitute(&self, substitutions: &Substitution) -> Self {
-        use self::Bool::*;
-
         match self {
             Zero => Zero,
             One => One,
-            And(left, right) => And(
-                Box::new(left.substitute(substitutions)),
-                Box::new(right.substitute(substitutions)),
+            And(left, right) => and(
+                left.substitute(substitutions),
+                right.substitute(substitutions),
             ),
-            Or(left, right) => Or(
-                Box::new(left.substitute(substitutions)),
-                Box::new(right.substitute(substitutions)),
+            Or(left, right) => or(
+                left.substitute(substitutions),
+                right.substitute(substitutions),
             ),
-            Not(nested) => Not(Box::new(nested.substitute(substitutions))),
+            Not(nested) => not(nested.substitute(substitutions)),
             Variable(current) => match substitutions.get(current) {
                 Some(new) => new.clone(),
                 None => Variable(*current),
@@ -80,8 +100,6 @@ impl Bool {
     }
 
     pub fn is_var(&self) -> bool {
-        use self::Bool::*;
-
         match self {
             Variable(_) => true,
             _ => false,
@@ -90,12 +108,122 @@ impl Bool {
 }
 
 pub fn simplify(term: Bool) -> Bool {
-    panic!();
+    sop_to_term(simplify_sop(bcf(normalize_sop(term_to_sop(
+        normalize_term(term),
+    )))))
+}
+
+fn sop_to_term(sop: Sop) -> Bool {
+    any(sop.into_iter().map(|v| all(v)))
+}
+
+fn simplify_sop(sop: Sop) -> Sop {
+    // filter out anything that is included in the remaining elements
+    let mut active = sop.clone();
+    let mut result = ImSet::default();
+    for t in sop {
+        if included(all(t.clone()), sop_to_term(active.without(&t))) {
+            active.remove(&t);
+        } else {
+            result.insert(t);
+        }
+    }
+
+    result
+}
+
+/// Blake canonical form
+fn bcf(sop: Sop) -> Sop {
+    absorptive(syllogistic(sop))
+}
+
+fn syllogistic(terms: Sop) -> Sop {
+    let mut cs_prime = ImSet::default();
+
+    for c in cartesian_product(terms.clone())
+        .iter()
+        .filter_map(|(x, y)| consensus(x, y))
+    {
+        if !terms
+            .clone()
+            .into_iter()
+            .any(|x| included_term(c.clone(), x))
+        {
+            cs_prime.insert(c);
+        }
+    }
+
+    if cs_prime.is_empty() {
+        terms
+    } else {
+        syllogistic(terms.union(cs_prime))
+    }
+}
+
+/// Absorption (apply the identify p + pq = p)
+fn absorptive(sop: Sop) -> Sop {
+    // TODO this is extremely inefficient!
+    let mut accum: Vec<Product<Bool>> = Vec::new();
+
+    for product in sop {
+        accum = accum
+            .into_iter()
+            .filter(|v| !absorbs(&product, v))
+            .collect();
+        accum.push(product);
+    }
+
+    accum.into()
+}
+
+/// Does p absorb q? (can we replace p + q by p?)
+fn absorbs(p: &Product<Bool>, q: &Product<Bool>) -> bool {
+    p.iter().all(|x| q.contains(x))
+}
+
+fn consensus(p: &Product<Bool>, q: &Product<Bool>) -> Option<Product<Bool>> {
+    let mut it = oppositions(p, q).into_iter();
+
+    if let Some(x) = it.next() {
+        if let None = it.next() {
+            let mut result = ImSet::default();
+
+            let compx = not(x.clone());
+
+            for elem in p
+                .iter()
+                .chain(q.iter())
+                .filter(|y| **y != x && **y != compx)
+            {
+                result.insert(elem.clone());
+            }
+
+            return Some(result);
+        }
+    }
+
+    None
+}
+
+fn oppositions(ps: &Product<Bool>, qs: &Product<Bool>) -> Product<Bool> {
+    let it1 = ps
+        .clone()
+        .into_iter()
+        .filter(|p| qs.contains(&not(p.clone())));
+    let it2 = qs
+        .clone()
+        .into_iter()
+        .filter(|q| ps.contains(&not(q.clone())));
+
+    let mut result = ImSet::default();
+    for x in it1.chain(it2) {
+        result.insert(x);
+    }
+
+    result
 }
 
 pub fn try_unify(p: Bool, q: Bool) -> Option<Substitution> {
-    use self::Bool::*;
-
     let (sub, consistency) = unify(p, q);
 
     let mut substitution = ImMap::default();
@@ -124,8 +252,6 @@ fn unify(p: Bool, q: Bool) -> (Substitution, Bool) {
 }
 
 fn unify0(names: ImSet<Variable>, input: Bool) -> (Substitution, Bool) {
-    use self::Bool::*;
-
     let mut substitution: Substitution = ImMap::default();
     let mut term: Bool = simplify(input);
     for x in names {
@@ -153,15 +279,21 @@ fn unify0(names: ImSet<Variable>, input: Bool) -> (Substitution, Bool) {
 
 // --- Simplification ---
 
-fn normalize_term(term: &Bool) -> Bool {
-    use self::Bool::*;
-
+/// Normalisation of terms. Applies (in bottom-up fashion) the identities
+///
+/// x * 1 = x
+/// x * 0 = 0
+/// x + 1 = 1
+/// x + 0 = x
+/// !1 = 0
+/// !0 = 1
+fn normalize_term(term: Bool) -> Bool {
     match term {
         Zero => Zero,
         One => One,
         And(left, right) => {
-            let p = normalize_term(&left);
-            let q = normalize_term(&right);
+            let p = normalize_term(*left);
+            let q = normalize_term(*right);
 
             match (p == One, p == Zero, q == One, q == Zero) {
                 (true, _, _, _) => q,
@@ -172,8 +304,8 @@ fn normalize_term(term: &Bool) -> Bool {
             }
         }
         Or(left, right) => {
-            let p = normalize_term(&left);
-            let q = normalize_term(&right);
+            let p = normalize_term(*left);
+            let q = normalize_term(*right);
 
             match (p == One, p == Zero, q == One, q == Zero) {
                 (true, _, _, _) => One,
@@ -184,7 +316,7 @@ fn normalize_term(term: &Bool) -> Bool {
             }
         }
         Not(nested) => {
-            let p = normalize_term(&nested);
+            let p = normalize_term(*nested);
 
             match (p == One, p == Zero) {
                 (true, _) => Zero,
@@ -192,174 +324,165 @@ fn normalize_term(term: &Bool) -> Bool {
                 _ => not(p),
             }
         }
-        Variable(v) => Variable(*v),
+        Variable(v) => Variable(v),
     }
 }
 
-/*
-pub fn unify(typ: &BooleanAlgebra, _expected: &BooleanAlgebra) -> Option<Substitution> {
-    // find the most general unifier.
-    let mut val = typ.clone();
-    let fv = val.variables();
-    let (mgu, consistency_condition) = boolean_unification(&mut val, &fv);
+// --- Inclusion ---
 
-    // the consistency_condition must be a base term, and must evaluate to False
-    if !consistency_condition.evaluate() {
-        Some(mgu)
+fn included(g: Bool, h: Bool) -> bool {
+    contradiction(and(g, not(h)))
+}
+
+fn included_term(g: Product<Bool>, h: Product<Bool>) -> bool {
+    included(all(g), all(h))
+}
+
+// --- Tautology / Contradiction ---
+
+fn tautology(term: Bool) -> bool {
+    normalize_pos(term_to_pos(normalize_term(term))).is_empty()
+}
+
+fn contradiction(term: Bool) -> bool {
+    tautology(not(term))
+}
+
+// --- Normalization of POS / SOP
+
+type Pos = Product<Sum<Bool>>;
+type Sop = Sum<Product<Bool>>;
+
+fn term_to_pos(term: Bool) -> Pos {
+    ImSet::default()
+}
+
+fn term_to_sop(term: Bool) -> Sop {
+    ImSet::default()
+}
+
+fn normalize_pos(pos: Pos) -> Pos {
+    let mut result = ImSet::default();
+
+    let singleton_one = unit(One);
+    for sum in pos {
+        let normalized = normalize_disj(sum);
+        if normalized != singleton_one {
+            result.insert(normalized);
+        }
+    }
+
+    result
+}
+
+fn normalize_sop(sop: Sop) -> Sop {
+    let mut result = ImSet::default();
+
+    let singleton_zero = unit(Zero);
+    for product in sop {
+        let normalized = normalize_conj(product);
+        if normalized != singleton_zero {
+            result.insert(normalized);
+        }
+    }
+
+    result
+}
+
+fn cartesian_product<A>(set: ImSet<A>) -> ImSet<(A, A)>
+where
+    A: Eq + Clone + core::hash::Hash,
+{
+    let mut result = ImSet::default();
+
+    for x in set.clone().into_iter() {
+        for y in set.clone() {
+            if x == y {
+                break;
+            }
+
+            result.insert((x.clone(), y));
+        }
+    }
+
+    result
+}
+
+fn unit<A>(a: A) -> ImSet<A>
+where
+    A: Clone + Eq + core::hash::Hash,
+{
+    let mut result = ImSet::default();
+    result.insert(a);
+    result
+}
+
+fn normalize_disj(mut sum: Sum<Bool>) -> Sum<Bool> {
+    let is_always_false =
+        sum.clone().into_iter().any(|x| sum.contains(&not(x))) || sum.contains(&One);
+
+    if is_always_false {
+        unit(One)
     } else {
-        // the unification has no solution
-        None
+        sum.remove(&Zero);
+        sum
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BooleanAlgebra {
-    Ground(bool),
-    Disjunction(Box<BooleanAlgebra>, Box<BooleanAlgebra>),
-    Conjunction(Box<BooleanAlgebra>, Box<BooleanAlgebra>),
-    Negation(Box<BooleanAlgebra>),
-    Variable(Variable),
-}
+fn normalize_conj(mut product: Product<Bool>) -> Product<Bool> {
+    let is_always_false = product
+        .clone()
+        .into_iter()
+        .any(|x| product.contains(&not(x)))
+        || product.contains(&Zero);
 
-impl BooleanAlgebra {
-    pub fn simplify(&mut self) {
-        *self = simplify(self.clone());
-    }
-
-    pub fn substitute(&self, var: Variable, expanded: &BooleanAlgebra) -> Self {
-        use BooleanAlgebra::*;
-        match self {
-            Variable(v) if v == &var => expanded.clone(),
-            Variable(_) | Ground(_) => self.clone(),
-
-            Negation(t) => Negation(Box::new(t.substitute(var, expanded))),
-
-            Disjunction(l, r) => Disjunction(
-                Box::new(l.substitute(var, expanded)),
-                Box::new(r.substitute(var, expanded)),
-            ),
-
-            Conjunction(l, r) => Conjunction(
-                Box::new(l.substitute(var, expanded)),
-                Box::new(r.substitute(var, expanded)),
-            ),
-        }
-    }
-
-    pub fn evaluate(&self) -> bool {
-        use BooleanAlgebra::*;
-        match self {
-            Variable(v) => panic!(
-                "Cannot evaluate boolean expression with unbound variable {:?}",
-                v
-            ),
-            Ground(b) => *b,
-            Negation(t) => !(t.evaluate()),
-            Disjunction(l, r) => l.evaluate() || r.evaluate(),
-            Conjunction(l, r) => l.evaluate() && r.evaluate(),
-        }
-    }
-
-    pub fn variables(&self) -> Vec<Variable> {
-        let mut vars = Vec::new();
-        variables_help(self, &mut vars);
-        vars
+    if is_always_false {
+        unit(Zero)
+    } else {
+        product.remove(&One);
+        product
     }
 }
 
-fn variables_help(bconstraint: &BooleanAlgebra, variables: &mut Vec<Variable>) {
-    use BooleanAlgebra::*;
-
-    match bconstraint {
-        Variable(v) => variables.push(v.clone()),
-        Ground(_) => {}
-        Negation(t) => variables_help(t, variables),
-        Disjunction(l, r) => {
-            variables_help(l, variables);
-            variables_help(r, variables);
-        }
-        Conjunction(l, r) => {
-            variables_help(l, variables);
-            variables_help(r, variables);
-        }
+fn cnf(term: &Bool) -> Bool {
+    match term {
+        Zero => Zero,
+        One => One,
+        And(p, q) => and(cnf(p), cnf(q)),
+        Or(p, q) => distr_cnf(cnf(p), cnf(q)),
+        Not(nested) => Not(nested.clone()),
+        Variable(current) => Variable(*current),
     }
 }
 
-fn simplify(bconstraint: BooleanAlgebra) -> BooleanAlgebra {
-    use BooleanAlgebra::*;
-    match bconstraint {
-        Variable(_) | Ground(_) => bconstraint,
+// TODO test this thoroughly
+fn distr_cnf(p: Bool, q: Bool) -> Bool {
+    panic!();
+}
 
-        Negation(nested) => match simplify(*nested) {
-            Ground(t) => Ground(!t),
-            other => Negation(Box::new(other)),
-        },
-
-        Disjunction(l, r) => match (simplify(*l), simplify(*r)) {
-            (Ground(true), _) => Ground(true),
-            (_, Ground(true)) => Ground(true),
-            (Ground(false), rr) => rr,
-            (ll, Ground(false)) => ll,
-            (ll, rr) => Disjunction(Box::new(ll), Box::new(rr)),
-        },
-
-        Conjunction(l, r) => match (simplify(*l), simplify(*r)) {
-            (Ground(true), rr) => rr,
-            (ll, Ground(true)) => ll,
-            (Ground(false), _) => Ground(false),
-            (_, Ground(false)) => Ground(false),
-            (ll, rr) => Conjunction(Box::new(ll), Box::new(rr)),
-        },
+fn dnf(term: &Bool) -> Bool {
+    match term {
+        Zero => Zero,
+        One => One,
+        And(p, q) => and(dnf(p), dnf(q)),
+        Or(p, q) => distr_dnf(dnf(p), dnf(q)),
+        Not(nested) => Not(nested.clone()),
+        Variable(current) => Variable(*current),
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Substitution {
-    pairs: ImMap<Variable, BooleanAlgebra>,
+// TODO test this thoroughly
+fn distr_dnf(p: Bool, q: Bool) -> Bool {
+    panic!();
 }
 
-impl Substitution {
-    pub fn empty() -> Self {
-        Substitution {
-            pairs: ImMap::default(),
-        }
-    }
-
-    pub fn insert(&mut self, var: Variable, term: BooleanAlgebra) {
-        self.pairs.insert(var, term);
-    }
-
-    pub fn get(&self, var: Variable) -> Option<&BooleanAlgebra> {
-        self.pairs.get(&var)
+fn nnf(term: &Bool) -> Bool {
+    match term {
+        Zero => Zero,
+        One => One,
+        And(p, q) => and(dnf(p), dnf(q)),
+        Or(p, q) => distr_dnf(dnf(p), dnf(q)),
+        Not(nested) => Not(nested.clone()),
+        Variable(current) => Variable(*current),
     }
 }
-
-fn boolean_unification(
-    term: &mut BooleanAlgebra,
-    variables: &[Variable],
-) -> (Substitution, BooleanAlgebra) {
-    use BooleanAlgebra::*;
-    let mut substitution = Substitution::empty();
-
-    for var in variables {
-        let t0 = term.clone().substitute(*var, &Ground(false));
-        let t1 = term.clone().substitute(*var, &Ground(true));
-
-        *term = Conjunction(Box::new(t1.clone()), Box::new(t0.clone()));
-        term.simplify();
-
-        let mut sub = Disjunction(
-            Box::new(t0),
-            Box::new(Conjunction(
-                Box::new(Variable(*var)),
-                Box::new(Negation(Box::new(t1))),
-            )),
-        );
-        sub.simplify();
-
-        substitution.insert(var.clone(), sub);
-    }
-
-    (substitution, term.clone())
-}
-*/
