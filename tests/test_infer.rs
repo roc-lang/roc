@@ -1068,19 +1068,16 @@ mod test_infer {
         );
     }
 
-    // currently doesn't work because of a parsing issue
-    // @Foo x y isn't turned into Apply(@Foo, [x,y]) currently
-    // #[test]
-    // fn private_tag_application() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"@Foo "happy" 2020
-    //             "#
-    //         ),
-    //         "[ Test.Foo Str Int ]*",
-    //     );
-    // }
-    //
+    #[test]
+    fn private_tag_application() {
+        infer_eq(
+            indoc!(
+                r#"@Foo "happy" 2020
+                "#
+            ),
+            "[ Test.Foo Str Int ]*",
+        );
+    }
 
     #[test]
     fn if_then_else() {
