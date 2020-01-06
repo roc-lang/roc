@@ -69,6 +69,7 @@ fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAn
 }
 
 #[inline(always)]
+#[allow(clippy::type_complexity)]
 fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
     map!(
         and!(
