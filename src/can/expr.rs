@@ -55,10 +55,9 @@ pub enum Expr {
     },
     If {
         cond_var: Variable,
+        branch_var: Variable,
         loc_cond: Box<Located<Expr>>,
-        then_var: Variable,
         loc_then: Box<Located<Expr>>,
-        else_var: Variable,
         loc_else: Box<Located<Expr>>,
     },
 
@@ -585,8 +584,7 @@ pub fn canonicalize_expr(
             (
                 If {
                     cond_var: var_store.fresh(),
-                    then_var: var_store.fresh(),
-                    else_var: var_store.fresh(),
+                    branch_var: var_store.fresh(),
                     loc_cond: Box::new(loc_cond),
                     loc_then: Box::new(loc_then),
                     loc_else: Box::new(loc_else),
