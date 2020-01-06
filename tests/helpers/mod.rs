@@ -129,7 +129,7 @@ pub fn uniq_expr_with(
 
     let variable2 = var_store2.fresh();
     let expected2 = Expected::NoExpectation(Type::Variable(variable2));
-    let (output2, constraint2) = roc::uniqueness::canonicalize_declaration(
+    let (output2, constraint2) = roc::uniqueness::constrain_declaration(
         &var_store2,
         Region::zero(),
         loc_expr,

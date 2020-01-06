@@ -35,7 +35,7 @@ pub struct Env {
     pub procedures: ImMap<Symbol, Procedure>,
 }
 
-pub fn canonicalize_declaration(
+pub fn constrain_declaration(
     var_store: &VarStore,
     region: Region,
     loc_expr: Located<Expr>,
@@ -45,7 +45,7 @@ pub fn canonicalize_declaration(
     let rigids = ImMap::default();
     let mut var_usage = VarUsage::default();
 
-    canonicalize_expr(
+    constrain_expr(
         &rigids,
         var_store,
         &mut var_usage,
@@ -61,7 +61,7 @@ pub struct PatternState {
     pub constraints: Vec<Constraint>,
 }
 
-fn canonicalize_pattern(
+fn constrain_pattern(
     var_store: &VarStore,
     state: &mut PatternState,
     pattern: &Located<Pattern>,
@@ -132,10 +132,10 @@ fn canonicalize_pattern(
                             },
                         );
 
-                        canonicalize_pattern(var_store, state, loc_guard, pattern_expected);
+                        constrain_pattern(var_store, state, loc_guard, pattern_expected);
                     }
                     None => {
-                        canonicalize_pattern(var_store, state, pattern, pattern_expected);
+                        constrain_pattern(var_store, state, pattern, pattern_expected);
                     }
                 }
 
@@ -165,7 +165,7 @@ fn canonicalize_pattern(
     }
 }
 
-pub fn canonicalize_expr(
+pub fn constrain_expr(
     rigids: &Rigids,
     var_store: &VarStore,
     var_usage: &mut VarUsage,
@@ -209,7 +209,7 @@ pub fn canonicalize_expr(
                 let field_type = Variable(field_var);
                 let field_expected = Expected::NoExpectation(field_type.clone());
                 let loc_expr = &*field.loc_expr;
-                let (field_out, field_con) = canonicalize_expr(
+                let (field_out, field_con) = constrain_expr(
                     rigids,
                     var_store,
                     var_usage,
@@ -269,7 +269,7 @@ pub fn canonicalize_expr(
                         Expected::ForReason(Reason::ElemInList, elem_type, region),
                         region,
                     );
-                    let (elem_out, constraint) = canonicalize_expr(
+                    let (elem_out, constraint) = constrain_expr(
                         rigids,
                         var_store,
                         var_usage,
@@ -354,7 +354,7 @@ pub fn canonicalize_expr(
 
             for (arg_var, pattern) in args {
                 let arg_typ = Variable(*arg_var);
-                canonicalize_pattern(
+                constrain_pattern(
                     var_store,
                     &mut state,
                     &pattern,
@@ -371,7 +371,7 @@ pub fn canonicalize_expr(
                 Type::Function(arg_types, Box::new(ret_type.clone())),
             );
 
-            let (output, ret_constraint) = canonicalize_expr(
+            let (output, ret_constraint) = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -416,7 +416,7 @@ pub fn canonicalize_expr(
             let mut vars = Vec::with_capacity(2 + loc_args.len());
 
             // Canonicalize the function expression and its arguments
-            let (_, fn_con) = canonicalize_expr(
+            let (_, fn_con) = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -442,7 +442,7 @@ pub fn canonicalize_expr(
                 };
 
                 let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
-                let (_, arg_con) = canonicalize_expr(
+                let (_, arg_con) = constrain_expr(
                     rigids,
                     var_store,
                     var_usage,
@@ -478,7 +478,7 @@ pub fn canonicalize_expr(
         LetRec(defs, loc_ret, _) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
-            let (_, body_con) = canonicalize_expr(
+            let (_, body_con) = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -494,7 +494,7 @@ pub fn canonicalize_expr(
         LetNonRec(def, loc_ret, _) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
-            let (_, body_con) = canonicalize_expr(
+            let (_, body_con) = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -516,7 +516,7 @@ pub fn canonicalize_expr(
         } => {
             let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
-            let (mut output, expr_con) = canonicalize_expr(
+            let (mut output, expr_con) = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -533,7 +533,7 @@ pub fn canonicalize_expr(
                 Expected::FromAnnotation(name, arity, _, typ) => {
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
-                        let branch_con = canonicalize_when_branch(
+                        let branch_con = constrain_when_branch(
                             var_store,
                             &mut branch_var_usage,
                             rigids,
@@ -583,7 +583,7 @@ pub fn canonicalize_expr(
 
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
-                        let branch_con = canonicalize_when_branch(
+                        let branch_con = constrain_when_branch(
                             var_store,
                             &mut branch_var_usage,
                             rigids,
@@ -714,7 +714,7 @@ pub fn canonicalize_expr(
                 constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));
             let record_expected = Expected::NoExpectation(record_type);
 
-            let (output, mut constraint) = canonicalize_expr(
+            let (output, mut constraint) = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -765,7 +765,7 @@ pub fn canonicalize_expr(
 // TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn canonicalize_when_branch(
+fn constrain_when_branch(
     var_store: &VarStore,
     var_usage: &mut VarUsage,
     rigids: &Rigids,
@@ -776,7 +776,7 @@ fn canonicalize_when_branch(
     expr_expected: Expected<Type>,
     _output: &mut Output,
 ) -> Constraint {
-    let (_, ret_constraint) = canonicalize_expr(
+    let (_, ret_constraint) = constrain_expr(
         rigids,
         var_store,
         var_usage,
@@ -792,7 +792,7 @@ fn canonicalize_when_branch(
     };
 
     // mutates the state, so return value is not used
-    canonicalize_pattern(var_store, &mut state, &loc_pattern, pattern_expected);
+    constrain_pattern(var_store, &mut state, &loc_pattern, pattern_expected);
 
     Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
@@ -818,7 +818,7 @@ fn constrain_def_pattern(
         constraints: Vec::with_capacity(1),
     };
 
-    canonicalize_pattern(var_store, &mut state, loc_pattern, pattern_expected);
+    constrain_pattern(var_store, &mut state, loc_pattern, pattern_expected);
 
     state
 }
@@ -869,7 +869,7 @@ pub fn constrain_def(
                 Region::zero(),
             ));
 
-            canonicalize_expr(
+            constrain_expr(
                 &ftv,
                 var_store,
                 var_usage,
@@ -880,7 +880,7 @@ pub fn constrain_def(
             .1
         }
         None => {
-            canonicalize_expr(
+            constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -947,7 +947,7 @@ pub fn rec_defs_help(
             constraints: Vec::with_capacity(1),
         };
 
-        canonicalize_pattern(
+        constrain_pattern(
             var_store,
             &mut pattern_state,
             &def.loc_pattern,
@@ -959,7 +959,7 @@ pub fn rec_defs_help(
         let mut new_rigids = Vec::new();
         match &def.annotation {
             None => {
-                let (_, expr_con) = canonicalize_expr(
+                let (_, expr_con) = constrain_expr(
                     rigids,
                     var_store,
                     var_usage,
@@ -1002,7 +1002,7 @@ pub fn rec_defs_help(
                     AnnotationSource::TypedBody,
                     annotation.clone(),
                 );
-                let (_, expr_con) = canonicalize_expr(
+                let (_, expr_con) = constrain_expr(
                     &ftv,
                     var_store,
                     var_usage,
@@ -1074,7 +1074,7 @@ fn constrain_field_update(
     let field_type = Type::Variable(var);
     let reason = Reason::RecordUpdateValue(field);
     let expected = Expected::ForReason(reason, field_type.clone(), region);
-    let (_, con) = canonicalize_expr(
+    let (_, con) = constrain_expr(
         rigids,
         var_store,
         var_usage,
