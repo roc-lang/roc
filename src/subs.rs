@@ -431,8 +431,6 @@ pub enum FlatType {
     },
     Func(Vec<Variable>, Variable),
     Record(ImMap<RecordFieldLabel, Variable>, Variable),
-    // Within a tag union, a tag can occur multiple times, e.g. [ Foo, Foo Int, Foo Bool Int ], but
-    // only once for every arity, so not [ Foo Int, Foo Bool ]
     TagUnion(ImMap<Symbol, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
