@@ -673,6 +673,15 @@ fn adjust_rank_content(
                     rank
                 }
 
+                Boolean(b) => {
+                    let mut rank = Rank::toplevel();
+                    for var in b.variables() {
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                    }
+
+                    rank
+                }
+
                 Erroneous(_) => group_rank,
             }
         }
@@ -805,6 +814,12 @@ fn deep_copy_var_help(
                     }
 
                     TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))
+                }
+
+                Boolean(b) => {
+                    let mut mapper = |var| deep_copy_var_help(subs, max_rank, pools, var);
+
+                    Boolean(b.map_variables(&mut mapper))
                 }
             };
 

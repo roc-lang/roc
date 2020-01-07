@@ -3,6 +3,7 @@ use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
+use crate::uniqueness::boolean_algebra;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -439,6 +440,7 @@ pub enum FlatType {
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,
+    Boolean(boolean_algebra::Bool),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -482,6 +484,10 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                                 .values()
                                 .any(|vars| vars.iter().any(|var| occurs(subs, &new_seen, *var)))
                     }
+                    Boolean(b) => b
+                        .variables()
+                        .iter()
+                        .any(|var| occurs(subs, &new_seen, *var)),
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => false,
                 }
             }
@@ -560,6 +566,12 @@ fn get_var_names(
 
                     taken_names
                 }
+                FlatType::Boolean(b) => b
+                    .variables()
+                    .into_iter()
+                    .fold(taken_names, |answer, arg_var| {
+                        get_var_names(subs, arg_var, answer)
+                    }),
             },
         }
     }
@@ -759,6 +771,8 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
             }
         }
 
+        Boolean(_) => panic!("TODO make error type"),
+
         Erroneous(_) => ErrorType::Error,
     }
 }
@@ -809,6 +823,11 @@ fn restore_content(subs: &mut Subs, content: &Content) {
                 }
 
                 subs.restore(*ext_var);
+            }
+            Boolean(b) => {
+                for var in b.variables() {
+                    subs.restore(var);
+                }
             }
             Erroneous(_) => (),
         },

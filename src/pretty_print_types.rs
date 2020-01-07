@@ -104,6 +104,11 @@ fn find_names_needed(
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
+        Structure(Boolean(b)) => {
+            for var in b.variables() {
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
+        }
         RigidVar(name) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
@@ -295,6 +300,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                 }
             }
         }
+        Boolean(_) => panic!("pretty print type"),
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }

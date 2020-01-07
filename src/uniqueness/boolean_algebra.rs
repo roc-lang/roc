@@ -82,6 +82,20 @@ impl Bool {
         };
     }
 
+    pub fn map_variables<F>(&self, f: &mut F) -> Self
+    where
+        F: FnMut(Variable) -> Variable,
+    {
+        match self {
+            Zero => Zero,
+            One => One,
+            And(left, right) => and(left.map_variables(f), right.map_variables(f)),
+            Or(left, right) => or(left.map_variables(f), right.map_variables(f)),
+            Not(nested) => not(nested.map_variables(f)),
+            Variable(current) => Variable(f(*current)),
+        }
+    }
+
     pub fn substitute(&self, substitutions: &Substitution) -> Self {
         match self {
             Zero => Zero,
@@ -131,8 +145,7 @@ pub fn simplify(term: Bool) -> Bool {
     let a = term_to_sop(normalized);
     let b = normalize_sop(a);
     let after_bcf = bcf(b);
-    let answer = sop_to_term(simplify_sop(after_bcf));
-    answer
+    sop_to_term(simplify_sop(after_bcf))
 }
 
 #[inline(always)]
