@@ -662,6 +662,38 @@ mod test_parse {
     }
 
     #[test]
+    fn apply_private_tag() {
+        let arena = Bump::new();
+        let arg1 = arena.alloc(Located::new(0, 0, 6, 8, Int("12")));
+        let arg2 = arena.alloc(Located::new(0, 0, 9, 11, Int("34")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let expected = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 0, 5, Expr::PrivateTag("@Whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let actual = parse_with(&arena, "@Whee 12 34");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn apply_global_tag() {
+        let arena = Bump::new();
+        let arg1 = arena.alloc(Located::new(0, 0, 5, 7, Int("12")));
+        let arg2 = arena.alloc(Located::new(0, 0, 8, 10, Int("34")));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let expected = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 0, 4, Expr::GlobalTag("Whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let actual = parse_with(&arena, "Whee 12 34");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn qualified_global_tag() {
         let arena = Bump::new();
         let expected = Expr::MalformedIdent("One.Two.Whee");
