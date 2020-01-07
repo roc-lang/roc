@@ -1075,7 +1075,7 @@ mod test_infer {
                 r#"@Foo "happy" 2020
                 "#
             ),
-            "[ Test.Foo Str Int ]*",
+            "[ Test.@Foo Str Int ]*",
         );
     }
 
