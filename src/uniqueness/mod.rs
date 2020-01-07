@@ -155,7 +155,7 @@ fn canonicalize_pattern(
             state.constraints.push(record_con);
         }
 
-        Tag(_) | AppliedTag(_, _) => {
+        AppliedTag(_, _, _) => {
             panic!("TODO add_constraints for {:?}", pattern);
         }
 
@@ -245,8 +245,8 @@ pub fn canonicalize_expr(
 
             (output, constraint)
         }
-        Tag(name, arguments) => {
-            panic!("TODO implement tag {:?} {:?}", name, arguments);
+        Tag { .. } => {
+            panic!("TODO implement tag");
         }
         List(variable, loc_elems) => {
             if loc_elems.is_empty() {
@@ -508,6 +508,7 @@ pub fn canonicalize_expr(
                 constrain_def(rigids, var_store, var_usage, def, body_con),
             )
         }
+        If { .. } => panic!("TODO constrain uniq if"),
         When {
             cond_var,
             loc_cond,
