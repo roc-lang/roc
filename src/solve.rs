@@ -7,6 +7,7 @@ use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
+use crate::uniqueness::boolean_algebra::Bool;
 
 type Env = ImMap<Symbol, Variable>;
 
@@ -398,6 +399,12 @@ fn type_to_variable(
         }
         EmptyTagUnion => {
             let content = Content::Structure(FlatType::EmptyTagUnion);
+
+            register(subs, rank, pools, content)
+        }
+        Boolean(Bool::Variable(var)) => *var,
+        Boolean(b) => {
+            let content = Content::Structure(FlatType::Boolean(b.clone()));
 
             register(subs, rank, pools, content)
         }
