@@ -771,7 +771,7 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
             }
         }
 
-        Boolean(_) => panic!("TODO make error type"),
+        Boolean(b) => ErrorType::Boolean(b),
 
         Erroneous(_) => ErrorType::Error,
     }

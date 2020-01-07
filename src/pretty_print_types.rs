@@ -2,6 +2,7 @@ use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{MutMap, MutSet};
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::{self, name_type_var};
+use crate::uniqueness::boolean_algebra::Bool;
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -300,7 +301,10 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                 }
             }
         }
-        Boolean(_) => panic!("pretty print type"),
+        Boolean(Bool::Variable(var)) => write_content(subs.get(var).content, subs, buf, parens),
+        Boolean(b) => {
+            buf.push_str(&format!("{:?}", b));
+        }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }

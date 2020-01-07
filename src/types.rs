@@ -393,6 +393,7 @@ pub enum ErrorType {
         Vec<(Lowercase, ErrorType)>,
         Box<ErrorType>,
     ),
+    Boolean(boolean_algebra::Bool),
     Error,
 }
 

@@ -402,7 +402,7 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
-        Boolean(Bool::Variable(var)) => *var,
+        // Boolean(Bool::Variable(var)) => *var,
         Boolean(b) => {
             let content = Content::Structure(FlatType::Boolean(b.clone()));
 
