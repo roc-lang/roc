@@ -320,6 +320,8 @@ pub enum Reason {
     IntLiteral,
     InterpolatedStringVar,
     WhenBranch { index: usize },
+    IfCondition,
+    IfBranch { index: usize },
     ElemInList,
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Ident, SendMap<Lowercase, Type>),

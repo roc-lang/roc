@@ -1080,4 +1080,16 @@ mod test_infer {
     //         "[ Test.Foo Str Int ]*",
     //     );
     // }
+    //
+
+    #[test]
+    fn if_then_else() {
+        infer_eq(
+            indoc!(
+                r#"if True then 1 else 0
+                "#
+            ),
+            "Int",
+        );
+    }
 }
