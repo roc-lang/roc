@@ -1,3 +1,13 @@
+// Based on work by Edsko de Vries for tfp 2007
+//
+// http://www.edsko.net/tcd/pub/tfp07-prototype-snapshot.tar.gz
+//
+// Thank you Edsko!
+//
+// quoting from that work:
+//
+// > Main reference for this module is "Boolean Reasoning: The Logic of
+// > Boolean Equations" by Frank Markham Brown.
 use crate::collections::{ImMap, ImSet};
 use crate::subs::Variable;
 
