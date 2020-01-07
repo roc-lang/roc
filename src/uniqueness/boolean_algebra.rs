@@ -43,7 +43,7 @@ pub fn all(terms: Product<Bool>) -> Bool {
     if let Some(first) = it.next() {
         it.fold(first, |a, b| and(a, b))
     } else {
-        Zero
+        One
     }
 }
 
@@ -121,12 +121,11 @@ impl Bool {
 }
 
 pub fn simplify(term: Bool) -> Bool {
-    sop_to_term(simplify_sop(bcf(normalize_sop(term_to_sop(
-        normalize_term(term),
-    )))))
+    let normalized = normalize_term(term);
+    sop_to_term(simplify_sop(bcf(normalize_sop(term_to_sop(normalized)))))
 }
 
-fn sop_to_term(sop: Sop) -> Bool {
+pub fn sop_to_term(sop: Sop) -> Bool {
     any(sop.into_iter().map(|v| all(v)))
 }
 
@@ -255,7 +254,8 @@ pub fn try_unify(p: Bool, q: Bool) -> Option<Substitution> {
 }
 
 fn unify(p: Bool, q: Bool) -> (Substitution, Bool) {
-    let t = if q.is_var() && !p.is_var() {
+    let condition = q.is_var() && !p.is_var();
+    let t = if condition {
         or(and(q.clone(), not(p.clone())), and(not(q), p))
     } else {
         or(and(p.clone(), not(q.clone())), and(not(p), q))
@@ -264,9 +264,9 @@ fn unify(p: Bool, q: Bool) -> (Substitution, Bool) {
     unify0(t.variables(), t)
 }
 
-fn unify0(names: ImSet<Variable>, input: Bool) -> (Substitution, Bool) {
+fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
     let mut substitution: Substitution = ImMap::default();
-    let mut term: Bool = simplify(input);
+
     for x in names {
         let mut sub_zero = ImMap::default();
         sub_zero.insert(x, Zero);
@@ -279,15 +279,17 @@ fn unify0(names: ImSet<Variable>, input: Bool) -> (Substitution, Bool) {
 
         term = and(subbed_zero.clone(), subbed_one.clone());
 
-        let replacement: Bool = simplify(or(
+        let complicated = or(
             subbed_zero.substitute(&substitution),
-            or(Variable(x), subbed_one.substitute(&substitution)),
-        ));
+            and(Variable(x), not(subbed_one.substitute(&substitution))),
+        );
+
+        let replacement: Bool = simplify(complicated);
 
         substitution.insert(x, replacement);
     }
 
-    (substitution, term)
+    (substitution, simplify(term))
 }
 
 // --- Simplification ---
@@ -300,7 +302,7 @@ fn unify0(names: ImSet<Variable>, input: Bool) -> (Substitution, Bool) {
 /// x + 0 = x
 /// !1 = 0
 /// !0 = 1
-fn normalize_term(term: Bool) -> Bool {
+pub fn normalize_term(term: Bool) -> Bool {
     match term {
         Zero => Zero,
         One => One,
@@ -367,11 +369,41 @@ type Pos = Product<Sum<Bool>>;
 type Sop = Sum<Product<Bool>>;
 
 fn term_to_pos(term: Bool) -> Pos {
-    panic!("TODO term_to_pos");
+    conj_to_list(cnf(term))
+        .into_iter()
+        .map(|v| disj_to_list(v))
+        .collect()
 }
 
-fn term_to_sop(term: Bool) -> Sop {
-    panic!("TODO term_to_sop");
+pub fn term_to_sop(term: Bool) -> Sop {
+    disj_to_list(dnf(term))
+        .into_iter()
+        .map(|v| conj_to_list(v))
+        .collect()
+}
+
+fn conj_to_list(term: Bool) -> Product<Bool> {
+    match term {
+        And(left, right) => {
+            let p = conj_to_list(*left);
+            let q = conj_to_list(*right);
+
+            p.union(q)
+        }
+        _ => unit(term),
+    }
+}
+
+fn disj_to_list(term: Bool) -> Sum<Bool> {
+    match term {
+        Or(left, right) => {
+            let p = disj_to_list(*left);
+            let q = disj_to_list(*right);
+
+            p.union(q)
+        }
+        _ => unit(term),
+    }
 }
 
 fn normalize_pos(pos: Pos) -> Pos {
@@ -388,7 +420,7 @@ fn normalize_pos(pos: Pos) -> Pos {
     result
 }
 
-fn normalize_sop(sop: Sop) -> Sop {
+pub fn normalize_sop(sop: Sop) -> Sop {
     let mut result = ImSet::default();
 
     let singleton_zero = unit(Zero);
@@ -456,40 +488,54 @@ fn normalize_conj(mut product: Product<Bool>) -> Product<Bool> {
         product
     }
 }
-/*
 
-fn cnf(term: &Bool) -> Bool {
+fn cnf(term: Bool) -> Bool {
     match term {
-        Zero => Zero,
-        One => One,
-        And(p, q) => and(cnf(p), cnf(q)),
-        Or(p, q) => distr_cnf(cnf(p), cnf(q)),
-        Not(nested) => Not(nested.clone()),
-        Variable(current) => Variable(*current),
+        And(p, q) => and(cnf(*p), cnf(*q)),
+        Or(p, q) => distr_cnf(cnf(*p), cnf(*q)),
+        _ => term,
     }
 }
 
 // TODO test this thoroughly
 fn distr_cnf(p: Bool, q: Bool) -> Bool {
-    panic!();
+    match p {
+        And(p1, p2) => and(distr_cnf(*p1, q.clone()), distr_cnf(*p2, q)),
+        _ => distr_cnf_help(p, q),
+    }
 }
 
-fn dnf(term: &Bool) -> Bool {
+fn distr_cnf_help(p: Bool, q: Bool) -> Bool {
+    match q {
+        And(q1, q2) => and(distr_cnf(p.clone(), *q1), distr_cnf(p, *q2)),
+        _ => or(p, q),
+    }
+}
+
+fn dnf(term: Bool) -> Bool {
     match term {
-        Zero => Zero,
-        One => One,
-        And(p, q) => and(dnf(p), dnf(q)),
-        Or(p, q) => distr_dnf(dnf(p), dnf(q)),
-        Not(nested) => Not(nested.clone()),
-        Variable(current) => Variable(*current),
+        And(p, q) => distr_dnf(dnf(*p), dnf(*q)),
+        Or(p, q) => or(dnf(*p), dnf(*q)),
+        _ => term,
     }
 }
 
 // TODO test this thoroughly
 fn distr_dnf(p: Bool, q: Bool) -> Bool {
-    panic!();
+    match p {
+        Or(p1, p2) => or(distr_dnf(*p1, q.clone()), distr_dnf(*p2, q)),
+        _ => distr_dnf_help(p, q),
+    }
 }
 
+fn distr_dnf_help(p: Bool, q: Bool) -> Bool {
+    match q {
+        Or(q1, q2) => or(distr_dnf(p.clone(), *q1), distr_dnf(p, *q2)),
+        _ => and(p, q),
+    }
+}
+
+/*
 fn nnf(term: &Bool) -> Bool {
     match term {
         Zero => Zero,

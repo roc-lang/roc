@@ -1,4 +1,7 @@
 #[macro_use]
+extern crate maplit;
+
+#[macro_use]
 extern crate pretty_assertions;
 
 extern crate bumpalo;
@@ -8,6 +11,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_boolean_algebra {
+    use roc::collections::ImSet;
     use roc::subs::VarStore;
     use roc::uniqueness::boolean_algebra;
     use roc::uniqueness::boolean_algebra::Bool::{self, *};
@@ -15,6 +19,12 @@ mod test_boolean_algebra {
     // HELPERS
     fn simplify_eq(a: Bool, b: Bool) {
         assert_eq!(boolean_algebra::simplify(a), boolean_algebra::simplify(b));
+    }
+
+    fn unify_eq(a: Bool, b: Bool, expected: std::collections::HashMap<roc::subs::Variable, Bool>) {
+        let result = boolean_algebra::try_unify(a, b);
+
+        assert_eq!(result, Some(expected.into()));
     }
 
     #[test]
@@ -42,32 +52,77 @@ mod test_boolean_algebra {
     }
 
     #[test]
-    fn unify_single_var() {
-        let var_store = VarStore::default();
-        let var = var_store.fresh();
-
-        let result = boolean_algebra::try_unify(Variable(var), One);
-
-        if let Some(sub) = result {
-            assert_eq!(Some(&Zero), sub.get(&var));
-        } else {
-            panic!("result is None");
-        }
-    }
-
-    #[test]
     fn unify_or() {
         let var_store = VarStore::default();
         let a = var_store.fresh();
         let b = var_store.fresh();
 
-        let result = boolean_algebra::try_unify(Bool::or(Variable(a), Variable(b)), One);
+        let cond = Bool::or(
+            Bool::or(
+                Bool::and(Zero, Bool::not(One)),
+                Bool::and(Bool::not(Zero), One),
+            ),
+            Bool::and(
+                Variable(a),
+                Bool::not(Bool::or(
+                    Bool::and(One, Bool::not(One)),
+                    Bool::and(Bool::not(One), One),
+                )),
+            ),
+        );
 
-        if let Some(sub) = result {
-            assert_eq!(Some(&Variable(b)), sub.get(&a));
-            assert_eq!(Some(&Zero), sub.get(&b));
-        } else {
-            panic!("result is None");
-        }
+        let ours = Bool::or(
+            Bool::or(
+                Bool::and(Zero, Bool::not(One)),
+                Bool::and(Bool::not(Zero), One),
+            ),
+            Bool::and(
+                Variable(a),
+                Bool::not(Bool::or(
+                    Bool::and(One, Bool::not(One)),
+                    Bool::and(Bool::not(One), One),
+                )),
+            ),
+        );
+
+        assert_eq!(cond.clone(), ours);
+
+        assert_eq!(
+            Zero,
+            boolean_algebra::normalize_term(Bool::and(
+                Bool::or(
+                    Bool::and(Zero, Bool::not(One)),
+                    Bool::and(Bool::not(Zero), One)
+                ),
+                Bool::or(
+                    Bool::and(One, Bool::not(One)),
+                    Bool::and(Bool::not(One), One)
+                )
+            ))
+        );
+
+        assert_eq!(
+            boolean_algebra::term_to_sop(One),
+            hashset![hashset![One].into()].into()
+        );
+
+        assert_eq!(
+            boolean_algebra::normalize_sop(hashset![hashset![One].into()].into()),
+            hashset![hashset![].into()].into()
+        );
+
+        assert_eq!(
+            boolean_algebra::sop_to_term(hashset![hashset![].into()].into()),
+            One
+        );
+
+        unify_eq(Variable(a), One, hashmap![ a => One ]);
+        unify_eq(Variable(a), Zero, hashmap![ a => Zero ]);
+        simplify_eq(ours, One);
+        unify_eq(
+            Bool::or(Variable(a), Variable(b)),
+            One,
+            hashmap![ a => Bool::or(Bool::not(Variable(b)), Variable(a)) ],
+        );
     }
 }
