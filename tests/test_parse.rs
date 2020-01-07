@@ -25,7 +25,7 @@ mod test_parse {
     use roc::parse::ast::CommentOrNewline::*;
     use roc::parse::ast::Expr::{self, *};
     use roc::parse::ast::Pattern::{self, *};
-    use roc::parse::ast::{Attempting, Def, InterfaceHeader, Spaceable};
+    use roc::parse::ast::{Attempting, Def, InterfaceHeader, Spaceable, TypeAnnotation};
     use roc::parse::module::{interface_header, module_defs};
     use roc::parse::parser::{Fail, FailReason, Parser, State};
     use roc::region::{Located, Region};
@@ -1277,7 +1277,7 @@ mod test_parse {
         let arena = Bump::new();
         let newline = bumpalo::vec![in &arena; Newline];
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
-        let applied_ann = roc::parse::ast::TypeAnnotation::Apply(&[], "Int", &[]);
+        let applied_ann = TypeAnnotation::Apply(&[], "Int", &[]);
         let signature = Def::Annotation(
             Located::new(0, 0, 0, 3, Identifier("foo")),
             Located::new(0, 0, 6, 9, applied_ann),
@@ -1310,7 +1310,7 @@ mod test_parse {
 
     #[test]
     fn type_signature_function_def() {
-        use roc::parse::ast::TypeAnnotation;
+        use TypeAnnotation;
         let arena = Bump::new();
         let newline = bumpalo::vec![in &arena; Newline];
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
