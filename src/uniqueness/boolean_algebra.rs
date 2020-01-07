@@ -164,8 +164,7 @@ pub fn sop_to_term(sop: Sop) -> Bool {
 }
 
 pub fn simplify_sop(sop: Sop) -> Sop {
-    // sort by length (proxy for how many variables there are)
-    // longest to shortest
+    // sort by length longest to shortest (proxy for how many variables there are)
     let mut sorted: Vec<ImSet<Bool>> = sop.clone().into_iter().collect();
 
     sorted.sort_by(|x, y| y.len().cmp(&x.len()));
@@ -174,10 +173,7 @@ pub fn simplify_sop(sop: Sop) -> Sop {
     let mut active = sop;
     let mut result = ImSet::default();
     for t in sorted {
-        if active.contains(&t) && included(all(t.clone()), sop_to_term(active.without(&t))) {
-            active.remove(&t);
-        } else {
-            active.remove(&t);
+        if !(active.remove(&t).is_some() && included(all(t.clone()), sop_to_term(active.clone()))) {
             result.insert(t);
         }
     }
@@ -295,53 +291,14 @@ fn unify(p: Bool, q: Bool) -> (Substitution, Bool) {
     unify0(t.variables(), t)
 }
 
-fn unify0(names: ImSet<Variable>, term: Bool) -> (Substitution, Bool) {
-    let mut v: Vec<Variable> = names.into_iter().collect();
-    v.sort();
-    v.reverse();
-
-    unify0_help(v, term)
-}
-
-fn unify0_help(mut names: Vec<Variable>, term: Bool) -> (Substitution, Bool) {
-    if let Some(x) = names.pop() {
-        let mut sub_zero = ImMap::default();
-        sub_zero.insert(x, Zero);
-
-        let mut sub_one = ImMap::default();
-        sub_one.insert(x, One);
-
-        let subbed_zero = term.substitute(&sub_zero);
-        let subbed_one = term.substitute(&sub_one);
-
-        let e = and(subbed_zero.clone(), subbed_one.clone());
-
-        let (mut se, cc) = unify0_help(names, e);
-
-        let input = or(
-            subbed_zero.substitute(&se),
-            and(Variable(x), not(subbed_one).substitute(&se)),
-        );
-
-        let replacement = simplify(input);
-
-        se.insert(x, replacement);
-
-        (se, cc)
-    } else {
-        (ImMap::default(), simplify(term))
-    }
-}
-
-/*
 fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
+    // NOTE sort is required for stable test order that is the same as the Haskell ref. impl.
     let mut substitution: Substitution = ImMap::default();
 
-    let mut v: Vec<Variable> = names.into_iter().collect();
-    v.sort();
-    v.reverse();
+    let mut sorted_names: Vec<Variable> = names.into_iter().collect();
+    sorted_names.sort();
 
-    for x in v.into_iter() {
+    for x in sorted_names.into_iter() {
         let mut sub_zero = ImMap::default();
         sub_zero.insert(x, Zero);
 
@@ -353,24 +310,20 @@ fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
 
         term = and(subbed_zero.clone(), subbed_one.clone());
 
-        let complicated = or(
+        let replacement = simplify(or(
             subbed_zero.substitute(&substitution),
             and(Variable(x), not(subbed_one.substitute(&substitution))),
-        );
-
-
-        let replacement: Bool = simplify(complicated);
+        ));
 
         substitution.insert(x, replacement);
     }
 
     (substitution, simplify(term))
 }
-*/
 
 // --- Simplification ---
 
-/// Normalisation of terms. Applies (in bottom-up fashion) the identities
+/// Normalization of terms. Applies (in bottom-up fashion) the identities
 ///
 /// x * 1 = x
 /// x * 0 = 0
@@ -527,10 +480,10 @@ where
 }
 
 fn normalize_disj(mut sum: Sum<Bool>) -> Sum<Bool> {
-    let is_always_false =
+    let is_always_true =
         sum.clone().into_iter().any(|x| sum.contains(&not(x))) || sum.contains(&One);
 
-    if is_always_false {
+    if is_always_true {
         unit(One)
     } else {
         sum.remove(&Zero);
@@ -553,6 +506,7 @@ fn normalize_conj(mut product: Product<Bool>) -> Product<Bool> {
     }
 }
 
+/// Conjunction Normal Form
 fn cnf(term: Bool) -> Bool {
     match nnf(term) {
         And(p, q) => and(cnf(*p), cnf(*q)),
@@ -561,7 +515,6 @@ fn cnf(term: Bool) -> Bool {
     }
 }
 
-// TODO test this thoroughly
 fn distr_cnf(p: Bool, q: Bool) -> Bool {
     match p {
         And(p1, p2) => and(distr_cnf(*p1, q.clone()), distr_cnf(*p2, q)),
@@ -576,6 +529,7 @@ fn distr_cnf_help(p: Bool, q: Bool) -> Bool {
     }
 }
 
+/// Disjunction Normal Form
 pub fn dnf(term: Bool) -> Bool {
     match nnf(term) {
         And(p, q) => distr_dnf(dnf(*p), dnf(*q)),
@@ -584,7 +538,6 @@ pub fn dnf(term: Bool) -> Bool {
     }
 }
 
-// TODO test this thoroughly
 fn distr_dnf(p: Bool, q: Bool) -> Bool {
     match p {
         Or(p1, p2) => or(distr_dnf(*p1, q.clone()), distr_dnf(*p2, q)),
@@ -599,6 +552,7 @@ fn distr_dnf_help(p: Bool, q: Bool) -> Bool {
     }
 }
 
+/// Negation Normal Form
 pub fn nnf(term: Bool) -> Bool {
     match term {
         Not(n) => nnf_help(*n),
@@ -610,8 +564,8 @@ pub fn nnf_help(term: Bool) -> Bool {
     match term {
         Zero => One,
         One => Zero,
-        And(p, q) => or(nnf(not(*p)), nnf(not(*q))),
-        Or(p, q) => and(nnf(not(*p)), nnf(not(*q))),
+        And(p, q) => or(nnf_help(*p), nnf_help(*q)),
+        Or(p, q) => and(nnf_help(*p), nnf_help(*q)),
         // double negation
         Not(nested) => nnf(*nested),
         Variable(_) => not(term),
