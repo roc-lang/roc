@@ -27,9 +27,11 @@ pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
 #[derive(PartialEq, Eq, Clone)]
 pub enum Type {
     EmptyRec,
+    EmptyTagUnion,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
     Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
+    TagUnion(Vec<(Symbol, Vec<Type>)>, Box<Type>),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
@@ -48,6 +50,7 @@ impl fmt::Debug for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
+            Type::EmptyTagUnion => write!(f, "[]"),
             Type::Function(args, ret) => {
                 write!(f, "Fn(")?;
 
@@ -134,6 +137,50 @@ impl fmt::Debug for Type {
                         //
                         // e.g. the "*" at the end of `{ x: Int }*`
                         // or the "r" at the end of `{ x: Int }r`
+                        other.fmt(f)
+                    }
+                }
+            }
+            Type::TagUnion(tags, ext) => {
+                write!(f, "[")?;
+
+                if !tags.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                let mut any_written_yet = false;
+
+                for (label, arguments) in tags {
+                    write!(f, "{:?}", label)?;
+
+                    for argument in arguments {
+                        write!(f, " {:?}", argument)?;
+                    }
+
+                    if any_written_yet {
+                        write!(f, ", ")?;
+                    } else {
+                        any_written_yet = true;
+                    }
+                }
+
+                if !tags.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                write!(f, "]")?;
+
+                match *ext.clone() {
+                    Type::EmptyTagUnion => {
+                        // This is a closed variant. We're done!
+                        Ok(())
+                    }
+                    other => {
+                        // This is an open tag union, so print the variable
+                        // right after the ']'
+                        //
+                        // e.g. the "*" at the end of `[ Foo ]*`
+                        // or the "r" at the end of `[ DivByZero ]r`
                         other.fmt(f)
                     }
                 }
@@ -273,6 +320,8 @@ pub enum Reason {
     IntLiteral,
     InterpolatedStringVar,
     WhenBranch { index: usize },
+    IfCondition,
+    IfBranch { index: usize },
     ElemInList,
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Ident, SendMap<Lowercase, Type>),
@@ -296,7 +345,7 @@ pub enum PatternCategory {
     List,
     Set,
     Map,
-    Ctor(Box<str>),
+    Ctor(Symbol),
     Int,
     Str,
     Float,
@@ -333,7 +382,8 @@ pub enum ErrorType {
     Type(ModuleName, Uppercase, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    Record(SendMap<RecordFieldLabel, ErrorType>, RecordExt),
+    Record(SendMap<RecordFieldLabel, ErrorType>, TypeExt),
+    TagUnion(SendMap<Symbol, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(
         ModuleName,
@@ -354,7 +404,7 @@ impl ErrorType {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum RecordExt {
+pub enum TypeExt {
     Closed,
     FlexOpen(Lowercase),
     RigidOpen(Lowercase),

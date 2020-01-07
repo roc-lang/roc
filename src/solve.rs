@@ -396,6 +396,11 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
+        EmptyTagUnion => {
+            let content = Content::Structure(FlatType::EmptyTagUnion);
+
+            register(subs, rank, pools, content)
+        }
         Function(args, ret_type) => {
             let mut arg_vars = Vec::with_capacity(args.len());
 
@@ -420,6 +425,24 @@ fn type_to_variable(
 
             let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
             let content = Content::Structure(FlatType::Record(field_vars, ext_var));
+
+            register(subs, rank, pools, content)
+        }
+        TagUnion(tags, ext) => {
+            let mut tag_vars = ImMap::default();
+
+            for (tag, tag_argument_types) in tags {
+                let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
+
+                for arg_type in tag_argument_types {
+                    tag_argument_vars.push(type_to_variable(subs, rank, pools, aliases, arg_type));
+                }
+
+                tag_vars.insert(tag.clone(), tag_argument_vars);
+            }
+
+            let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
+            let content = Content::Structure(FlatType::TagUnion(tag_vars, ext_var));
 
             register(subs, rank, pools, content)
         }
@@ -627,6 +650,8 @@ fn adjust_rank_content(
                     Rank::toplevel()
                 }
 
+                EmptyTagUnion => Rank::toplevel(),
+
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var);
 
@@ -636,6 +661,18 @@ fn adjust_rank_content(
 
                     rank
                 }
+
+                TagUnion(tags, ext_var) => {
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var);
+
+                    for var in tags.values().flatten() {
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    }
+
+                    rank
+                }
+
                 Erroneous(_) => group_rank,
             }
         }
@@ -741,7 +778,7 @@ fn deep_copy_var_help(
                     Func(arg_vars, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ Erroneous(_) => same,
+                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
                     let mut new_fields = ImMap::default();
@@ -754,6 +791,20 @@ fn deep_copy_var_help(
                         new_fields,
                         deep_copy_var_help(subs, max_rank, pools, ext_var),
                     )
+                }
+
+                TagUnion(tags, ext_var) => {
+                    let mut new_tags = ImMap::default();
+
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                            .collect();
+                        new_tags.insert(tag, new_vars);
+                    }
+
+                    TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))
                 }
             };
 
