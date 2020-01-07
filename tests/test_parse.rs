@@ -1365,7 +1365,61 @@ mod test_parse {
     }
 
     #[test]
-    fn ann_private_union() {
+    fn ann_private_open_union() {
+        let arena = Bump::new();
+        let newline = bumpalo::vec![in &arena; Newline];
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let tag1 = Tag::Private {
+            name: Located::new(0, 0, 8, 13, "True"),
+            args: &[],
+        };
+        let tag2arg = Located::new(0, 0, 24, 29, TypeAnnotation::Apply(&[], "Thing", &[]));
+        let tag2args = bumpalo::vec![in &arena; tag2arg];
+        let tag2 = Tag::Private {
+            name: Located::new(0, 0, 15, 23, "Perhaps"),
+            args: tag2args.into_bump_slice(),
+        };
+        let tags = bumpalo::vec![in &arena;
+            Located::new(0, 0, 8, 13, tag1),
+            Located::new(0, 0, 15, 29, tag2)
+        ];
+        let loc_wildcard = Located::new(0, 0, 31, 32, TypeAnnotation::Wildcard);
+        let applied_ann = TypeAnnotation::TagUnion {
+            tags: tags.into_bump_slice(),
+            ext: Some(arena.alloc(loc_wildcard)),
+        };
+        let signature = Def::Annotation(
+            Located::new(0, 0, 0, 3, Identifier("foo")),
+            Located::new(0, 0, 6, 32, applied_ann),
+        );
+        let def = Def::Body(
+            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+            arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+        );
+        let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
+
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                foo : [ @True, @Perhaps Thing ]*
+                foo = True
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn ann_private_closed_union() {
         let arena = Bump::new();
         let newline = bumpalo::vec![in &arena; Newline];
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
@@ -1418,7 +1472,61 @@ mod test_parse {
     }
 
     #[test]
-    fn ann_global_union() {
+    fn ann_global_open_union() {
+        let arena = Bump::new();
+        let newline = bumpalo::vec![in &arena; Newline];
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let tag1 = Tag::Global {
+            name: Located::new(0, 0, 8, 12, "True"),
+            args: &[],
+        };
+        let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply(&[], "Thing", &[]));
+        let tag2args = bumpalo::vec![in &arena; tag2arg];
+        let tag2 = Tag::Global {
+            name: Located::new(0, 0, 14, 21, "Perhaps"),
+            args: tag2args.into_bump_slice(),
+        };
+        let tags = bumpalo::vec![in &arena;
+            Located::new(0, 0, 8, 12, tag1),
+            Located::new(0, 0, 14, 27, tag2)
+        ];
+        let loc_wildcard = Located::new(0, 0, 29, 30, TypeAnnotation::Wildcard);
+        let applied_ann = TypeAnnotation::TagUnion {
+            tags: tags.into_bump_slice(),
+            ext: Some(arena.alloc(loc_wildcard)),
+        };
+        let signature = Def::Annotation(
+            Located::new(0, 0, 0, 3, Identifier("foo")),
+            Located::new(0, 0, 6, 30, applied_ann),
+        );
+        let def = Def::Body(
+            arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
+            arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+        );
+        let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
+
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+        let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                foo : [ True, Perhaps Thing ]*
+                foo = True
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn ann_global_closed_union() {
         let arena = Bump::new();
         let newline = bumpalo::vec![in &arena; Newline];
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
