@@ -73,26 +73,25 @@ fn can_annotation_help(
                 Type::Variable(var)
             }
         }
-        Record(fields) => {
+        Record { fields, ext } => {
             let mut field_types = SendMap::default();
-            for field in fields {
+
+            for field in fields.iter() {
                 can_assigned_field(&field.value, var_store, rigids, &mut field_types);
             }
 
-            // This is a closed record, so the fragment must be {}
-            let fragment_type = Type::EmptyRec;
+            let ext_type = match ext {
+                Some(loc_ann) => can_annotation_help(&loc_ann.value, var_store, rigids),
+                None => Type::EmptyRec,
+            };
 
-            Type::Record(field_types, Box::new(fragment_type))
+            Type::Record(field_types, Box::new(ext_type))
         }
-        RecordFragment(fields, fragment) => {
-            let mut field_types = SendMap::default();
-            for field in fields {
-                can_assigned_field(&field.value, var_store, rigids, &mut field_types);
-            }
-
-            let fragment_type = can_annotation_help(&fragment.value, var_store, rigids);
-
-            Type::Record(field_types, Box::new(fragment_type))
+        TagUnion { tags, ext } => {
+            panic!(
+                "TODO canonicalize tag union annotation: {:?} {:?}",
+                tags, ext
+            );
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
             can_annotation_help(nested, var_store, rigids)
@@ -114,11 +113,6 @@ fn can_assigned_field<'a>(
 
     match field {
         LabeledValue(field_name, _, annotation) => {
-            let field_type = can_annotation_help(&annotation.value, var_store, rigids);
-            let label = Lowercase::from(field_name.value);
-            field_types.insert(label, field_type);
-        }
-        OptionalField(field_name, _, annotation) => {
             let field_type = can_annotation_help(&annotation.value, var_store, rigids);
             let label = Lowercase::from(field_name.value);
             field_types.insert(label, field_type);
