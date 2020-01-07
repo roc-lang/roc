@@ -111,6 +111,18 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     .unwrap_or_else(|| panic!("LLVM error: Invalid call by name."))
             }
         }
+        FunctionPointer(ref fn_name) => {
+            let ptr = env
+                .module
+                .get_function(fn_name)
+                .unwrap_or_else(|| {
+                    panic!("Could not get pointer to unknown function {:?}", fn_name)
+                })
+                .as_global_value()
+                .as_pointer_value();
+
+            BasicValueEnum::PointerValue(ptr)
+        }
         CallByPointer(ref _ptr, ref args) => {
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity(args.len());
 

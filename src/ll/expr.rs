@@ -43,7 +43,7 @@ pub enum Expr<'a> {
 
     // Functions
     FunctionPointer(InlinableString),
-    CallByPointer(InlinableString, &'a [Expr<'a>]),
+    CallByPointer(&'a Expr<'a>, &'a [Expr<'a>]),
     CallByName(InlinableString, &'a [Expr<'a>]),
 
     // Exactly two conditional branches, e.g. if/else
@@ -176,7 +176,7 @@ fn from_can<'a, 'ctx>(
 
             match from_can(env, loc_expr.value, procs, None) {
                 Expr::Load(proc_name) => Expr::CallByName(proc_name, args.into_bump_slice()),
-                Expr::FunctionPointer(proc_name) => {
+                ptr => {
                     // Call by pointer - the closure was anonymous, e.g.
                     //
                     // ((\a -> a) 5)
@@ -184,13 +184,7 @@ fn from_can<'a, 'ctx>(
                     // It might even be the anonymous result of a conditional:
                     //
                     // ((if x > 0 then \a -> a else \_ -> 0) 5)
-                    Expr::CallByPointer(proc_name, args.into_bump_slice())
-                }
-                non_ptr => {
-                    panic!(
-                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
-                        non_ptr
-                    );
+                    Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice())
                 }
             }
         }
