@@ -10,7 +10,7 @@ extern crate roc;
 mod helpers;
 
 #[cfg(test)]
-mod test_gen {
+mod test_llvm {
     use crate::helpers::can_expr;
     use bumpalo::Bump;
     use inkwell::context::Context;
@@ -19,11 +19,11 @@ mod test_gen {
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
     use roc::collections::{ImMap, MutMap};
-    use roc::gen::build::{build_expr, build_proc};
-    use roc::gen::convert::content_to_basic_type;
-    use roc::gen::env::Env;
     use roc::infer::infer_expr;
     use roc::ll::expr::Expr;
+    use roc::llvm::build::{build_expr, build_proc};
+    use roc::llvm::convert::content_to_basic_type;
+    use roc::llvm::env::Env;
     use roc::subs::Subs;
 
     macro_rules! assert_evals_to {
@@ -106,7 +106,7 @@ mod test_gen {
             }
 
             // Uncomment this to see the module's LLVM instruction output:
-            env.module.print_to_stderr();
+            // env.module.print_to_stderr();
 
             let execution_engine = env
                 .module

@@ -12,8 +12,8 @@ use crate::can::pattern::Pattern::{self, *};
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::collections::MutMap;
-use crate::gen::convert::content_to_basic_type;
-use crate::gen::env::Env;
+use crate::llvm::convert::content_to_basic_type;
+use crate::llvm::env::Env;
 use crate::subs::{Content, FlatType, Subs};
 
 fn extract_procs(loc_expr: Located<Expr>, module: &Module<'ctx>, name: Option<Lowercase>, procs, &mut Procs<'ctx>) -> Located<Expr> {

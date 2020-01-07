@@ -5,9 +5,9 @@ use inkwell::{FloatPredicate, IntPredicate};
 use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
-use crate::gen::convert::{content_to_basic_type, layout_to_basic_type};
-use crate::gen::env::Env;
 use crate::ll::expr::{Expr, Proc, Procs};
+use crate::llvm::convert::{content_to_basic_type, layout_to_basic_type};
+use crate::llvm::env::Env;
 use crate::subs::Variable;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
