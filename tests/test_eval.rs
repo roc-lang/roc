@@ -105,15 +105,15 @@ mod test_gen {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
+            // Uncomment this to see the module's LLVM instruction output:
+            env.module.print_to_stderr();
+
             let execution_engine = env
                 .module
                 .create_jit_execution_engine(OptimizationLevel::None)
-                .expect("errored");
+                .expect("Error creating JIT execution engine for test");
 
             unsafe {
-                // Uncomment this to see the module's LLVM instruction output:
-                // env.module.print_to_stderr();
-
                 let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
                     .get_function(main_fn_name)
                     .ok()
@@ -327,6 +327,37 @@ mod test_gen {
             ),
             -1,
             i64
+        );
+    }
+
+    #[test]
+    fn apply_unnamed_fn() {
+        assert_evals_to!(
+            // We could improve the perf of this scenario by
+            indoc!(
+                r#"
+                    (\a -> a) 5
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
+    fn return_unnamed_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysIdentity : Num.Num Int.Integer -> (Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint)
+                alwaysIdentity = \num ->
+                    (\a -> a)
+
+                (alwaysIdentity 2) 3.14
+                "#
+            ),
+            3.14,
+            f64
         );
     }
 }
