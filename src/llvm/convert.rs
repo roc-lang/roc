@@ -3,7 +3,7 @@ use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{BasicType, FunctionType};
 use inkwell::AddressSpace;
 
-use crate::ll::layout::Layout;
+use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs};
 use crate::types;
@@ -118,8 +118,8 @@ pub fn layout_to_basic_type<'ctx>(
     _subs: &Subs,
     context: &'ctx Context,
 ) -> BasicTypeEnum<'ctx> {
-    use crate::ll::layout::Builtin::*;
-    use crate::ll::layout::Layout::*;
+    use crate::mono::layout::Builtin::*;
+    use crate::mono::layout::Layout::*;
 
     match layout {
         FunctionPointer(_arg_layouts, _ret_layout) => {

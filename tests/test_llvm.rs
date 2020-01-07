@@ -20,10 +20,10 @@ mod test_llvm {
     use inkwell::OptimizationLevel;
     use roc::collections::{ImMap, MutMap};
     use roc::infer::infer_expr;
-    use roc::ll::expr::Expr;
     use roc::llvm::build::{build_expr, build_proc};
     use roc::llvm::convert::content_to_basic_type;
     use roc::llvm::env::Env;
+    use roc::llvm::expr::Expr;
     use roc::subs::Subs;
 
     macro_rules! assert_evals_to {

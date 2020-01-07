@@ -1,8 +1,8 @@
 use crate::can;
 use crate::can::pattern::Pattern;
 use crate::collections::MutMap;
-use crate::ll::layout::Layout;
 use crate::llvm::convert::content_to_basic_type;
+use crate::mono::layout::Layout;
 use crate::region::Located;
 use crate::subs::{Subs, Variable};
 use bumpalo::collections::Vec;

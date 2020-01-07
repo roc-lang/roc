@@ -5,9 +5,9 @@ use inkwell::{FloatPredicate, IntPredicate};
 use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
-use crate::ll::expr::{Expr, Proc, Procs};
 use crate::llvm::convert::{content_to_basic_type, layout_to_basic_type};
 use crate::llvm::env::Env;
+use crate::llvm::expr::{Expr, Proc, Procs};
 use crate::subs::Variable;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -27,7 +27,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
     expr: &Expr<'a>,
     procs: &Procs<'a, 'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    use crate::ll::expr::Expr::*;
+    use crate::llvm::expr::Expr::*;
 
     match expr {
         Int(num) => env.context.i64_type().const_int(*num as u64, false).into(),
