@@ -1277,27 +1277,17 @@ mod test_parse {
         let arena = Bump::new();
         let newline = bumpalo::vec![in &arena; Newline];
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let applied_ann = roc::parse::ast::TypeAnnotation::Apply(&[], "Int", &[]);
         let signature = Def::Annotation(
             Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(
-                0,
-                0,
-                6,
-                9,
-                roc::parse::ast::TypeAnnotation::Apply(&[], "Int", &[]),
-            ),
+            Located::new(0, 0, 6, 9, applied_ann),
         );
         let def = Def::Body(
             arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
             arena.alloc(Located::new(1, 1, 6, 7, Int("4"))),
         );
-        let loc_def = &*arena.alloc(Located::new(
-            1,
-            1,
-            0,
-            7,
-            Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice()),
-        ));
+        let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 7, spaced_def));
 
         let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
         let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
@@ -1334,16 +1324,10 @@ mod test_parse {
             Located::new(0, 0, 11, 16, float_type)
         ];
         let return_type = Located::new(0, 0, 20, 24, bool_type);
-
+        let fn_ann = TypeAnnotation::Function(&arguments, &return_type);
         let signature = Def::Annotation(
             Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(
-                0,
-                0,
-                20,
-                24,
-                TypeAnnotation::Function(&arguments, &return_type),
-            ),
+            Located::new(0, 0, 20, 24, fn_ann),
         );
 
         let args = bumpalo::vec![in &arena;
@@ -1358,13 +1342,8 @@ mod test_parse {
             arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
             arena.alloc(Located::new(1, 1, 6, 17, closure)),
         );
-        let loc_def = &*arena.alloc(Located::new(
-            1,
-            1,
-            0,
-            17,
-            Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice()),
-        ));
+        let spaced = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
+        let loc_def = &*arena.alloc(Located::new(1, 1, 0, 17, spaced));
 
         let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
         let defs = bumpalo::vec![in &arena; loc_ann, loc_def];
