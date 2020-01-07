@@ -103,7 +103,7 @@ where
         }
     };
 
-    let mut chars_parsed = 1;
+    let mut chars_parsed = part_buf.len();
     let mut next_char = None;
 
     while let Some(ch) = chars.next() {
