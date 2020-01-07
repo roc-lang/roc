@@ -1069,6 +1069,28 @@ mod test_infer {
     }
 
     #[test]
+    fn private_tag_application() {
+        infer_eq(
+            indoc!(
+                r#"@Foo "happy" 2020
+                "#
+            ),
+            "[ Test.@Foo Str Int ]*",
+        );
+    }
+
+    #[test]
+    fn if_then_else() {
+        infer_eq(
+            indoc!(
+                r#"if True then 1 else 0
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
     fn record_extraction() {
         with_larger_debug_stack(|| {
             infer_eq(
@@ -1085,17 +1107,4 @@ mod test_infer {
             );
         });
     }
-
-    // currently doesn't work because of a parsing issue
-    // @Foo x y isn't turned into Apply(@Foo, [x,y]) currently
-    // #[test]
-    // fn private_tag_application() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"@Foo "happy" 2020
-    //             "#
-    //         ),
-    //         "[ Test.Foo Str Int ]*",
-    //     );
-    // }
 }

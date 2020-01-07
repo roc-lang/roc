@@ -465,6 +465,7 @@ pub fn constrain_expr(
 
             constrain_def(rigids, var_store, var_usage, def, body_con)
         }
+        If { .. } => panic!("TODO constrain uniq if"),
         When {
             cond_var,
             loc_cond,
