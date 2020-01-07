@@ -324,7 +324,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     name: InlinableString,
     proc: Proc<'a>,
     procs: &Procs<'a, 'ctx>,
-) {
+) -> FunctionValue<'ctx> {
     let args = proc.args;
     let mut arg_names = Vec::new();
     let mut arg_basic_types = Vec::with_capacity(args.len());
@@ -369,6 +369,10 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     builder.build_return(Some(&body));
 
+    fn_val
+}
+
+pub fn verify_fn(fn_val: FunctionValue<'_>) {
     if fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
         // TODO call pass_manager.run_on(&fn_val) to optimize it!
     } else {

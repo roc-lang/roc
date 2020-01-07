@@ -15,6 +15,7 @@ mod test_gen {
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
+    use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
     use roc::collections::{ImMap, MutMap};
@@ -34,8 +35,22 @@ mod test_gen {
             let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
 
             let context = Context::create();
-            let builder = context.create_builder();
             let module = context.create_module("app");
+            let builder = context.create_builder();
+            let fpm = PassManager::create(&module);
+
+            fpm.add_instruction_combining_pass();
+            fpm.add_reassociate_pass();
+            fpm.add_basic_alias_analysis_pass();
+            fpm.add_promote_memory_to_register_pass();
+            fpm.add_cfg_simplification_pass();
+            fpm.add_gvn_pass();
+            // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
+            // fpm.add_strip_dead_prototypes_pass();
+            // fpm.add_dead_arg_elimination_pass();
+            // fpm.add_function_inlining_pass();
+
+            fpm.initialize();
 
             // Compute main_fn_type before moving subs to Env
             let main_fn_type = content_to_basic_type(&content, &mut subs, &context)
@@ -58,7 +73,13 @@ mod test_gen {
             // Add all the Procs to the module
             for (name, (opt_proc, _fn_val)) in procs.clone() {
                 if let Some(proc) = opt_proc {
-                    build_proc(&env, &ImMap::default(), name, proc, &procs);
+                    let fn_val = build_proc(&env, &ImMap::default(), name, proc, &procs);
+
+                    if fn_val.verify(true) {
+                        fpm.run_on(&fn_val);
+                    } else {
+                        panic!("Function {} failed LLVM verification.", main_fn_name);
+                    }
                 }
             }
 
