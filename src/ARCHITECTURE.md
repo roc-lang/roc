@@ -44,7 +44,7 @@ That said, the parser can still run into syntax errors. This won't parse:
 
 This is gibberish to the parser, so it will produce an error rather than an `Expr`.
 
-Roc's parser is implemented using the [`marwes/combine`](http://github.com/marwes/combine-language/) crate.
+Roc's has it's own [parser][./parse/parser.rs].
 
 # Evaluating
 
