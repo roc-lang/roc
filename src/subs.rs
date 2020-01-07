@@ -134,7 +134,7 @@ impl Into<Option<Variable>> for OptVariable {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Variable(usize);
 
 impl Variable {
@@ -145,6 +145,10 @@ impl Variable {
     const NULL: Variable = Variable(0);
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(1);
+
+    pub fn unsafe_debug_variable(v: usize) -> Self {
+        Variable(v)
+    }
 }
 
 impl Into<OptVariable> for Variable {

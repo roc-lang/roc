@@ -13,15 +13,17 @@ pub enum Bool {
 
 use self::Bool::*;
 
-// TODO add inline pragma
+#[inline(always)]
 pub fn not(nested: Bool) -> Bool {
     Not(Box::new(nested))
 }
 
+#[inline(always)]
 pub fn and(left: Bool, right: Bool) -> Bool {
     And(Box::new(left), Box::new(right))
 }
 
+#[inline(always)]
 pub fn or(left: Bool, right: Bool) -> Bool {
     Or(Box::new(left), Box::new(right))
 }
@@ -31,7 +33,7 @@ where
     I: Iterator<Item = Bool>,
 {
     if let Some(first) = it.next() {
-        it.fold(first, |a, b| or(a, b))
+        it.fold(first, or)
     } else {
         Zero
     }
@@ -41,7 +43,7 @@ pub fn all(terms: Product<Bool>) -> Bool {
     let mut it = terms.into_iter();
 
     if let Some(first) = it.next() {
-        it.fold(first, |a, b| and(a, b))
+        it.fold(first, and)
     } else {
         One
     }
@@ -52,6 +54,7 @@ type Substitution = ImMap<Variable, Bool>;
 type Product<A> = ImSet<A>;
 type Sum<A> = ImSet<A>;
 
+#[allow(clippy::should_implement_trait)]
 impl Bool {
     pub fn variables(&self) -> ImSet<Variable> {
         let mut result = ImSet::default();
@@ -99,6 +102,7 @@ impl Bool {
         }
     }
 
+    #[inline(always)]
     pub fn is_var(&self) -> bool {
         match self {
             Variable(_) => true,
@@ -106,15 +110,17 @@ impl Bool {
         }
     }
 
-    // TODO add inline pragma
+    #[inline(always)]
     pub fn not(nested: Bool) -> Bool {
         not(nested)
     }
 
+    #[inline(always)]
     pub fn and(left: Bool, right: Bool) -> Bool {
         and(left, right)
     }
 
+    #[inline(always)]
     pub fn or(left: Bool, right: Bool) -> Bool {
         or(left, right)
     }
@@ -122,21 +128,33 @@ impl Bool {
 
 pub fn simplify(term: Bool) -> Bool {
     let normalized = normalize_term(term);
-    sop_to_term(simplify_sop(bcf(normalize_sop(term_to_sop(normalized)))))
+    let a = term_to_sop(normalized);
+    let b = normalize_sop(a);
+    let after_bcf = bcf(b);
+    let answer = sop_to_term(simplify_sop(after_bcf));
+    answer
 }
 
+#[inline(always)]
 pub fn sop_to_term(sop: Sop) -> Bool {
-    any(sop.into_iter().map(|v| all(v)))
+    any(sop.into_iter().map(all))
 }
 
-fn simplify_sop(sop: Sop) -> Sop {
+pub fn simplify_sop(sop: Sop) -> Sop {
+    // sort by length (proxy for how many variables there are)
+    // longest to shortest
+    let mut sorted: Vec<ImSet<Bool>> = sop.clone().into_iter().collect();
+
+    sorted.sort_by(|x, y| y.len().cmp(&x.len()));
+
     // filter out anything that is included in the remaining elements
-    let mut active = sop.clone();
+    let mut active = sop;
     let mut result = ImSet::default();
-    for t in sop {
-        if included(all(t.clone()), sop_to_term(active.without(&t))) {
+    for t in sorted {
+        if active.contains(&t) && included(all(t.clone()), sop_to_term(active.without(&t))) {
             active.remove(&t);
         } else {
+            active.remove(&t);
             result.insert(t);
         }
     }
@@ -189,6 +207,7 @@ fn absorptive(sop: Sop) -> Sop {
 }
 
 /// Does p absorb q? (can we replace p + q by p?)
+/// TODO investigate: either the comment or the implementation is wrong I think?
 fn absorbs(p: &Product<Bool>, q: &Product<Bool>) -> bool {
     p.iter().all(|x| q.contains(x))
 }
@@ -196,21 +215,18 @@ fn absorbs(p: &Product<Bool>, q: &Product<Bool>) -> bool {
 fn consensus(p: &Product<Bool>, q: &Product<Bool>) -> Option<Product<Bool>> {
     let mut it = oppositions(p, q).into_iter();
 
+    // oppositions must have exactly one element
     if let Some(x) = it.next() {
-        if let None = it.next() {
-            let mut result = ImSet::default();
-
+        if it.next().is_none() {
             let compx = not(x.clone());
 
-            for elem in p
-                .iter()
-                .chain(q.iter())
-                .filter(|y| **y != x && **y != compx)
-            {
-                result.insert(elem.clone());
-            }
-
-            return Some(result);
+            return Some(
+                p.clone()
+                    .into_iter()
+                    .chain(q.clone().into_iter())
+                    .filter(|y| *y != x && *y != compx)
+                    .collect(),
+            );
         }
     }
 
@@ -227,24 +243,16 @@ fn oppositions(ps: &Product<Bool>, qs: &Product<Bool>) -> Product<Bool> {
         .into_iter()
         .filter(|q| ps.contains(&not(q.clone())));
 
-    let mut result = ImSet::default();
-    for x in it1.chain(it2) {
-        result.insert(x);
-    }
-
-    result
+    it1.chain(it2).collect()
 }
 
 pub fn try_unify(p: Bool, q: Bool) -> Option<Substitution> {
     let (sub, consistency) = unify(p, q);
 
-    let mut substitution = ImMap::default();
-
-    for (x, p) in sub.into_iter() {
-        if p != Variable(x) {
-            substitution.insert(x, p);
-        }
-    }
+    let substitution = sub
+        .into_iter()
+        .filter(|(x, p)| *p != Variable(*x))
+        .collect();
 
     if consistency == Zero {
         Some(substitution)
@@ -264,10 +272,53 @@ fn unify(p: Bool, q: Bool) -> (Substitution, Bool) {
     unify0(t.variables(), t)
 }
 
+fn unify0(names: ImSet<Variable>, term: Bool) -> (Substitution, Bool) {
+    let mut v: Vec<Variable> = names.into_iter().collect();
+    v.sort();
+    v.reverse();
+
+    unify0_help(v, term)
+}
+
+fn unify0_help(mut names: Vec<Variable>, term: Bool) -> (Substitution, Bool) {
+    if let Some(x) = names.pop() {
+        let mut sub_zero = ImMap::default();
+        sub_zero.insert(x, Zero);
+
+        let mut sub_one = ImMap::default();
+        sub_one.insert(x, One);
+
+        let subbed_zero = term.substitute(&sub_zero);
+        let subbed_one = term.substitute(&sub_one);
+
+        let e = and(subbed_zero.clone(), subbed_one.clone());
+
+        let (mut se, cc) = unify0_help(names, e);
+
+        let input = or(
+            subbed_zero.substitute(&se),
+            and(Variable(x), not(subbed_one).substitute(&se)),
+        );
+
+        let replacement = simplify(input);
+
+        se.insert(x, replacement);
+
+        (se, cc)
+    } else {
+        (ImMap::default(), simplify(term))
+    }
+}
+
+/*
 fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
     let mut substitution: Substitution = ImMap::default();
 
-    for x in names {
+    let mut v: Vec<Variable> = names.into_iter().collect();
+    v.sort();
+    v.reverse();
+
+    for x in v.into_iter() {
         let mut sub_zero = ImMap::default();
         sub_zero.insert(x, Zero);
 
@@ -284,6 +335,7 @@ fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
             and(Variable(x), not(subbed_one.substitute(&substitution))),
         );
 
+
         let replacement: Bool = simplify(complicated);
 
         substitution.insert(x, replacement);
@@ -291,6 +343,7 @@ fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
 
     (substitution, simplify(term))
 }
+*/
 
 // --- Simplification ---
 
@@ -304,8 +357,6 @@ fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
 /// !0 = 1
 pub fn normalize_term(term: Bool) -> Bool {
     match term {
-        Zero => Zero,
-        One => One,
         And(left, right) => {
             let p = normalize_term(*left);
             let q = normalize_term(*right);
@@ -339,13 +390,13 @@ pub fn normalize_term(term: Bool) -> Bool {
                 _ => not(p),
             }
         }
-        Variable(v) => Variable(v),
+        _ => term,
     }
 }
 
 // --- Inclusion ---
 
-fn included(g: Bool, h: Bool) -> bool {
+pub fn included(g: Bool, h: Bool) -> bool {
     contradiction(and(g, not(h)))
 }
 
@@ -359,7 +410,7 @@ fn tautology(term: Bool) -> bool {
     normalize_pos(term_to_pos(normalize_term(term))).is_empty()
 }
 
-fn contradiction(term: Bool) -> bool {
+pub fn contradiction(term: Bool) -> bool {
     tautology(not(term))
 }
 
@@ -371,14 +422,14 @@ type Sop = Sum<Product<Bool>>;
 fn term_to_pos(term: Bool) -> Pos {
     conj_to_list(cnf(term))
         .into_iter()
-        .map(|v| disj_to_list(v))
+        .map(disj_to_list)
         .collect()
 }
 
 pub fn term_to_sop(term: Bool) -> Sop {
     disj_to_list(dnf(term))
         .into_iter()
-        .map(|v| conj_to_list(v))
+        .map(conj_to_list)
         .collect()
 }
 
@@ -407,31 +458,21 @@ fn disj_to_list(term: Bool) -> Sum<Bool> {
 }
 
 fn normalize_pos(pos: Pos) -> Pos {
-    let mut result = ImSet::default();
-
     let singleton_one = unit(One);
-    for sum in pos {
-        let normalized = normalize_disj(sum);
-        if normalized != singleton_one {
-            result.insert(normalized);
-        }
-    }
 
-    result
+    pos.into_iter()
+        .map(normalize_disj)
+        .filter(|normalized| *normalized != singleton_one)
+        .collect()
 }
 
 pub fn normalize_sop(sop: Sop) -> Sop {
-    let mut result = ImSet::default();
-
     let singleton_zero = unit(Zero);
-    for product in sop {
-        let normalized = normalize_conj(product);
-        if normalized != singleton_zero {
-            result.insert(normalized);
-        }
-    }
 
-    result
+    sop.into_iter()
+        .map(normalize_conj)
+        .filter(|normalized| *normalized != singleton_zero)
+        .collect()
 }
 
 fn cartesian_product<A>(set: ImSet<A>) -> ImSet<(A, A)>
@@ -490,10 +531,10 @@ fn normalize_conj(mut product: Product<Bool>) -> Product<Bool> {
 }
 
 fn cnf(term: Bool) -> Bool {
-    match term {
+    match nnf(term) {
         And(p, q) => and(cnf(*p), cnf(*q)),
         Or(p, q) => distr_cnf(cnf(*p), cnf(*q)),
-        _ => term,
+        other => other,
     }
 }
 
@@ -512,11 +553,11 @@ fn distr_cnf_help(p: Bool, q: Bool) -> Bool {
     }
 }
 
-fn dnf(term: Bool) -> Bool {
-    match term {
+pub fn dnf(term: Bool) -> Bool {
+    match nnf(term) {
         And(p, q) => distr_dnf(dnf(*p), dnf(*q)),
         Or(p, q) => or(dnf(*p), dnf(*q)),
-        _ => term,
+        other => other,
     }
 }
 
@@ -535,15 +576,21 @@ fn distr_dnf_help(p: Bool, q: Bool) -> Bool {
     }
 }
 
-/*
-fn nnf(term: &Bool) -> Bool {
+pub fn nnf(term: Bool) -> Bool {
     match term {
-        Zero => Zero,
-        One => One,
-        And(p, q) => and(dnf(p), dnf(q)),
-        Or(p, q) => distr_dnf(dnf(p), dnf(q)),
-        Not(nested) => Not(nested.clone()),
-        Variable(current) => Variable(*current),
+        Not(n) => nnf_help(*n),
+        _ => term,
     }
 }
-*/
+
+pub fn nnf_help(term: Bool) -> Bool {
+    match term {
+        Zero => One,
+        One => Zero,
+        And(p, q) => or(nnf(not(*p)), nnf(not(*q))),
+        Or(p, q) => and(nnf(not(*p)), nnf(not(*q))),
+        // double negation
+        Not(nested) => nnf(*nested),
+        Variable(_) => not(term),
+    }
+}
