@@ -10,7 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer_uniq {
-    use crate::helpers::uniq_expr;
+    use crate::helpers::{uniq_expr, with_larger_debug_stack};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
 
@@ -920,4 +920,22 @@ mod test_infer_uniq {
             "Attr.Attr * { year : (Attr.Attr * Str) }{ name : (Attr.Attr * Str) }",
         );
     }
+
+    //    #[test]
+    //    fn record_extraction() {
+    //        with_larger_debug_stack(|| {
+    //            infer_eq(
+    //                indoc!(
+    //                    r#"
+    //                f = \x ->
+    //                    when x is
+    //                        { a, b } -> a
+    //
+    //                f
+    //                "#
+    //                ),
+    //                "Attr.Attr * (Attr.Attr u { a : Attr u a, b : * }* -> Attr u a)",
+    //            );
+    //        });
+    //    }
 }

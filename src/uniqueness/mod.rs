@@ -119,27 +119,23 @@ fn constrain_pattern(
             } in patterns
             {
                 let pat_type = Type::Variable(*var);
-                let pattern_expected = PExpected::NoExpectation(pat_type.clone());
+                let expected = PExpected::NoExpectation(pat_type.clone());
 
-                match guard {
-                    Some((_guard_var, loc_guard)) => {
-                        state.headers.insert(
-                            symbol.clone(),
-                            Located {
-                                region: pattern.region,
-                                value: pat_type.clone(),
-                            },
-                        );
+                if !state.headers.contains_key(&symbol) {
+                    state.headers.insert(
+                        symbol.clone(),
+                        Located::at(pattern.region, pat_type.clone()),
+                    );
+                }
 
-                        constrain_pattern(var_store, state, loc_guard, pattern_expected);
-                    }
-                    None => {
-                        constrain_pattern(var_store, state, pattern, pattern_expected);
-                    }
+                field_types.insert(label.clone(), pat_type.clone());
+
+                // TODO investigate: shouldn't guard_var be constrained somewhere?
+                if let Some((_guard_var, loc_guard)) = guard {
+                    constrain_pattern(var_store, state, loc_guard, expected);
                 }
 
                 state.vars.push(*var);
-                field_types.insert(label.clone(), pat_type);
             }
 
             let record_type =
@@ -275,7 +271,9 @@ pub fn constrain_expr(
             symbol_for_lookup, ..
         } => {
             var_usage.register(symbol_for_lookup);
-            match var_usage.get_usage(symbol_for_lookup) {
+            let usage = var_usage.get_usage(symbol_for_lookup);
+
+            match usage {
                 Some(sharing::ReferenceCount::Shared) => {
                     // the variable is used/consumed more than once, so it must be Shared
                     let val_var = var_store.fresh();

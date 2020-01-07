@@ -122,6 +122,7 @@ pub fn uniq_expr_with(
 
     let next_var = var_store1.into();
     let subs1 = Subs::new(next_var);
+
     // double check
     let var_store2 = VarStore::new(next_var);
 

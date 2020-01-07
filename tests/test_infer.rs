@@ -1068,6 +1068,24 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn record_extraction() {
+        with_larger_debug_stack(|| {
+            infer_eq(
+                indoc!(
+                    r#"
+                f = \x -> 
+                    when x is 
+                        { a, b } -> a
+
+                f
+                "#
+                ),
+                "{ a : a, b : * }* -> a",
+            );
+        });
+    }
+
     // currently doesn't work because of a parsing issue
     // @Foo x y isn't turned into Apply(@Foo, [x,y]) currently
     // #[test]
