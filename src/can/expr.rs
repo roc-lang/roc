@@ -46,16 +46,22 @@ pub enum Expr {
         symbol_for_lookup: Symbol,
         resolved_symbol: Symbol,
     },
-    // Pattern Matching
-    /// When is guaranteed to be exhaustive at this point. (If it wasn't, then
-    /// a _ branch was added at the end that will throw a runtime error.)
-    /// Also, `If` is desugared into `When` matching on `False` and `_` at this point.
+    // Branching
     When {
         cond_var: Variable,
         expr_var: Variable,
         loc_cond: Box<Located<Expr>>,
         branches: Vec<(Located<Pattern>, Located<Expr>)>,
     },
+    If {
+        cond_var: Variable,
+        branch_var: Variable,
+        loc_cond: Box<Located<Expr>>,
+        loc_then: Box<Located<Expr>>,
+        loc_else: Box<Located<Expr>>,
+    },
+
+    // Let
     LetRec(Vec<Def>, Box<Located<Expr>>, Variable),
     LetNonRec(Box<Def>, Box<Located<Expr>>, Variable),
 
@@ -104,7 +110,12 @@ pub enum Expr {
     },
 
     // Sum Types
-    Tag(Box<str>, Vec<Expr>),
+    Tag {
+        variant_var: Variable,
+        ext_var: Variable,
+        name: Symbol,
+        arguments: Vec<(Variable, Located<Expr>)>,
+    },
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
@@ -275,6 +286,17 @@ pub fn canonicalize_expr(
                     // We can't call a runtime error; bail out by propagating it!
                     return (fn_expr, output);
                 }
+                Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    ..
+                } => Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    arguments: args,
+                },
                 _ => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
                     Call(
@@ -510,10 +532,68 @@ pub fn canonicalize_expr(
                 Output::default(),
             )
         }
-        ast::Expr::If(_)
-        | ast::Expr::GlobalTag(_)
-        | ast::Expr::PrivateTag(_)
-        | ast::Expr::MalformedIdent(_)
+        ast::Expr::GlobalTag(tag) => {
+            let variant_var = var_store.fresh();
+            let ext_var = var_store.fresh();
+
+            (
+                Tag {
+                    name: Symbol::from_global_tag(tag),
+                    arguments: vec![],
+                    variant_var,
+                    ext_var,
+                },
+                Output::default(),
+            )
+        }
+        ast::Expr::PrivateTag(tag) => {
+            let variant_var = var_store.fresh();
+            let ext_var = var_store.fresh();
+
+            (
+                Tag {
+                    name: Symbol::from_private_tag(&env.home, tag),
+                    arguments: vec![],
+                    variant_var,
+                    ext_var,
+                },
+                Output::default(),
+            )
+        }
+        ast::Expr::If((cond, then_branch, else_branch)) => {
+            let (loc_cond, mut output) =
+                canonicalize_expr(env, var_store, scope, cond.region, &cond.value);
+            let (loc_then, then_output) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                then_branch.region,
+                &then_branch.value,
+            );
+            let (loc_else, else_output) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                else_branch.region,
+                &else_branch.value,
+            );
+
+            output.references = output.references.union(then_output.references);
+            output.references = output.references.union(else_output.references);
+
+            (
+                If {
+                    cond_var: var_store.fresh(),
+                    branch_var: var_store.fresh(),
+                    loc_cond: Box::new(loc_cond),
+                    loc_then: Box::new(loc_then),
+                    loc_else: Box::new(loc_else),
+                },
+                output,
+            )
+        }
+
+        ast::Expr::MalformedIdent(_)
         | ast::Expr::MalformedClosure
         | ast::Expr::PrecedenceConflict(_, _, _) => {
             panic!(
@@ -930,8 +1010,6 @@ fn canonicalize_field<'a>(
                 field_var,
             )
         }
-
-        OptionalField(_, _, _) => panic!("invalid in expressions"),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {

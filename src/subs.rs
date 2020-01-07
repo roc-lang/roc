@@ -1,7 +1,8 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
-use crate::types::{name_type_var, ErrorType, Problem, RecordExt, RecordFieldLabel};
+use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -430,8 +431,10 @@ pub enum FlatType {
     },
     Func(Vec<Variable>, Variable),
     Record(ImMap<RecordFieldLabel, Variable>, Variable),
+    TagUnion(ImMap<Symbol, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
+    EmptyTagUnion,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -469,7 +472,13 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                                 .into_iter()
                                 .any(|(_, var)| occurs(subs, &new_seen, var))
                     }
-                    EmptyRecord | Erroneous(_) => false,
+                    TagUnion(tags, ext_var) => {
+                        occurs(subs, &new_seen, ext_var)
+                            || tags
+                                .values()
+                                .any(|vars| vars.iter().any(|var| occurs(subs, &new_seen, *var)))
+                    }
+                    EmptyRecord | EmptyTagUnion | Erroneous(_) => false,
                 }
             }
             Alias(_, _, args, _) => {
@@ -523,7 +532,9 @@ fn get_var_names(
                     })
                 }
 
-                FlatType::EmptyRecord | FlatType::Erroneous(_) => taken_names,
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::Erroneous(_) => {
+                    taken_names
+                }
 
                 FlatType::Record(vars_by_field, ext_var) => {
                     let taken_names = get_var_names(subs, ext_var, taken_names);
@@ -533,6 +544,17 @@ fn get_var_names(
                         .fold(taken_names, |answer, (_, arg_var)| {
                             get_var_names(subs, arg_var, answer)
                         })
+                }
+                FlatType::TagUnion(tags, ext_var) => {
+                    let mut taken_names = get_var_names(subs, ext_var, taken_names);
+
+                    for vars in tags.values() {
+                        for arg_var in vars {
+                            taken_names = get_var_names(subs, *arg_var, taken_names)
+                        }
+                    }
+
+                    taken_names
                 }
             },
         }
@@ -674,7 +696,8 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
             ErrorType::Function(args, Box::new(ret))
         }
 
-        EmptyRecord => ErrorType::Record(SendMap::default(), RecordExt::Closed),
+        EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),
+        EmptyTagUnion => ErrorType::TagUnion(SendMap::default(), TypeExt::Closed),
 
         Record(vars_by_field, ext_var) => {
             let mut err_fields = SendMap::default();
@@ -689,15 +712,46 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
                 }
 
                 ErrorType::FlexVar(var) => {
-                    ErrorType::Record(err_fields, RecordExt::FlexOpen(var))
+                    ErrorType::Record(err_fields, TypeExt::FlexOpen(var))
                 }
 
                 ErrorType::RigidVar(var) => {
-                    ErrorType::Record(err_fields, RecordExt::RigidOpen(var))
+                    ErrorType::Record(err_fields, TypeExt::RigidOpen(var))
                 }
 
                 other =>
                     panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
+            }
+        }
+
+        TagUnion(tags, ext_var) => {
+            let mut err_tags = SendMap::default();
+
+            for (tag, vars) in tags.into_iter() {
+                let mut err_vars = Vec::with_capacity(vars.len());
+
+                for var in vars {
+                    err_vars.push(var_to_err_type(subs, state, var));
+                }
+
+                err_tags.insert(tag, err_vars);
+            }
+
+            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+                ErrorType::TagUnion(sub_tags, sub_ext) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+                }
+
+                ErrorType::FlexVar(var) => {
+                    ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var))
+                }
+
+                ErrorType::RigidVar(var) => {
+                    ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var))
+                }
+
+                other =>
+                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
             }
         }
 
@@ -736,9 +790,17 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             }
 
             EmptyRecord => (),
+            EmptyTagUnion => (),
 
             Record(fields, ext_var) => {
                 for (_, var) in fields {
+                    subs.restore(*var);
+                }
+
+                subs.restore(*ext_var);
+            }
+            TagUnion(tags, ext_var) => {
+                for var in tags.values().flatten() {
                     subs.restore(*var);
                 }
 

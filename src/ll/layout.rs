@@ -96,6 +96,12 @@ fn layout_from_flat_type<'a>(
         Record(_, _) => {
             panic!("TODO make Layout for non-empty Record");
         }
+        TagUnion(_, _) => {
+            panic!("TODO make Layout for non-empty Tag Union");
+        }
+        EmptyTagUnion => {
+            panic!("TODO make Layout for empty Tag Union");
+        }
         Erroneous(_) => Err(()),
         EmptyRecord => Ok(Layout::Struct(&[])),
     }
