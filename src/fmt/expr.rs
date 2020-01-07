@@ -141,7 +141,7 @@ pub fn fmt_expr<'a>(
             buf.push_str(" is\n");
 
             let mut it = branches.iter().peekable();
-            while let Some((pattern, expr)) = it.next() {
+            while let Some(((pattern, _), expr)) = it.next() {
                 add_spaces(buf, indent + INDENT);
 
                 match pattern.value {
