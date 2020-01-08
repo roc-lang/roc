@@ -22,9 +22,14 @@ inlinable_string = "0.1.0"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "llvm8-0" }
 futures = "0.3"
 lazy_static = "1.4"
+target-lexicon = "0.9" # NOTE: we must use the same version of target-lexicon as cranelift!
+cranelift           = "0.52" # All cranelift crates should have the same version!
+cranelift-simplejit = "0.52" # All cranelift crates should have the same version!
+cranelift-module    = "0.52" # All cranelift crates should have the same version!
+cranelift-codegen   = "0.52" # All cranelift crates should have the same version!
 
 [dev-dependencies]
-pretty_assertions = "0.5.1"
+pretty_assertions = "0.5.1 "
 maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"

@@ -10,19 +10,19 @@ extern crate roc;
 mod helpers;
 
 #[cfg(test)]
-mod test_gen {
+mod test_llvm {
     use crate::helpers::can_expr;
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
+    use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
     use roc::collections::{ImMap, MutMap};
-    use roc::gen::build::{build_expr, build_proc};
-    use roc::gen::convert::content_to_basic_type;
-    use roc::gen::env::Env;
     use roc::infer::infer_expr;
-    use roc::ll::expr::Expr;
+    use roc::llvm::build::{build_expr, build_proc, Env};
+    use roc::llvm::convert::content_to_basic_type;
+    use roc::mono::expr::Expr;
     use roc::subs::Subs;
 
     macro_rules! assert_evals_to {
@@ -34,8 +34,25 @@ mod test_gen {
             let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
 
             let context = Context::create();
-            let builder = context.create_builder();
             let module = context.create_module("app");
+            let builder = context.create_builder();
+            let fpm = PassManager::create(&module);
+
+            // Enable optimizations when running cargo test --release
+            if !cfg!(debug_assetions) {
+                fpm.add_instruction_combining_pass();
+                fpm.add_reassociate_pass();
+                fpm.add_basic_alias_analysis_pass();
+                fpm.add_promote_memory_to_register_pass();
+                fpm.add_cfg_simplification_pass();
+                fpm.add_gvn_pass();
+                // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
+                // fpm.add_strip_dead_prototypes_pass();
+                // fpm.add_dead_arg_elimination_pass();
+                // fpm.add_function_inlining_pass();
+            }
+
+            fpm.initialize();
 
             // Compute main_fn_type before moving subs to Env
             let main_fn_type = content_to_basic_type(&content, &mut subs, &context)
@@ -53,12 +70,23 @@ mod test_gen {
             };
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &env.subs, &env.module, &context, expr, &mut procs);
+            let main_body = Expr::new(&arena, &env.subs, expr, &mut procs);
 
             // Add all the Procs to the module
-            for (name, (opt_proc, _fn_val)) in procs.clone() {
+            for (name, opt_proc) in procs.clone() {
                 if let Some(proc) = opt_proc {
-                    build_proc(&env, &ImMap::default(), name, proc, &procs);
+                    // NOTE: This is here to be uncommented in case verification fails.
+                    // (This approach means we don't have to defensively clone name here.)
+                    //
+                    // println!("\n\nBuilding and then verifying function {}\n\n", name);
+                    let fn_val = build_proc(&env, name, proc, &procs);
+
+                    if fn_val.verify(true) {
+                        fpm.run_on(&fn_val);
+                    } else {
+                        // NOTE: If this fails, uncomment the above println to debug
+                        panic!("Non-main function failed LLVM verification.");
+                    }
                 }
             }
 
@@ -84,15 +112,15 @@ mod test_gen {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
+            // Uncomment this to see the module's LLVM instruction output:
+            // env.module.print_to_stderr();
+
             let execution_engine = env
                 .module
                 .create_jit_execution_engine(OptimizationLevel::None)
-                .expect("errored");
+                .expect("Error creating JIT execution engine for test");
 
             unsafe {
-                // Uncomment this to see the module's LLVM instruction output:
-                // env.module.print_to_stderr();
-
                 let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
                     .get_function(main_fn_name)
                     .ok()
@@ -299,13 +327,43 @@ mod test_gen {
                     limitedNegate = \num ->
                         when num is
                             1 -> -1
-                            _ -> 0
+                            _ -> num
 
                     limitedNegate 1
                 "#
             ),
             -1,
             i64
+        );
+    }
+
+    #[test]
+    fn apply_unnamed_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    (\a -> a) 5
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
+    fn return_unnamed_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysIdentity : Num.Num Int.Integer -> (Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint)
+                alwaysIdentity = \num ->
+                    (\a -> a)
+
+                (alwaysIdentity 2) 3.14
+                "#
+            ),
+            3.14,
+            f64
         );
     }
 }

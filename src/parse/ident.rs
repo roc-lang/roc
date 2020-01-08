@@ -49,7 +49,7 @@ impl<'a> Ident<'a> {
 /// Sometimes we may want to check for those later in the process, and give
 /// more contextually-aware error messages than "unexpected `if`" or the like.
 #[inline(always)]
-pub fn parse_into<'a, I>(
+pub fn parse_ident<'a, I>(
     arena: &'a Bump,
     chars: &mut I,
     state: State<'a>,
@@ -103,7 +103,7 @@ where
         }
     };
 
-    let mut chars_parsed = 1;
+    let mut chars_parsed = part_buf.len();
     let mut next_char = None;
 
     while let Some(ch) = chars.next() {
@@ -310,7 +310,7 @@ where
 pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         // Discard next_char; we don't need it.
-        let ((string, _), state) = parse_into(arena, &mut state.input.chars(), state)?;
+        let ((string, _), state) = parse_ident(arena, &mut state.input.chars(), state)?;
 
         Ok((string, state))
     }

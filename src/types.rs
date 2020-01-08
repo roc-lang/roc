@@ -7,6 +7,7 @@ use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
 use crate::region::Region;
 use crate::subs::Variable;
+use crate::uniqueness::boolean_algebra;
 use std::fmt;
 
 // The standard modules
@@ -39,6 +40,8 @@ pub enum Type {
         name: Uppercase,
         args: Vec<Type>,
     },
+    /// Boolean type used in uniqueness inference
+    Boolean(boolean_algebra::Bool),
     Variable(Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
@@ -185,6 +188,7 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::Boolean(b) => write!(f, "{:?}", b),
         }
     }
 }
@@ -320,6 +324,8 @@ pub enum Reason {
     IntLiteral,
     InterpolatedStringVar,
     WhenBranch { index: usize },
+    IfCondition,
+    IfBranch { index: usize },
     ElemInList,
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Ident, SendMap<Lowercase, Type>),
@@ -389,6 +395,7 @@ pub enum ErrorType {
         Vec<(Lowercase, ErrorType)>,
         Box<ErrorType>,
     ),
+    Boolean(boolean_algebra::Bool),
     Error,
 }
 
