@@ -2,6 +2,7 @@ use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{MutMap, MutSet};
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::{self, name_type_var};
+use crate::uniqueness::boolean_algebra::Bool;
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -103,6 +104,11 @@ fn find_names_needed(
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
+        }
+        Structure(Boolean(b)) => {
+            for var in b.variables() {
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
         }
         RigidVar(name) => {
             // User-defined names are already taken.
@@ -294,6 +300,10 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     write_content(content, subs, buf, parens)
                 }
             }
+        }
+        Boolean(Bool::Variable(var)) => write_content(subs.get(var).content, subs, buf, parens),
+        Boolean(b) => {
+            buf.push_str(&format!("{:?}", b));
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));

@@ -1089,4 +1089,22 @@ mod test_infer {
             "Int",
         );
     }
+
+    #[test]
+    fn record_extraction() {
+        with_larger_debug_stack(|| {
+            infer_eq(
+                indoc!(
+                    r#"
+                f = \x -> 
+                    when x is 
+                        { a, b } -> a
+
+                f
+                "#
+                ),
+                "{ a : a, b : * }* -> a",
+            );
+        });
+    }
 }
