@@ -1095,4 +1095,17 @@ mod test_infer {
             );
         });
     }
+
+    #[test]
+    fn record_field_pattern_match_with_guard() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when foo is
+                        { x: 4 } -> x
+                "#
+            ),
+            "Int",
+        );
+    }
 }

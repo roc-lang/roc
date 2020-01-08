@@ -873,19 +873,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn record_pattern_match_infer() {
-        infer_eq(
-            indoc!(
-                r#"
-                    when foo is
-                        { x: 4 } -> x
-                "#
-            ),
-            "Attr.Attr * Int",
-        );
-    }
-
-    #[test]
     fn empty_record_pattern() {
         infer_eq(
             indoc!(
@@ -1021,6 +1008,31 @@ mod test_infer_uniq {
         );
     }
 
+    #[test]
+    fn record_field_pattern_match_with_guard() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when foo is
+                        { x: 4 } -> x
+                "#
+            ),
+            "Attr.Attr * Int",
+        );
+    }
+
+    // #[test]
+    // fn tag_union_pattern_match() {
+    //     infer_eq(
+    //         indoc!(
+    //             r#"
+    //             \Foo x -> Foo x
+    //             "#
+    //         ),
+    //         "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+    //     );
+    // }
+
     // TODO when type signatures are supported, ensure this works
     //    #[test]
     //    fn num_identity() {
@@ -1038,23 +1050,5 @@ mod test_infer_uniq {
     //            ),
     //            "tbd",
     //        );
-    //    }
-
-    //    #[test]
-    //    fn record_extraction() {
-    //        with_larger_debug_stack(|| {
-    //            infer_eq(
-    //                indoc!(
-    //                    r#"
-    //                f = \x ->
-    //                    when x is
-    //                        { a, b } -> a
-    //
-    //                f
-    //                "#
-    //                ),
-    //                "Attr.Attr * (Attr.Attr u { a : Attr u a, b : * }* -> Attr u a)",
-    //            );
-    //        });
     //    }
 }
