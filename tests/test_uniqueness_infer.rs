@@ -863,11 +863,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn accessor_function() {
-        infer_eq(".foo", "Attr.Attr * { foo : a }* -> a");
-    }
-
-    #[test]
     fn record() {
         infer_eq("{ foo: 42 }", "Attr.Attr * { foo : (Attr.Attr * Int) }");
     }
@@ -883,10 +878,10 @@ mod test_infer_uniq {
             indoc!(
                 r#"
                     when foo is
-                        { x: 4 }-> x
+                        { x: 4 } -> x
                 "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -989,6 +984,61 @@ mod test_infer_uniq {
             "Attr.Attr * [ Test.@Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
         );
     }
+
+    #[test]
+    fn record_field_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                \rec -> rec.left 
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
+    fn record_field_accessor_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                .left
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
+    fn record_field_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                \{ left } -> left
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    // TODO when type signatures are supported, ensure this works
+    //    #[test]
+    //    fn num_identity() {
+    //        infer_eq(
+    //            indoc!(
+    //                r#"
+    //                numIdentity : Num a -> Num a
+    //                numIdentity = \x -> x
+    //
+    //                x = numIdentity 42
+    //                y = numIdentity 3.14
+    //
+    //                numIdentity
+    //                "#
+    //            ),
+    //            "tbd",
+    //        );
+    //    }
 
     //    #[test]
     //    fn record_extraction() {

@@ -20,6 +20,7 @@ use crate::types::PReason::{self};
 use crate::types::Reason;
 use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
+use crate::uniqueness::boolean_algebra::Bool;
 use crate::uniqueness::constrain::exists;
 use crate::uniqueness::sharing::VarUsage;
 
@@ -84,7 +85,7 @@ fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Int,
-                Type::int(),
+                constrain::lift(var_store, Type::int()),
                 expected,
             ));
         }
@@ -92,7 +93,7 @@ fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Float,
-                Type::float(),
+                constrain::lift(var_store, Type::float()),
                 expected,
             ));
         }
@@ -101,12 +102,14 @@ fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Str,
-                Type::string(),
+                constrain::lift(var_store, Type::string()),
                 expected,
             ));
         }
 
         RecordDestructure(ext_var, patterns) => {
+            let mut pattern_uniq_vars = Vec::new();
+
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
@@ -118,7 +121,11 @@ fn constrain_pattern(
                 guard,
             } in patterns
             {
-                let pat_type = Type::Variable(*var);
+                let pat_uniq_var = var_store.fresh();
+                pattern_uniq_vars.push(pat_uniq_var);
+
+                let pat_type =
+                    constrain::attr_type(Type::Variable(pat_uniq_var), Type::Variable(*var));
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
                 if !state.headers.contains_key(&symbol) {
@@ -130,16 +137,32 @@ fn constrain_pattern(
 
                 field_types.insert(label.clone(), pat_type.clone());
 
-                // TODO investigate: shouldn't guard_var be constrained somewhere?
-                if let Some((_guard_var, loc_guard)) = guard {
+                if let Some((guard_var, loc_guard)) = guard {
+                    state.constraints.push(Eq(
+                        Type::Variable(*guard_var),
+                        Expected::NoExpectation(pat_type.clone()),
+                        pattern.region,
+                    ));
+                    state.vars.push(*guard_var);
                     constrain_pattern(var_store, state, loc_guard, expected);
                 }
 
                 state.vars.push(*var);
             }
 
-            let record_type =
-                constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
+            let record_uniq_type = if pattern_uniq_vars.is_empty() {
+                // explicitly keep uniqueness of empty record (match) free
+                let empty_var = var_store.fresh();
+                state.vars.push(empty_var);
+                Bool::Variable(empty_var)
+            } else {
+                boolean_algebra::any(pattern_uniq_vars.into_iter().map(Bool::Variable))
+            };
+
+            let record_type = constrain::attr_type(
+                Type::Boolean(record_uniq_type),
+                Type::Record(field_types, Box::new(ext_type)),
+            );
             let record_con = Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Record,
@@ -730,14 +753,22 @@ pub fn constrain_expr(
             field,
         } => {
             let ext_type = Type::Variable(*ext_var);
-            let field_type = Type::Variable(*field_var);
+
+            let field_uniq_var = var_store.fresh();
+            let field_uniq_type = Type::Variable(field_uniq_var);
+            let field_type =
+                constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
 
             let mut rec_field_types = SendMap::default();
 
             rec_field_types.insert(field.clone(), field_type.clone());
 
-            let record_type =
-                constrain::lift(var_store, Type::Record(rec_field_types, Box::new(ext_type)));
+            let record_uniq_var = var_store.fresh();
+            let record_uniq_type = Type::Variable(record_uniq_var);
+            let record_type = constrain::attr_type(
+                record_uniq_type.clone(),
+                Type::Record(rec_field_types, Box::new(ext_type)),
+            );
             let record_expected = Expected::NoExpectation(record_type);
 
             let mut constraint = constrain_expr(
@@ -749,9 +780,15 @@ pub fn constrain_expr(
                 record_expected,
             );
 
+            let uniq_con = Eq(
+                field_uniq_type,
+                Expected::NoExpectation(record_uniq_type),
+                region,
+            );
+
             constraint = exists(
-                vec![*field_var, *ext_var],
-                And(vec![constraint, Eq(field_type, expected, region)]),
+                vec![*field_var, *ext_var, field_uniq_var, record_uniq_var],
+                And(vec![constraint, Eq(field_type, expected, region), uniq_con]),
             );
 
             constraint
@@ -762,22 +799,43 @@ pub fn constrain_expr(
             field_var,
             ext_var,
         } => {
-            let ext_type = Variable(*ext_var);
-            let field_type = Variable(*field_var);
             let mut field_types = SendMap::default();
+
+            let field_uniq_var = var_store.fresh();
+            let field_uniq_type = Type::Variable(field_uniq_var);
+            let field_type =
+                constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
 
             field_types.insert(field.clone(), field_type.clone());
 
-            let record_type =
-                constrain::lift(var_store, Type::Record(field_types, Box::new(ext_type)));
+            let record_uniq_var = var_store.fresh();
+            let record_uniq_type = Type::Variable(record_uniq_var);
+            let record_type = constrain::attr_type(
+                record_uniq_type.clone(),
+                Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
+            );
+
+            let fn_uniq_var = var_store.fresh();
+            let fn_type = constrain::attr_type(
+                Type::Variable(fn_uniq_var),
+                Type::Function(vec![record_type], Box::new(field_type)),
+            );
+
+            let uniq_con = Eq(
+                field_uniq_type,
+                Expected::NoExpectation(record_uniq_type),
+                region,
+            );
 
             exists(
-                vec![*field_var, *ext_var],
-                Eq(
-                    Type::Function(vec![record_type], Box::new(field_type)),
-                    expected,
-                    region,
-                ),
+                vec![
+                    *field_var,
+                    *ext_var,
+                    fn_uniq_var,
+                    field_uniq_var,
+                    record_uniq_var,
+                ],
+                And(vec![Eq(fn_type, expected, region), uniq_con]),
             )
         }
         RuntimeError(_) => True,
