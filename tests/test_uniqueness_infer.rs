@@ -10,7 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer_uniq {
-    use crate::helpers::{uniq_expr, with_larger_debug_stack};
+    use crate::helpers::uniq_expr;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
 
@@ -23,6 +23,8 @@ mod test_infer_uniq {
         let mut unify_problems = Vec::new();
         let content1 = infer_expr(&mut subs1, &mut unify_problems, &constraint1, variable1);
         let content2 = infer_expr(&mut subs2, &mut unify_problems, &constraint2, variable2);
+
+        dbg!(unify_problems);
 
         name_all_type_vars(variable1, &mut subs1);
         name_all_type_vars(variable2, &mut subs2);
@@ -500,41 +502,40 @@ mod test_infer_uniq {
         );
     }
 
-    //    #[test]
-    //    fn identity_infers_principal_type() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                identity = \a -> a
-    //
-    //                x = identity 5
-    //
-    //                identity
-    //                "#
-    //            ),
-    //            // TODO this is wrong!
-    //            "Attr.Attr Attr.Shared (Attr.Attr a Int -> Attr.Attr a Int)",
-    //        );
-    //    }
-    //
-    //    #[test]
-    //    fn identity_works_on_incompatible_types() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                identity = \a -> a
-    //
-    //                x = identity 5
-    //                y = identity "hi"
-    //
-    //                x
-    //                "#
-    //            ),
-    //            // TODO investigate why is this not shared?
-    //            // maybe because y is not used it is dropped?
-    //            "Attr.Attr * Int",
-    //        );
-    //    }
+    #[test]
+    fn identity_infers_principal_type() {
+        infer_eq(
+            indoc!(
+                r#"
+                    identity = \a -> a
+                    x = identity 5
+
+                    identity
+                    "#
+            ),
+            // TODO investigate why not shared?
+            "Attr.Attr * (a -> a)",
+        );
+    }
+
+    #[test]
+    fn identity_works_on_incompatible_types() {
+        infer_eq(
+            indoc!(
+                r#"
+                identity = \a -> a
+
+                x = identity 5
+                y = identity "hi"
+
+                x
+                "#
+            ),
+            // TODO investigate why is this not shared?
+            // maybe because y is not used it is dropped?
+            "Attr.Attr * Int",
+        );
+    }
 
     #[test]
     fn call_returns_list() {
@@ -627,20 +628,19 @@ mod test_infer_uniq {
         );
     }
 
-    // #[test]
-    // TODO FIXME this should work, but instead causes a stack overflow!
-    // fn recursive_identity() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //                 identity = \val -> val
+    #[test]
+    fn recursive_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    identity = \val -> val
 
-    //                 identity identity
-    //             "#
-    //         ),
-    //         "a -> a",
-    //     );
-    // }
+                    identity identity
+                "#
+            ),
+            "Attr.Attr Attr.Shared (a -> a)",
+        );
+    }
 
     #[test]
     fn identity_function() {
@@ -833,20 +833,20 @@ mod test_infer_uniq {
         );
     }
 
-    // #[test]
-    // fn if_with_int_literals() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             if 1 == 1 then
-    //                 42
-    //             else
-    //                 24
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+    #[test]
+    fn if_with_int_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                if True then
+                    42
+                else
+                    24
+            "#
+            ),
+            "Int",
+        );
+    }
 
     #[test]
     fn when_with_int_literals() {

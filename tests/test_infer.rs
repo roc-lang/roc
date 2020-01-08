@@ -607,20 +607,19 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // TODO FIXME this should work, but instead causes a stack overflow!
-    // fn recursive_identity() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //                 identity = \val -> val
+    #[test]
+    fn recursive_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    identity = \val -> val
 
-    //                 identity identity
-    //             "#
-    //         ),
-    //         "a -> a",
-    //     );
-    // }
+                    identity identity
+                "#
+            ),
+            "a -> a",
+        );
+    }
 
     #[test]
     fn identity_function() {
@@ -813,20 +812,20 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // fn if_with_int_literals() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             if 1 == 1 then
-    //                 42
-    //             else
-    //                 24
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+    #[test]
+    fn if_with_int_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                if True then
+                    42
+                else
+                    24
+            "#
+            ),
+            "Int",
+        );
+    }
 
     #[test]
     fn when_with_int_literals() {
@@ -1076,17 +1075,6 @@ mod test_infer {
                 "#
             ),
             "[ Test.@Foo Str Int ]*",
-        );
-    }
-
-    #[test]
-    fn if_then_else() {
-        infer_eq(
-            indoc!(
-                r#"if True then 1 else 0
-                "#
-            ),
-            "Int",
         );
     }
 

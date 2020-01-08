@@ -301,60 +301,55 @@ pub fn constrain_expr(
                 None => panic!("symbol not analyzed"),
             }
         }
-        Closure(fn_var, _symbol, _recursion, args, boxed_body) => {
-            let (body, ret_var) = &**boxed_body;
-
-            // first, generate constraints for the arguments
-            let mut arg_types = Vec::new();
-            let mut arg_vars = Vec::new();
-
+        Closure(_fn_var, _symbol, _recursion, args, boxed) => {
+            let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
                 headers: SendMap::default(),
-                vars: Vec::with_capacity(1),
+                vars: Vec::with_capacity(args.len()),
                 constraints: Vec::with_capacity(1),
             };
-
             let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
-            let ret_type = Variable(*ret_var);
+            let mut pattern_types = Vec::with_capacity(state.vars.capacity());
+            let ret_var = *ret_var;
+            let ret_type = Type::Variable(ret_var);
 
-            vars.push(*ret_var);
+            vars.push(ret_var);
 
-            for (arg_var, pattern) in args {
-                let arg_typ = Variable(*arg_var);
-                constrain_pattern(
-                    var_store,
-                    &mut state,
-                    &pattern,
-                    PExpected::NoExpectation(arg_typ.clone()),
-                );
-                arg_types.push(arg_typ);
-                arg_vars.push(arg_var);
+            for (pattern_var, loc_pattern) in args {
+                let pattern_type = Type::Variable(*pattern_var);
+                let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
 
-                vars.push(*arg_var);
+                pattern_types.push(pattern_type);
+
+                constrain_pattern(var_store, &mut state, loc_pattern, pattern_expected);
+
+                vars.push(*pattern_var);
             }
 
-            let fn_typ = constrain::lift(
+            let fn_type = constrain::lift(
                 var_store,
-                Type::Function(arg_types, Box::new(ret_type.clone())),
+                Type::Function(pattern_types, Box::new(ret_type.clone())),
             );
-
+            let body_type = Expected::NoExpectation(ret_type);
             let ret_constraint = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
-                region,
-                &body.value,
-                Expected::NoExpectation(ret_type),
+                loc_body_expr.region,
+                &loc_body_expr.value,
+                body_type,
             );
 
+            let defs_constraint = And(state.constraints);
+
             // remove identifiers bound in the arguments from VarUsage
+            // makes e.g. `(\x -> x) (\x -> x)` count as unique in both cases
             for (_, pattern) in args {
                 for identifier in pattern::symbols_from_pattern(&pattern.value) {
                     var_usage.unregister(&identifier);
                 }
             }
 
-            let defs_constraint = And(state.constraints);
             exists(
                 vars,
                 And(vec![
@@ -362,12 +357,18 @@ pub fn constrain_expr(
                         rigid_vars: Vec::new(),
                         flex_vars: state.vars,
                         def_types: state.headers,
-                        defs_constraint: defs_constraint,
+                        defs_constraint,
                         ret_constraint,
                     })),
-                    // "the closure's type is equal to expected  type"
-                    Eq(fn_typ, expected.clone(), region),
-                    Eq(Type::Variable(*fn_var), expected, region),
+                    // "the closure's type is equal to expected type"
+                    Eq(fn_type.clone(), expected, region),
+                    // "fn_var is equal to the closure's type" - fn_var is used in code gen
+                    // TODO investigate this breaks principality somehow
+                    // Eq(
+                    //     Type::Variable(*fn_var),
+                    //     Expected::NoExpectation(fn_type),
+                    //     region,
+                    // ),
                 ]),
             )
         }

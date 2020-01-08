@@ -7,6 +7,7 @@ use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
+use crate::uniqueness::boolean_algebra;
 
 type Env = ImMap<Symbol, Variable>;
 
@@ -401,6 +402,8 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
+        // This case is important so e.g. `Bool::Variable(v) ~ Attr.Shared`
+        Boolean(boolean_algebra::Bool::Variable(var)) => *var,
         Boolean(b) => {
             let content = Content::Structure(FlatType::Boolean(b.clone()));
 
