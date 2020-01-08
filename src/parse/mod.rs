@@ -880,6 +880,8 @@ pub fn case_branches<'a>(
         let indented_more = original_indent + 1;
         let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
 
+        // TODO do we need to do this in branch_parser as well?
+        // TODO can we use space1_around above and avoid this here?
         // Record the spaces before the first "->", if any.
         if !spaces_before_arrow.is_empty() {
             let last = loc_first_pattern.pop().unwrap();
