@@ -166,17 +166,14 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let loc_desugared_cond = &*arena.alloc(desugar_expr(arena, &loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
-            for ((loc_pattern, _), loc_branch_expr) in branches.into_iter() {
+            for (loc_pattern, loc_branch_expr) in branches.into_iter() {
                 let desugared = desugar_expr(arena, &loc_branch_expr);
 
                 desugared_branches.push(&*arena.alloc((
-                    (
-                        Located {
-                            region: loc_pattern.region,
-                            value: Pattern::Nested(&loc_pattern.value),
-                        },
-                        Vec::with_capacity_in(0, arena),
-                    ),
+                    bumpalo::vec![in arena; Located {
+                        region: loc_pattern.first().unwrap().region,
+                        value: Pattern::Nested(&loc_pattern.first().unwrap().value),
+                    }],
                     Located {
                         region: desugared.region,
                         value: Nested(&desugared.value),
@@ -254,13 +251,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let pattern_region = condition.region;
 
             branches.push(&*arena.alloc((
-                (
-                    Located {
-                        value: Pattern::GlobalTag("False"),
-                        region: pattern_region,
-                    },
-                    Vec::new_in(arena),
-                ),
+                bumpalo::vec![in arena; Located {
+                    value: Pattern::GlobalTag("False"),
+                    region: pattern_region,
+                }],
                 Located {
                     value: Nested(&else_branch.value),
                     region: else_branch.region,
@@ -268,13 +262,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             )));
 
             branches.push(&*arena.alloc((
-                (
-                    Located {
-                        value: Pattern::Underscore,
-                        region: pattern_region,
-                    },
-                    Vec::new_in(arena),
-                ),
+                bumpalo::vec![in arena; Located {
+                    value: Pattern::Underscore,
+                    region: pattern_region,
+                }],
                 Located {
                     value: Nested(&then_branch.value),
                     region: then_branch.region,

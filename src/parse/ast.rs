@@ -158,7 +158,7 @@ pub enum Expr<'a> {
     If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
     When(
         &'a Loc<Expr<'a>>,
-        Vec<'a, &'a ((Loc<Pattern<'a>>, Vec<'a, Loc<Pattern<'a>>>), Loc<Expr<'a>>)>,
+        Vec<'a, &'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.

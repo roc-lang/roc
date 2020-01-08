@@ -863,46 +863,29 @@ pub fn when_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
 pub fn case_branches<'a>(
     min_indent: u16,
-) -> impl Parser<
-    'a,
-    Vec<
-        'a,
-        &'a (
-            (Located<Pattern<'a>>, Vec<'a, Located<Pattern<'a>>>),
-            Located<Expr<'a>>,
-        ),
-    >,
-> {
+) -> impl Parser<'a, Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)>> {
     move |arena, state| {
-        let mut branches: Vec<
-            'a,
-            &'a (
-                (Located<Pattern<'a>>, Vec<'a, Located<Pattern<'a>>>),
-                Located<Expr<'a>>,
-            ),
-        > = Vec::with_capacity_in(2, arena);
+        let mut branches: Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)> =
+            Vec::with_capacity_in(2, arena);
 
         // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
         // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
-        let (mut loc_first_pattern, state) =
-            space1_before(loc!(pattern(min_indent)), min_indent).parse(arena, state)?;
+        let (mut loc_first_pattern, state) = sep_by1(
+            map!(and!(space1(min_indent), char('|')), |_| ()),
+            space1_before(loc!(pattern(min_indent)), min_indent),
+        )
+        .parse(arena, state)?;
         let original_indent = state.indent_col;
         let indented_more = original_indent + 1;
-        let (loc_first_pattern_alt, state) = zero_or_more!(skip_first!(
-            and!(space0(min_indent), char('|')),
-            space0_before(loc!(pattern(min_indent)), min_indent)
-        ))
-        .parse(arena, state)?;
         let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
 
         // Record the spaces before the first "->", if any.
         if !spaces_before_arrow.is_empty() {
-            let region = loc_first_pattern.region;
-            let value =
-                Pattern::SpaceAfter(arena.alloc(loc_first_pattern.value), spaces_before_arrow);
-
-            loc_first_pattern = Located { region, value };
+            let last = loc_first_pattern.pop().unwrap();
+            let region = last.region;
+            let value = Pattern::SpaceAfter(arena.alloc(last.value), spaces_before_arrow);
+            loc_first_pattern.push(Located { region, value });
         };
 
         // Parse the first "->" and the expression after it.
@@ -917,14 +900,14 @@ pub fn case_branches<'a>(
         .parse(arena, state)?;
 
         // Record this as the first branch, then optionally parse additional branches.
-        branches.push(arena.alloc(((loc_first_pattern, loc_first_pattern_alt), loc_first_expr)));
+        branches.push(arena.alloc((loc_first_pattern, loc_first_expr)));
 
         let branch_parser = and!(
             then(
                 space1_around(loc!(pattern(min_indent)), min_indent),
                 move |_arena, state, loc_pattern| {
                     if state.indent_col == original_indent {
-                        Ok(((loc_pattern, Vec::with_capacity_in(0, arena)), state))
+                        Ok((bumpalo::vec![in arena; loc_pattern ], state))
                     } else {
                         panic!(
                             "TODO additional branch didn't have same indentation as first branch"

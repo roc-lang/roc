@@ -141,16 +141,21 @@ pub fn fmt_expr<'a>(
             buf.push_str(" is\n");
 
             let mut it = branches.iter().peekable();
-            while let Some(((pattern, _), expr)) = it.next() {
+            while let Some((patterns, expr)) = it.next() {
                 add_spaces(buf, indent + INDENT);
 
-                match pattern.value {
+                match patterns.first().unwrap().value {
                     Pattern::SpaceBefore(nested, spaces) => {
                         fmt_comments_only(buf, spaces.iter(), indent + INDENT);
                         fmt_pattern(buf, nested, indent + INDENT, false);
                     }
                     _ => {
-                        fmt_pattern(buf, &pattern.value, indent + INDENT, false);
+                        fmt_pattern(
+                            buf,
+                            &patterns.first().unwrap().value,
+                            indent + INDENT,
+                            false,
+                        );
                     }
                 }
 
