@@ -1,9 +1,11 @@
-use cranelift_codegen::ir::{types, Type};
+use cranelift::prelude::AbiParam;
+use cranelift_codegen::ir::{types, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
 
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs};
+use cranelift_module::{Backend, Module};
 
 pub fn content_to_crane_type(
     content: &Content,
@@ -82,19 +84,14 @@ fn num_to_crane_type(content: Content) -> Result<Type, String> {
     }
 }
 
-pub fn type_from_layout(layout: &Layout<'_>, _subs: &Subs) -> Type {
+pub fn type_from_layout(cfg: TargetFrontendConfig, layout: &Layout<'_>, _subs: &Subs) -> Type {
     use crate::mono::layout::Builtin::*;
     use crate::mono::layout::Layout::*;
 
     match layout {
-        FunctionPointer(_arg_layouts, _ret_layout) => {
-            panic!("TODO function poitner");
-        }
+        Pointer(_) | FunctionPointer(_, _) => cfg.pointer_type(),
         Struct(_fields) => {
             panic!("TODO layout_to_crane_type for Struct");
-        }
-        Pointer(_layout) => {
-            panic!("TODO layout_to_crane_type for Pointer");
         }
         Builtin(builtin) => match builtin {
             Int64 => types::I64,
@@ -103,5 +100,34 @@ pub fn type_from_layout(layout: &Layout<'_>, _subs: &Subs) -> Type {
             Map(_, _) => panic!("TODO layout_to_crane_type for Builtin::Map"),
             Set(_) => panic!("TODO layout_to_crane_type for Builtin::Set"),
         },
+    }
+}
+
+pub fn sig_from_layout<B: Backend>(
+    cfg: TargetFrontendConfig,
+    module: &mut Module<B>,
+    layout: Layout,
+    subs: &Subs,
+) -> Signature {
+    match layout {
+        Layout::FunctionPointer(args, ret) => {
+            let ret_type = type_from_layout(cfg, &ret, subs);
+            let mut sig = module.make_signature();
+
+            // Add return type to the signature
+            sig.returns.push(AbiParam::new(ret_type));
+
+            // Add params to the signature
+            for layout in args.iter() {
+                let arg_type = type_from_layout(cfg, &layout, subs);
+
+                sig.params.push(AbiParam::new(arg_type));
+            }
+
+            sig
+        }
+        _ => {
+            panic!("Could not make Signature from Layout {:?}", layout);
+        }
     }
 }

@@ -46,8 +46,9 @@ pub fn content_to_basic_type<'ctx>(
                     arg_basic_types.push(content_to_basic_type(&arg_content, subs, context)?);
                 }
                 let fn_type = get_fn_type(&ret_type, arg_basic_types.as_slice());
+                let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
 
-                Ok(fn_type.ptr_type(AddressSpace::Global).as_basic_type_enum())
+                Ok(ptr_type.as_basic_type_enum())
             }
             other => panic!("TODO handle content_to_basic_type for {:?}", other),
         },

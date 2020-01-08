@@ -11,7 +11,7 @@ use cranelift_module::{Backend, FuncId, Linkage, Module};
 use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
-use crate::crane::convert::{content_to_crane_type, type_from_layout};
+use crate::crane::convert::{content_to_crane_type, sig_from_layout, type_from_layout};
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::Layout;
 use crate::subs::Subs;
@@ -23,7 +23,7 @@ pub enum ScopeEntry {
     Stack { expr_type: Type, slot: StackSlot },
     Heap { expr_type: Type, ptr: Value },
     Arg { expr_type: Type, param: Value },
-    FuncId(FuncId),
+    Func { sig: Signature, func_id: FuncId },
 }
 
 pub struct Env<'a> {
@@ -78,7 +78,7 @@ pub fn build_expr<'a, B: Backend>(
                 let content = subs.get_without_compacting(*var).content;
                 let layout = Layout::from_content(arena, content, subs)
                     .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));
-                let expr_type = type_from_layout(&layout, subs);
+                let expr_type = type_from_layout(cfg, &layout, subs);
 
                 let slot = builder.create_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
@@ -117,7 +117,7 @@ pub fn build_expr<'a, B: Backend>(
                 }
 
                 let fn_id = match scope.get(name) {
-                    Some(ScopeEntry::FuncId(id)) => *id,
+                    Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
                     other => panic!(
                         "CallByName could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
                         name, other, scope
@@ -132,43 +132,40 @@ pub fn build_expr<'a, B: Backend>(
                 results[0]
             }
         }
-        // FunctionPointer(ref fn_name) => {
-        //     let ptr = env
-        //         .module
-        //         .get_function(fn_name)
-        //         .unwrap_or_else(|| {
-        //             panic!("Could not get pointer to unknown function {:?}", fn_name)
-        //         })
-        //         .as_global_value()
-        //         .as_pointer_value();
+        FunctionPointer(ref name) => {
+            let fn_id = match scope.get(name) {
+                Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
+                other => panic!(
+                    "FunctionPointer could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
+                    name, other, scope
+                ),
+            };
 
-        //     BasicValueEnum::PointerValue(ptr)
-        // }
-        // CallByPointer(ref _ptr, ref args) => {
-        //     let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity(args.len());
+            let func_ref = module.declare_func_in_func(fn_id, &mut builder.func);
 
-        //     for arg in args.iter() {
-        //         arg_vals.push(build_expr(env, scope, arg, procs));
-        //     }
+            builder.ins().func_addr(env.cfg.pointer_type(), func_ref)
+        }
+        CallByPointer(ref sub_expr, ref args, ref fn_var) => {
+            let subs = &env.subs;
+            let mut arg_vals = Vec::with_capacity(args.len());
 
-        //     panic!("TODO do a load(ptr) to get back the pointer, then pass *that* in here!");
+            for arg in args.iter() {
+                arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
+            }
 
-        //     //             let call = match build_expr(env, scope, expr, procs) {
-        //     //                 BasicValueEnum::PointerValue(ptr) => {
-        //     //                     env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
-        //     //                 }
-        //     //                 non_ptr => {
-        //     //                     panic!(
-        //     //                         "Tried to call by pointer, but encountered a non-pointer: {:?}",
-        //     //                         non_ptr
-        //     //                     );
-        //     //                 }
-        //     //             };
+            let content = subs.get_without_compacting(*fn_var).content;
+            let layout = Layout::from_content(env.arena, content, &subs)
+                .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));
+            let sig = sig_from_layout(env.cfg, module, layout, &subs);
+            let callee = build_expr(env, scope, module, builder, sub_expr, procs);
+            let sig_ref = builder.import_signature(sig);
+            let call = builder.ins().call_indirect(sig_ref, callee, &arg_vals);
+            let results = builder.inst_results(call);
 
-        //     //             call.try_as_basic_value()
-        //     //                 .left()
-        //     //                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-        // }
+            debug_assert!(results.len() == 1);
+
+            results[0]
+        }
         Load(name) => match scope.get(name) {
             Some(ScopeEntry::Stack { expr_type, slot }) => {
                 builder
@@ -181,7 +178,7 @@ pub fn build_expr<'a, B: Backend>(
                     .ins()
                     .load(*expr_type, MemFlags::new(), *ptr, Offset32::new(0))
             }
-            Some(ScopeEntry::FuncId(_fn_id)) => {
+            Some(ScopeEntry::Func { .. }) => {
                 panic!("TODO I don't yet know how to return fn pointers")
             }
             None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
@@ -341,6 +338,7 @@ pub fn declare_proc<'a, B: Backend>(
 ) -> (FuncId, Signature) {
     let args = proc.args;
     let subs = &env.subs;
+    let cfg = env.cfg;
     let ret_content = subs.get_without_compacting(proc.ret_var).content;
     // TODO this content_to_crane_type is duplicated when building this Proc
     let ret_type = content_to_crane_type(&ret_content, subs, env.cfg).unwrap_or_else(|err| {
@@ -358,7 +356,7 @@ pub fn declare_proc<'a, B: Backend>(
 
     // Add params to the signature
     for (layout, _name, _var) in args.iter() {
-        let arg_type = type_from_layout(&layout, subs);
+        let arg_type = type_from_layout(cfg, &layout, subs);
 
         sig.params.push(AbiParam::new(arg_type));
     }
@@ -385,6 +383,7 @@ pub fn define_proc_body<'a, B: Backend>(
 ) {
     let args = proc.args;
     let subs = &env.subs;
+    let cfg = env.cfg;
 
     // Build the body of the function
     {
@@ -409,7 +408,7 @@ pub fn define_proc_body<'a, B: Backend>(
             //
             let layout = Layout::from_content(arena, content, subs)
                 .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));
-            let expr_type = type_from_layout(&layout, subs);
+            let expr_type = type_from_layout(cfg, &layout, subs);
 
             scope.insert(arg_name.clone(), ScopeEntry::Arg { expr_type, param });
         }

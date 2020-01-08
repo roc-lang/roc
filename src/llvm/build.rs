@@ -116,9 +116,9 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 let call = env.builder.build_call(fn_val, arg_vals.as_slice(), "tmp");
 
-                call.try_as_basic_value()
-                    .left()
-                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by name."))
+                call.try_as_basic_value().left().unwrap_or_else(|| {
+                    panic!("LLVM error: Invalid call by name for name {:?}", name)
+                })
             }
         }
         FunctionPointer(ref fn_name) => {
@@ -133,30 +133,28 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             BasicValueEnum::PointerValue(ptr)
         }
-        CallByPointer(ref _ptr, ref args) => {
+        CallByPointer(ref sub_expr, ref args, _var) => {
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity(args.len());
 
             for arg in args.iter() {
                 arg_vals.push(build_expr(env, scope, parent, arg, procs));
             }
 
-            panic!("TODO do a load(ptr) to get back the pointer, then pass *that* in here!");
+            let call = match build_expr(env, scope, parent, sub_expr, procs) {
+                BasicValueEnum::PointerValue(ptr) => {
+                    env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
+                }
+                non_ptr => {
+                    panic!(
+                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
+                        non_ptr
+                    );
+                }
+            };
 
-            //             let call = match build_expr(env, scope, parent, expr, procs) {
-            //                 BasicValueEnum::PointerValue(ptr) => {
-            //                     env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
-            //                 }
-            //                 non_ptr => {
-            //                     panic!(
-            //                         "Tried to call by pointer, but encountered a non-pointer: {:?}",
-            //                         non_ptr
-            //                     );
-            //                 }
-            //             };
-
-            //             call.try_as_basic_value()
-            //                 .left()
-            //                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
 
         Load(name) => match scope.get(name) {
@@ -368,6 +366,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     }
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
+
     let fn_val = env
         .module
         .add_function(&name, fn_type, Some(Linkage::Private));
@@ -401,9 +400,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 }
 
 pub fn verify_fn(fn_val: FunctionValue<'_>) {
-    if fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
-        // TODO call pass_manager.run_on(&fn_val) to optimize it!
-    } else {
+    if !fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
         unsafe {
             fn_val.delete();
         }

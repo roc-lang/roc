@@ -45,8 +45,8 @@ pub enum Expr<'a> {
 
     // Functions
     FunctionPointer(InlinableString),
-    CallByPointer(&'a Expr<'a>, &'a [Expr<'a>]),
     CallByName(InlinableString, &'a [Expr<'a>]),
+    CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Variable),
 
     // Exactly two conditional branches, e.g. if/else
     Cond {
@@ -159,16 +159,13 @@ fn from_can<'a>(
 
         Closure(_, _symbol, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
-            let name = name.unwrap_or_else(||
-                    // Give the closure a name like "_0" or "_1".
-                    // We know procs.len() will be unique!
-                    format!("_{}", procs.len()).into());
+            let name = name.unwrap_or_else(|| gen_closure_name(procs));
 
             add_closure(env, name, loc_body.value, ret_var, &loc_args, procs)
         }
 
         Call(boxed, loc_args, _) => {
-            let (_, loc_expr, _) = *boxed;
+            let (fn_var, loc_expr, _) = *boxed;
             let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
             for (_, loc_arg) in loc_args {
@@ -185,7 +182,7 @@ fn from_can<'a>(
                     // It might even be the anonymous result of a conditional:
                     //
                     // ((if x > 0 then \a -> a else \_ -> 0) 5)
-                    Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice())
+                    Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice(), fn_var)
                 }
             }
         }
@@ -354,4 +351,10 @@ fn store_pattern<'a>(
             panic!("TODO store_pattern for {:?}", can_pat);
         }
     }
+}
+
+fn gen_closure_name(procs: &Procs<'_>) -> InlinableString {
+    // Give the closure a name like "_0" or "_1".
+    // We know procs.len() will be unique!
+    format!("_{}", procs.len()).into()
 }

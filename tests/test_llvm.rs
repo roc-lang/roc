@@ -75,12 +75,17 @@ mod test_llvm {
             // Add all the Procs to the module
             for (name, opt_proc) in procs.clone() {
                 if let Some(proc) = opt_proc {
+                    // NOTE: This is here to be uncommented in case verification fails.
+                    // (This approach means we don't have to defensively clone name here.)
+                    //
+                    // println!("\n\nBuilding and then verifying function {}\n\n", name);
                     let fn_val = build_proc(&env, name, proc, &procs);
 
                     if fn_val.verify(true) {
                         fpm.run_on(&fn_val);
                     } else {
-                        panic!("Function {} failed LLVM verification.", main_fn_name);
+                        // NOTE: If this fails, uncomment the above println to debug
+                        panic!("Non-main function failed LLVM verification.");
                     }
                 }
             }
@@ -332,34 +337,33 @@ mod test_llvm {
         );
     }
 
-    // #[test]
-    // fn apply_unnamed_fn() {
-    //     assert_evals_to!(
-    //         // We could improve the perf of this scenario by
-    //         indoc!(
-    //             r#"
-    //                 (\a -> a) 5
-    //             "#
-    //         ),
-    //         5,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn apply_unnamed_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    (\a -> a) 5
+                "#
+            ),
+            5,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn return_unnamed_fn() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //             alwaysIdentity : Num.Num Int.Integer -> (Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint)
-    //             alwaysIdentity = \num ->
-    //                 (\a -> a)
+    #[test]
+    fn return_unnamed_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysIdentity : Num.Num Int.Integer -> (Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint)
+                alwaysIdentity = \num ->
+                    (\a -> a)
 
-    //             (alwaysIdentity 2) 3.14
-    //             "#
-    //         ),
-    //         3.14,
-    //         f64
-    //     );
-    // }
+                (alwaysIdentity 2) 3.14
+                "#
+            ),
+            3.14,
+            f64
+        );
+    }
 }

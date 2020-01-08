@@ -75,14 +75,14 @@ mod test_crane {
             let mut declared = Vec::with_capacity(procs.len());
 
             // Declare all the Procs, then insert them into scope so their bodies
-            // can look up their FuncIds later when calling each other by value.
+            // can look up their Funcs in scope later when calling each other by value.
             for (name, opt_proc) in procs.iter() {
                 if let Some(proc) = opt_proc {
-                    let (fn_id, sig) = declare_proc(&env, &mut module, name.clone(), proc);
+                    let (func_id, sig) = declare_proc(&env, &mut module, name.clone(), proc);
 
-                    scope.insert(name.clone(), ScopeEntry::FuncId(fn_id));
+                    declared.push((proc.clone(), sig.clone(), func_id));
 
-                    declared.push((proc.clone(), sig, fn_id));
+                    scope.insert(name.clone(), ScopeEntry::Func { func_id, sig });
                 }
             }
 
@@ -346,34 +346,33 @@ mod test_crane {
     //         );
     //     }
 
-    // #[test]
-    // fn apply_unnamed_fn() {
-    //     assert_evals_to!(
-    //         // We could improve the perf of this scenario by
-    //         indoc!(
-    //             r#"
-    //                 (\a -> a) 5
-    //             "#
-    //         ),
-    //         5,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn apply_unnamed_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    (\a -> a) 5
+                "#
+            ),
+            5,
+            i64
+        );
+    }
 
-    //     #[test]
-    //     fn return_unnamed_fn() {
-    //         assert_evals_to!(
-    //             indoc!(
-    //                 r#"
-    //                 alwaysIdentity : Num.Num Int.Integer -> (Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint)
-    //                 alwaysIdentity = \num ->
-    //                     (\a -> a)
+    #[test]
+    fn return_unnamed_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    alwaysIdentity : Num.Num Int.Integer -> (Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint)
+                    alwaysIdentity = \num ->
+                        (\a -> a)
 
-    //                 (alwaysIdentity 2) 3.14
-    //                 "#
-    //             ),
-    //             3.14,
-    //             f64
-    //         );
-    //     }
+                    (alwaysIdentity 2) 3.14
+                    "#
+            ),
+            3.14,
+            f64
+        );
+    }
 }
