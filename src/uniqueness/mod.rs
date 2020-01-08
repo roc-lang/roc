@@ -187,8 +187,8 @@ pub fn constrain_expr(
     pub use crate::can::expr::Expr::*;
 
     match expr {
-        Int(_, _) => constrain::int_literal(var_store, expected, region),
-        Float(_, _) => constrain::float_literal(var_store, expected, region),
+        Int(var, _) => constrain::int_literal(var_store, *var, expected, region),
+        Float(var, _) => constrain::float_literal(var_store, *var, expected, region),
         BlockStr(_) | Str(_) => {
             let inferred = constrain::lift(var_store, constrain::str_type());
             Eq(inferred, expected, region)
@@ -356,7 +356,7 @@ pub fn constrain_expr(
                 None => panic!("symbol not analyzed"),
             }
         }
-        Closure(_fn_var, _symbol, _recursion, args, boxed) => {
+        Closure(fn_var, _symbol, _recursion, args, boxed) => {
             let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
                 headers: SendMap::default(),
@@ -369,6 +369,7 @@ pub fn constrain_expr(
             let ret_type = Type::Variable(ret_var);
 
             vars.push(ret_var);
+            vars.push(*fn_var);
 
             for (pattern_var, loc_pattern) in args {
                 let pattern_type = Type::Variable(*pattern_var);
@@ -418,12 +419,11 @@ pub fn constrain_expr(
                     // "the closure's type is equal to expected type"
                     Eq(fn_type.clone(), expected, region),
                     // "fn_var is equal to the closure's type" - fn_var is used in code gen
-                    // TODO investigate this breaks principality somehow
-                    // Eq(
-                    //     Type::Variable(*fn_var),
-                    //     Expected::NoExpectation(fn_type),
-                    //     region,
-                    // ),
+                    Eq(
+                        Type::Variable(*fn_var),
+                        Expected::NoExpectation(fn_type),
+                        region,
+                    ),
                 ]),
             )
         }
@@ -436,6 +436,9 @@ pub fn constrain_expr(
             let fn_region = fn_expr.region;
 
             let mut vars = Vec::with_capacity(2 + loc_args.len());
+
+            vars.push(*fn_var);
+            vars.push(*ret_var);
 
             // Canonicalize the function expression and its arguments
             let fn_con = constrain_expr(
@@ -494,7 +497,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetRec(defs, loc_ret, _) => {
+        LetRec(defs, loc_ret, var) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -503,23 +506,34 @@ pub fn constrain_expr(
                 var_usage,
                 loc_ret.region,
                 &loc_ret.value,
-                expected,
-            );
-            constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con)
-        }
-        LetNonRec(def, loc_ret, _) => {
-            // NOTE doesn't currently unregister bound symbols
-            // may be a problem when symbols are not globally unique
-            let body_con = constrain_expr(
-                rigids,
-                var_store,
-                var_usage,
-                loc_ret.region,
-                &loc_ret.value,
-                expected,
+                expected.clone(),
             );
 
-            constrain_def(rigids, var_store, var_usage, def, body_con)
+            And(vec![
+                constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con),
+                // Record the type of tne entire def-expression in the variable.
+                // Code gen will need that later!
+                Eq(Type::Variable(*var), expected, loc_ret.region),
+            ])
+        }
+        LetNonRec(def, loc_ret, var) => {
+            // NOTE doesn't currently unregister bound symbols
+            // may be a problem when symbols are not globally unique
+            let body_con = constrain_expr(
+                rigids,
+                var_store,
+                var_usage,
+                loc_ret.region,
+                &loc_ret.value,
+                expected.clone(),
+            );
+
+            And(vec![
+                constrain_def(rigids, var_store, var_usage, def, body_con),
+                // Record the type of tne entire def-expression in the variable.
+                // Code gen will need that later!
+                Eq(Type::Variable(*var), expected, loc_ret.region),
+            ])
         }
         If { .. } => panic!("TODO constrain uniq if"),
         When {

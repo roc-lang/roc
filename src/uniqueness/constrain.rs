@@ -24,30 +24,39 @@ pub fn lift(var_store: &VarStore, typ: Type) -> Type {
     attr_type(uniq_type, typ)
 }
 
-pub fn int_literal(var_store: &VarStore, expected: Expected<Type>, region: Region) -> Constraint {
+pub fn int_literal(
+    var_store: &VarStore,
+    var: Variable,
+    expected: Expected<Type>,
+    region: Region,
+) -> Constraint {
     let typ = lift(var_store, number_literal_type("Int", "Integer"));
     let reason = Reason::IntLiteral;
 
-    num_literal(var_store, typ, reason, expected, region)
+    num_literal(var, typ, reason, expected, region)
 }
 
 #[inline(always)]
-pub fn float_literal(var_store: &VarStore, expected: Expected<Type>, region: Region) -> Constraint {
+pub fn float_literal(
+    var_store: &VarStore,
+    var: Variable,
+    expected: Expected<Type>,
+    region: Region,
+) -> Constraint {
     let typ = lift(var_store, number_literal_type("Float", "FloatingPoint"));
     let reason = Reason::FloatLiteral;
 
-    num_literal(var_store, typ, reason, expected, region)
+    num_literal(var, typ, reason, expected, region)
 }
 
 #[inline(always)]
 fn num_literal(
-    var_store: &VarStore,
+    num_var: Variable,
     literal_type: Type,
     reason: Reason,
     expected: Expected<Type>,
     region: Region,
 ) -> Constraint {
-    let num_var = var_store.fresh();
     let num_type = Variable(num_var);
     let expected_literal = ForReason(reason, literal_type, region);
 
