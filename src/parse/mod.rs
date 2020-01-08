@@ -904,10 +904,13 @@ pub fn case_branches<'a>(
 
         let branch_parser = and!(
             then(
-                space1_around(loc!(pattern(min_indent)), min_indent),
+                sep_by1(
+                    char('|'),
+                    space1_around(loc!(pattern(min_indent)), min_indent),
+                ),
                 move |_arena, state, loc_pattern| {
                     if state.indent_col == original_indent {
-                        Ok((bumpalo::vec![in arena; loc_pattern ], state))
+                        Ok((loc_pattern, state))
                     } else {
                         panic!(
                             "TODO additional branch didn't have same indentation as first branch"

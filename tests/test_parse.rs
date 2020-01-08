@@ -1469,7 +1469,7 @@ mod test_parse {
         let newlines = bumpalo::vec![in &arena; Newline];
         let pattern1 =
             Pattern::SpaceBefore(arena.alloc(StrLiteral("blah")), newlines.into_bump_slice());
-        let pattern1_alt = StrLiteral("blop"); // TODO retain spacebefore
+        let pattern1_alt = StrLiteral("blop");
         let loc_pattern1 = Located::new(1, 1, 1, 7, pattern1);
         let loc_pattern1_alt = Located::new(1, 1, 10, 16, pattern1_alt);
         let expr1 = Int("1");
@@ -1478,7 +1478,21 @@ mod test_parse {
             bumpalo::vec![in &arena;loc_pattern1, loc_pattern1_alt],
             loc_expr1,
         ));
-        let branches = bumpalo::vec![in &arena; branch1];
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern2 =
+            Pattern::SpaceBefore(arena.alloc(StrLiteral("foo")), newlines.into_bump_slice());
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern2_alt =
+            Pattern::SpaceBefore(arena.alloc(StrLiteral("bar")), newlines.into_bump_slice());
+        let loc_pattern2 = Located::new(2, 2, 1, 6, pattern2);
+        let loc_pattern2_alt = Located::new(3, 3, 1, 6, pattern2_alt);
+        let expr2 = Int("2");
+        let loc_expr2 = Located::new(3, 3, 10, 11, expr2);
+        let branch2 = &*arena.alloc((
+            bumpalo::vec![in &arena;loc_pattern2, loc_pattern2_alt],
+            loc_expr2,
+        ));
+        let branches = bumpalo::vec![in &arena; branch1, branch2];
         let loc_cond = Located::new(0, 0, 5, 6, Var(&[], "x"));
         let expected = Expr::When(arena.alloc(loc_cond), branches);
         let actual = parse_with(
@@ -1487,6 +1501,8 @@ mod test_parse {
                 r#"
                 when x is
                  "blah" | "blop" -> 1
+                 "foo" |
+                 "bar" -> 2
                 "#
             ),
         );
