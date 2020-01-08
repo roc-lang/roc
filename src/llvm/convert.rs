@@ -99,7 +99,7 @@ fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTypeEnu
 }
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-fn get_fn_type<'ctx>(
+pub fn get_fn_type<'ctx>(
     bt_enum: &BasicTypeEnum<'ctx>,
     arg_types: &[BasicTypeEnum<'ctx>],
 ) -> FunctionType<'ctx> {

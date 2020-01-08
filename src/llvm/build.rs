@@ -1,3 +1,6 @@
+use inkwell::builder::Builder;
+use inkwell::context::Context;
+use inkwell::module::{Linkage, Module};
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
@@ -5,10 +8,9 @@ use inkwell::{FloatPredicate, IntPredicate};
 use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
-use crate::llvm::convert::{content_to_basic_type, layout_to_basic_type};
-use crate::llvm::env::Env;
-use crate::llvm::expr::{Expr, Proc, Procs};
-use crate::subs::Variable;
+use crate::llvm::convert::{content_to_basic_type, get_fn_type, layout_to_basic_type};
+use crate::mono::expr::{Expr, Proc, Procs};
+use crate::subs::{Subs, Variable};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -20,14 +22,21 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
 type Scope<'ctx> = ImMap<InlinableString, (Variable, PointerValue<'ctx>)>;
 
+pub struct Env<'ctx, 'env> {
+    pub context: &'ctx Context,
+    pub builder: &'env Builder<'ctx>,
+    pub module: &'ctx Module<'ctx>,
+    pub subs: Subs,
+}
+
 pub fn build_expr<'a, 'ctx, 'env>(
     env: &Env<'ctx, 'env>,
     scope: &Scope<'ctx>,
     parent: FunctionValue<'ctx>,
     expr: &Expr<'a>,
-    procs: &Procs<'a, 'ctx>,
+    procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use crate::llvm::expr::Expr::*;
+    use crate::mono::expr::Expr::*;
 
     match expr {
         Int(num) => env.context.i64_type().const_int(*num as u64, false).into(),
@@ -88,6 +97,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             //
             // 1. use SIMD string comparison to compare these strings faster
             // 2. pre-register Bool.or using module.add_function, and see if LLVM inlines it
+            // 3. intern all these strings
             if name == "Bool.or" {
                 panic!("TODO create a phi node for ||");
             } else if name == "Bool.and" {
@@ -154,7 +164,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
         },
         _ => {
-            panic!("I don't yet know how to build {:?}", expr);
+            panic!("I don't yet know how to LLVM build {:?}", expr);
         }
     }
 }
@@ -172,7 +182,7 @@ fn build_cond<'a, 'ctx, 'env>(
     scope: &Scope<'ctx>,
     parent: FunctionValue<'ctx>,
     cond: Cond2<'a>,
-    procs: &Procs<'a, 'ctx>,
+    procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let context = env.context;
@@ -261,7 +271,7 @@ fn build_phi2<'a, 'ctx, 'env>(
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
     ret_type: BasicTypeEnum<'ctx>,
-    procs: &Procs<'a, 'ctx>,
+    procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let context = env.context;
@@ -332,37 +342,43 @@ pub fn create_entry_block_alloca<'ctx>(
 
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &Env<'ctx, 'env>,
-    scope: &Scope<'ctx>,
     name: InlinableString,
     proc: Proc<'a>,
-    procs: &Procs<'a, 'ctx>,
+    procs: &Procs<'a>,
 ) -> FunctionValue<'ctx> {
     let args = proc.args;
-    let mut arg_names = Vec::new();
+    let subs = &env.subs;
+    let context = &env.context;
+    let ret_content = subs.get_without_compacting(proc.ret_var).content;
+    // TODO this content_to_basic_type is duplicated when building this Proc
+    let ret_type = content_to_basic_type(&ret_content, subs, context).unwrap_or_else(|err| {
+        panic!(
+            "Error converting function return value content to basic type: {:?}",
+            err
+        )
+    });
     let mut arg_basic_types = Vec::with_capacity(args.len());
+    let mut arg_names = Vec::new();
 
     for (layout, name, _var) in args.iter() {
-        let arg_type = layout_to_basic_type(&layout, &env.subs, env.context);
+        let arg_type = layout_to_basic_type(&layout, subs, env.context);
 
         arg_basic_types.push(arg_type);
         arg_names.push(name);
     }
 
-    // Retrieve the function value from the module
-    let fn_val = env.module.get_function(&name).unwrap_or_else(|| {
-        panic!(
-            "Function {:?} should have been registered in the LLVM module, but it was not!",
-            name
-        )
-    });
+    let fn_type = get_fn_type(&ret_type, &arg_basic_types);
+    let fn_val = env
+        .module
+        .add_function(&name, fn_type, Some(Linkage::Private));
 
     // Add a basic block for the entry point
-    let entry = env.context.append_basic_block(fn_val, "entry");
+    let entry = context.append_basic_block(fn_val, "entry");
     let builder = env.builder;
 
     builder.position_at_end(&entry);
 
-    let mut scope = scope.clone();
+    let mut scope = ImMap::default();
 
     // Add args to scope
     for ((arg_val, arg_type), (_, arg_name, var)) in

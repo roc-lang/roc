@@ -1,19 +1,14 @@
 use crate::can;
 use crate::can::pattern::Pattern;
 use crate::collections::MutMap;
-use crate::llvm::convert::content_to_basic_type;
 use crate::mono::layout::Layout;
 use crate::region::Located;
 use crate::subs::{Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use inkwell::context::Context;
-use inkwell::module::Module;
-use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::FunctionValue;
 use inlinable_string::InlinableString;
 
-pub type Procs<'a, 'ctx> = MutMap<InlinableString, (Option<Proc<'a>>, FunctionValue<'ctx>)>;
+pub type Procs<'a> = MutMap<InlinableString, Option<Proc<'a>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
@@ -23,11 +18,9 @@ pub struct Proc<'a> {
     pub ret_var: Variable,
 }
 
-struct Env<'a, 'ctx> {
-    arena: &'a Bump,
-    subs: &'a Subs,
-    module: &'ctx Module<'ctx>,
-    context: &'ctx Context,
+struct Env<'a> {
+    pub arena: &'a Bump,
+    pub subs: &'a Subs,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,29 +67,22 @@ pub enum Expr<'a> {
 }
 
 impl<'a> Expr<'a> {
-    pub fn new<'ctx>(
+    pub fn new(
         arena: &'a Bump,
         subs: &'a Subs,
-        module: &'ctx Module<'ctx>,
-        context: &'ctx Context,
         can_expr: can::expr::Expr,
-        procs: &mut Procs<'a, 'ctx>,
+        procs: &mut Procs<'a>,
     ) -> Self {
-        let env = Env {
-            arena,
-            subs,
-            module,
-            context,
-        };
+        let env = Env { arena, subs };
 
         from_can(&env, can_expr, procs, None)
     }
 }
 
-fn from_can<'a, 'ctx>(
-    env: &Env<'a, 'ctx>,
+fn from_can<'a>(
+    env: &Env<'a>,
     can_expr: can::expr::Expr,
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &mut Procs<'a>,
     name: Option<InlinableString>,
 ) -> Expr<'a> {
     use crate::can::expr::Expr::*;
@@ -273,45 +259,28 @@ fn from_can<'a, 'ctx>(
     }
 }
 
-fn add_closure<'a, 'ctx>(
-    env: &Env<'a, 'ctx>,
+fn add_closure<'a>(
+    env: &Env<'a>,
     name: InlinableString,
     can_body: can::expr::Expr,
     ret_var: Variable,
     loc_args: &[(Variable, Located<Pattern>)],
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &mut Procs<'a>,
 ) -> Expr<'a> {
     let subs = &env.subs;
-    let context = env.context;
     let arena = env.arena;
-    let ret_content = subs.get_without_compacting(ret_var).content;
-    let ret_type = content_to_basic_type(&ret_content, subs, context).unwrap_or_else(|err| {
-        panic!(
-            "Error converting function return value content to basic type: {:?}",
-            err
-        )
-    });
-
-    let mut arg_names = Vec::with_capacity_in(loc_args.len(), arena);
-    let mut arg_basic_types = Vec::with_capacity_in(loc_args.len(), arena);
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), arena);
 
     for (arg_var, loc_arg) in loc_args.iter() {
         let content = subs.get_without_compacting(*arg_var).content;
 
-        arg_basic_types.push(
-            content_to_basic_type(&content, subs, context).unwrap_or_else(|err| {
-                panic!(
-                    "Error converting function arg content to basic type: {:?}",
-                    err
-                )
-            }),
-        );
-
         let layout = match Layout::from_content(arena, content, subs) {
             Ok(layout) => layout,
             Err(()) => {
-                return invalid_closure(env, name, ret_type, procs);
+                // Invalid closure!
+                procs.insert(name.clone(), None);
+
+                return Expr::FunctionPointer(name);
             }
         };
 
@@ -322,12 +291,9 @@ fn add_closure<'a, 'ctx>(
             }
         };
 
-        arg_names.push(arg_name.clone());
         proc_args.push((layout, arg_name, *arg_var));
     }
 
-    let fn_type = ret_type.fn_type(arg_basic_types.into_bump_slice(), false);
-    let fn_val = env.module.add_function(&name, fn_type, None);
     let proc = Proc {
         args: proc_args.into_bump_slice(),
         body: from_can(env, can_body, procs, None),
@@ -335,31 +301,17 @@ fn add_closure<'a, 'ctx>(
         ret_var,
     };
 
-    procs.insert(name.clone(), (Some(proc), fn_val));
+    procs.insert(name.clone(), Some(proc));
 
     Expr::FunctionPointer(name)
 }
 
-fn invalid_closure<'a, 'ctx>(
-    env: &Env<'a, 'ctx>,
-    name: InlinableString,
-    ret_type: BasicTypeEnum<'ctx>,
-    procs: &mut Procs<'a, 'ctx>,
-) -> Expr<'a> {
-    let fn_type = ret_type.fn_type(&[], false);
-    let fn_val = env.module.add_function(&name, fn_type, None);
-
-    procs.insert(name.clone(), (None, fn_val));
-
-    Expr::FunctionPointer(name)
-}
-
-fn store_pattern<'a, 'ctx>(
-    env: &Env<'a, 'ctx>,
+fn store_pattern<'a>(
+    env: &Env<'a>,
     can_pat: Pattern,
     can_expr: can::expr::Expr,
     var: Variable,
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &mut Procs<'a>,
     stored: &mut Vec<'a, (InlinableString, Variable, Expr<'a>)>,
 ) {
     use crate::can::pattern::Pattern::*;
