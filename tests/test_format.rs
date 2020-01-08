@@ -782,6 +782,36 @@ mod test_format {
         ));
     }
 
+    //    #[test]
+    //    fn multi_line_list_def() {
+    //        expr_formats_same(indoc!(
+    //            r#"
+    //            scores =
+    //                [
+    //                    5,
+    //                    10
+    //                ]
+    //
+    //            scores
+    //            "#
+    //        ));
+    //    }
+    //
+    //    #[test]
+    //    fn multi_line_record_def() {
+    //        expr_formats_same(indoc!(
+    //            r#"
+    //            pos =
+    //                {
+    //                    x: 5,
+    //                    x: 10
+    //                }
+    //
+    //            pos
+    //            "#
+    //        ));
+    //    }
+
     #[test]
     fn two_fields_center_newline() {
         expr_formats_to(
