@@ -890,8 +890,8 @@ pub fn case_branches<'a>(
         let original_indent = state.indent_col;
         let indented_more = original_indent + 1;
         let (loc_first_pattern_alt, state) = zero_or_more!(skip_first!(
-            and!(space1(min_indent), char('|')),
-            space1_before(loc!(pattern(min_indent)), min_indent)
+            and!(space0(min_indent), char('|')),
+            space0_before(loc!(pattern(min_indent)), min_indent)
         ))
         .parse(arena, state)?;
         let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
