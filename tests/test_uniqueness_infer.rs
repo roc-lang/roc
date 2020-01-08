@@ -921,6 +921,75 @@ mod test_infer_uniq {
         );
     }
 
+    #[test]
+    fn bare_tag() {
+        infer_eq(
+            indoc!(
+                r#"Foo
+                "#
+            ),
+            "Attr.Attr * [ Foo ]*",
+        );
+    }
+
+    #[test]
+    fn single_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\Foo -> 42
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr * [ Foo ]* -> Attr.Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn single_private_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\@Foo -> 42
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr * [ Test.Foo ]* -> Attr.Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn two_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\x -> 
+                    when x is 
+                        True -> 1
+                        False -> 0
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr * [ False, True ]* -> Attr.Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn tag_application() {
+        infer_eq(
+            indoc!(
+                r#"Foo "happy" 2020
+                "#
+            ),
+            "Attr.Attr * [ Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
+        );
+    }
+
+    #[test]
+    fn private_tag_application() {
+        infer_eq(
+            indoc!(
+                r#"@Foo "happy" 2020
+                "#
+            ),
+            "Attr.Attr * [ Test.@Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
+        );
+    }
+
     //    #[test]
     //    fn record_extraction() {
     //        with_larger_debug_stack(|| {
