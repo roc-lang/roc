@@ -844,7 +844,7 @@ mod test_infer_uniq {
                     24
             "#
             ),
-            "Int",
+            "Attr.Attr * Int",
         );
     }
 

@@ -150,8 +150,24 @@ fn constrain_pattern(
             state.constraints.push(record_con);
         }
 
-        AppliedTag(_, _, _) => {
-            panic!("TODO add_constraints for {:?}", pattern);
+        AppliedTag(ext_var, symbol, _arguments) => {
+            let union_type = constrain::lift(
+                var_store,
+                Type::TagUnion(
+                    vec![(symbol.clone(), vec![])],
+                    Box::new(Type::Variable(*ext_var)),
+                ),
+            );
+
+            let tag_con = Constraint::Pattern(
+                pattern.region,
+                PatternCategory::Ctor(symbol.clone()),
+                union_type,
+                expected,
+            );
+
+            state.vars.push(*ext_var);
+            state.constraints.push(tag_con);
         }
 
         Underscore | Shadowed(_) | UnsupportedPattern(_) => {
@@ -227,8 +243,47 @@ pub fn constrain_expr(
 
             (constraint)
         }
-        Tag { .. } => {
-            panic!("TODO implement tag");
+        Tag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            let mut vars = Vec::with_capacity(arguments.len());
+            let mut types = Vec::with_capacity(arguments.len());
+            let mut arg_cons = Vec::with_capacity(arguments.len());
+
+            for (var, loc_expr) in arguments {
+                let arg_con = constrain_expr(
+                    rigids,
+                    var_store,
+                    var_usage,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    Expected::NoExpectation(Type::Variable(*var)),
+                );
+
+                arg_cons.push(arg_con);
+                vars.push(*var);
+                types.push(Type::Variable(*var));
+            }
+
+            let union_type = constrain::lift(
+                var_store,
+                Type::TagUnion(
+                    vec![(name.clone(), types)],
+                    Box::new(Type::Variable(*ext_var)),
+                ),
+            );
+
+            let union_con = Eq(union_type, expected.clone(), region);
+            let ast_con = Eq(Type::Variable(*variant_var), expected, region);
+
+            vars.push(*variant_var);
+            arg_cons.push(union_con);
+            arg_cons.push(ast_con);
+
+            exists(vars, And(arg_cons))
         }
         List(variable, loc_elems) => {
             if loc_elems.is_empty() {
