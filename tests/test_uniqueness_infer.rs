@@ -1009,6 +1009,18 @@ mod test_infer_uniq {
     }
 
     #[test]
+    fn record_field_pattern_match_two() {
+        infer_eq(
+            indoc!(
+                r#"
+                \{ left, right } -> { left, right }
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (a | b) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
+        );
+    }
+
+    #[test]
     fn record_field_pattern_match_with_guard() {
         infer_eq(
             indoc!(

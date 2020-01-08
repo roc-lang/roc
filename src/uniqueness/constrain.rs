@@ -103,11 +103,11 @@ pub fn attr_type(uniq: Uniqueness, typ: Type) -> Type {
 }
 
 pub fn shared_type() -> Uniqueness {
-    builtin_type("Attr", "Shared", Vec::new())
+    Type::Boolean(Bool::Zero)
 }
 
 /// We usually just leave a type parameter unbound (written `*`) when it's unique
 #[allow(dead_code)]
 pub fn unique_type() -> Uniqueness {
-    builtin_type("Attr", "Unique", Vec::new())
+    Type::Boolean(Bool::One)
 }

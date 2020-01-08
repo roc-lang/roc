@@ -301,13 +301,49 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                 }
             }
         }
-        Boolean(Bool::Variable(var)) => write_content(subs.get(var).content, subs, buf, parens),
         Boolean(b) => {
-            buf.push_str(&format!("{:?}", b));
+            write_boolean(b, subs, buf, Parens::InTypeParam);
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }
+    }
+}
+
+fn write_boolean(boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
+    let is_atom = boolean.is_var() || boolean == Bool::Zero || boolean == Bool::One;
+    let write_parens = parens == Parens::InTypeParam && !is_atom;
+
+    if write_parens {
+        buf.push_str("(");
+    }
+
+    match boolean {
+        Bool::Variable(var) => write_content(subs.get(var).content, subs, buf, parens),
+        Bool::Or(p, q) => {
+            write_boolean(*p, subs, buf, Parens::InTypeParam);
+            buf.push_str(" | ");
+            write_boolean(*q, subs, buf, Parens::InTypeParam);
+        }
+        Bool::And(p, q) => {
+            write_boolean(*p, subs, buf, Parens::InTypeParam);
+            buf.push_str(" & ");
+            write_boolean(*q, subs, buf, Parens::InTypeParam);
+        }
+        Bool::Not(p) => {
+            buf.push_str("!");
+            write_boolean(*p, subs, buf, Parens::InTypeParam);
+        }
+        Bool::Zero => {
+            buf.push_str("Attr.Shared");
+        }
+        Bool::One => {
+            buf.push_str("Attr.Unique");
+        }
+    };
+
+    if write_parens {
+        buf.push_str(")");
     }
 }
 
