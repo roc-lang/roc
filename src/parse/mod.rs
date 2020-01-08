@@ -691,7 +691,6 @@ fn reserved_keyword<'a>() -> impl Parser<'a, ()> {
         string(keyword::IF),
         string(keyword::THEN),
         string(keyword::ELSE),
-        string(keyword::CASE),
         string(keyword::WHEN),
         string(keyword::IS),
         string(keyword::AS)
