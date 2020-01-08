@@ -7,6 +7,8 @@ use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::can::procedure::Procedure;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
+use crate::constrain::builtins;
+use crate::constrain::expr::exists;
 use crate::constrain::expr::{Info, Rigids};
 use crate::ident::Ident;
 use crate::region::{Located, Region};
@@ -21,7 +23,6 @@ use crate::types::Reason;
 use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::Bool;
-use crate::uniqueness::constrain::exists;
 use crate::uniqueness::sharing::VarUsage;
 
 pub use crate::can::expr::Expr::*;
@@ -125,7 +126,7 @@ fn constrain_pattern(
                 pattern_uniq_vars.push(pat_uniq_var);
 
                 let pat_type =
-                    constrain::attr_type(Type::Variable(pat_uniq_var), Type::Variable(*var));
+                    constrain::attr_type(Bool::Variable(pat_uniq_var), Type::Variable(*var));
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
                 if !state.headers.contains_key(&symbol) {
@@ -160,7 +161,7 @@ fn constrain_pattern(
             };
 
             let record_type = constrain::attr_type(
-                Type::Boolean(record_uniq_type),
+                record_uniq_type,
                 Type::Record(field_types, Box::new(ext_type)),
             );
             let record_con = Constraint::Pattern(
@@ -210,10 +211,32 @@ pub fn constrain_expr(
     pub use crate::can::expr::Expr::*;
 
     match expr {
-        Int(var, _) => constrain::int_literal(var_store, *var, expected, region),
-        Float(var, _) => constrain::float_literal(var_store, *var, expected, region),
+        Int(var, _) => And(vec![
+            Eq(
+                Type::Variable(*var),
+                Expected::ForReason(
+                    Reason::IntLiteral,
+                    constrain::lift(var_store, Type::int()),
+                    region,
+                ),
+                region,
+            ),
+            Eq(Type::Variable(*var), expected, region),
+        ]),
+        Float(var, _) => And(vec![
+            Eq(
+                Type::Variable(*var),
+                Expected::ForReason(
+                    Reason::FloatLiteral,
+                    constrain::lift(var_store, Type::float()),
+                    region,
+                ),
+                region,
+            ),
+            Eq(Type::Variable(*var), expected, region),
+        ]),
         BlockStr(_) | Str(_) => {
-            let inferred = constrain::lift(var_store, constrain::str_type());
+            let inferred = constrain::lift(var_store, Type::string());
             Eq(inferred, expected, region)
         }
         EmptyRecord => Eq(constrain::lift(var_store, EmptyRec), expected, region),
@@ -311,7 +334,7 @@ pub fn constrain_expr(
         List(variable, loc_elems) => {
             if loc_elems.is_empty() {
                 let list_var = *variable;
-                let inferred = constrain::lift(var_store, constrain::empty_list_type(list_var));
+                let inferred = constrain::lift(var_store, builtins::empty_list_type(list_var));
                 Eq(inferred, expected, region)
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
@@ -339,7 +362,7 @@ pub fn constrain_expr(
                     constraints.push(list_elem_constraint);
                     constraints.push(constraint);
                 }
-                let inferred = constrain::lift(var_store, constrain::list_type(list_type));
+                let inferred = constrain::lift(var_store, builtins::list_type(list_type));
                 constraints.push(Eq(inferred, expected, region));
 
                 And(constraints)
@@ -358,7 +381,7 @@ pub fn constrain_expr(
                     let uniq_var = var_store.fresh();
 
                     let val_type = Variable(val_var);
-                    let uniq_type = Variable(uniq_var);
+                    let uniq_type = Bool::Variable(uniq_var);
 
                     let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
 
@@ -366,8 +389,8 @@ pub fn constrain_expr(
                         Lookup(symbol_for_lookup.clone(), expected.clone(), region),
                         Eq(attr_type, expected, region),
                         Eq(
-                            uniq_type,
-                            Expected::NoExpectation(constrain::shared_type()),
+                            Type::Boolean(uniq_type),
+                            Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
                             region,
                         ),
                     ])
@@ -755,7 +778,7 @@ pub fn constrain_expr(
             let ext_type = Type::Variable(*ext_var);
 
             let field_uniq_var = var_store.fresh();
-            let field_uniq_type = Type::Variable(field_uniq_var);
+            let field_uniq_type = Bool::Variable(field_uniq_var);
             let field_type =
                 constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
 
@@ -764,7 +787,7 @@ pub fn constrain_expr(
             rec_field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type = Type::Variable(record_uniq_var);
+            let record_uniq_type = Bool::Variable(record_uniq_var);
             let record_type = constrain::attr_type(
                 record_uniq_type.clone(),
                 Type::Record(rec_field_types, Box::new(ext_type)),
@@ -781,8 +804,8 @@ pub fn constrain_expr(
             );
 
             let uniq_con = Eq(
-                field_uniq_type,
-                Expected::NoExpectation(record_uniq_type),
+                Type::Boolean(field_uniq_type),
+                Expected::NoExpectation(Type::Boolean(record_uniq_type)),
                 region,
             );
 
@@ -802,14 +825,14 @@ pub fn constrain_expr(
             let mut field_types = SendMap::default();
 
             let field_uniq_var = var_store.fresh();
-            let field_uniq_type = Type::Variable(field_uniq_var);
+            let field_uniq_type = Bool::Variable(field_uniq_var);
             let field_type =
                 constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
 
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type = Type::Variable(record_uniq_var);
+            let record_uniq_type = Bool::Variable(record_uniq_var);
             let record_type = constrain::attr_type(
                 record_uniq_type.clone(),
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
@@ -817,13 +840,13 @@ pub fn constrain_expr(
 
             let fn_uniq_var = var_store.fresh();
             let fn_type = constrain::attr_type(
-                Type::Variable(fn_uniq_var),
+                Bool::Variable(fn_uniq_var),
                 Type::Function(vec![record_type], Box::new(field_type)),
             );
 
             let uniq_con = Eq(
-                field_uniq_type,
-                Expected::NoExpectation(record_uniq_type),
+                Type::Boolean(field_uniq_type),
+                Expected::NoExpectation(Type::Boolean(record_uniq_type)),
                 region,
             );
 
