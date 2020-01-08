@@ -94,13 +94,7 @@ pub fn build_expr<'a, B: Backend>(
                 // access itself!
                 scope = im_rc::HashMap::clone(&scope);
 
-                scope.insert(
-                    name.clone(),
-                    ScopeEntry::Stack {
-                        expr_type: expr_type,
-                        slot,
-                    },
-                );
+                scope.insert(name.clone(), ScopeEntry::Stack { expr_type, slot });
             }
 
             build_expr(env, &scope, module, builder, ret, procs)
@@ -135,7 +129,7 @@ pub fn build_expr<'a, B: Backend>(
 
                 debug_assert!(results.len() == 1);
 
-                results[0].clone()
+                results[0]
             }
         }
         // FunctionPointer(ref fn_name) => {
@@ -377,6 +371,8 @@ pub fn declare_proc<'a, B: Backend>(
     (fn_id, sig)
 }
 
+// TODO trim down these arguments
+#[allow(clippy::too_many_arguments)]
 pub fn define_proc_body<'a, B: Backend>(
     env: &Env<'a>,
     ctx: &mut Context,
@@ -407,7 +403,7 @@ pub fn define_proc_body<'a, B: Backend>(
         builder.append_ebb_params_for_function_params(ebb);
 
         // Add args to scope
-        for (&param, (_, arg_name, var)) in builder.ebb_params(ebb).into_iter().zip(args) {
+        for (&param, (_, arg_name, var)) in builder.ebb_params(ebb).iter().zip(args) {
             let content = subs.get_without_compacting(*var).content;
             // TODO this content_to_crane_type is duplicated when building this Proc
             //

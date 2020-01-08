@@ -52,7 +52,7 @@ impl<'a> Layout<'a> {
                 let mut sum = 0;
 
                 for (_, field_layout) in *fields {
-                    sum = sum + field_layout.stack_size(cfg);
+                    sum += field_layout.stack_size(cfg);
                 }
 
                 sum
