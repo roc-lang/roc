@@ -1361,10 +1361,15 @@ mod test_parse {
         let newlines = bumpalo::vec![in &arena; Newline];
         let pattern1 =
             Pattern::SpaceBefore(arena.alloc(StrLiteral("blah")), newlines.into_bump_slice());
+        let pattern1_alt = StrLiteral("blop"); // TODO retain spacebefore
         let loc_pattern1 = Located::new(1, 1, 1, 7, pattern1);
+        let loc_pattern1_alt = Located::new(1, 1, 10, 16, pattern1_alt);
         let expr1 = Int("1");
-        let loc_expr1 = Located::new(1, 1, 11, 12, expr1);
-        let branch1 = &*arena.alloc(((loc_pattern1, bumpalo::vec![in &arena;]), loc_expr1));
+        let loc_expr1 = Located::new(1, 1, 20, 21, expr1);
+        let branch1 = &*arena.alloc((
+            (loc_pattern1, bumpalo::vec![in &arena;loc_pattern1_alt]),
+            loc_expr1,
+        ));
         let newlines = bumpalo::vec![in &arena; Newline];
         let pattern2 =
             Pattern::SpaceBefore(arena.alloc(StrLiteral("mise")), newlines.into_bump_slice());
@@ -1380,7 +1385,7 @@ mod test_parse {
             indoc!(
                 r#"
                 when x is
-                 "blah" -> 1
+                 "blah" | "blop" -> 1
                  "mise" -> 2
                 "#
             ),

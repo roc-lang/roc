@@ -889,6 +889,11 @@ pub fn case_branches<'a>(
             space1_before(loc!(pattern(min_indent)), min_indent).parse(arena, state)?;
         let original_indent = state.indent_col;
         let indented_more = original_indent + 1;
+        let (loc_first_pattern_alt, state) = zero_or_more!(skip_first!(
+            and!(space1(min_indent), char('|')),
+            space1_before(loc!(pattern(min_indent)), min_indent)
+        ))
+        .parse(arena, state)?;
         let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
 
         // Record the spaces before the first "->", if any.
@@ -912,10 +917,7 @@ pub fn case_branches<'a>(
         .parse(arena, state)?;
 
         // Record this as the first branch, then optionally parse additional branches.
-        branches.push(arena.alloc((
-            (loc_first_pattern, Vec::with_capacity_in(0, arena)),
-            loc_first_expr,
-        )));
+        branches.push(arena.alloc(((loc_first_pattern, loc_first_pattern_alt), loc_first_expr)));
 
         let branch_parser = and!(
             then(
