@@ -38,16 +38,19 @@ mod test_llvm {
             let builder = context.create_builder();
             let fpm = PassManager::create(&module);
 
-            fpm.add_instruction_combining_pass();
-            fpm.add_reassociate_pass();
-            fpm.add_basic_alias_analysis_pass();
-            fpm.add_promote_memory_to_register_pass();
-            fpm.add_cfg_simplification_pass();
-            fpm.add_gvn_pass();
-            // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
-            // fpm.add_strip_dead_prototypes_pass();
-            // fpm.add_dead_arg_elimination_pass();
-            // fpm.add_function_inlining_pass();
+            // Enable optimizations when running cargo test --release
+            if !cfg!(debug_assetions) {
+                fpm.add_instruction_combining_pass();
+                fpm.add_reassociate_pass();
+                fpm.add_basic_alias_analysis_pass();
+                fpm.add_promote_memory_to_register_pass();
+                fpm.add_cfg_simplification_pass();
+                fpm.add_gvn_pass();
+                // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
+                // fpm.add_strip_dead_prototypes_pass();
+                // fpm.add_dead_arg_elimination_pass();
+                // fpm.add_function_inlining_pass();
+            }
 
             fpm.initialize();
 
