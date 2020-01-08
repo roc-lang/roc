@@ -917,7 +917,7 @@ mod test_infer_uniq {
                 { user & year: "foo" }
                 "#
             ),
-            "Attr.Attr * { year : (Attr.Attr * Str) }{ name : (Attr.Attr * Str) }",
+            "Attr.Attr * { name : (Attr.Attr * Str), year : (Attr.Attr * Str) }",
         );
     }
 
