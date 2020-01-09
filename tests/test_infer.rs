@@ -1110,6 +1110,18 @@ mod test_infer {
     }
 
     #[test]
+    fn tag_union_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x -> Foo x
+                "#
+            ),
+            "[ Foo (Attr.Attr a b) ]* -> [ Foo (Attr.Attr a b) ]*",
+        );
+    }
+
+    #[test]
     fn global_tag_with_field() {
         infer_eq(
             indoc!(

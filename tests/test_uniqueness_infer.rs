@@ -1033,17 +1033,62 @@ mod test_infer_uniq {
         );
     }
 
-    // #[test]
-    // fn tag_union_pattern_match() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             \Foo x -> Foo x
-    //             "#
-    //         ),
-    //         "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
-    //     );
-    // }
+    #[test]
+    fn tag_union_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x -> Foo x
+                "#
+            ),
+            // NOTE: Foo loses the relation to the uniqueness attribute `a` 
+            // That is fine. Whenever we try to extract from it, the relation will be enforced
+            "Attr.Attr * (Attr.Attr a [ Foo (Attr.Attr a b) ]* -> Attr.Attr * [ Foo (Attr.Attr a b) ]*)",
+        );
+    }
+
+    #[test]
+    fn tag_union_pattern_match_ignored_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x _ -> Foo x "y"
+                "#
+            ),
+            // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
+            // i.e. the `a` could be ignored in this example, is that true in general?
+            // seems like it because we don't really extract anything.
+            // TODO investigate should `Attr a *` be `Attr a Str`, i.e. should it know that `Foo`
+            // is used at `Str` elsewhere as a function? does it matter?
+            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)"
+        );
+    }
+
+    #[test]
+    fn global_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when Foo 4 is
+                        Foo x -> x
+                "#
+            ),
+            "Attr.Attr a Int",
+        );
+    }
+
+    #[test]
+    fn private_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when @Foo 4 is
+                        @Foo x -> x
+                "#
+            ),
+            "Attr.Attr a Int",
+        );
+    }
 
     // TODO when type signatures are supported, ensure this works
     //    #[test]
