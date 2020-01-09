@@ -763,12 +763,21 @@ fn parse_closure_param<'a>(
 
 fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
     one_of!(
+        loc_parenthetical_pattern(min_indent),
         loc!(underscore_pattern()),
         loc_tag_pattern(min_indent),
         loc!(ident_pattern()),
         loc!(record_destructure(min_indent)),
         loc!(string_pattern()),
         loc!(int_pattern())
+    )
+}
+
+fn loc_parenthetical_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    between!(
+        char('('),
+        move |arena, state| loc_pattern(min_indent).parse(arena, state),
+        char(')')
     )
 }
 
