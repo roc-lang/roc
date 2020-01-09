@@ -912,7 +912,7 @@ pub fn case_branches<'a>(
                 },
             ),
             skip_first!(
-                and!(space1(min_indent), string("->")),
+                string("->"),
                 space1_before(
                     loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                     min_indent,
@@ -940,8 +940,8 @@ pub fn case_branches<'a>(
 }
 fn alternative_patterns<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>> {
     sep_by1(
-        map!(and!(space0(min_indent), char('|')), |_| ()),
-        space0_before(loc!(pattern(min_indent)), min_indent),
+        char('|'),
+        space0_around(loc!(pattern(min_indent)), min_indent),
     )
 }
 
