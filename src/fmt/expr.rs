@@ -73,8 +73,9 @@ pub fn fmt_expr<'a>(
             }
             buf.push_str("\"\"\"");
         }
-        Int(string) => buf.push_str(string),
-        Float(string) => buf.push_str(string),
+        Int(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
+            buf.push_str(string)
+        }
         NonBase10Int {
             base,
             string,
