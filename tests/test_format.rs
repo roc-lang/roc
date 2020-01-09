@@ -540,7 +540,6 @@ mod test_format {
         ));
     }
 
-<<<<<<< HEAD
     //     #[test]
     //     fn record_field_destructuring() {
     //         expr_formats_same(indoc!(
@@ -550,7 +549,7 @@ mod test_format {
     //             "#
     //         ));
     //     }
-=======
+
     #[test]
     fn record_updating() {
         expr_formats_same(indoc!(
@@ -612,17 +611,6 @@ mod test_format {
             ),
         );
     }
-
-    // #[test]
-    // fn record_field_destructuring() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         when foo is
-    //             { x: 5 } -> 42
-    //         "#
-    //     ));
-    // }
->>>>>>> dd525d3a13b3db5f50f036f256caf2962d73e4ce
 
     #[test]
     fn def_closure() {
