@@ -481,7 +481,7 @@ pub fn fmt_closure<'a>(
             any_args_printed = true;
         }
 
-        fmt_pattern(buf, &loc_pattern.value, indent, true);
+        fmt_pattern(buf, &loc_pattern.value, indent, false);
     }
 
     if !arguments_are_multiline {
