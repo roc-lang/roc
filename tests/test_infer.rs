@@ -607,20 +607,19 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // TODO FIXME this should work, but instead causes a stack overflow!
-    // fn recursive_identity() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //                 identity = \val -> val
+    #[test]
+    fn recursive_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    identity = \val -> val
 
-    //                 identity identity
-    //             "#
-    //         ),
-    //         "a -> a",
-    //     );
-    // }
+                    identity identity
+                "#
+            ),
+            "a -> a",
+        );
+    }
 
     #[test]
     fn identity_function() {
@@ -813,20 +812,20 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // fn if_with_int_literals() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             if 1 == 1 then
-    //                 42
-    //             else
-    //                 24
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+    #[test]
+    fn if_with_int_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                if True then
+                    42
+                else
+                    24
+            "#
+            ),
+            "Int",
+        );
+    }
 
     #[test]
     fn when_with_int_literals() {
@@ -1006,7 +1005,7 @@ mod test_infer {
                 { user & year: "foo" }
                 "#
             ),
-            "{ year : Str }{ name : Str }",
+            "{ name : Str, year : Str }",
         );
     }
 
@@ -1080,17 +1079,6 @@ mod test_infer {
     }
 
     #[test]
-    fn if_then_else() {
-        infer_eq(
-            indoc!(
-                r#"if True then 1 else 0
-                "#
-            ),
-            "Int",
-        );
-    }
-
-    #[test]
     fn record_extraction() {
         with_larger_debug_stack(|| {
             infer_eq(
@@ -1106,5 +1094,18 @@ mod test_infer {
                 "{ a : a, b : * }* -> a",
             );
         });
+    }
+
+    #[test]
+    fn record_field_pattern_match_with_guard() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when foo is
+                        { x: 4 } -> x
+                "#
+            ),
+            "Int",
+        );
     }
 }

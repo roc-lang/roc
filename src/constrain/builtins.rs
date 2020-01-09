@@ -48,7 +48,7 @@ fn number_literal_type(module_name: &str, type_name: &str) -> Type {
 }
 
 #[inline(always)]
-fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
+pub fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
     Type::Apply {
         module_name: module_name.into(),
         name: type_name.into(),
