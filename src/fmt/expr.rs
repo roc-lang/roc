@@ -74,8 +74,9 @@ pub fn fmt_expr<'a>(
             }
             buf.push_str("\"\"\"");
         }
-        Int(string) => buf.push_str(string),
-        Float(string) => buf.push_str(string),
+        Int(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
+            buf.push_str(string)
+        }
         NonBase10Int {
             base,
             string,
@@ -247,22 +248,6 @@ pub fn fmt_field<'a>(
             buf.push(' ');
             fmt_expr(buf, &value.value, indent, apply_needs_parens, true);
         }
-        OptionalField(name, spaces, value) => {
-            if is_multiline {
-                newline(buf, indent);
-            }
-
-            buf.push_str(name.value);
-            buf.push('?');
-
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-            }
-
-            buf.push(':');
-            buf.push(' ');
-            fmt_expr(buf, &value.value, indent, apply_needs_parens, true);
-        }
         LabelOnly(name) => {
             if is_multiline {
                 newline(buf, indent);
@@ -407,7 +392,6 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
 
     match field {
         LabeledValue(_, spaces, _) => !spaces.is_empty(),
-        OptionalField(_, spaces, _) => !spaces.is_empty(),
         LabelOnly(_) => false,
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
         Malformed(text) => text.chars().any(|c| c == '\n'),
@@ -551,7 +535,7 @@ pub fn fmt_closure<'a>(
             any_args_printed = true;
         }
 
-        fmt_pattern(buf, &loc_pattern.value, indent, true);
+        fmt_pattern(buf, &loc_pattern.value, indent, false);
     }
 
     if !arguments_are_multiline {
@@ -590,6 +574,19 @@ pub fn fmt_record<'a>(
     apply_needs_parens: bool,
 ) {
     buf.push('{');
+
+    match _update {
+        None => {}
+        // We are presuming this to be a Var()
+        // If it wasnt a Var() we would not have made
+        // it this far. For example "{ 4 & hello = 9 }"
+        // doesnt make sense.
+        Some(record_var) => {
+            buf.push(' ');
+            fmt_expr(buf, &record_var.value, indent, false, false);
+            buf.push_str(" &");
+        }
+    }
 
     let is_multiline = loc_fields
         .iter()

@@ -1006,7 +1006,7 @@ mod test_infer {
                 { user & year: "foo" }
                 "#
             ),
-            "{ year : Str }{ name : Str }",
+            "{ name : Str, year : Str }",
         );
     }
 
@@ -1068,19 +1068,16 @@ mod test_infer {
         );
     }
 
-    // currently doesn't work because of a parsing issue
-    // @Foo x y isn't turned into Apply(@Foo, [x,y]) currently
-    // #[test]
-    // fn private_tag_application() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"@Foo "happy" 2020
-    //             "#
-    //         ),
-    //         "[ Test.Foo Str Int ]*",
-    //     );
-    // }
-    //
+    #[test]
+    fn private_tag_application() {
+        infer_eq(
+            indoc!(
+                r#"@Foo "happy" 2020
+                "#
+            ),
+            "[ Test.@Foo Str Int ]*",
+        );
+    }
 
     #[test]
     fn if_then_else() {
@@ -1091,5 +1088,23 @@ mod test_infer {
             ),
             "Int",
         );
+    }
+
+    #[test]
+    fn record_extraction() {
+        with_larger_debug_stack(|| {
+            infer_eq(
+                indoc!(
+                    r#"
+                f = \x -> 
+                    when x is 
+                        { a, b } -> a
+
+                f
+                "#
+                ),
+                "{ a : a, b : * }* -> a",
+            );
+        });
     }
 }

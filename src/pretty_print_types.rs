@@ -2,6 +2,7 @@ use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{MutMap, MutSet};
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::{self, name_type_var};
+use crate::uniqueness::boolean_algebra::Bool;
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -104,6 +105,11 @@ fn find_names_needed(
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
+        Structure(Boolean(b)) => {
+            for var in b.variables() {
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
+        }
         RigidVar(name) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
@@ -202,6 +208,13 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, ret) => write_fn(args, ret, subs, buf, parens),
         Record(fields, ext_var) => {
+            use crate::unify::gather_fields;
+            use crate::unify::RecordStructure;
+
+            // If the `ext` has concrete fields (e.g. { foo : Int}{ bar : Bool }), merge them
+            let RecordStructure { fields, ext } = gather_fields(subs, fields, ext_var);
+            let ext_var = ext;
+
             if fields.is_empty() {
                 buf.push_str(EMPTY_RECORD)
             } else {
@@ -294,6 +307,10 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     write_content(content, subs, buf, parens)
                 }
             }
+        }
+        Boolean(Bool::Variable(var)) => write_content(subs.get(var).content, subs, buf, parens),
+        Boolean(b) => {
+            buf.push_str(&format!("{:?}", b));
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));

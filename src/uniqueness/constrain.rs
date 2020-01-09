@@ -5,6 +5,7 @@ use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
 use crate::types::Type::{self, *};
 use crate::types::{self, LetConstraint, Reason};
+use crate::uniqueness::boolean_algebra::Bool;
 
 pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
     Constraint::Let(Box::new(LetConstraint {
@@ -18,7 +19,7 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
 
 pub fn lift(var_store: &VarStore, typ: Type) -> Type {
     let uniq_var = var_store.fresh();
-    let uniq_type = Variable(uniq_var);
+    let uniq_type = Type::Boolean(Bool::Variable(uniq_var));
 
     attr_type(uniq_type, typ)
 }

@@ -1,19 +1,14 @@
 use crate::can;
 use crate::can::pattern::Pattern;
 use crate::collections::MutMap;
-use crate::gen::convert::content_to_basic_type;
-use crate::ll::layout::Layout;
+use crate::mono::layout::Layout;
 use crate::region::Located;
 use crate::subs::{Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use inkwell::context::Context;
-use inkwell::module::Module;
-use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::FunctionValue;
 use inlinable_string::InlinableString;
 
-pub type Procs<'a, 'ctx> = MutMap<InlinableString, (Option<Proc<'a>>, FunctionValue<'ctx>)>;
+pub type Procs<'a> = MutMap<InlinableString, Option<Proc<'a>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
@@ -23,11 +18,9 @@ pub struct Proc<'a> {
     pub ret_var: Variable,
 }
 
-struct Env<'a, 'ctx> {
-    arena: &'a Bump,
-    subs: &'a Subs,
-    module: &'ctx Module<'ctx>,
-    context: &'ctx Context,
+struct Env<'a> {
+    pub arena: &'a Bump,
+    pub subs: &'a Subs,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +29,15 @@ pub enum Expr<'a> {
     Int(i64),
     Float(f64),
     Str(&'a str),
+    /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
+    /// so they can (at least potentially) be emitted as 1-bit machine bools.
+    ///
+    /// So [ True, False ] compiles to this, and so do [ A, B ] and [ Foo, Bar ].
+    /// However, a union like [ True, False, Other Int ] would not.
+    Bool(bool),
+    /// Closed tag unions containing between 3 and 256 tags (all of 0 arity)
+    /// compile to bytes, e.g. [ Blue, Black, Red, Green, White ]
+    Byte(u8),
 
     // Load/Store
     Load(InlinableString),
@@ -43,8 +45,8 @@ pub enum Expr<'a> {
 
     // Functions
     FunctionPointer(InlinableString),
-    CallByPointer(InlinableString, &'a [Expr<'a>]),
     CallByName(InlinableString, &'a [Expr<'a>]),
+    CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Variable),
 
     // Exactly two conditional branches, e.g. if/else
     Cond {
@@ -67,6 +69,12 @@ pub enum Expr<'a> {
         branches: &'a [(Expr<'a>, Expr<'a>, Expr<'a>)],
         ret_var: Variable,
     },
+    Tag {
+        variant_var: Variable,
+        ext_var: Variable,
+        name: InlinableString,
+        arguments: &'a [Expr<'a>],
+    },
 
     Struct(&'a [(InlinableString, Expr<'a>)]),
 
@@ -74,29 +82,22 @@ pub enum Expr<'a> {
 }
 
 impl<'a> Expr<'a> {
-    pub fn new<'ctx>(
+    pub fn new(
         arena: &'a Bump,
         subs: &'a Subs,
-        module: &'ctx Module<'ctx>,
-        context: &'ctx Context,
         can_expr: can::expr::Expr,
-        procs: &mut Procs<'a, 'ctx>,
+        procs: &mut Procs<'a>,
     ) -> Self {
-        let env = Env {
-            arena,
-            subs,
-            module,
-            context,
-        };
+        let env = Env { arena, subs };
 
         from_can(&env, can_expr, procs, None)
     }
 }
 
-fn from_can<'a, 'ctx>(
-    env: &Env<'a, 'ctx>,
+fn from_can<'a>(
+    env: &Env<'a>,
     can_expr: can::expr::Expr,
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &mut Procs<'a>,
     name: Option<InlinableString>,
 ) -> Expr<'a> {
     use crate::can::expr::Expr::*;
@@ -158,16 +159,13 @@ fn from_can<'a, 'ctx>(
 
         Closure(_, _symbol, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
-            let name = name.unwrap_or_else(||
-                    // Give the closure a name like "_0" or "_1".
-                    // We know procs.len() will be unique!
-                    format!("_{}", procs.len()).into());
+            let name = name.unwrap_or_else(|| gen_closure_name(procs));
 
             add_closure(env, name, loc_body.value, ret_var, &loc_args, procs)
         }
 
         Call(boxed, loc_args, _) => {
-            let (_, loc_expr, _) = *boxed;
+            let (fn_var, loc_expr, _) = *boxed;
             let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
             for (_, loc_arg) in loc_args {
@@ -176,7 +174,7 @@ fn from_can<'a, 'ctx>(
 
             match from_can(env, loc_expr.value, procs, None) {
                 Expr::Load(proc_name) => Expr::CallByName(proc_name, args.into_bump_slice()),
-                Expr::FunctionPointer(proc_name) => {
+                ptr => {
                     // Call by pointer - the closure was anonymous, e.g.
                     //
                     // ((\a -> a) 5)
@@ -184,13 +182,7 @@ fn from_can<'a, 'ctx>(
                     // It might even be the anonymous result of a conditional:
                     //
                     // ((if x > 0 then \a -> a else \_ -> 0) 5)
-                    Expr::CallByPointer(proc_name, args.into_bump_slice())
-                }
-                non_ptr => {
-                    panic!(
-                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
-                        non_ptr
-                    );
+                    Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice(), fn_var)
                 }
             }
         }
@@ -279,45 +271,28 @@ fn from_can<'a, 'ctx>(
     }
 }
 
-fn add_closure<'a, 'ctx>(
-    env: &Env<'a, 'ctx>,
+fn add_closure<'a>(
+    env: &Env<'a>,
     name: InlinableString,
     can_body: can::expr::Expr,
     ret_var: Variable,
     loc_args: &[(Variable, Located<Pattern>)],
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &mut Procs<'a>,
 ) -> Expr<'a> {
     let subs = &env.subs;
-    let context = env.context;
     let arena = env.arena;
-    let ret_content = subs.get_without_compacting(ret_var).content;
-    let ret_type = content_to_basic_type(&ret_content, subs, context).unwrap_or_else(|err| {
-        panic!(
-            "Error converting function return value content to basic type: {:?}",
-            err
-        )
-    });
-
-    let mut arg_names = Vec::with_capacity_in(loc_args.len(), arena);
-    let mut arg_basic_types = Vec::with_capacity_in(loc_args.len(), arena);
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), arena);
 
     for (arg_var, loc_arg) in loc_args.iter() {
         let content = subs.get_without_compacting(*arg_var).content;
 
-        arg_basic_types.push(
-            content_to_basic_type(&content, subs, context).unwrap_or_else(|err| {
-                panic!(
-                    "Error converting function arg content to basic type: {:?}",
-                    err
-                )
-            }),
-        );
-
         let layout = match Layout::from_content(arena, content, subs) {
             Ok(layout) => layout,
             Err(()) => {
-                return invalid_closure(env, name, ret_type, procs);
+                // Invalid closure!
+                procs.insert(name.clone(), None);
+
+                return Expr::FunctionPointer(name);
             }
         };
 
@@ -328,12 +303,9 @@ fn add_closure<'a, 'ctx>(
             }
         };
 
-        arg_names.push(arg_name.clone());
         proc_args.push((layout, arg_name, *arg_var));
     }
 
-    let fn_type = ret_type.fn_type(arg_basic_types.into_bump_slice(), false);
-    let fn_val = env.module.add_function(&name, fn_type, None);
     let proc = Proc {
         args: proc_args.into_bump_slice(),
         body: from_can(env, can_body, procs, None),
@@ -341,31 +313,17 @@ fn add_closure<'a, 'ctx>(
         ret_var,
     };
 
-    procs.insert(name.clone(), (Some(proc), fn_val));
+    procs.insert(name.clone(), Some(proc));
 
     Expr::FunctionPointer(name)
 }
 
-fn invalid_closure<'a, 'ctx>(
-    env: &Env<'a, 'ctx>,
-    name: InlinableString,
-    ret_type: BasicTypeEnum<'ctx>,
-    procs: &mut Procs<'a, 'ctx>,
-) -> Expr<'a> {
-    let fn_type = ret_type.fn_type(&[], false);
-    let fn_val = env.module.add_function(&name, fn_type, None);
-
-    procs.insert(name.clone(), (None, fn_val));
-
-    Expr::FunctionPointer(name)
-}
-
-fn store_pattern<'a, 'ctx>(
-    env: &Env<'a, 'ctx>,
+fn store_pattern<'a>(
+    env: &Env<'a>,
     can_pat: Pattern,
     can_expr: can::expr::Expr,
     var: Variable,
-    procs: &mut Procs<'a, 'ctx>,
+    procs: &mut Procs<'a>,
     stored: &mut Vec<'a, (InlinableString, Variable, Expr<'a>)>,
 ) {
     use crate::can::pattern::Pattern::*;
@@ -393,4 +351,10 @@ fn store_pattern<'a, 'ctx>(
             panic!("TODO store_pattern for {:?}", can_pat);
         }
     }
+}
+
+fn gen_closure_name(procs: &Procs<'_>) -> InlinableString {
+    // Give the closure a name like "_0" or "_1".
+    // We know procs.len() will be unique!
+    format!("_{}", procs.len()).into()
 }

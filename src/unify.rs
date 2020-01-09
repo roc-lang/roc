@@ -5,6 +5,7 @@ use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
+use crate::uniqueness::boolean_algebra;
 
 type Pool = Vec<Variable>;
 
@@ -15,9 +16,9 @@ struct Context {
     second_desc: Descriptor,
 }
 
-struct RecordStructure {
-    fields: ImMap<RecordFieldLabel, Variable>,
-    ext: Variable,
+pub struct RecordStructure {
+    pub fields: ImMap<RecordFieldLabel, Variable>,
+    pub ext: Variable,
 }
 
 struct TagUnionStructure {
@@ -404,6 +405,18 @@ fn unify_flat_type(
             unify_tag_union(subs, pool, ctx, union1, union2)
         }
 
+        (Boolean(b1), Boolean(b2)) => {
+            if let Some(substitution) = boolean_algebra::try_unify(b1.clone(), b2.clone()) {
+                for (var, replacement) in substitution {
+                    subs.set_content(var, Structure(FlatType::Boolean(replacement)));
+                }
+
+                vec![]
+            } else {
+                mismatch()
+            }
+        }
+
         (
             Apply {
                 module_name: l_module_name,
@@ -506,7 +519,7 @@ fn unify_flex(
     }
 }
 
-fn gather_fields(
+pub fn gather_fields(
     subs: &mut Subs,
     fields: ImMap<RecordFieldLabel, Variable>,
     var: Variable,
