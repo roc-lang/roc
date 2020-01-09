@@ -563,14 +563,14 @@ pub fn fmt_closure<'a>(
 
 pub fn fmt_record<'a>(
     buf: &mut String<'a>,
-    _update: Option<&'a Located<Expr<'a>>>,
+    update: Option<&'a Located<Expr<'a>>>,
     loc_fields: &'a Vec<'a, Located<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
     apply_needs_parens: bool,
 ) {
     buf.push('{');
 
-    match _update {
+    match update {
         None => {}
         // We are presuming this to be a Var()
         // If it wasnt a Var() we would not have made
