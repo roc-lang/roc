@@ -373,7 +373,7 @@ mod test_format {
             # Hello
             y = 10
 
-            42
+            42 # gets removed
             "#
         ));
 
