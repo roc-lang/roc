@@ -303,6 +303,15 @@ mod test_format {
         ));
     }
 
+    #[test]
+    fn destructure_nested_tag_closure() {
+        expr_formats_same(indoc!(
+            r#"
+            \Foo (Bar a) -> Foo (Bar a)
+            "#
+        ));
+    }
+
     // DEFS
 
     #[test]
