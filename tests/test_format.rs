@@ -240,7 +240,7 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             """
- 
+
             "" \""" ""\"
 
             """
@@ -289,6 +289,24 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             \a, b, c -> a b c
+            "#
+        ));
+    }
+
+    #[test]
+    fn destructure_tag_closure() {
+        expr_formats_same(indoc!(
+            r#"
+            \Foo a -> Foo a
+            "#
+        ));
+    }
+
+    #[test]
+    fn destructure_nested_tag_closure() {
+        expr_formats_same(indoc!(
+            r#"
+            \Foo (Bar a) -> Foo (Bar a)
             "#
         ));
     }
@@ -522,6 +540,7 @@ mod test_format {
         ));
     }
 
+<<<<<<< HEAD
     //     #[test]
     //     fn record_field_destructuring() {
     //         expr_formats_same(indoc!(
@@ -531,6 +550,79 @@ mod test_format {
     //             "#
     //         ));
     //     }
+=======
+    #[test]
+    fn record_updating() {
+        expr_formats_same(indoc!(
+            r#"
+            { shoes & leftShoe: nothing }
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                {   shoes  &  rightShoe : nothing }
+                "#
+            ),
+            indoc!(
+                r#"
+                { shoes & rightShoe: nothing }
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                {   shoes  &  rightShoe : nothing }
+                "#
+            ),
+            indoc!(
+                r#"
+                { shoes & rightShoe: nothing }
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+            { shoes &
+                rightShoe: newRightShoe,
+                leftShoe: newLeftShoe
+            }
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                { shoes
+                    & rightShoe: bareFoot
+                    , leftShoe: bareFoot }
+                "#
+            ),
+            indoc!(
+                r#"
+                { shoes &
+                    rightShoe: bareFoot,
+                    leftShoe: bareFoot
+                }
+                "#
+            ),
+        );
+    }
+
+    // #[test]
+    // fn record_field_destructuring() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         when foo is
+    //             { x: 5 } -> 42
+    //         "#
+    //     ));
+    // }
+>>>>>>> dd525d3a13b3db5f50f036f256caf2962d73e4ce
 
     #[test]
     fn def_closure() {
@@ -726,6 +818,36 @@ mod test_format {
             "#
         ));
     }
+
+    //    #[test]
+    //    fn multi_line_list_def() {
+    //        expr_formats_same(indoc!(
+    //            r#"
+    //            scores =
+    //                [
+    //                    5,
+    //                    10
+    //                ]
+    //
+    //            scores
+    //            "#
+    //        ));
+    //    }
+    //
+    //    #[test]
+    //    fn multi_line_record_def() {
+    //        expr_formats_same(indoc!(
+    //            r#"
+    //            pos =
+    //                {
+    //                    x: 5,
+    //                    x: 10
+    //                }
+    //
+    //            pos
+    //            "#
+    //        ));
+    //    }
 
     #[test]
     fn two_fields_center_newline() {

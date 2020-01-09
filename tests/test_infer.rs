@@ -1006,7 +1006,105 @@ mod test_infer {
                 { user & year: "foo" }
                 "#
             ),
-            "{ year : Str }{ name : Str }",
+            "{ name : Str, year : Str }",
         );
+    }
+
+    #[test]
+    fn bare_tag() {
+        infer_eq(
+            indoc!(
+                r#"Foo
+                "#
+            ),
+            "[ Foo ]*",
+        );
+    }
+
+    #[test]
+    fn single_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\Foo -> 42
+                "#
+            ),
+            "[ Foo ]* -> Int",
+        );
+    }
+
+    #[test]
+    fn single_private_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\@Foo -> 42
+                "#
+            ),
+            "[ Test.Foo ]* -> Int",
+        );
+    }
+
+    #[test]
+    fn two_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\x -> 
+                    when x is 
+                        True -> 1
+                        False -> 0
+                "#
+            ),
+            "[ False, True ]* -> Int",
+        );
+    }
+
+    #[test]
+    fn tag_application() {
+        infer_eq(
+            indoc!(
+                r#"Foo "happy" 2020
+                "#
+            ),
+            "[ Foo Str Int ]*",
+        );
+    }
+
+    #[test]
+    fn private_tag_application() {
+        infer_eq(
+            indoc!(
+                r#"@Foo "happy" 2020
+                "#
+            ),
+            "[ Test.@Foo Str Int ]*",
+        );
+    }
+
+    #[test]
+    fn if_then_else() {
+        infer_eq(
+            indoc!(
+                r#"if True then 1 else 0
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn record_extraction() {
+        with_larger_debug_stack(|| {
+            infer_eq(
+                indoc!(
+                    r#"
+                f = \x -> 
+                    when x is 
+                        { a, b } -> a
+
+                f
+                "#
+                ),
+                "{ a : a, b : * }* -> a",
+            );
+        });
     }
 }

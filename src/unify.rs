@@ -1,9 +1,11 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
+use crate::uniqueness::boolean_algebra;
 
 type Pool = Vec<Variable>;
 
@@ -14,8 +16,13 @@ struct Context {
     second_desc: Descriptor,
 }
 
-struct RecordStructure {
-    fields: ImMap<RecordFieldLabel, Variable>,
+pub struct RecordStructure {
+    pub fields: ImMap<RecordFieldLabel, Variable>,
+    pub ext: Variable,
+}
+
+struct TagUnionStructure {
+    tags: ImMap<Symbol, Vec<Variable>>,
     ext: Variable,
 }
 
@@ -244,6 +251,115 @@ fn unify_shared_fields(
     }
 }
 
+fn unify_tag_union(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    rec1: TagUnionStructure,
+    rec2: TagUnionStructure,
+) -> Outcome {
+    let tags1 = rec1.tags;
+    let tags2 = rec2.tags;
+    let shared_tags = tags1
+        .clone()
+        .intersection_with(tags2.clone(), |one, two| (one, two));
+    // NOTE: don't use `difference` here, in contrast to Haskell, im-rc `difference` is symmetric
+    let unique_tags1 = tags1.clone().relative_complement(tags2.clone());
+    let unique_tags2 = tags2.relative_complement(tags1);
+
+    if unique_tags1.is_empty() {
+        if unique_tags2.is_empty() {
+            let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
+            let mut tag_problems =
+                unify_shared_tags(subs, pool, ctx, shared_tags, ImMap::default(), rec1.ext);
+
+            tag_problems.extend(ext_problems);
+
+            tag_problems
+        } else {
+            let flat_type = FlatType::TagUnion(unique_tags2, rec2.ext);
+            let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
+            let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
+            let mut tag_problems =
+                unify_shared_tags(subs, pool, ctx, shared_tags, ImMap::default(), sub_record);
+
+            tag_problems.extend(ext_problems);
+
+            tag_problems
+        }
+    } else if unique_tags2.is_empty() {
+        let flat_type = FlatType::TagUnion(unique_tags1, rec1.ext);
+        let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
+        let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
+        let mut tag_problems =
+            unify_shared_tags(subs, pool, ctx, shared_tags, ImMap::default(), sub_record);
+
+        tag_problems.extend(ext_problems);
+
+        tag_problems
+    } else {
+        let other_tags = unique_tags1.clone().union(unique_tags2.clone());
+
+        let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
+        let flat_type1 = FlatType::TagUnion(unique_tags1, rec1.ext);
+        let flat_type2 = FlatType::TagUnion(unique_tags2, rec2.ext);
+
+        let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
+        let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
+
+        let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);
+        let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+
+        let mut tag_problems = unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext);
+
+        tag_problems.reserve(rec1_problems.len() + rec2_problems.len());
+        tag_problems.extend(rec1_problems);
+        tag_problems.extend(rec2_problems);
+
+        tag_problems
+    }
+}
+
+fn unify_shared_tags(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    shared_tags: ImMap<Symbol, (Vec<Variable>, Vec<Variable>)>,
+    other_tags: ImMap<Symbol, Vec<Variable>>,
+    ext: Variable,
+) -> Outcome {
+    let mut matching_tags = ImMap::default();
+    let num_shared_tags = shared_tags.len();
+
+    for (name, (actual_vars, expected_vars)) in shared_tags {
+        let mut matching_vars = Vec::with_capacity(actual_vars.len());
+
+        let actual_len = actual_vars.len();
+        let expected_len = expected_vars.len();
+
+        for (actual, expected) in actual_vars.into_iter().zip(expected_vars.into_iter()) {
+            let problems = unify_pool(subs, pool, actual, expected);
+
+            if problems.is_empty() {
+                matching_vars.push(actual);
+            }
+        }
+
+        // only do this check after unification so the error message has more info
+        if actual_len == expected_len && actual_len == matching_tags.len() {
+            matching_tags.insert(name, matching_vars);
+        }
+    }
+
+    if num_shared_tags == matching_tags.len() {
+        let flat_type = FlatType::TagUnion(matching_tags.union(other_tags), ext);
+
+        merge(subs, ctx, Structure(flat_type))
+    } else {
+        mismatch()
+    }
+}
+
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
@@ -271,6 +387,36 @@ fn unify_flat_type(
 
             unify_record(subs, pool, ctx, rec1, rec2)
         }
+
+        (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(left.clone())),
+
+        (TagUnion(tags, ext), EmptyTagUnion) if tags.is_empty() => {
+            unify_pool(subs, pool, *ext, ctx.second)
+        }
+
+        (EmptyTagUnion, TagUnion(tags, ext)) if tags.is_empty() => {
+            unify_pool(subs, pool, ctx.first, *ext)
+        }
+
+        (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+
+            unify_tag_union(subs, pool, ctx, union1, union2)
+        }
+
+        (Boolean(b1), Boolean(b2)) => {
+            if let Some(substitution) = boolean_algebra::try_unify(b1.clone(), b2.clone()) {
+                for (var, replacement) in substitution {
+                    subs.set_content(var, Structure(FlatType::Boolean(replacement)));
+                }
+
+                vec![]
+            } else {
+                mismatch()
+            }
+        }
+
         (
             Apply {
                 module_name: l_module_name,
@@ -373,7 +519,7 @@ fn unify_flex(
     }
 }
 
-fn gather_fields(
+pub fn gather_fields(
     subs: &mut Subs,
     fields: ImMap<RecordFieldLabel, Variable>,
     var: Variable,
@@ -391,6 +537,25 @@ fn gather_fields(
         }
 
         _ => RecordStructure { fields, ext: var },
+    }
+}
+
+fn gather_tags(
+    subs: &mut Subs,
+    tags: ImMap<Symbol, Vec<Variable>>,
+    var: Variable,
+) -> TagUnionStructure {
+    use crate::subs::FlatType::*;
+
+    match subs.get(var).content {
+        Structure(TagUnion(sub_tags, sub_ext)) => gather_tags(subs, tags.union(sub_tags), sub_ext),
+
+        Alias(_, _, _, var) => {
+            // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+            gather_tags(subs, tags, var)
+        }
+
+        _ => TagUnionStructure { tags, ext: var },
     }
 }
 

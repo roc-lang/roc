@@ -12,7 +12,7 @@ use crate::constrain::builtins::{
 use crate::constrain::pattern::{constrain_pattern, PatternState};
 use crate::region::{Located, Region};
 use crate::subs::Variable;
-use crate::types::AnnotationSource::*;
+use crate::types::AnnotationSource::{self, *};
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
 use crate::types::PReason;
@@ -297,6 +297,89 @@ pub fn constrain_expr(
                 ]),
             )
         }
+
+        If {
+            cond_var,
+            branch_var,
+            loc_cond,
+            loc_then,
+            loc_else,
+        } => {
+            // TODO use Bool alias here, so we don't allocate this type every time.
+            let bool_type = Type::TagUnion(
+                vec![("True".into(), vec![]), ("False".into(), vec![])],
+                Box::new(Type::EmptyTagUnion),
+            );
+            let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);
+
+            let cond_con = Eq(Type::Variable(*cond_var), expect_bool, loc_cond.region);
+
+            match expected {
+                FromAnnotation(name, arity, _, tipe) => {
+                    let then_con = constrain_expr(
+                        rigids,
+                        loc_then.region,
+                        &loc_then.value,
+                        FromAnnotation(
+                            name.clone(),
+                            arity,
+                            AnnotationSource::TypedIfBranch(0),
+                            tipe.clone(),
+                        ),
+                    );
+                    let else_con = constrain_expr(
+                        rigids,
+                        loc_else.region,
+                        &loc_else.value,
+                        FromAnnotation(
+                            name,
+                            arity,
+                            AnnotationSource::TypedIfBranch(1),
+                            tipe.clone(),
+                        ),
+                    );
+
+                    let ast_con = Eq(Type::Variable(*branch_var), NoExpectation(tipe), region);
+
+                    exists(
+                        vec![*cond_var, *branch_var],
+                        And(vec![cond_con, then_con, else_con, ast_con]),
+                    )
+                }
+                _ => {
+                    let then_con = constrain_expr(
+                        rigids,
+                        loc_then.region,
+                        &loc_then.value,
+                        ForReason(
+                            Reason::IfBranch { index: 0 },
+                            Type::Variable(*branch_var),
+                            region,
+                        ),
+                    );
+                    let else_con = constrain_expr(
+                        rigids,
+                        loc_else.region,
+                        &loc_else.value,
+                        ForReason(
+                            Reason::IfBranch { index: 1 },
+                            Type::Variable(*branch_var),
+                            region,
+                        ),
+                    );
+
+                    exists(
+                        vec![*cond_var, *branch_var],
+                        And(vec![
+                            cond_con,
+                            then_con,
+                            else_con,
+                            Eq(Type::Variable(*branch_var), expected, region),
+                        ]),
+                    )
+                }
+            }
+        }
         When {
             cond_var,
             expr_var,
@@ -461,8 +544,44 @@ pub fn constrain_expr(
                 Eq(Type::Variable(*var), expected, loc_ret.region),
             ])
         }
-        Tag(_, _) => {
-            panic!("TODO constrain Tag");
+        Tag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            let mut vars = Vec::with_capacity(arguments.len());
+            let mut types = Vec::with_capacity(arguments.len());
+            let mut arg_cons = Vec::with_capacity(arguments.len());
+
+            for (var, loc_expr) in arguments {
+                let arg_con = constrain_expr(
+                    rigids,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    Expected::NoExpectation(Type::Variable(*var)),
+                );
+
+                arg_cons.push(arg_con);
+                vars.push(*var);
+                types.push(Type::Variable(*var));
+            }
+
+            let union_con = Eq(
+                Type::TagUnion(
+                    vec![(name.clone(), types)],
+                    Box::new(Type::Variable(*ext_var)),
+                ),
+                expected.clone(),
+                region,
+            );
+            let ast_con = Eq(Type::Variable(*variant_var), expected, region);
+
+            vars.push(*variant_var);
+            arg_cons.push(union_con);
+            arg_cons.push(ast_con);
+
+            exists(vars, And(arg_cons))
         }
         RuntimeError(_) => True,
     }
@@ -559,8 +678,6 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
 }
 
 pub fn constrain_def(rigids: &Rigids, def: &Def, body_con: Constraint) -> Constraint {
-    use crate::types::AnnotationSource;
-
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
@@ -645,7 +762,6 @@ pub fn rec_defs_help(
     mut rigid_info: Info,
     mut flex_info: Info,
 ) -> Constraint {
-    use crate::types::AnnotationSource;
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);

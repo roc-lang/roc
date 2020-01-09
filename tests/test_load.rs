@@ -284,7 +284,7 @@ mod test_load {
     #[test]
     fn load_records() {
         test_async(async {
-            use roc::types::{ErrorType, Mismatch, Problem, RecordExt};
+            use roc::types::{ErrorType, Mismatch, Problem, TypeExt};
 
             let mut deps = Vec::new();
             let (module, mut subs) =
@@ -305,8 +305,8 @@ mod test_load {
 
             let problem = Problem::Mismatch(
                 Mismatch::TypeMismatch,
-                ErrorType::Record(SendMap::default(), RecordExt::Closed),
-                ErrorType::Record(record, RecordExt::FlexOpen("b".into())),
+                ErrorType::Record(SendMap::default(), TypeExt::Closed),
+                ErrorType::Record(record, TypeExt::FlexOpen("b".into())),
             );
 
             assert_eq!(unify_problems, vec![problem]);

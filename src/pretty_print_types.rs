@@ -2,9 +2,11 @@ use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::collections::{MutMap, MutSet};
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::{self, name_type_var};
+use crate::uniqueness::boolean_algebra::Bool;
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
+static EMPTY_TAG_UNION: &str = "[]";
 
 /// Rerquirements for parentheses.
 ///
@@ -96,6 +98,18 @@ fn find_names_needed(
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
+        Structure(TagUnion(tags, ext_var)) => {
+            for var in tags.values().flatten() {
+                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            }
+
+            find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
+        }
+        Structure(Boolean(b)) => {
+            for var in b.variables() {
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
+        }
         RigidVar(name) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
@@ -104,7 +118,7 @@ fn find_names_needed(
         Alias(_, _, _, _) => {
             panic!("TODO find_names_needed Alias");
         }
-        Error | Structure(Erroneous(_)) | Structure(EmptyRecord) => {
+        Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
         }
     }
@@ -191,8 +205,16 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
             args,
         } => write_apply(module_name, name, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
+        EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, ret) => write_fn(args, ret, subs, buf, parens),
         Record(fields, ext_var) => {
+            use crate::unify::gather_fields;
+            use crate::unify::RecordStructure;
+
+            // If the `ext` has concrete fields (e.g. { foo : Int}{ bar : Bool }), merge them
+            let RecordStructure { fields, ext } = gather_fields(subs, fields, ext_var);
+            let ext_var = ext;
+
             if fields.is_empty() {
                 buf.push_str(EMPTY_RECORD)
             } else {
@@ -237,6 +259,58 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     write_content(content, subs, buf, parens)
                 }
             }
+        }
+        TagUnion(tags, ext_var) => {
+            if tags.is_empty() {
+                buf.push_str(EMPTY_TAG_UNION)
+            } else {
+                buf.push_str("[ ");
+
+                // Sort the fields so they always end up in the same order.
+                let mut sorted_fields = Vec::with_capacity(tags.len());
+
+                for (label, vars) in tags {
+                    sorted_fields.push((label.clone(), vars));
+                }
+
+                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+                let mut any_written_yet = false;
+
+                for (label, vars) in sorted_fields {
+                    if any_written_yet {
+                        buf.push_str(", ");
+                    } else {
+                        any_written_yet = true;
+                    }
+                    buf.push_str(label.as_str());
+
+                    for var in vars {
+                        buf.push(' ');
+                        write_content(subs.get(var).content, subs, buf, parens);
+                    }
+                }
+
+                buf.push_str(" ]");
+            }
+
+            match subs.get(ext_var).content {
+                Content::Structure(EmptyTagUnion) => {
+                    // This is a closed record. We're done!
+                }
+                content => {
+                    // This is an open tag union, so print the variable
+                    // right after the ']'
+                    //
+                    // e.g. the "*" at the end of `{ x: Int }*`
+                    // or the "r" at the end of `{ x: Int }r`
+                    write_content(content, subs, buf, parens)
+                }
+            }
+        }
+        Boolean(Bool::Variable(var)) => write_content(subs.get(var).content, subs, buf, parens),
+        Boolean(b) => {
+            buf.push_str(&format!("{:?}", b));
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));

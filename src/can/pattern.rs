@@ -17,9 +17,7 @@ use im_rc::Vector;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
-    Tag(Symbol),
-    /// TODO replace regular Tag with this
-    AppliedTag(Symbol, Vec<Located<Pattern>>),
+    AppliedTag(Variable, Symbol, Vec<Located<Pattern>>),
     IntLiteral(i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
@@ -86,11 +84,15 @@ pub fn canonicalize_pattern<'a>(
         }
         &GlobalTag(name) => {
             // Canonicalize the tag's name.
-            Pattern::Tag(Symbol::from_global_tag(name))
+            Pattern::AppliedTag(var_store.fresh(), Symbol::from_global_tag(name), vec![])
         }
         &PrivateTag(name) => {
             // Canonicalize the tag's name.
-            Pattern::Tag(Symbol::from_private_tag(&env.home, name))
+            Pattern::AppliedTag(
+                var_store.fresh(),
+                Symbol::from_private_tag(&env.home, name),
+                vec![],
+            )
         }
         &FloatLiteral(ref string) => match pattern_type {
             WhenBranch => {
