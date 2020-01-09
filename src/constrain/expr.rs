@@ -305,7 +305,7 @@ pub fn constrain_expr(
             loc_then,
             loc_else,
         } => {
-            // TODO use Bool alias here, so we don't allocate this type every time.
+            // TODO use Bool alias here, so we don't allocate this type every time
             let bool_type = Type::TagUnion(
                 vec![("True".into(), vec![]), ("False".into(), vec![])],
                 Box::new(Type::EmptyTagUnion),
