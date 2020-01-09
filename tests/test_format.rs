@@ -241,7 +241,7 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             """
- 
+
             "" \""" ""\"
 
             """
@@ -290,6 +290,24 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             \a, b, c -> a b c
+            "#
+        ));
+    }
+
+    #[test]
+    fn destructure_tag_closure() {
+        expr_formats_same(indoc!(
+            r#"
+            \Foo a -> Foo a
+            "#
+        ));
+    }
+
+    #[test]
+    fn destructure_nested_tag_closure() {
+        expr_formats_same(indoc!(
+            r#"
+            \Foo (Bar a) -> Foo (Bar a)
             "#
         ));
     }

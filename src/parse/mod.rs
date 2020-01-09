@@ -430,7 +430,7 @@ pub fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
             space0_after(
                 between!(
                     char('('),
-                    space0_around(loc!(pattern(min_indent)), min_indent),
+                    space0_around(loc_pattern(min_indent), min_indent),
                     char(')')
                 ),
                 min_indent,
@@ -752,23 +752,32 @@ fn parse_closure_param<'a>(
         // e.g. \User.UserId userId -> ...
         between!(
             char('('),
-            space0_around(loc!(pattern(min_indent)), min_indent),
+            space0_around(loc_pattern(min_indent), min_indent),
             char(')')
         ),
         // The least common, but still allowed, e.g. \Foo -> ...
-        loc!(tag_pattern())
+        loc_tag_pattern(min_indent)
     )
     .parse(arena, state)
 }
 
-fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
+fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
     one_of!(
-        underscore_pattern(),
-        tag_pattern(),
-        ident_pattern(),
-        record_destructure(min_indent),
-        string_pattern(),
-        int_pattern()
+        loc_parenthetical_pattern(min_indent),
+        loc!(underscore_pattern()),
+        loc_tag_pattern(min_indent),
+        loc!(ident_pattern()),
+        loc!(record_destructure(min_indent)),
+        loc!(string_pattern()),
+        loc!(int_pattern())
+    )
+}
+
+fn loc_parenthetical_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    between!(
+        char('('),
+        move |arena, state| loc_pattern(min_indent).parse(arena, state),
+        char(')')
     )
 }
 
@@ -796,7 +805,7 @@ fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     then(
-        record_without_update!(loc!(pattern(min_indent)), min_indent),
+        record_without_update!(loc_pattern(min_indent), min_indent),
         move |arena, state, assigned_fields| {
             let mut patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
             for assigned_field in assigned_fields {
@@ -815,10 +824,29 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     )
 }
 
-fn tag_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    one_of!(
-        map!(private_tag(), Pattern::PrivateTag),
-        map!(global_tag(), Pattern::GlobalTag)
+fn loc_tag_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    map_with_arena!(
+        and!(
+            loc!(one_of!(
+                map!(private_tag(), Pattern::PrivateTag),
+                map!(global_tag(), Pattern::GlobalTag)
+            )),
+            // This can optionally be an applied pattern, e.g. (Foo bar) instead of (Foo)
+            zero_or_more!(space1_before(loc_pattern(min_indent), min_indent))
+        ),
+        |arena: &'a Bump,
+         (loc_tag, loc_args): (Located<Pattern<'a>>, Vec<'a, Located<Pattern<'a>>>)| {
+            if loc_args.is_empty() {
+                loc_tag
+            } else {
+                // TODO FIME this region doesn't cover the tag's
+                // arguments; need to add them to the region!
+                let region = loc_tag.region;
+                let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+
+                Located { region, value }
+            }
+        }
     )
 }
 
@@ -868,7 +896,7 @@ pub fn case_branches<'a>(
         // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
         let (mut loc_first_pattern, state) =
-            space1_before(loc!(pattern(min_indent)), min_indent).parse(arena, state)?;
+            space1_before(loc_pattern(min_indent), min_indent).parse(arena, state)?;
         let original_indent = state.indent_col;
         let indented_more = original_indent + 1;
         let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
@@ -898,7 +926,7 @@ pub fn case_branches<'a>(
 
         let branch_parser = and!(
             then(
-                space1_around(loc!(pattern(min_indent)), min_indent),
+                space1_around(loc_pattern(min_indent), min_indent),
                 move |_arena, state, loc_pattern| {
                     if state.indent_col == original_indent {
                         Ok((loc_pattern, state))
