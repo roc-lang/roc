@@ -1033,6 +1033,21 @@ mod test_infer_uniq {
         );
     }
 
+    #[test]
+    fn type_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                x : Int 
+                x = 4
+
+                x
+                "#
+            ),
+            "Attr.Attr * Int",
+        );
+    }
+
     // #[test]
     // fn tag_union_pattern_match() {
     //     infer_eq(
