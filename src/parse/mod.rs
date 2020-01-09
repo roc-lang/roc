@@ -1426,7 +1426,17 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
 /// This is mainly for matching tags in closure params, e.g. \@Foo -> ...
 fn private_tag<'a>() -> impl Parser<'a, &'a str> {
-    skip_first!(char('@'), global_tag())
+    // TODO should be refactored so the name is not allocated again.
+    map_with_arena!(
+        skip_first!(char('@'), global_tag()),
+        |arena: &'a Bump, name: &'a str| {
+            use bumpalo::collections::string::String;
+            let mut buf = String::with_capacity_in(1 + name.len(), arena);
+            buf.push('@');
+            buf.push_str(name);
+            buf.into_bump_str()
+        }
+    )
 }
 
 /// This is mainly for matching tags in closure params, e.g. \Foo -> ...

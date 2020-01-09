@@ -174,11 +174,22 @@ fn constrain_pattern(
             state.constraints.push(record_con);
         }
 
-        AppliedTag(ext_var, symbol, _arguments) => {
+        AppliedTag(ext_var, symbol, patterns) => {
+            let mut argument_types = Vec::with_capacity(patterns.len());
+            for (pattern_var, loc_pattern) in patterns {
+                state.vars.push(*pattern_var);
+
+                let pattern_type = Type::Variable(*pattern_var);
+                argument_types.push(pattern_type.clone());
+
+                let expected = PExpected::NoExpectation(pattern_type);
+                constrain_pattern(var_store, state, loc_pattern, expected);
+            }
+
             let union_type = constrain::lift(
                 var_store,
                 Type::TagUnion(
-                    vec![(symbol.clone(), vec![])],
+                    vec![(symbol.clone(), argument_types)],
                     Box::new(Type::Variable(*ext_var)),
                 ),
             );

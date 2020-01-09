@@ -1038,7 +1038,7 @@ mod test_infer {
                 r#"\@Foo -> 42
                 "#
             ),
-            "[ Test.Foo ]* -> Int",
+            "[ Test.@Foo ]* -> Int",
         );
     }
 
@@ -1103,6 +1103,32 @@ mod test_infer {
                 r#"
                     when foo is
                         { x: 4 } -> x
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn global_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when Foo 4 is
+                        Foo x -> x
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn private_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when @Foo 4 is
+                        @Foo x -> x
                 "#
             ),
             "Int",
