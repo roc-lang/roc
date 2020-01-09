@@ -16,9 +16,9 @@ struct Context {
     second_desc: Descriptor,
 }
 
-struct RecordStructure {
-    fields: ImMap<RecordFieldLabel, Variable>,
-    ext: Variable,
+pub struct RecordStructure {
+    pub fields: ImMap<RecordFieldLabel, Variable>,
+    pub ext: Variable,
 }
 
 struct TagUnionStructure {
@@ -519,7 +519,7 @@ fn unify_flex(
     }
 }
 
-fn gather_fields(
+pub fn gather_fields(
     subs: &mut Subs,
     fields: ImMap<RecordFieldLabel, Variable>,
     var: Variable,
