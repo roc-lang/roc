@@ -1005,7 +1005,7 @@ mod test_infer {
                 { user & year: "foo" }
                 "#
             ),
-            "{ year : Str }{ name : Str }",
+            "{ name : Str, year : Str }",
         );
     }
 

@@ -208,6 +208,13 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, ret) => write_fn(args, ret, subs, buf, parens),
         Record(fields, ext_var) => {
+            use crate::unify::gather_fields;
+            use crate::unify::RecordStructure;
+
+            // If the `ext` has concrete fields (e.g. { foo : Int}{ bar : Bool }), merge them
+            let RecordStructure { fields, ext } = gather_fields(subs, fields, ext_var);
+            let ext_var = ext;
+
             if fields.is_empty() {
                 buf.push_str(EMPTY_RECORD)
             } else {
