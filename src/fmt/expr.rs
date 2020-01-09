@@ -435,16 +435,16 @@ fn fmt_if<'a>(
     buf.push_str("if");
 
     if is_multiline_condition {
-        dbg!(&loc_condition.value);
         match &loc_condition.value {
-            Expr::SpaceBefore(expr_below, spaces_below) => {
-                fmt_if_spaces(buf, spaces_below.iter(), return_indent);
+            Expr::SpaceBefore(expr_below, spaces_above_expr) => {
+
+                fmt_if_spaces(buf, spaces_above_expr.iter(), return_indent);
                 newline(buf, return_indent);
 
                 match &expr_below {
-                    Expr::SpaceAfter(expr_above, spaces_above) => {
+                    Expr::SpaceAfter(expr_above, spaces_below_expr) => {
                         fmt_expr(buf, &expr_above, return_indent, false, false);
-                        fmt_if_spaces(buf, spaces_above.iter(), return_indent);
+                        fmt_if_spaces(buf, spaces_below_expr.iter(), return_indent);
                         newline(buf, indent);
                     }
 

@@ -65,7 +65,6 @@ pub fn fmt_if_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
     let mut encountered_comment = false;
 
     while let Some(space) = iter.next() {
-        dbg!(space);
         match space {
             Newline => {}
             LineComment(comment) => {
