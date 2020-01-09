@@ -1049,7 +1049,8 @@ mod test_format {
             indoc!(
                 r#"
             when b is
-                1   |   2 |  3 ->
+            1   |   2 |3 ->
+
                     1
             "#
             ),
