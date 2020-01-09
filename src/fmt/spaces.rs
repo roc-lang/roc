@@ -22,6 +22,8 @@ where
 {
     use self::CommentOrNewline::*;
 
+    // Only ever print two newlines back to back.
+    // (Two newlines renders as one blank line.)
     let mut consecutive_newlines = 0;
     let mut iter = spaces.peekable();
 
@@ -30,8 +32,6 @@ where
     while let Some(space) = iter.next() {
         match space {
             Newline => {
-                // Only ever print two newlines back to back.
-                // (Two newlines renders as one blank line.)
                 if !encountered_comment && (consecutive_newlines < 2) {
                     if iter.peek() == Some(&&Newline) {
                         buf.push('\n');
@@ -53,16 +53,14 @@ where
     }
 }
 
-
+/// Similar to fmt_comments_only, but does not finish with a newline()
 pub fn fmt_if_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
-    where
-        I: Iterator<Item = &'a CommentOrNewline<'a>>,
+where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
 
     let mut iter = spaces.peekable();
-
-    let mut encountered_comment = false;
 
     while let Some(space) = iter.next() {
         match space {
@@ -70,24 +68,19 @@ pub fn fmt_if_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
             LineComment(comment) => {
                 buf.push('#');
                 buf.push_str(comment);
-
-
             }
         }
         match iter.peek() {
-            None => {},
-            Some(next_space) => {
-                match next_space {
-                    Newline => {},
-                    LineComment(_) => {
-                        newline(buf, indent);
-                    },
+            None => {}
+            Some(next_space) => match next_space {
+                Newline => {}
+                LineComment(_) => {
+                    newline(buf, indent);
                 }
             },
         }
     }
 }
-
 
 /// Like format_spaces, but remove newlines and keep only comments.
 pub fn fmt_comments_only<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
@@ -113,14 +106,9 @@ fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str, indent: u16) {
     newline(buf, indent);
 }
 
-
 pub fn is_comment<'a>(space: &'a CommentOrNewline<'a>) -> bool {
     match space {
-        CommentOrNewline::Newline => {
-            false
-        },
-        CommentOrNewline::LineComment(_) => {
-            true
-        },
+        CommentOrNewline::Newline => false,
+        CommentOrNewline::LineComment(_) => true,
     }
 }

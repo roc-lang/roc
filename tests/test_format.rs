@@ -449,33 +449,32 @@ mod test_format {
             ),
         );
 
-        //        expr_formats_to(
-        //            indoc!(
-        //                r#"
-        //                f = \x ->
-        //                    # 1st
-        //
-        //
-        //
-        //
-        //                    # 2nd
-        //                    x
-        //
-        //                f 4
-        //                "#
-        //            ),
-        //            indoc!(
-        //                r#"
-        //                f = \x ->
-        //                    # 1st
-        //
-        //                    # 2nd
-        //                    x
-        //
-        //                f 4
-        //                "#
-        //            ),
-        //        );
+        expr_formats_to(
+            indoc!(
+                r#"
+                f = \x ->
+                    # 1st
+
+
+
+
+                    # 2nd
+                    x
+
+                f 4
+                "#
+            ),
+            indoc!(
+                r#"
+                f = \x ->
+                    # 1st
+                    # 2nd
+                    x
+
+                f 4
+                "#
+            ),
+        );
     }
     #[test]
     fn doesnt_detect_comment_in_comment() {
@@ -523,15 +522,15 @@ mod test_format {
         ));
     }
 
-    // #[test]
-    // fn record_field_destructuring() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         when foo is
-    //             { x: 5 } -> 42
-    //         "#
-    //     ));
-    // }
+    //     #[test]
+    //     fn record_field_destructuring() {
+    //         expr_formats_same(indoc!(
+    //             r#"
+    //             when foo is
+    //                 { x: 5 } -> 42
+    //             "#
+    //         ));
+    //     }
 
     #[test]
     fn def_closure() {

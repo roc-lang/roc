@@ -1,10 +1,11 @@
 use crate::fmt::def::fmt_def;
 use crate::fmt::pattern::fmt_pattern;
-use crate::fmt::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, INDENT, fmt_if_spaces, is_comment};
+use crate::fmt::spaces::{
+    add_spaces, fmt_comments_only, fmt_if_spaces, fmt_spaces, is_comment, newline, INDENT,
+};
 use crate::parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern};
 use crate::region::Located;
 use bumpalo::collections::{String, Vec};
-use crate::parse::expr;
 
 pub fn fmt_expr<'a>(
     buf: &mut String<'a>,
@@ -437,7 +438,6 @@ fn fmt_if<'a>(
     if is_multiline_condition {
         match &loc_condition.value {
             Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-
                 fmt_if_spaces(buf, spaces_above_expr.iter(), return_indent);
                 newline(buf, return_indent);
 
@@ -455,13 +455,12 @@ fn fmt_if<'a>(
             }
             _ => {
                 fmt_expr(buf, &loc_condition.value, return_indent, false, false);
-            },
+            }
         }
     } else {
         buf.push(' ');
         fmt_expr(buf, &loc_condition.value, indent, false, true);
         buf.push(' ');
-
     }
 
     buf.push_str("then");
@@ -485,8 +484,6 @@ fn fmt_if<'a>(
                     Expr::SpaceAfter(expr_above, spaces_above) => {
                         fmt_expr(buf, &expr_above, return_indent, false, false);
 
-
-
                         fmt_if_spaces(buf, spaces_above.iter(), return_indent);
                         newline(buf, indent);
                     }
@@ -498,14 +495,12 @@ fn fmt_if<'a>(
             }
             _ => {
                 fmt_expr(buf, &loc_condition.value, return_indent, false, false);
-            },
+            }
         }
     } else {
         buf.push_str(" ");
         fmt_expr(buf, &loc_then.value, return_indent, false, false);
-
     }
-
 
     if is_multiline {
         buf.push_str("else");
