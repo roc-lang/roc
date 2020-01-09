@@ -1117,7 +1117,21 @@ mod test_infer {
                 \Foo x -> Foo x
                 "#
             ),
-            "[ Foo (Attr.Attr a b) ]* -> [ Foo (Attr.Attr a b) ]*",
+            "[ Foo a ]* -> [ Foo a ]*",
+        );
+    }
+
+    #[test]
+    fn tag_union_pattern_match_ignored_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x _ -> Foo x "y"
+                "#
+            ),
+            // TODO investigate should `Foo a *` be `Foo a Str`, i.e. should it know that `Foo`
+            // is used at `Str` elsewhere as a function? does it ever matter?
+            "[ Foo a * ]* -> [ Foo a Str ]*",
         );
     }
 
