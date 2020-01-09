@@ -641,7 +641,7 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
-    // VARIANT
+    // TAG
 
     #[test]
     fn basic_global_tag() {
