@@ -1370,13 +1370,13 @@ mod test_parse {
         let newline = bumpalo::vec![in &arena; Newline];
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let tag1 = Tag::Private {
-            name: Located::new(0, 0, 8, 13, "True"),
+            name: Located::new(0, 0, 8, 13, "@True"),
             args: &[],
         };
         let tag2arg = Located::new(0, 0, 24, 29, TypeAnnotation::Apply(&[], "Thing", &[]));
         let tag2args = bumpalo::vec![in &arena; tag2arg];
         let tag2 = Tag::Private {
-            name: Located::new(0, 0, 15, 23, "Perhaps"),
+            name: Located::new(0, 0, 15, 23, "@Perhaps"),
             args: tag2args.into_bump_slice(),
         };
         let tags = bumpalo::vec![in &arena;
@@ -1424,13 +1424,13 @@ mod test_parse {
         let newline = bumpalo::vec![in &arena; Newline];
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let tag1 = Tag::Private {
-            name: Located::new(0, 0, 8, 13, "True"),
+            name: Located::new(0, 0, 8, 13, "@True"),
             args: &[],
         };
         let tag2arg = Located::new(0, 0, 24, 29, TypeAnnotation::Apply(&[], "Thing", &[]));
         let tag2args = bumpalo::vec![in &arena; tag2arg];
         let tag2 = Tag::Private {
-            name: Located::new(0, 0, 15, 23, "Perhaps"),
+            name: Located::new(0, 0, 15, 23, "@Perhaps"),
             args: tag2args.into_bump_slice(),
         };
         let tags = bumpalo::vec![in &arena;

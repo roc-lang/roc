@@ -17,7 +17,7 @@ use im_rc::Vector;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
-    AppliedTag(Variable, Symbol, Vec<Located<Pattern>>),
+    AppliedTag(Variable, Symbol, Vec<(Variable, Located<Pattern>)>),
     IntLiteral(i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
@@ -94,6 +94,32 @@ pub fn canonicalize_pattern<'a>(
                 vec![],
             )
         }
+        &Apply(tag, patterns) => {
+            let mut can_patterns = Vec::with_capacity(patterns.len());
+            for loc_pattern in *patterns {
+                can_patterns.push((
+                    var_store.fresh(),
+                    canonicalize_pattern(
+                        env,
+                        var_store,
+                        scope,
+                        pattern_type,
+                        &loc_pattern.value,
+                        loc_pattern.region,
+                        shadowable_idents,
+                    ),
+                ));
+            }
+
+            let symbol = match tag.value {
+                GlobalTag(name) => Symbol::from_global_tag(name),
+                PrivateTag(name) => Symbol::from_private_tag(&env.home, name),
+                _ => unreachable!("Other patterns cannot be applied"),
+            };
+
+            Pattern::AppliedTag(var_store.fresh(), symbol, can_patterns)
+        }
+
         &FloatLiteral(ref string) => match pattern_type {
             WhenBranch => {
                 let float = finish_parsing_float(string)
@@ -344,13 +370,10 @@ pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, 
         QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern in remove_idents.");
         }
-        Apply(_, _) => {
-            panic!("TODO implement Apply pattern in remove_idents.");
-            // AppliedVariant(_, Some(loc_args)) => {
-            //     for loc_arg in loc_args {
-            //         remove_idents(loc_arg.value, idents);
-            //     }
-            // }
+        Apply(_, patterns) => {
+            for loc_pattern in *patterns {
+                remove_idents(&loc_pattern.value, idents);
+            }
         }
         RecordDestructure(patterns) => {
             for loc_pattern in patterns {
@@ -410,16 +433,10 @@ fn add_idents_from_pattern<'a>(
         QualifiedIdentifier(_name) => {
             panic!("TODO implement QualifiedIdentifier pattern.");
         }
-        Apply(_, _) => {
-            panic!("TODO implement Apply pattern.");
-            // &AppliedVariant(_, ref opt_loc_args) => match opt_loc_args {
-            // &None => (),
-            // &Some(ref loc_args) => {
-            //     for loc_arg in loc_args.iter() {
-            //         add_idents_from_pattern(loc_arg, scope, answer);
-            //     }
-            // }
-            // },
+        Apply(_tag, patterns) => {
+            for loc_pattern in *patterns {
+                add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
+            }
         }
 
         RecordDestructure(patterns) => {
