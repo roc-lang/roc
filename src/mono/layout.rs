@@ -1,4 +1,4 @@
-use crate::subs::{Content, FlatType, Subs};
+use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -25,6 +25,11 @@ pub enum Builtin<'a> {
 }
 
 impl<'a> Layout<'a> {
+    pub fn from_var(arena: &'a Bump, var: Variable, subs: &Subs) -> Result<Self, ()> {
+        let content = subs.get_without_compacting(var).content;
+
+        Self::from_content(arena, content, subs)
+    }
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!

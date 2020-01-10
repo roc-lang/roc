@@ -47,6 +47,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             pass,
             fail,
             ret_var,
+            ..
         } => {
             let cond = Cond2 {
                 cond_lhs,

@@ -167,35 +167,65 @@ mod test_crane {
         assert_evals_to!("1234.0", 1234.0, f64);
     }
 
-    //     #[test]
-    //     fn gen_when_take_first_branch() {
-    //         assert_evals_to!(
-    //             indoc!(
-    //                 r#"
-    //                     when 1 is
-    //                         1 -> 12
-    //                         _ -> 34
-    //                 "#
-    //             ),
-    //             12,
-    //             i64
-    //         );
-    //     }
+    #[test]
+    fn branch_first_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        when 1.23 is
+                            1.23 -> 12
+                            _ -> 34
+                    "#
+            ),
+            12,
+            i64
+        );
+    }
 
-    //     #[test]
-    //     fn gen_when_take_second_branch() {
-    //         assert_evals_to!(
-    //             indoc!(
-    //                 r#"
-    //                     when 2 is
-    //                         1 -> 63
-    //                         _ -> 48
-    //                 "#
-    //             ),
-    //             48,
-    //             i64
-    //         );
-    //     }
+    #[test]
+    fn branch_second_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        when 2.34 is
+                            1.23 -> 63
+                            _ -> 48
+                    "#
+            ),
+            48,
+            i64
+        );
+    }
+
+    #[test]
+    fn branch_first_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        when 1 is
+                            1 -> 12
+                            _ -> 34
+                    "#
+            ),
+            12,
+            i64
+        );
+    }
+
+    #[test]
+    fn branch_second_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        when 2 is
+                            1 -> 63
+                            _ -> 48
+                    "#
+            ),
+            48,
+            i64
+        );
+    }
 
     #[test]
     fn gen_when_one_branch() {
