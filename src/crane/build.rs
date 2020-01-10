@@ -309,7 +309,6 @@ fn build_switch<'a, B: Backend>(
     switch_args: SwitchArgs<'a>,
     procs: &Procs<'a>,
 ) -> Value {
-    let subs = &env.subs;
     let mut switch = Switch::new();
     let SwitchArgs {
         branches,
