@@ -1,4 +1,6 @@
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use cranelift::frontend::Switch;
 use cranelift::prelude::{
     AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext, MemFlags,
 };
@@ -11,10 +13,10 @@ use cranelift_module::{Backend, FuncId, Linkage, Module};
 use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
-use crate::crane::convert::{content_to_crane_type, sig_from_layout, type_from_layout};
+use crate::crane::convert::{sig_from_layout, type_from_layout, type_from_var};
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::Layout;
-use crate::subs::Subs;
+use crate::subs::{Content, FlatType, Subs, Variable};
 
 type Scope = ImMap<InlinableString, ScopeEntry>;
 
@@ -64,8 +66,23 @@ pub fn build_expr<'a, B: Backend>(
 
         //     build_cond(env, scope, cond, procs)
         // }
-        Branches { .. } => {
-            panic!("TODO build_branches(env, scope, cond_lhs, branches, procs)");
+        Switch {
+            cond,
+            branches,
+            default_branch,
+            ret_var,
+            cond_var,
+        } => {
+            let ret_type = type_from_var(*ret_var, &env.subs, env.cfg);
+            let switch_args = SwitchArgs {
+                cond_var: *cond_var,
+                cond_expr: cond,
+                branches: branches,
+                default_branch,
+                ret_type,
+            };
+
+            build_switch(env, scope, module, builder, switch_args, procs)
         }
         Store(ref stores, ref ret) => {
             let mut scope = im_rc::HashMap::clone(scope);
@@ -77,7 +94,7 @@ pub fn build_expr<'a, B: Backend>(
                 let val = build_expr(env, &scope, module, builder, &expr, procs);
                 let content = subs.get_without_compacting(*var).content;
                 let layout = Layout::from_content(arena, content, subs)
-                    .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));
+                    .unwrap_or_else(|()| panic!("TODO generate a runtime error for this Store!"));
                 let expr_type = type_from_layout(cfg, &layout, subs);
 
                 let slot = builder.create_stack_slot(StackSlotData::new(
@@ -110,7 +127,7 @@ pub fn build_expr<'a, B: Backend>(
             } else if name == "Bool.and" {
                 panic!("TODO create a branch for &&");
             } else {
-                let mut arg_vals = Vec::with_capacity(args.len());
+                let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
 
                 for arg in args.iter() {
                     arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
@@ -147,7 +164,7 @@ pub fn build_expr<'a, B: Backend>(
         }
         CallByPointer(ref sub_expr, ref args, ref fn_var) => {
             let subs = &env.subs;
-            let mut arg_vals = Vec::with_capacity(args.len());
+            let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
 
             for arg in args.iter() {
                 arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
@@ -204,97 +221,29 @@ pub fn build_expr<'a, B: Backend>(
 //     cond: Cond2<'a>,
 //     procs: &Procs<'a>,
 // ) -> BasicValueEnum<'ctx> {
-// let builder = env.builder;
-// let context = env.context;
-// let subs = &env.subs;
-
-// let content = subs.get_without_compacting(cond.ret_var).content;
-// let ret_type = content_to_crane_type(&content, subs, context).unwrap_or_else(|err| {
-//     panic!(
-//         "Error converting cond branch ret_type content {:?} to basic type: {:?}",
-//         cond.pass, err
-//     )
-// });
-
-// let lhs = build_expr(env, scope, cond.cond_lhs, procs);
-// let rhs = build_expr(env, scope, cond.cond_rhs, procs);
-
-// match (lhs, rhs) {
-//     (FloatValue(lhs_float), FloatValue(rhs_float)) => {
-//         let comparison =
-//             builder.build_float_compare(FloatPredicate::OEQ, lhs_float, rhs_float, "cond");
-
-//         build_phi2(
-//             env, scope, comparison, cond.pass, cond.fail, ret_type, procs,
-//         )
-//     }
-
-//     (IntValue(lhs_int), IntValue(rhs_int)) => {
-//         let comparison = builder.build_int_compare(IntPredicate::EQ, lhs_int, rhs_int, "cond");
-
-//         build_phi2(
-//             env, scope, comparison, cond.pass, cond.fail, ret_type, procs,
-//         )
-//     }
-//     _ => panic!(
-//         "Tried to make a branch out of incompatible conditions: lhs = {:?} and rhs = {:?}",
-//         cond.cond_lhs, cond.cond_rhs
-//     ),
-// }
-// }
-
-// fn build_branches<'a, 'ctx, 'env>(
-//     env: &Env<'ctx, 'env>,
-//     scope: &Scope<'ctx>,
-//     parent: FunctionValue<'ctx>,
-//     cond_lhs: &'a Expr<'a>,
-//     branches: &'a [(Expr<'a>, Expr<'a>, Expr<'a>)],
-//     ret_type: BasicValueEnum<'ctx>,
-//     procs: &Procs<'a, 'ctx>,
-// ) -> BasicValueEnum<'ctx> {
 //     let builder = env.builder;
 //     let context = env.context;
-//     let lhs = build_expr(env, scope, cond_lhs, procs);
-//     let mut branch_iter = branches.into_iter();
+//     let subs = &env.subs;
+
 //     let content = subs.get_without_compacting(cond.ret_var).content;
-//     let ret_type = content_to_crane_type(&content, subs, context).unwrap_or_else(|err| {
+//     let ret_type = type_from_content(&content, subs, context).unwrap_or_else(|err| {
 //         panic!(
 //             "Error converting cond branch ret_type content {:?} to basic type: {:?}",
 //             cond.pass, err
 //         )
 //     });
 
-//     for (cond_rhs, cond_pass, cond_else) in branches {
-//         let rhs = build_expr(env, scope, cond_rhs, procs);
-//         let pass = build_expr(env, scope, cond_pass, procs);
-//         let fail = build_expr(env, scope, cond_else, procs);
+//     let lhs = build_expr(env, scope, cond.cond_lhs, procs);
+//     let rhs = build_expr(env, scope, cond.cond_rhs, procs);
 
-//         let cond = Cond {
-//             lhs,
-//             rhs,
-//             pass,
-//             fail,
-//             ret_type,
-//         };
+//     match (lhs_layout, rhs_layout) {
+//         // TODO do this based on lhs_type and rhs_type
+//         (Layout::Float64, Layout::Float64) => {
+//             let then_ebb = builder.create_ebb();
+//             builder.switch_to_block(then_ebb);
 
-//         build_cond(env, scope, cond, procs)
-//     }
-// }
-
-// TODO trim down these arguments
-// #[allow(clippy::too_many_arguments)]
-// fn build_phi2<'a, 'ctx, 'env>(
-//     env: &Env<'ctx, 'env>,
-//     scope: &Scope<'ctx>,
-//     parent: FunctionValue<'ctx>,
-//     comparison: IntValue<'ctx>,
-//     pass: &'a Expr<'a>,
-//     fail: &'a Expr<'a>,
-//     ret_type: BasicTypeEnum<'ctx>,
-//     procs: &Procs<'a>,
-// ) -> BasicValueEnum<'ctx> {
-//     let builder = env.builder;
-//     let context = env.context;
+//             let else_ebb = builder.create_ebb();
+//             builder.switch_to_block(else_ebb);
 
 //     // build branch
 //     let then_bb = context.append_basic_block("then");
@@ -328,7 +277,149 @@ pub fn build_expr<'a, B: Backend>(
 //     ]);
 
 //     phi.as_basic_value()
+
+//             builder.ins().fcmp(FloatCC::Equal, lhs, rhs, ebb, &[]);
+
+//             build_phi2(
+//                 env, scope, comparison, cond.pass, cond.fail, ret_type, procs,
+//             )
+//         }
+
+//         (Layout::Int64, Layout::Int64) => {
+//             let ebb = builder.create_ebb();
+
+//             builder.ins().icmp(IntCC::Equal, lhs, rhs, ebb, &[]);
+
+//             build_phi2(
+//                 env, scope, comparison, cond.pass, cond.fail, ret_type, procs,
+//             )
+//         }
+//         _ => panic!(
+//             "Tried to make a branch out of incompatible conditions: lhs = {:?} and rhs = {:?}",
+//             cond.cond_lhs, cond.cond_rhs
+//         ),
+//     }
 // }
+struct SwitchArgs<'a> {
+    pub cond_expr: &'a Expr<'a>,
+    pub cond_var: Variable,
+    pub branches: &'a [(u64, Expr<'a>)],
+    pub default_branch: &'a Expr<'a>,
+    pub ret_type: Type,
+}
+
+fn build_switch<'a, B: Backend>(
+    env: &Env<'a>,
+    scope: &Scope,
+    module: &mut Module<B>,
+    builder: &mut FunctionBuilder,
+    switch_args: SwitchArgs<'a>,
+    procs: &Procs<'a>,
+) -> Value {
+    let subs = &env.subs;
+    let mut switch = Switch::new();
+    let SwitchArgs {
+        branches,
+        cond_expr,
+        cond_var,
+        default_branch,
+        ret_type,
+    } = switch_args;
+    let mut blocks = Vec::with_capacity_in(branches.len(), env.arena);
+
+    // Declare a variable which each branch will mutate to be the value of that branch.
+    // At the end of the expression, we will evaluate to this.
+    let ret = cranelift::frontend::Variable::with_u32(0);
+
+    builder.declare_var(ret, ret_type);
+
+    // The block for the conditional's default branch.
+    let default_block = builder.create_ebb();
+
+    // The block we'll jump to once the switch has completed.
+    let ret_block = builder.create_ebb();
+
+    // Build the blocks for each branch, and register them in the switch.
+    // Do this before emitting the switch, because it needs to be emitted at the front.
+    for (int, _) in branches {
+        let block = builder.create_ebb();
+
+        blocks.push(block);
+
+        switch.set_entry(*int, block);
+    }
+
+    // Run the switch. Each branch will mutate ret and then jump to ret_ebb.
+    let cond = build_expr(env, scope, module, builder, cond_expr, procs);
+
+    // If necessary, convert cond from Float to Int using a bitcast.
+    let cond = match subs.get_without_compacting(cond_var).content {
+        Content::Structure(FlatType::Apply {
+            module_name,
+            name,
+            args,
+        }) if module_name.as_str() == crate::types::MOD_NUM
+            && name.as_str() == crate::types::TYPE_NUM =>
+        {
+            let arg = *args.iter().next().unwrap();
+
+            match subs.get_without_compacting(arg).content {
+                Content::Structure(FlatType::Apply {
+                    module_name, name, ..
+                }) if module_name.as_str() == crate::types::MOD_FLOAT => {
+                    debug_assert!(name.as_str() == crate::types::TYPE_FLOATINGPOINT);
+
+                    // This is an f64, but switch only works on u64.
+                    //
+                    // Since it's the same size, we could theoretically use raw_bitcast
+                    // which doesn't actually change the bits, just allows
+                    // them to be used as a different type from its register.
+                    //
+                    // However, in practice, this fails Cranelift verification.
+                    builder.ins().bitcast(types::I64, cond)
+                }
+                _ => cond,
+            }
+        }
+        other => panic!("Cannot Switch on type {:?}", other),
+    };
+
+    switch.emit(builder, cond, default_block);
+
+    let mut build_branch = |block, expr| {
+        builder.switch_to_block(block);
+        // TODO re-enable this once Switch stops making unsealed
+        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // builder.seal_block(block);
+
+        // Mutate the ret variable to be the outcome of this branch.
+        let value = build_expr(env, scope, module, builder, expr, procs);
+
+        builder.def_var(ret, value);
+
+        // Unconditionally jump to ret_block, making the whole expression evaluate to ret.
+        builder.ins().jump(ret_block, &[]);
+    };
+
+    // Build the blocks for each branch
+    for ((_, expr), block) in branches.iter().zip(blocks) {
+        build_branch(block, expr);
+    }
+
+    // Build the block for the default branch
+    build_branch(default_block, default_branch);
+
+    // Finally, build ret_block - which contains our terminator instruction.
+    {
+        builder.switch_to_block(ret_block);
+        // TODO re-enable this once Switch stops making unsealed
+        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // builder.seal_block(block);
+
+        // Now that ret has been mutated by the switch statement, evaluate to it.
+        builder.use_var(ret)
+    }
+}
 
 pub fn declare_proc<'a, B: Backend>(
     env: &Env<'a>,
@@ -339,14 +430,8 @@ pub fn declare_proc<'a, B: Backend>(
     let args = proc.args;
     let subs = &env.subs;
     let cfg = env.cfg;
-    let ret_content = subs.get_without_compacting(proc.ret_var).content;
-    // TODO this content_to_crane_type is duplicated when building this Proc
-    let ret_type = content_to_crane_type(&ret_content, subs, env.cfg).unwrap_or_else(|err| {
-        panic!(
-            "Error converting function return value content to basic type: {:?}",
-            err
-        )
-    });
+    // TODO this rtype_from_var is duplicated when building this Proc
+    let ret_type = type_from_var(proc.ret_var, subs, env.cfg);
 
     // Create a signature for the function
     let mut sig = module.make_signature();
@@ -396,15 +481,15 @@ pub fn define_proc_body<'a, B: Backend>(
         let mut func_ctx = FunctionBuilderContext::new();
         let mut builder: FunctionBuilder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
 
-        let ebb = builder.create_ebb();
+        let block = builder.create_ebb();
 
-        builder.switch_to_block(ebb);
-        builder.append_ebb_params_for_function_params(ebb);
+        builder.switch_to_block(block);
+        builder.append_ebb_params_for_function_params(block);
 
         // Add args to scope
-        for (&param, (_, arg_name, var)) in builder.ebb_params(ebb).iter().zip(args) {
+        for (&param, (_, arg_name, var)) in builder.ebb_params(block).iter().zip(args) {
             let content = subs.get_without_compacting(*var).content;
-            // TODO this content_to_crane_type is duplicated when building this Proc
+            // TODO this type_from_content is duplicated when building this Proc
             //
             let layout = Layout::from_content(arena, content, subs)
                 .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));
@@ -416,7 +501,11 @@ pub fn define_proc_body<'a, B: Backend>(
         let body = build_expr(env, &scope, module, &mut builder, &proc.body, procs);
 
         builder.ins().return_(&[body]);
+        // TODO re-enable this once Switch stops making unsealed
+        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // builder.seal_block(block);
         builder.seal_all_blocks();
+
         builder.finalize();
     }
 

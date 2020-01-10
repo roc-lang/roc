@@ -15,12 +15,13 @@ mod test_crane {
     use bumpalo::Bump;
     use cranelift::prelude::*;
     use cranelift_codegen::isa;
-    use cranelift_codegen::settings::{self};
+    use cranelift_codegen::settings;
+    use cranelift_codegen::verifier::verify_function;
     use cranelift_module::{default_libcall_names, Linkage, Module};
     use cranelift_simplejit::{SimpleJITBackend, SimpleJITBuilder};
     use roc::collections::{ImMap, MutMap};
     use roc::crane::build::{build_expr, declare_proc, define_proc_body, Env, ScopeEntry};
-    use roc::crane::convert::content_to_crane_type;
+    use roc::crane::convert::type_from_content;
     use roc::infer::infer_expr;
     use roc::mono::expr::Expr;
     use roc::subs::Subs;
@@ -49,7 +50,7 @@ mod test_crane {
                     );
                 }
                 Ok(isa_builder) => {
-                    let isa = isa_builder.finish(shared_flags);
+                    let isa = isa_builder.finish(shared_flags.clone());
 
                     isa.frontend_config()
                 }
@@ -58,8 +59,7 @@ mod test_crane {
             let main_fn_name = "$Test.main";
 
             // Compute main_fn_ret_type before moving subs to Env
-            let main_ret_type = content_to_crane_type(&content, &mut subs, cfg)
-                .expect("Unable to infer type for test expr");
+            let main_ret_type = type_from_content(&content, &mut subs, cfg);
 
             // Compile and add all the Procs before adding main
             let mut procs = MutMap::default();
@@ -98,6 +98,14 @@ mod test_crane {
                     proc,
                     &procs,
                 );
+
+                // Verify the function we just defined
+                if let Err(errors) = verify_function(&ctx.func, &shared_flags) {
+                    // NOTE: We don't include proc here because it's already
+                    // been moved. If you need to know which proc failed, go back
+                    // and add some logging.
+                    panic!("Errors defining proc: {}", errors);
+                }
             }
 
             // Add main itself
@@ -114,16 +122,19 @@ mod test_crane {
             {
                 let mut builder: FunctionBuilder =
                     FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
-                let ebb = builder.create_ebb();
+                let block = builder.create_ebb();
 
-                builder.switch_to_block(ebb);
+                builder.switch_to_block(block);
                 // TODO try deleting this line and seeing if everything still works.
-                builder.append_ebb_params_for_function_params(ebb);
+                builder.append_ebb_params_for_function_params(block);
 
                 let main_body =
                     build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
                 builder.ins().return_(&[main_body]);
+                // TODO re-enable this once Switch stops making unsealed
+                // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+                // builder.seal_block(block);
                 builder.seal_all_blocks();
                 builder.finalize();
             }
@@ -133,6 +144,11 @@ mod test_crane {
 
             // Perform linking
             module.finalize_definitions();
+
+            // Verify the main function
+            if let Err(errors) = verify_function(&ctx.func, &shared_flags) {
+                panic!("Errors defining {} - {}", main_fn_name, errors);
+            }
 
             let main_ptr = module.get_finalized_function(main_fn);
             let run_main = unsafe { mem::transmute::<_, fn() -> $ty>(main_ptr) };
@@ -151,48 +167,93 @@ mod test_crane {
         assert_evals_to!("1234.0", 1234.0, f64);
     }
 
-    // #[test]
-    // fn gen_when_take_first_branch() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 when 1 is
-    //                     1 -> 12
-    //                     _ -> 34
-    //             "#
-    //         ),
-    //         12,
-    //         i64
-    //     );
-    // }
+    //     #[test]
+    //     fn gen_when_take_first_branch() {
+    //         assert_evals_to!(
+    //             indoc!(
+    //                 r#"
+    //                     when 1 is
+    //                         1 -> 12
+    //                         _ -> 34
+    //                 "#
+    //             ),
+    //             12,
+    //             i64
+    //         );
+    //     }
 
-    // #[test]
-    // fn gen_when_take_second_branch() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 when 2 is
-    //                     1 -> 63
-    //                     _ -> 48
-    //             "#
-    //         ),
-    //         48,
-    //         i64
-    //     );
-    // }
-    // #[test]
-    // fn gen_when_one_branch() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 when 3.14 is
-    //                     _ -> 23
-    //             "#
-    //         ),
-    //         23,
-    //         i64
-    //     );
-    // }
+    //     #[test]
+    //     fn gen_when_take_second_branch() {
+    //         assert_evals_to!(
+    //             indoc!(
+    //                 r#"
+    //                     when 2 is
+    //                         1 -> 63
+    //                         _ -> 48
+    //                 "#
+    //             ),
+    //             48,
+    //             i64
+    //         );
+    //     }
+
+    #[test]
+    fn gen_when_one_branch() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when 3.14 is
+                        _ -> 23
+                "#
+            ),
+            23,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_large_when_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    foo = \num ->
+                        when num is
+                            0 -> 200
+                            -3 -> 111
+                            3 -> 789
+                            1 -> 123
+                            2 -> 456
+                            _ -> 1000
+
+                    foo -3
+                "#
+            ),
+            111,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_large_when_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    foo = \num ->
+                        when num is
+                            0.5 -> 200.1
+                            -3.6 -> 111.2
+                            3.6 -> 789.5
+                            1.7 -> 123.3
+                            2.8 -> 456.4
+                            _ -> 1000.6
+
+                    foo -3.6
+                "#
+            ),
+            111.2,
+            f64
+        );
+    }
 
     #[test]
     fn gen_basic_def() {
@@ -328,23 +389,24 @@ mod test_crane {
         );
     }
 
-    //     #[test]
-    //     fn gen_when_fn() {
-    //         assert_evals_to!(
-    //             indoc!(
-    //                 r#"
-    //                     limitedNegate = \num ->
-    //                         when num is
-    //                             1 -> -1
-    //                             _ -> num
+    #[test]
+    fn gen_when_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        limitedNegate = \num ->
+                            when num is
+                                1 -> -1
+                                -1 -> 1
+                                _ -> num
 
-    //                     limitedNegate 1
-    //                 "#
-    //             ),
-    //             -1,
-    //             i64
-    //         );
-    //     }
+                        limitedNegate 1
+                    "#
+            ),
+            -1,
+            i64
+        );
+    }
 
     #[test]
     fn apply_unnamed_fn() {
