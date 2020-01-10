@@ -77,7 +77,7 @@ pub fn build_expr<'a, B: Backend>(
             let switch_args = SwitchArgs {
                 cond_var: *cond_var,
                 cond_expr: cond,
-                branches: branches,
+                branches,
                 default_branch,
                 ret_type,
             };
