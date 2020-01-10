@@ -2,6 +2,7 @@ use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
+use crate::types;
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
@@ -425,6 +426,18 @@ pub enum Content {
     Structure(FlatType),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Variable),
     Error,
+}
+
+impl Content {
+    #[inline(always)]
+    pub fn is_number(&self) -> bool {
+        match &self {
+            Content::Structure(FlatType::Apply {
+                module_name, name, ..
+            }) => module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -4,14 +4,16 @@ use cranelift_codegen::isa::TargetFrontendConfig;
 
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
-use crate::subs::{Content, Subs};
+use crate::subs::{Content, Subs, Variable};
 use cranelift_module::{Backend, Module};
 
-pub fn content_to_crane_type(
-    content: &Content,
-    subs: &Subs,
-    cfg: TargetFrontendConfig,
-) -> Result<Type, String> {
+pub fn type_from_var(var: Variable, subs: &Subs, cfg: TargetFrontendConfig) -> Type {
+    let content = subs.get_without_compacting(var).content;
+
+    type_from_content(&content, subs, cfg)
+}
+
+pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConfig) -> Type {
     match content {
         Content::Structure(flat_type) => match flat_type {
             Apply {
@@ -29,19 +31,19 @@ pub fn content_to_crane_type(
                     num_to_crane_type(arg_content)
                 } else {
                     panic!(
-                        "TODO handle content_to_crane_type for FlatType::Apply of {}.{} with args {:?}",
+                        "TODO handle type_from_content for FlatType::Apply of {}.{} with args {:?}",
                         module_name, name, args
                     );
                 }
             }
-            Func(_, _) => Ok(cfg.pointer_type()),
-            other => panic!("TODO handle content_to_crane_type for {:?}", other),
+            Func(_, _) => cfg.pointer_type(),
+            other => panic!("TODO handle type_from_content for {:?}", other),
         },
-        other => Err(format!("Cannot convert {:?} to BasicTypeEnum", other)),
+        other => panic!("Cannot convert {:?} to Crane Type", other),
     }
 }
 
-fn num_to_crane_type(content: Content) -> Result<Type, String> {
+fn num_to_crane_type(content: Content) -> Type {
     match content {
         Content::Structure(flat_type) => match flat_type {
             Apply {
@@ -57,18 +59,18 @@ fn num_to_crane_type(content: Content) -> Result<Type, String> {
                     && args.is_empty()
                 {
                     debug_assert!(args.is_empty());
-                    Ok(types::F64)
+                    types::F64
                 } else if module_name == crate::types::MOD_INT
                     && name == crate::types::TYPE_INTEGER
                     && args.is_empty()
                 {
                     debug_assert!(args.is_empty());
-                    Ok(types::I64)
+                    types::I64
                 } else {
-                    Err(format!(
+                    panic!(
                         "Unrecognized numeric type: {}.{} with args {:?}",
                         module_name, name, args
-                    ))
+                    )
                 }
             }
             other => panic!(
