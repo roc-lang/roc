@@ -83,27 +83,30 @@ fn constrain_pattern(
         }
 
         IntLiteral(_) => {
+            let uniq_var = var_store.fresh();
             state.constraints.push(Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Int,
-                constrain::lift(var_store, Type::int()),
+                constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
                 expected,
             ));
         }
         FloatLiteral(_) => {
+            let uniq_var = var_store.fresh();
             state.constraints.push(Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Float,
-                constrain::lift(var_store, Type::float()),
+                constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
                 expected,
             ));
         }
 
         StrLiteral(_) => {
+            let uniq_var = var_store.fresh();
             state.constraints.push(Constraint::Pattern(
                 pattern.region,
                 PatternCategory::Str,
-                constrain::lift(var_store, Type::string()),
+                constrain::attr_type(Bool::Variable(uniq_var), Type::string()),
                 expected,
             ));
         }
@@ -276,15 +279,29 @@ pub fn constrain_expr(
             )
         }
         BlockStr(_) | Str(_) => {
-            let inferred = constrain::lift(var_store, Type::string());
-            Eq(inferred, expected, region)
+            let uniq_type = var_store.fresh();
+            let inferred = constrain::attr_type(Bool::Variable(uniq_type), Type::string());
+
+            exists(vec![uniq_type], Eq(inferred, expected, region))
         }
-        EmptyRecord => Eq(constrain::lift(var_store, EmptyRec), expected, region),
+        EmptyRecord => {
+            let uniq_type = var_store.fresh();
+
+            exists(
+                vec![uniq_type],
+                Eq(
+                    constrain::attr_type(Bool::Variable(uniq_type), EmptyRec),
+                    expected,
+                    region,
+                ),
+            )
+        }
         Record(variable, fields) => {
             // NOTE: canonicalization guarantees at least one field
             // zero fields generates an EmptyRecord
             let mut field_types = SendMap::default();
             let mut field_vars = Vec::with_capacity(fields.len());
+            field_vars.push(*variable);
 
             // Constraints need capacity for each field + 1 for the record itself + 1 for ext
             let mut constraints = Vec::with_capacity(2 + fields.len());
@@ -327,9 +344,7 @@ pub fn constrain_expr(
             constraints.push(record_con);
             constraints.push(ext_con);
 
-            let constraint = exists(field_vars, And(constraints));
-
-            constraint
+            exists(field_vars, And(constraints))
         }
         Tag {
             variant_var,
@@ -356,8 +371,11 @@ pub fn constrain_expr(
                 types.push(Type::Variable(*var));
             }
 
-            let union_type = constrain::lift(
-                var_store,
+            let uniq_var = var_store.fresh();
+            vars.push(uniq_var);
+
+            let union_type = constrain::attr_type(
+                Bool::Variable(uniq_var),
                 Type::TagUnion(
                     vec![(name.clone(), types)],
                     Box::new(Type::Variable(*ext_var)),
@@ -368,21 +386,27 @@ pub fn constrain_expr(
             let ast_con = Eq(Type::Variable(*variant_var), expected, region);
 
             vars.push(*variant_var);
+            vars.push(*ext_var);
             arg_cons.push(union_con);
             arg_cons.push(ast_con);
 
             exists(vars, And(arg_cons))
         }
         List(variable, loc_elems) => {
+            let uniq_var = var_store.fresh();
             if loc_elems.is_empty() {
                 let list_var = *variable;
-                let inferred = constrain::lift(var_store, builtins::empty_list_type(list_var));
-                Eq(inferred, expected, region)
+                let inferred = constrain::attr_type(
+                    Bool::Variable(uniq_var),
+                    builtins::empty_list_type(list_var),
+                );
+                exists(vec![*variable, uniq_var], Eq(inferred, expected, region))
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
                 let list_var = *variable; // `v` in the type (List v)
                 let list_type = Type::Variable(list_var);
                 let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
+                let mut elem_vars = Vec::with_capacity(2 + loc_elems.len());
 
                 for (elem_var, loc_elem) in loc_elems.iter() {
                     let elem_type = Variable(*elem_var);
@@ -403,11 +427,17 @@ pub fn constrain_expr(
 
                     constraints.push(list_elem_constraint);
                     constraints.push(constraint);
+                    elem_vars.push(*elem_var);
                 }
-                let inferred = constrain::lift(var_store, builtins::list_type(list_type));
+
+                elem_vars.push(list_var);
+                elem_vars.push(uniq_var);
+
+                let inferred =
+                    constrain::attr_type(Bool::Variable(uniq_var), builtins::list_type(list_type));
                 constraints.push(Eq(inferred, expected, region));
 
-                And(constraints)
+                exists(elem_vars, And(constraints))
             }
         }
         Var {
@@ -607,13 +637,15 @@ pub fn constrain_expr(
                 &loc_ret.value,
                 expected.clone(),
             );
-
-            And(vec![
-                constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                Eq(Type::Variable(*var), expected, loc_ret.region),
-            ])
+            exists(
+                vec![*var],
+                And(vec![
+                    constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con),
+                    // Record the type of tne entire def-expression in the variable.
+                    // Code gen will need that later!
+                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                ]),
+            )
         }
         LetNonRec(def, loc_ret, var) => {
             // NOTE doesn't currently unregister bound symbols
@@ -627,12 +659,15 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            And(vec![
-                constrain_def(rigids, var_store, var_usage, def, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                Eq(Type::Variable(*var), expected, loc_ret.region),
-            ])
+            exists(
+                vec![*var],
+                And(vec![
+                    constrain_def(rigids, var_store, var_usage, def, body_con),
+                    // Record the type of tne entire def-expression in the variable.
+                    // Code gen will need that later!
+                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                ]),
+            )
         }
         If { .. } => panic!("TODO constrain uniq if"),
         When {
@@ -788,8 +823,11 @@ pub fn constrain_expr(
                 cons.push(con);
             }
 
-            let fields_type = constrain::lift(
-                var_store,
+            let uniq_var = var_store.fresh();
+            vars.push(uniq_var);
+
+            let fields_type = constrain::attr_type(
+                Bool::Variable(uniq_var),
                 Type::Record(fields.clone(), Box::new(Type::Variable(*ext_var))),
             );
             let record_type = Type::Variable(*record_var);

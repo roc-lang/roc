@@ -154,10 +154,14 @@ pub fn constrain_expr(
         Str(_) | BlockStr(_) => Eq(str_type(), expected, region),
         List(list_var, loc_elems) => {
             if loc_elems.is_empty() {
-                Eq(empty_list_type(*list_var), expected, region)
+                exists(
+                    vec![*list_var],
+                    Eq(empty_list_type(*list_var), expected, region),
+                )
             } else {
                 let list_elem_type = Type::Variable(*list_var);
                 let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
+                let mut elem_vars = Vec::with_capacity(1 + loc_elems.len());
 
                 for (elem_var, loc_elem) in loc_elems {
                     let elem_type = Variable(*elem_var);
@@ -172,11 +176,13 @@ pub fn constrain_expr(
 
                     constraints.push(list_elem_constraint);
                     constraints.push(constraint);
+                    elem_vars.push(*elem_var)
                 }
 
                 constraints.push(Eq(list_type(list_elem_type), expected, region));
+                elem_vars.push(*list_var);
 
-                And(constraints)
+                exists(elem_vars, And(constraints))
             }
         }
         Call(boxed, loc_args, _application_style) => {
@@ -420,8 +426,9 @@ pub fn constrain_expr(
                             ),
                         );
 
-                        // TODO investigate: why doesn't this use expr_var?
-                        // Shouldn't it?
+                        // TODO doesn't use expr_var, because it checks each branch against the
+                        // annotation. But when we in code gen want the type of a branch, it is not
+                        // set.
                         constraints.push(exists(
                             vec![cond_var],
                             // Each branch's pattern must have the same type
@@ -528,22 +535,29 @@ pub fn constrain_expr(
         }
         LetRec(defs, loc_ret, var) => {
             let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
-            And(vec![
-                constrain_recursive_defs(rigids, defs, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                Eq(Type::Variable(*var), expected, loc_ret.region),
-            ])
+
+            exists(
+                vec![*var],
+                And(vec![
+                    constrain_recursive_defs(rigids, defs, body_con),
+                    // Record the type of tne entire def-expression in the variable.
+                    // Code gen will need that later!
+                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                ]),
+            )
         }
         LetNonRec(def, loc_ret, var) => {
             let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
 
-            And(vec![
-                constrain_def(rigids, def, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                Eq(Type::Variable(*var), expected, loc_ret.region),
-            ])
+            exists(
+                vec![*var],
+                And(vec![
+                    constrain_def(rigids, def, body_con),
+                    // Record the type of tne entire def-expression in the variable.
+                    // Code gen will need that later!
+                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                ]),
+            )
         }
         Tag {
             variant_var,
@@ -579,6 +593,7 @@ pub fn constrain_expr(
             let ast_con = Eq(Type::Variable(*variant_var), expected, region);
 
             vars.push(*variant_var);
+            vars.push(*ext_var);
             arg_cons.push(union_con);
             arg_cons.push(ast_con);
 
