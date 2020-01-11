@@ -392,30 +392,25 @@ pub fn constrain_expr(
 
             exists(vars, And(arg_cons))
         }
-        List(variable, loc_elems) => {
+        List {
+            entry_var,
+            loc_elems,
+        } => {
             let uniq_var = var_store.fresh();
             if loc_elems.is_empty() {
-                let list_var = *variable;
                 let inferred = constrain::attr_type(
                     Bool::Variable(uniq_var),
-                    builtins::empty_list_type(list_var),
+                    builtins::empty_list_type(*entry_var),
                 );
-                exists(vec![*variable, uniq_var], Eq(inferred, expected, region))
+                exists(vec![*entry_var, uniq_var], Eq(inferred, expected, region))
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
-                let list_var = *variable; // `v` in the type (List v)
-                let list_type = Type::Variable(list_var);
-                let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
-                let mut elem_vars = Vec::with_capacity(2 + loc_elems.len());
+                let entry_type = Type::Variable(*entry_var);
+                let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
-                for (elem_var, loc_elem) in loc_elems.iter() {
-                    let elem_type = Variable(*elem_var);
-                    let elem_expected = Expected::NoExpectation(elem_type.clone());
-                    let list_elem_constraint = Eq(
-                        list_type.clone(),
-                        Expected::ForReason(Reason::ElemInList, elem_type, region),
-                        region,
-                    );
+                for loc_elem in loc_elems.iter() {
+                    let elem_expected =
+                        Expected::ForReason(Reason::ElemInList, entry_type.clone(), region);
                     let constraint = constrain_expr(
                         rigids,
                         var_store,
@@ -425,19 +420,14 @@ pub fn constrain_expr(
                         elem_expected,
                     );
 
-                    constraints.push(list_elem_constraint);
                     constraints.push(constraint);
-                    elem_vars.push(*elem_var);
                 }
 
-                elem_vars.push(list_var);
-                elem_vars.push(uniq_var);
-
                 let inferred =
-                    constrain::attr_type(Bool::Variable(uniq_var), builtins::list_type(list_type));
+                    constrain::attr_type(Bool::Variable(uniq_var), builtins::list_type(entry_type));
                 constraints.push(Eq(inferred, expected, region));
 
-                exists(elem_vars, And(constraints))
+                exists(vec![*entry_var, uniq_var], And(constraints))
             }
         }
         Var {

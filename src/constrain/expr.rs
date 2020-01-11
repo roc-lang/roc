@@ -152,37 +152,32 @@ pub fn constrain_expr(
             exists(vars, And(cons))
         }
         Str(_) | BlockStr(_) => Eq(str_type(), expected, region),
-        List(list_var, loc_elems) => {
+        List {
+            entry_var,
+            loc_elems,
+            ..
+        } => {
             if loc_elems.is_empty() {
                 exists(
-                    vec![*list_var],
-                    Eq(empty_list_type(*list_var), expected, region),
+                    vec![*entry_var],
+                    Eq(empty_list_type(*entry_var), expected, region),
                 )
             } else {
-                let list_elem_type = Type::Variable(*list_var);
-                let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
-                let mut elem_vars = Vec::with_capacity(1 + loc_elems.len());
+                let list_elem_type = Type::Variable(*entry_var);
+                let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
-                for (elem_var, loc_elem) in loc_elems {
-                    let elem_type = Variable(*elem_var);
-                    let elem_expected = NoExpectation(elem_type.clone());
-                    let list_elem_constraint = Eq(
-                        list_elem_type.clone(),
-                        ForReason(Reason::ElemInList, elem_type, region),
-                        region,
-                    );
+                for loc_elem in loc_elems {
+                    let elem_expected =
+                        ForReason(Reason::ElemInList, list_elem_type.clone(), region);
                     let constraint =
                         constrain_expr(rigids, loc_elem.region, &loc_elem.value, elem_expected);
 
-                    constraints.push(list_elem_constraint);
                     constraints.push(constraint);
-                    elem_vars.push(*elem_var)
                 }
 
                 constraints.push(Eq(list_type(list_elem_type), expected, region));
-                elem_vars.push(*list_var);
 
-                exists(elem_vars, And(constraints))
+                exists(vec![*entry_var], And(constraints))
             }
         }
         Call(boxed, loc_args, _application_style) => {
