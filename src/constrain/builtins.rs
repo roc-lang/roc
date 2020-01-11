@@ -1,9 +1,10 @@
+use crate::collections::SendMap;
 use crate::region::Region;
 use crate::subs::Variable;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
 use crate::types::Type::{self, *};
-use crate::types::{self, Reason};
+use crate::types::{self, LetConstraint, Reason};
 
 #[inline(always)]
 pub fn int_literal(var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
@@ -22,6 +23,17 @@ pub fn float_literal(var: Variable, expected: Expected<Type>, region: Region) ->
 }
 
 #[inline(always)]
+pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
+    Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars,
+        def_types: SendMap::default(),
+        defs_constraint: constraint,
+        ret_constraint: Constraint::True,
+    }))
+}
+
+#[inline(always)]
 fn num_literal(
     num_var: Variable,
     literal_type: Type,
@@ -32,10 +44,13 @@ fn num_literal(
     let num_type = Variable(num_var);
     let expected_literal = ForReason(reason, literal_type, region);
 
-    And(vec![
-        Eq(num_type.clone(), expected_literal, region),
-        Eq(num_type, expected, region),
-    ])
+    exists(
+        vec![num_var],
+        And(vec![
+            Eq(num_type.clone(), expected_literal, region),
+            Eq(num_type, expected, region),
+        ]),
+    )
 }
 
 #[inline(always)]

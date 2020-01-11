@@ -16,24 +16,35 @@ mod test_infer_uniq {
 
     // HELPERS
 
-    fn infer_eq(src: &str, expected: &str) {
-        let (_output1, _, mut subs1, variable1, mut subs2, variable2, constraint1, constraint2) =
-            uniq_expr(src);
+    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+        let (_output1, _, _, _, mut subs, variable, _, constraint) = uniq_expr(src);
 
         let mut unify_problems = Vec::new();
-        let content1 = infer_expr(&mut subs1, &mut unify_problems, &constraint1, variable1);
-        let content2 = infer_expr(&mut subs2, &mut unify_problems, &constraint2, variable2);
+        let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
 
-        dbg!(unify_problems);
+        name_all_type_vars(variable, &mut subs);
 
-        name_all_type_vars(variable1, &mut subs1);
-        name_all_type_vars(variable2, &mut subs2);
+        let actual_str = content_to_string(content, &mut subs);
 
-        let _actual_str = content_to_string(content1, &mut subs1);
-        let uniq_actual_str = content_to_string(content2, &mut subs2);
+        (unify_problems, actual_str)
+    }
+    fn infer_eq(src: &str, expected: &str) {
+        let (_, actual) = infer_eq_help(src);
 
-        // assert_eq!(actual_str, expected.to_string());
-        assert_eq!(expected.to_string(), uniq_actual_str);
+        assert_eq!(actual, expected.to_string());
+    }
+
+    fn infer_eq_without_problem(src: &str, expected: &str) {
+        let (problems, actual) = infer_eq_help(src);
+
+        if !problems.is_empty() {
+            // fail with an assert, but print the problems normally so rust doesn't try to diff
+            // an empty vec with the problems.
+            dbg!(problems);
+            println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
+            assert_eq!(0, 1);
+        }
+        assert_eq!(actual, expected.to_string());
     }
 
     #[test]

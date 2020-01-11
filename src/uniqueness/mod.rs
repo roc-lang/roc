@@ -239,30 +239,36 @@ pub fn constrain_expr(
     pub use crate::can::expr::Expr::*;
 
     match expr {
-        Int(var, _) => And(vec![
-            Eq(
-                Type::Variable(*var),
-                Expected::ForReason(
-                    Reason::IntLiteral,
-                    constrain::lift(var_store, Type::int()),
+        Int(var, _) => exists(
+            vec![*var],
+            And(vec![
+                Eq(
+                    Type::Variable(*var),
+                    Expected::ForReason(
+                        Reason::IntLiteral,
+                        constrain::lift(var_store, Type::int()),
+                        region,
+                    ),
                     region,
                 ),
-                region,
-            ),
-            Eq(Type::Variable(*var), expected, region),
-        ]),
-        Float(var, _) => And(vec![
-            Eq(
-                Type::Variable(*var),
-                Expected::ForReason(
-                    Reason::FloatLiteral,
-                    constrain::lift(var_store, Type::float()),
+                Eq(Type::Variable(*var), expected, region),
+            ]),
+        ),
+        Float(var, _) => exists(
+            vec![*var],
+            And(vec![
+                Eq(
+                    Type::Variable(*var),
+                    Expected::ForReason(
+                        Reason::FloatLiteral,
+                        constrain::lift(var_store, Type::float()),
+                        region,
+                    ),
                     region,
                 ),
-                region,
-            ),
-            Eq(Type::Variable(*var), expected, region),
-        ]),
+                Eq(Type::Variable(*var), expected, region),
+            ]),
+        ),
         BlockStr(_) | Str(_) => {
             let inferred = constrain::lift(var_store, Type::string());
             Eq(inferred, expected, region)

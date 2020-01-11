@@ -17,7 +17,7 @@ mod test_infer {
 
     // HELPERS
 
-    fn infer_eq(src: &str, expected: &str) -> Vec<roc::types::Problem> {
+    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
         let (_, output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
@@ -32,14 +32,25 @@ mod test_infer {
 
         let actual_str = content_to_string(content, &mut subs);
 
-        assert_eq!(actual_str, expected.to_string());
+        (unify_problems, actual_str)
+    }
+    fn infer_eq(src: &str, expected: &str) {
+        let (_, actual) = infer_eq_help(src);
 
-        unify_problems
+        assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq_without_problem(src: &str, expected: &str) {
-        let empty: Vec<roc::types::Problem> = Vec::new();
-        assert_eq!(empty, infer_eq(src, expected));
+        let (problems, actual) = infer_eq_help(src);
+
+        if !problems.is_empty() {
+            // fail with an assert, but print the problems normally so rust doesn't try to diff
+            // an empty vec with the problems.
+            dbg!(problems);
+            println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
+            assert_eq!(0, 1);
+        }
+        assert_eq!(actual, expected.to_string());
     }
 
     #[test]
@@ -1195,6 +1206,23 @@ mod test_infer {
                    "#
             ),
             "Int",
+        );
+    }
+
+    #[test]
+    fn num_identity() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    numIdentity : Num.Num a -> Num.Num a
+                    numIdentity = \x -> x
+
+                    y = numIdentity 3.14
+
+                    { numIdentity, x : numIdentity 42, y }
+                    "#
+            ),
+            "{ numIdentity : Num a -> Num a, x : Int, y : Float }",
         );
     }
 }

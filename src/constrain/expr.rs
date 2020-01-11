@@ -278,6 +278,7 @@ pub fn constrain_expr(
                 body_type,
             );
 
+            vars.push(*fn_var);
             let defs_constraint = And(state.constraints);
 
             exists(
