@@ -1,7 +1,7 @@
 use crate::can;
 use crate::can::pattern::Pattern;
 use crate::collections::MutMap;
-use crate::mono::layout::Layout;
+use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use bumpalo::collections::Vec;
@@ -55,6 +55,7 @@ pub enum Expr<'a> {
         // for e.g. "compare float and jump" vs. "compare integer and jump"
         cond_lhs: &'a Expr<'a>,
         cond_rhs: &'a Expr<'a>,
+        cond_layout: Layout<'a>,
         // What to do if the condition either passes or fails
         pass: &'a Expr<'a>,
         fail: &'a Expr<'a>,
@@ -351,6 +352,7 @@ fn from_can_when<'a>(
                     let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
 
                     Expr::Cond {
+                        cond_layout: Layout::Builtin(Builtin::Int64),
                         cond_lhs,
                         cond_rhs,
                         pass,
@@ -365,6 +367,7 @@ fn from_can_when<'a>(
                     let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
 
                     Expr::Cond {
+                        cond_layout: Layout::Builtin(Builtin::Float64),
                         cond_lhs,
                         cond_rhs,
                         pass,

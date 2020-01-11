@@ -5,8 +5,23 @@ use inkwell::AddressSpace;
 
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
-use crate::subs::{Content, Subs};
+use crate::subs::{Content, Subs, Variable};
 use crate::types;
+
+pub fn type_from_var<'ctx>(
+    var: Variable,
+    subs: &Subs,
+    context: &'ctx Context,
+) -> BasicTypeEnum<'ctx> {
+    let content = subs.get_without_compacting(var).content;
+
+    content_to_basic_type(&content, subs, context).unwrap_or_else(|err| {
+        panic!(
+            "Error converting Content to basic type: {:?} - {:?}",
+            content, err
+        )
+    })
+}
 
 pub fn content_to_basic_type<'ctx>(
     content: &Content,

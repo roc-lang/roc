@@ -2,7 +2,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use cranelift::frontend::Switch;
 use cranelift::prelude::{
-    AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext, MemFlags,
+    AbiParam, ExternalName, FloatCC, FunctionBuilder, FunctionBuilderContext, IntCC, MemFlags,
 };
 use cranelift_codegen::ir::entities::{StackSlot, Value};
 use cranelift_codegen::ir::stackslot::{StackSlotData, StackSlotKind};
@@ -15,8 +15,8 @@ use inlinable_string::InlinableString;
 use crate::collections::ImMap;
 use crate::crane::convert::{sig_from_layout, type_from_layout, type_from_var};
 use crate::mono::expr::{Expr, Proc, Procs};
-use crate::mono::layout::Layout;
-use crate::subs::{Content, FlatType, Subs, Variable};
+use crate::mono::layout::{Builtin, Layout};
+use crate::subs::{Subs, Variable};
 
 type Scope = ImMap<InlinableString, ScopeEntry>;
 
@@ -49,23 +49,25 @@ pub fn build_expr<'a, B: Backend>(
         Float(num) => builder.ins().f64const(*num),
         Bool(val) => builder.ins().bconst(types::B1, *val),
         Byte(val) => builder.ins().iconst(types::I8, *val as i64),
-        // Cond {
-        //     cond_lhs,
-        //     cond_rhs,
-        //     pass,
-        //     fail,
-        //     ret_var,
-        // } => {
-        //     let cond = Cond2 {
-        //         cond_lhs,
-        //         cond_rhs,
-        //         pass,
-        //         fail,
-        //         ret_var: *ret_var,
-        //     };
+        Cond {
+            cond_lhs,
+            cond_rhs,
+            pass,
+            fail,
+            cond_layout,
+            ret_var,
+        } => {
+            let branch = Branch2 {
+                cond_lhs,
+                cond_rhs,
+                pass,
+                fail,
+                cond_layout,
+                ret_var: *ret_var,
+            };
 
-        //     build_cond(env, scope, cond, procs)
-        // }
+            build_branch2(env, scope, module, builder, branch, procs)
+        }
         Switch {
             cond,
             branches,
@@ -206,100 +208,91 @@ pub fn build_expr<'a, B: Backend>(
     }
 }
 
-// struct Cond2<'a> {
-//     cond_lhs: &'a Expr<'a>,
-//     cond_rhs: &'a Expr<'a>,
-//     pass: &'a Expr<'a>,
-//     fail: &'a Expr<'a>,
-//     ret_var: Variable,
-// }
+struct Branch2<'a> {
+    cond_lhs: &'a Expr<'a>,
+    cond_rhs: &'a Expr<'a>,
+    cond_layout: &'a Layout<'a>,
+    pass: &'a Expr<'a>,
+    fail: &'a Expr<'a>,
+    ret_var: Variable,
+}
 
-// fn build_cond<'a, 'ctx, 'env>(
-//     env: &Env<'ctx, 'env>,
-//     scope: &Scope<'ctx>,
-//     parent: FunctionValue<'ctx>,
-//     cond: Cond2<'a>,
-//     procs: &Procs<'a>,
-// ) -> BasicValueEnum<'ctx> {
-//     let builder = env.builder;
-//     let context = env.context;
-//     let subs = &env.subs;
+fn build_branch2<'a, B: Backend>(
+    env: &Env<'a>,
+    scope: &Scope,
+    module: &mut Module<B>,
+    builder: &mut FunctionBuilder,
+    branch: Branch2<'a>,
+    procs: &Procs<'a>,
+) -> Value {
+    let subs = &env.subs;
+    let cfg = env.cfg;
 
-//     let content = subs.get_without_compacting(cond.ret_var).content;
-//     let ret_type = type_from_content(&content, subs, context).unwrap_or_else(|err| {
-//         panic!(
-//             "Error converting cond branch ret_type content {:?} to basic type: {:?}",
-//             cond.pass, err
-//         )
-//     });
+    // Declare a variable which each branch will mutate to be the value of that branch.
+    // At the end of the expression, we will evaluate to this.
+    let ret_type = type_from_var(branch.ret_var, subs, cfg);
+    let ret = cranelift::frontend::Variable::with_u32(0);
 
-//     let lhs = build_expr(env, scope, cond.cond_lhs, procs);
-//     let rhs = build_expr(env, scope, cond.cond_rhs, procs);
+    // The block we'll jump to once the switch has completed.
+    let ret_block = builder.create_ebb();
 
-//     match (lhs_layout, rhs_layout) {
-//         // TODO do this based on lhs_type and rhs_type
-//         (Layout::Float64, Layout::Float64) => {
-//             let then_ebb = builder.create_ebb();
-//             builder.switch_to_block(then_ebb);
+    builder.declare_var(ret, ret_type);
 
-//             let else_ebb = builder.create_ebb();
-//             builder.switch_to_block(else_ebb);
+    let lhs = build_expr(env, scope, module, builder, branch.cond_lhs, procs);
+    let rhs = build_expr(env, scope, module, builder, branch.cond_rhs, procs);
+    let pass_block = builder.create_ebb();
+    let fail_block = builder.create_ebb();
 
-//     // build branch
-//     let then_bb = context.append_basic_block("then");
-//     let else_bb = context.append_basic_block("else");
-//     let cont_bb = context.append_basic_block("branchcont");
+    match branch.cond_layout {
+        Layout::Builtin(Builtin::Float64) => {
+            // For floats, first do a `fcmp` comparison to get a bool answer about equality,
+            // then use `brnz` to branch if that bool equality answer was nonzero (aka true).
+            let is_eq = builder.ins().fcmp(FloatCC::Equal, lhs, rhs);
 
-//     builder.build_conditional_branch(comparison, &then_bb, &else_bb);
+            builder.ins().brnz(is_eq, pass_block, &[]);
+        }
+        Layout::Builtin(Builtin::Int64) => {
+            // For ints, we can compare and branch in the same instruction: `icmp`
+            builder
+                .ins()
+                .br_icmp(IntCC::Equal, lhs, rhs, pass_block, &[]);
+        }
+        other => panic!("I don't know how to build a conditional for {:?}", other),
+    }
 
-//     // build then block
-//     builder.position_at_end(&then_bb);
-//     let then_val = build_expr(env, scope, pass, procs);
-//     builder.build_unconditional_branch(&cont_bb);
+    // Unconditionally jump to fail_block (if we didn't just jump to pass_block).
+    builder.ins().jump(fail_block, &[]);
 
-//     let then_bb = builder.get_insert_block().unwrap();
+    let mut build_branch = |expr, block| {
+        builder.switch_to_block(block);
 
-//     // build else block
-//     builder.position_at_end(&else_bb);
-//     let else_val = build_expr(env, scope, fail, procs);
-//     builder.build_unconditional_branch(&cont_bb);
+        // TODO re-enable this once Switch stops making unsealed
+        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // builder.seal_block(block);
 
-//     let else_bb = builder.get_insert_block().unwrap();
+        // Mutate the ret variable to be the outcome of this branch.
+        let value = build_expr(env, scope, module, builder, expr, procs);
 
-//     // emit merge block
-//     builder.position_at_end(&cont_bb);
+        builder.def_var(ret, value);
 
-//     let phi = builder.build_phi(ret_type, "branch");
+        // Unconditionally jump to ret_block, making the whole expression evaluate to ret.
+        builder.ins().jump(ret_block, &[]);
+    };
 
-//     phi.add_incoming(&[
-//         (&Into::<BasicValueEnum>::into(then_val), &then_bb),
-//         (&Into::<BasicValueEnum>::into(else_val), &else_bb),
-//     ]);
+    build_branch(branch.pass, pass_block);
+    build_branch(branch.fail, fail_block);
 
-//     phi.as_basic_value()
+    // Finally, build ret_block - which contains our terminator instruction.
+    {
+        builder.switch_to_block(ret_block);
+        // TODO re-enable this once Switch stops making unsealed
+        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // builder.seal_block(block);
 
-//             builder.ins().fcmp(FloatCC::Equal, lhs, rhs, ebb, &[]);
-
-//             build_phi2(
-//                 env, scope, comparison, cond.pass, cond.fail, ret_type, procs,
-//             )
-//         }
-
-//         (Layout::Int64, Layout::Int64) => {
-//             let ebb = builder.create_ebb();
-
-//             builder.ins().icmp(IntCC::Equal, lhs, rhs, ebb, &[]);
-
-//             build_phi2(
-//                 env, scope, comparison, cond.pass, cond.fail, ret_type, procs,
-//             )
-//         }
-//         _ => panic!(
-//             "Tried to make a branch out of incompatible conditions: lhs = {:?} and rhs = {:?}",
-//             cond.cond_lhs, cond.cond_rhs
-//         ),
-//     }
-// }
+        // Now that ret has been mutated by the switch statement, evaluate to it.
+        builder.use_var(ret)
+    }
+}
 struct SwitchArgs<'a> {
     pub cond_expr: &'a Expr<'a>,
     pub cond_var: Variable,
@@ -316,14 +309,13 @@ fn build_switch<'a, B: Backend>(
     switch_args: SwitchArgs<'a>,
     procs: &Procs<'a>,
 ) -> Value {
-    let subs = &env.subs;
     let mut switch = Switch::new();
     let SwitchArgs {
         branches,
         cond_expr,
-        cond_var,
         default_branch,
         ret_type,
+        ..
     } = switch_args;
     let mut blocks = Vec::with_capacity_in(branches.len(), env.arena);
 
@@ -351,38 +343,6 @@ fn build_switch<'a, B: Backend>(
 
     // Run the switch. Each branch will mutate ret and then jump to ret_ebb.
     let cond = build_expr(env, scope, module, builder, cond_expr, procs);
-
-    // If necessary, convert cond from Float to Int using a bitcast.
-    let cond = match subs.get_without_compacting(cond_var).content {
-        Content::Structure(FlatType::Apply {
-            module_name,
-            name,
-            args,
-        }) if module_name.as_str() == crate::types::MOD_NUM
-            && name.as_str() == crate::types::TYPE_NUM =>
-        {
-            let arg = *args.iter().next().unwrap();
-
-            match subs.get_without_compacting(arg).content {
-                Content::Structure(FlatType::Apply {
-                    module_name, name, ..
-                }) if module_name.as_str() == crate::types::MOD_FLOAT => {
-                    debug_assert!(name.as_str() == crate::types::TYPE_FLOATINGPOINT);
-
-                    // This is an f64, but switch only works on u64.
-                    //
-                    // Since it's the same size, we could theoretically use raw_bitcast
-                    // which doesn't actually change the bits, just allows
-                    // them to be used as a different type from its register.
-                    //
-                    // However, in practice, this fails Cranelift verification.
-                    builder.ins().bitcast(types::I64, cond)
-                }
-                _ => cond,
-            }
-        }
-        other => panic!("Cannot Switch on type {:?}", other),
-    };
 
     switch.emit(builder, cond, default_block);
 
