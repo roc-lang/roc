@@ -86,18 +86,7 @@ pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, VarStore, Variab
 }
 
 #[allow(dead_code)]
-pub fn uniq_expr(
-    expr_str: &str,
-) -> (
-    Output,
-    Vec<Problem>,
-    Subs,
-    Variable,
-    Subs,
-    Variable,
-    Constraint,
-    Constraint,
-) {
+pub fn uniq_expr(expr_str: &str) -> (Output, Vec<Problem>, Subs, Variable, Constraint) {
     uniq_expr_with(&Bump::new(), expr_str, &ImMap::default())
 }
 
@@ -106,28 +95,15 @@ pub fn uniq_expr_with(
     arena: &Bump,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-) -> (
-    Output,
-    Vec<Problem>,
-    Subs,
-    Variable,
-    Subs,
-    Variable,
-    Constraint,
-    Constraint,
-) {
+) -> (Output, Vec<Problem>, Subs, Variable, Constraint) {
     let home = "Test";
-    let (loc_expr, output, problems, var_store1, variable, constraint1) =
+    let (loc_expr, output, problems, var_store1, variable, _) =
         can_expr_with(arena, home, expr_str, &ImMap::default());
 
-    let next_var = var_store1.into();
-    let subs1 = Subs::new(next_var);
-
     // double check
-    let var_store2 = VarStore::new(next_var);
+    let var_store2 = VarStore::new(var_store1.fresh());
 
-    let variable2 = var_store2.fresh();
-    let expected2 = Expected::NoExpectation(Type::Variable(variable2));
+    let expected2 = Expected::NoExpectation(Type::Variable(variable));
     let constraint2 = roc::uniqueness::constrain_declaration(
         &var_store2,
         Region::zero(),
@@ -138,16 +114,7 @@ pub fn uniq_expr_with(
 
     let subs2 = Subs::new(var_store2.into());
 
-    (
-        output,
-        problems,
-        subs1,
-        variable,
-        subs2,
-        variable2,
-        constraint1,
-        constraint2,
-    )
+    (output, problems, subs2, variable, constraint2)
 }
 
 #[allow(dead_code)]
