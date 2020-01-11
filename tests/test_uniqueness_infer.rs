@@ -1114,22 +1114,35 @@ mod test_infer_uniq {
         );
     }
 
-    // TODO when type signatures are supported, ensure this works
-    //    #[test]
-    //    fn num_identity() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                numIdentity : Num a -> Num a
-    //                numIdentity = \x -> x
-    //
-    //                x = numIdentity 42
-    //                y = numIdentity 3.14
-    //
-    //                numIdentity
-    //                "#
-    //            ),
-    //            "tbd",
-    //        );
-    //    }
+    #[test]
+    fn num_identity_def() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   numIdentity : Num.Num a -> Num.Num a
+                   numIdentity = \x -> x
+
+                   numIdentity
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))",
+        );
+    }
+
+    #[test]
+    fn num_identity_applied() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   numIdentity : Num.Num b -> Num.Num b
+                   numIdentity = \foo -> foo
+
+                   p = numIdentity 42
+                   q = numIdentity 3.14
+
+                   { numIdentity, p, q }
+                   "#
+            ), "Attr.Attr * { numIdentity : (Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
+        );
+    }
 }

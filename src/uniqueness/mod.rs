@@ -239,36 +239,42 @@ pub fn constrain_expr(
     pub use crate::can::expr::Expr::*;
 
     match expr {
-        Int(var, _) => exists(
-            vec![*var],
-            And(vec![
-                Eq(
-                    Type::Variable(*var),
-                    Expected::ForReason(
-                        Reason::IntLiteral,
-                        constrain::lift(var_store, Type::int()),
+        Int(var, _) => {
+            let uniq_var = var_store.fresh();
+            exists(
+                vec![*var, uniq_var],
+                And(vec![
+                    Eq(
+                        Type::Variable(*var),
+                        Expected::ForReason(
+                            Reason::IntLiteral,
+                            constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
+                            region,
+                        ),
                         region,
                     ),
-                    region,
-                ),
-                Eq(Type::Variable(*var), expected, region),
-            ]),
-        ),
-        Float(var, _) => exists(
-            vec![*var],
-            And(vec![
-                Eq(
-                    Type::Variable(*var),
-                    Expected::ForReason(
-                        Reason::FloatLiteral,
-                        constrain::lift(var_store, Type::float()),
+                    Eq(Type::Variable(*var), expected, region),
+                ]),
+            )
+        }
+        Float(var, _) => {
+            let uniq_var = var_store.fresh();
+            exists(
+                vec![*var, uniq_var],
+                And(vec![
+                    Eq(
+                        Type::Variable(*var),
+                        Expected::ForReason(
+                            Reason::FloatLiteral,
+                            constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                            region,
+                        ),
                         region,
                     ),
-                    region,
-                ),
-                Eq(Type::Variable(*var), expected, region),
-            ]),
-        ),
+                    Eq(Type::Variable(*var), expected, region),
+                ]),
+            )
+        }
         BlockStr(_) | Str(_) => {
             let inferred = constrain::lift(var_store, Type::string());
             Eq(inferred, expected, region)
@@ -303,8 +309,10 @@ pub fn constrain_expr(
                 constraints.push(field_con);
             }
 
-            let record_type = constrain::lift(
-                var_store,
+            let record_uniq_var = var_store.fresh();
+            field_vars.push(record_uniq_var);
+            let record_type = constrain::attr_type(
+                Bool::Variable(record_uniq_var),
                 Type::Record(
                     field_types,
                     // TODO can we avoid doing Box::new on every single one of these?
@@ -321,7 +329,7 @@ pub fn constrain_expr(
 
             let constraint = exists(field_vars, And(constraints));
 
-            (constraint)
+            constraint
         }
         Tag {
             variant_var,
@@ -419,15 +427,18 @@ pub fn constrain_expr(
 
                     let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
 
-                    And(vec![
-                        Lookup(symbol_for_lookup.clone(), expected.clone(), region),
-                        Eq(attr_type, expected, region),
-                        Eq(
-                            Type::Boolean(uniq_type),
-                            Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
-                            region,
-                        ),
-                    ])
+                    exists(
+                        vec![val_var, uniq_var],
+                        And(vec![
+                            Lookup(symbol_for_lookup.clone(), expected.clone(), region),
+                            Eq(attr_type, expected, region),
+                            Eq(
+                                Type::Boolean(uniq_type),
+                                Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
+                                region,
+                            ),
+                        ]),
+                    )
                 }
                 Some(sharing::ReferenceCount::Unique) => {
                     // no additional constraints, keep uniqueness unbound
@@ -462,8 +473,11 @@ pub fn constrain_expr(
                 vars.push(*pattern_var);
             }
 
-            let fn_type = constrain::lift(
-                var_store,
+            let fn_uniq_var = var_store.fresh();
+            vars.push(fn_uniq_var);
+
+            let fn_type = constrain::attr_type(
+                Bool::Variable(fn_uniq_var),
                 Type::Function(pattern_types, Box::new(ret_type.clone())),
             );
             let body_type = Expected::NoExpectation(ret_type);
@@ -561,9 +575,14 @@ pub fn constrain_expr(
                 arg_cons.push(arg_con);
             }
 
+            let expected_uniq_type = var_store.fresh();
+            vars.push(expected_uniq_type);
             let expected_fn_type = Expected::ForReason(
                 fn_reason,
-                constrain::lift(var_store, Function(arg_types, Box::new(ret_type.clone()))),
+                constrain::attr_type(
+                    Bool::Variable(expected_uniq_type),
+                    Function(arg_types, Box::new(ret_type.clone())),
+                ),
                 region,
             );
 
