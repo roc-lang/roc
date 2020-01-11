@@ -18,14 +18,16 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_, output, _, var_store, variable, constraint) = can_expr(src);
+        let (expr, output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
         // variables declared in constraint (flex_vars or rigid_vars)
         // and variables actually used in constraints
         let (declared, used) = roc::types::variable_usage(&constraint);
 
-        if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
+        if false && declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
+            dbg!(&constraint);
+            dbg!(expr);
             println!("VARIABLE USAGE PROBLEM");
             println!("used variable count: {}\n", used.len());
 

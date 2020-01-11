@@ -17,7 +17,37 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_output1, _, _, _, mut subs, variable, _, constraint) = uniq_expr(src);
+        use roc::collections::ImSet;
+        use roc::subs::Variable;
+        let (_output, _problems, mut subs, variable, constraint) = uniq_expr(src);
+
+        // variables declared in constraint (flex_vars or rigid_vars)
+        // and variables actually used in constraints
+        let (declared, used) = roc::types::variable_usage(&constraint);
+
+        if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
+            dbg!(&constraint);
+            // dbg!(expr);
+            println!("VARIABLE USAGE PROBLEM");
+            println!("used variable count: {}\n", used.len());
+
+            println!("used: {:?}", &used);
+            println!("rigids: {:?}", &declared.rigid_vars);
+            println!("flexs: {:?}", &declared.flex_vars);
+
+            let used: ImSet<Variable> = used.clone().into();
+            let mut decl: ImSet<Variable> = declared.rigid_vars.clone().into();
+
+            for var in declared.flex_vars.clone() {
+                decl.insert(var);
+            }
+
+            let diff = used.relative_complement(decl);
+
+            println!("difference: {:?}", &diff);
+
+            assert_eq!(0, 1);
+        }
 
         let mut unify_problems = Vec::new();
         let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
@@ -102,7 +132,7 @@ mod test_infer_uniq {
     // LIST
 
     #[test]
-    fn empty_list() {
+    fn empty_list_literal() {
         infer_eq(
             indoc!(
                 r#"
@@ -1067,9 +1097,9 @@ mod test_infer_uniq {
                 "#
             ),
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
-            // i.e. the `a` could be ignored in this example, is that true in general?
+            // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)"
+            "Attr.Attr * (Attr.Attr (a | b) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
         );
     }
 

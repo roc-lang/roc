@@ -84,34 +84,44 @@ fn constrain_pattern(
 
         IntLiteral(_) => {
             let uniq_var = var_store.fresh();
-            state.constraints.push(Constraint::Pattern(
-                pattern.region,
-                PatternCategory::Int,
-                constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
-                expected,
+            state.constraints.push(exists(
+                vec![uniq_var],
+                Constraint::Pattern(
+                    pattern.region,
+                    PatternCategory::Int,
+                    constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
+                    expected,
+                ),
             ));
         }
         FloatLiteral(_) => {
             let uniq_var = var_store.fresh();
-            state.constraints.push(Constraint::Pattern(
-                pattern.region,
-                PatternCategory::Float,
-                constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
-                expected,
+            state.constraints.push(exists(
+                vec![uniq_var],
+                Constraint::Pattern(
+                    pattern.region,
+                    PatternCategory::Float,
+                    constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                    expected,
+                ),
             ));
         }
 
         StrLiteral(_) => {
             let uniq_var = var_store.fresh();
-            state.constraints.push(Constraint::Pattern(
-                pattern.region,
-                PatternCategory::Str,
-                constrain::attr_type(Bool::Variable(uniq_var), Type::string()),
-                expected,
+            state.constraints.push(exists(
+                vec![uniq_var],
+                Constraint::Pattern(
+                    pattern.region,
+                    PatternCategory::Str,
+                    constrain::attr_type(Bool::Variable(uniq_var), Type::string()),
+                    expected,
+                ),
             ));
         }
 
         RecordDestructure(ext_var, patterns) => {
+            // TODO if a subpattern doesn't bind any identifiers, it doesn't count for uniqueness
             let mut pattern_uniq_vars = Vec::with_capacity(patterns.len());
 
             state.vars.push(*ext_var);
@@ -160,6 +170,7 @@ fn constrain_pattern(
                 state.vars.push(empty_var);
                 Bool::Variable(empty_var)
             } else {
+                state.vars.extend(pattern_uniq_vars.clone());
                 boolean_algebra::any(pattern_uniq_vars.into_iter().map(Bool::Variable))
             };
 
@@ -178,6 +189,7 @@ fn constrain_pattern(
         }
 
         AppliedTag(ext_var, symbol, patterns) => {
+            // TODO if a subpattern doesn't bind any identifiers, it doesn't count for uniqueness
             let mut argument_types = Vec::with_capacity(patterns.len());
             let mut pattern_uniq_vars = Vec::with_capacity(patterns.len());
 
@@ -203,6 +215,8 @@ fn constrain_pattern(
                 state.vars.push(empty_var);
                 Bool::Variable(empty_var)
             } else {
+                pattern_uniq_vars.sort();
+                state.vars.extend(pattern_uniq_vars.clone());
                 boolean_algebra::any(pattern_uniq_vars.into_iter().map(Bool::Variable))
             };
 
@@ -372,7 +386,6 @@ pub fn constrain_expr(
             }
 
             let uniq_var = var_store.fresh();
-            vars.push(uniq_var);
 
             let union_type = constrain::attr_type(
                 Bool::Variable(uniq_var),
@@ -385,6 +398,7 @@ pub fn constrain_expr(
             let union_con = Eq(union_type, expected.clone(), region);
             let ast_con = Eq(Type::Variable(*variant_var), expected, region);
 
+            vars.push(uniq_var);
             vars.push(*variant_var);
             vars.push(*ext_var);
             arg_cons.push(union_con);
@@ -662,9 +676,9 @@ pub fn constrain_expr(
         If { .. } => panic!("TODO constrain uniq if"),
         When {
             cond_var,
+            expr_var,
             loc_cond,
             branches,
-            ..
         } => {
             let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
@@ -728,8 +742,7 @@ pub fn constrain_expr(
                 }
 
                 _ => {
-                    let branch_var = var_store.fresh();
-                    let branch_type = Variable(branch_var);
+                    let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
@@ -770,7 +783,7 @@ pub fn constrain_expr(
                     }
 
                     constraints.push(exists(
-                        vec![cond_var],
+                        vec![cond_var, *expr_var],
                         And(vec![
                             // Record the original conditional expression's constraint.
                             expr_con,
