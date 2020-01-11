@@ -225,8 +225,8 @@ mod test_crane {
                     if fn_val.verify(true) {
                         fpm.run_on(&fn_val);
                     } else {
-                        // NOTE: If this fails, uncomment the above println to debug
-                        panic!("Non-main function failed LLVM verification.");
+                        // NOTE: If this fails, uncomment the above println to debug.
+                        panic!("Non-main function failed LLVM verification. Uncomment the above println to debug!");
                     }
                 }
             }
@@ -275,7 +275,10 @@ mod test_crane {
 
     macro_rules! assert_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
-            // Run Cranelift tests, then LLVM tests
+            // Run Cranelift tests, then LLVM tests, in separate scopes.
+            // These each rebuild everything from scratch, starting with
+            // parsing the source, so that there's no chance their passing
+            // or failing depends on leftover state from the previous one.
             {
                 assert_crane_evals_to!($src, $expected, $ty);
             }
