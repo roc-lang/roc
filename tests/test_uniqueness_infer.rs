@@ -1058,8 +1058,6 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `a` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            // TODO investigate should `Attr a *` be `Attr a Str`, i.e. should it know that `Foo`
-            // is used at `Str` elsewhere as a function? does it matter?
             "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)"
         );
     }
@@ -1084,6 +1082,21 @@ mod test_infer_uniq {
                 r#"
                     when @Foo 4 is
                         @Foo x -> x
+                "#
+            ),
+            "Attr.Attr a Int",
+        );
+    }
+
+    #[test]
+    fn type_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                x : Int 
+                x = 4
+
+                x
                 "#
             ),
             "Attr.Attr a Int",

@@ -1129,8 +1129,6 @@ mod test_infer {
                 \Foo x _ -> Foo x "y"
                 "#
             ),
-            // TODO investigate should `Foo a *` be `Foo a Str`, i.e. should it know that `Foo`
-            // is used at `Str` elsewhere as a function? does it ever matter?
             "[ Foo a * ]* -> [ Foo a Str ]*",
         );
     }

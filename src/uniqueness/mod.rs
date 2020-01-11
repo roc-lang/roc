@@ -953,6 +953,138 @@ fn constrain_def_pattern(
     state
 }
 
+/// Turn e.g. `Int` into `Attr.Attr * Int`
+fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, Type) {
+    use crate::types::Type::*;
+
+    match ann {
+        Variable(_) | Boolean(_) | Erroneous(_) => (vec![], ann.clone()),
+        EmptyRec | EmptyTagUnion => {
+            let uniq_var = var_store.fresh();
+            (
+                vec![uniq_var],
+                constrain::attr_type(Bool::Variable(uniq_var), ann.clone()),
+            )
+        }
+
+        Function(arguments, result) => {
+            let uniq_var = var_store.fresh();
+            let (mut arg_vars, args_lifted) = annotation_to_attr_type_many(var_store, arguments);
+            let (result_vars, result_lifted) = annotation_to_attr_type(var_store, result);
+
+            arg_vars.extend(result_vars);
+            arg_vars.push(uniq_var);
+
+            (
+                arg_vars,
+                constrain::attr_type(
+                    Bool::Variable(uniq_var),
+                    Type::Function(args_lifted, Box::new(result_lifted)),
+                ),
+            )
+        }
+
+        Apply {
+            module_name,
+            name,
+            args,
+        } => {
+            let uniq_var = var_store.fresh();
+            let (mut arg_vars, args_lifted) = annotation_to_attr_type_many(var_store, args);
+
+            arg_vars.push(uniq_var);
+
+            (
+                arg_vars,
+                constrain::attr_type(
+                    Bool::Variable(uniq_var),
+                    Type::Apply {
+                        module_name: module_name.clone(),
+                        name: name.clone(),
+                        args: args_lifted,
+                    },
+                ),
+            )
+        }
+
+        Record(fields, ext_type) => {
+            let uniq_var = var_store.fresh();
+            let mut vars = Vec::with_capacity(fields.len());
+            let mut lifted_fields = SendMap::default();
+
+            for (label, tipe) in fields.clone() {
+                let (new_vars, lifted_field) = annotation_to_attr_type(var_store, &tipe);
+                vars.extend(new_vars);
+                lifted_fields.insert(label, lifted_field);
+            }
+
+            vars.push(uniq_var);
+
+            (
+                vars,
+                constrain::attr_type(
+                    Bool::Variable(uniq_var),
+                    Type::Record(lifted_fields, ext_type.clone()),
+                ),
+            )
+        }
+
+        TagUnion(tags, ext_type) => {
+            let uniq_var = var_store.fresh();
+            let mut vars = Vec::with_capacity(tags.len());
+            let mut lifted_tags = Vec::with_capacity(tags.len());
+
+            for (tag, fields) in tags {
+                let (new_vars, lifted_fields) = annotation_to_attr_type_many(var_store, fields);
+                vars.extend(new_vars);
+                lifted_tags.push((tag.clone(), lifted_fields));
+            }
+
+            vars.push(uniq_var);
+
+            (
+                vars,
+                constrain::attr_type(
+                    Bool::Variable(uniq_var),
+                    Type::TagUnion(lifted_tags, ext_type.clone()),
+                ),
+            )
+        }
+
+        Alias(module_name, uppercase, fields, actual) => {
+            let uniq_var = var_store.fresh();
+
+            let (mut actual_vars, lifted_actual) = annotation_to_attr_type(var_store, actual);
+
+            actual_vars.push(uniq_var);
+
+            (
+                actual_vars,
+                constrain::attr_type(
+                    Bool::Variable(uniq_var),
+                    Type::Alias(
+                        module_name.clone(),
+                        uppercase.clone(),
+                        fields.clone(),
+                        Box::new(lifted_actual),
+                    ),
+                ),
+            )
+        }
+    }
+}
+
+fn annotation_to_attr_type_many(var_store: &VarStore, anns: &[Type]) -> (Vec<Variable>, Vec<Type>) {
+    anns.iter()
+        .fold((Vec::new(), Vec::new()), |(mut vars, mut types), value| {
+            let (new_vars, tipe) = annotation_to_attr_type(var_store, value);
+            vars.extend(new_vars);
+            types.push(tipe);
+
+            (vars, types)
+        })
+}
+
 pub fn constrain_def(
     rigids: &Rigids,
     var_store: &VarStore,
@@ -974,6 +1106,9 @@ pub fn constrain_def(
     let expr_con = match &def.annotation {
         Some((annotation, free_vars)) => {
             let mut ftv: Rigids = rigids.clone();
+            let (uniq_vars, annotation) = annotation_to_attr_type(var_store, annotation);
+
+            pattern_state.vars.extend(uniq_vars);
 
             for (var, name) in free_vars {
                 // if the rigid is known already, nothing needs to happen
@@ -990,7 +1125,7 @@ pub fn constrain_def(
                 def.loc_pattern.clone(),
                 annotation.arity(),
                 AnnotationSource::TypedBody,
-                annotation.clone(),
+                annotation,
             );
 
             pattern_state.constraints.push(Eq(
