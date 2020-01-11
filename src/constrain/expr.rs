@@ -455,7 +455,7 @@ pub fn constrain_expr(
                     }
 
                     constraints.push(exists(
-                        vec![cond_var],
+                        vec![cond_var, *expr_var],
                         And(vec![
                             // Record the original conditional expression's constraint.
                             expr_con,
