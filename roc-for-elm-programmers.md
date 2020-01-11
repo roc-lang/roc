@@ -456,46 +456,40 @@ only using *phantom values* instead.
 A phantom value is one which affects types, but which is never read at runtime.
 (It is similar to Rust's [`PhantomData`](https://doc.rust-lang.org/std/marker/struct.PhantomData.html)
 but not quite the same.)
-For example, let's say I wanted to define a units library - a classic example
-of phantom types. I could do that like this:
+For example, let's say I wanted to define a [units library](https://package.elm-lang.org/packages/ianmackenzie/elm-units/latest/) -
+a classic example of phantom types. I could do that like this:
 
 ```
-Quantity units : [ @Quantity Float units ]
+Quantity units data : [ Quantity units data ]
 
-km : Float -> Quantity [ Km ]
-km = \quantity -> @Number quantity Km
+km : Num n -> Quantity [ Km ] (Num n)
+km = \num ->
+    Quantity num Km
 
-cm : Float -> Quantity [ Cm ]
-cm = \quantity -> @Number quantity Cm
+cm : Num n -> Quantity [ Cm ] (Num n)
+cm = \num ->
+    Quantity num Cm
 
-mm : Float -> Quantity [ Mm ]
-mm = \quantity -> @Number quantity Mm
+mm : Num n -> Quantity [ Mm ] (Num n)
+mm = \num ->
+    Quantity num Mm
+
+add : Quantity u (Num n), Quantity u (Num n) -> Quantity u (Num n)
+add = \Quantity units a, Quantity _ b ->
+    Quantity units (a + b)
 ```
 
-Because `@Quantity` is a private tag, `Quantity` is opaque, meaning nobody
-outside this module can instantiate one. That in turn means that the only
-way other modules can get a `Quantity [ Km ]` value is by calling this
-`km` function. Phantom types can do this too; the usual benefit they bring
-is that `Quantity` would only have `units` in its type, not in its value,
-which in turn means you wouldn't be carrying the value around at runtime.
+From a performance perspective, it's relevant here that `[ Km ]`, `[ Cm ]`, and `[ Mm ]`
+are all unions containing a single tag. That means they have no data at runtime
+(they would always destructure to the same tag), which means they can be "unboxed away" -
+that is, discarded prior to code generation.
 
-In Roc, this is also true. Because the `units` value in `@Quantity Float units`
-is never read, it gets optimized away during code generation -
-as if it had never been defined at all. However, the fact that it *was*
-defined means it was present during type-checking, which was the whole goal.
+This means that for code generation purposes, Roc will treat `Quantity [ Km ] Int`
+as equivalent to `Quantity Int`. Then, becaue `Quantity Int` is an alias for
+`[ Quantity Int ]`, it will unbox again and reduce that all the way down to to `Int`.
 
-The above `Quantity` unit would compile to a plain `Float` representation
-at runtime, because `units` gets optimized away as phantom, and the
-remaining `[ @Quantity Float ]` gets unboxed to `Float`.
-
-> Phantom values are not quite the same as unused fields, because they
-> affect types. If we had `[ @Quantity Float Str ]` and the `Str` field
-> got set, but never read, it would generate a compiler warning for
-> being unused, becuase it is dead code that has no impact on anything.
->
-> In contrast, phantom values - those which are set but never read, *and*
-> which affect types depending on which value is set, do not generate
-> warnings because they have exactly this useful purpose.
+This means that, just like phantom *types*, phantom *values* affect type checking
+only, and have no runtime overhead. Rust has a related concept called [phantom data](https://doc.rust-lang.org/nomicon/phantom-data.html).
 
 ## Modules and Shadowing
 
