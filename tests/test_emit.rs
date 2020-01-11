@@ -203,6 +203,7 @@ mod test_crane {
             // Compile and add all the Procs before adding main
             let mut procs = MutMap::default();
             let env = roc::llvm::build::Env {
+                arena: &arena,
                 subs,
                 builder: &builder,
                 context: &context,
