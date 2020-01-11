@@ -1099,7 +1099,7 @@ mod test_infer_uniq {
                 x
                 "#
             ),
-            "Attr.Attr * Int",
+            "Attr.Attr a Int",
         );
     }
 

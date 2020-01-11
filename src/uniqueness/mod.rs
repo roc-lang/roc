@@ -1074,10 +1074,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
     }
 }
 
-fn annotation_to_attr_type_many(
-    var_store: &VarStore,
-    anns: &Vec<Type>,
-) -> (Vec<Variable>, Vec<Type>) {
+fn annotation_to_attr_type_many(var_store: &VarStore, anns: &[Type]) -> (Vec<Variable>, Vec<Type>) {
     anns.iter()
         .fold((Vec::new(), Vec::new()), |(mut vars, mut types), value| {
             let (new_vars, tipe) = annotation_to_attr_type(var_store, value);
@@ -1128,7 +1125,7 @@ pub fn constrain_def(
                 def.loc_pattern.clone(),
                 annotation.arity(),
                 AnnotationSource::TypedBody,
-                annotation.clone(),
+                annotation,
             );
 
             pattern_state.constraints.push(Eq(
