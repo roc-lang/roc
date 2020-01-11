@@ -359,7 +359,6 @@ pub fn assigned_expr_field_to_pattern<'a>(
                 )
             }
         }
-        AssignedField::OptionalField(_, _, _) => panic!("invalid in literals"),
         AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
         AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
             arena.alloc(assigned_expr_field_to_pattern(arena, nested)?),
@@ -400,9 +399,6 @@ pub fn assigned_pattern_field_to_pattern<'a>(
                 )
             }
         }
-        AssignedField::OptionalField(_, _, _) => {
-            panic!("invalid as a pattern");
-        }
         AssignedField::LabelOnly(name) => Located::at(name.region, Pattern::Identifier(name.value)),
         AssignedField::SpaceBefore(nested, spaces) => {
             let can_nested = assigned_pattern_field_to_pattern(arena, nested, backup_region)?;
@@ -434,7 +430,7 @@ pub fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
             space0_after(
                 between!(
                     char('('),
-                    space0_around(loc!(pattern(min_indent)), min_indent),
+                    space0_around(loc_pattern(min_indent), min_indent),
                     char(')')
                 ),
                 min_indent,
@@ -755,27 +751,36 @@ fn parse_closure_param<'a>(
         // e.g. \User.UserId userId -> ...
         between!(
             char('('),
-            space0_around(loc!(pattern(min_indent)), min_indent),
+            space0_around(loc_pattern(min_indent), min_indent),
             char(')')
         ),
         // The least common, but still allowed, e.g. \Foo -> ...
-        loc!(tag_pattern())
+        loc_tag_pattern(min_indent)
     )
     .parse(arena, state)
 }
 
-fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
+fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
     one_of!(
-        underscore_pattern(),
-        tag_pattern(),
-        ident_pattern(),
-        record_destructure(min_indent),
-        string_pattern(),
-        int_pattern()
+        loc_parenthetical_pattern(min_indent),
+        loc!(underscore_pattern()),
+        loc_tag_pattern(min_indent),
+        loc!(ident_pattern()),
+        loc!(record_destructure(min_indent)),
+        loc!(string_pattern()),
+        loc!(number_pattern())
     )
 }
 
-fn int_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
+fn loc_parenthetical_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    between!(
+        char('('),
+        move |arena, state| loc_pattern(min_indent).parse(arena, state),
+        char(')')
+    )
+}
+
+fn number_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
     map_with_arena!(number_literal(), |arena, expr| {
         expr_to_pattern(arena, &expr).unwrap()
     })
@@ -799,7 +804,7 @@ fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     then(
-        record_without_update!(loc!(pattern(min_indent)), min_indent),
+        record_without_update!(loc_pattern(min_indent), min_indent),
         move |arena, state, assigned_fields| {
             let mut patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
             for assigned_field in assigned_fields {
@@ -818,10 +823,29 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     )
 }
 
-fn tag_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    one_of!(
-        map!(private_tag(), Pattern::PrivateTag),
-        map!(global_tag(), Pattern::GlobalTag)
+fn loc_tag_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    map_with_arena!(
+        and!(
+            loc!(one_of!(
+                map!(private_tag(), Pattern::PrivateTag),
+                map!(global_tag(), Pattern::GlobalTag)
+            )),
+            // This can optionally be an applied pattern, e.g. (Foo bar) instead of (Foo)
+            zero_or_more!(space1_before(loc_pattern(min_indent), min_indent))
+        ),
+        |arena: &'a Bump,
+         (loc_tag, loc_args): (Located<Pattern<'a>>, Vec<'a, Located<Pattern<'a>>>)| {
+            if loc_args.is_empty() {
+                loc_tag
+            } else {
+                // TODO FIME this region doesn't cover the tag's
+                // arguments; need to add them to the region!
+                let region = loc_tag.region;
+                let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+
+                Located { region, value }
+            }
+        }
     )
 }
 
@@ -938,10 +962,11 @@ pub fn case_branches<'a>(
         Ok((branches, state))
     }
 }
+
 fn alternative_patterns<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>> {
     sep_by1(
         char('|'),
-        space0_around(loc!(pattern(min_indent)), min_indent),
+        space0_around(loc_pattern(min_indent), min_indent),
     )
 }
 
@@ -996,49 +1021,61 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
     then(
         // Spaces, then '-', then *not* more spaces.
         not_followed_by(
-            and!(space1(min_indent), loc!(char('-'))),
+            and!(
+                space1(min_indent),
+                either!(
+                    // Try to parse a number literal *before* trying to parse unary negate,
+                    // because otherwise (foo -1) will parse as (foo (Num.neg 1))
+                    loc!(number_literal()),
+                    loc!(char('-'))
+                )
+            ),
             one_of!(char(' '), char('#'), char('\n')),
         ),
-        move |arena, state, (spaces, loc_minus_char)| {
-            let region = loc_minus_char.region;
-            let loc_op = Located {
-                region,
-                value: UnaryOp::Negate,
-            };
+        move |arena, state, (spaces, num_or_minus_char)| {
+            match num_or_minus_char {
+                Either::First(loc_num_literal) => Ok((loc_num_literal, state)),
+                Either::Second(Located { region, .. }) => {
+                    let loc_op = Located {
+                        region,
+                        value: UnaryOp::Negate,
+                    };
 
-            // Continue parsing the function arg as normal.
-            let (loc_expr, state) = loc_function_arg(min_indent).parse(arena, state)?;
-            let region = Region {
-                start_col: loc_op.region.start_col,
-                start_line: loc_op.region.start_line,
-                end_col: loc_expr.region.end_col,
-                end_line: loc_expr.region.end_line,
-            };
-            let value = Expr::UnaryOp(arena.alloc(loc_expr), loc_op);
-            let loc_expr = Located {
-                // Start from where the unary op started,
-                // and end where its argument expr ended.
-                // This is relevant in case (for example)
-                // we have an expression involving parens,
-                // for example `-(foo bar)`
-                region,
-                value,
-            };
+                    // Continue parsing the function arg as normal.
+                    let (loc_expr, state) = loc_function_arg(min_indent).parse(arena, state)?;
+                    let region = Region {
+                        start_col: loc_op.region.start_col,
+                        start_line: loc_op.region.start_line,
+                        end_col: loc_expr.region.end_col,
+                        end_line: loc_expr.region.end_line,
+                    };
+                    let value = Expr::UnaryOp(arena.alloc(loc_expr), loc_op);
+                    let loc_expr = Located {
+                        // Start from where the unary op started,
+                        // and end where its argument expr ended.
+                        // This is relevant in case (for example)
+                        // we have an expression involving parens,
+                        // for example `-(foo bar)`
+                        region,
+                        value,
+                    };
 
-            // spaces can be empy if it's all space characters (no newlines or comments).
-            let value = if spaces.is_empty() {
-                loc_expr.value
-            } else {
-                Expr::SpaceBefore(arena.alloc(loc_expr.value), spaces)
-            };
+                    // spaces can be empy if it's all space characters (no newlines or comments).
+                    let value = if spaces.is_empty() {
+                        loc_expr.value
+                    } else {
+                        Expr::SpaceBefore(arena.alloc(loc_expr.value), spaces)
+                    };
 
-            Ok((
-                Located {
-                    region: loc_expr.region,
-                    value,
-                },
-                state,
-            ))
+                    Ok((
+                        Located {
+                            region: loc_expr.region,
+                            value,
+                        },
+                        state,
+                    ))
+                }
+            }
         },
     )
 }
@@ -1406,7 +1443,17 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
 /// This is mainly for matching tags in closure params, e.g. \@Foo -> ...
 fn private_tag<'a>() -> impl Parser<'a, &'a str> {
-    skip_first!(char('@'), global_tag())
+    // TODO should be refactored so the name is not allocated again.
+    map_with_arena!(
+        skip_first!(char('@'), global_tag()),
+        |arena: &'a Bump, name: &'a str| {
+            use bumpalo::collections::string::String;
+            let mut buf = String::with_capacity_in(1 + name.len(), arena);
+            buf.push('@');
+            buf.push_str(name);
+            buf.into_bump_str()
+        }
+    )
 }
 
 /// This is mainly for matching tags in closure params, e.g. \Foo -> ...

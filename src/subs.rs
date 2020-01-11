@@ -2,7 +2,9 @@ use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
+use crate::types;
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
+use crate::uniqueness::boolean_algebra;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -134,7 +136,7 @@ impl Into<Option<Variable>> for OptVariable {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Variable(usize);
 
 impl Variable {
@@ -145,6 +147,10 @@ impl Variable {
     const NULL: Variable = Variable(0);
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(1);
+
+    pub fn unsafe_debug_variable(v: usize) -> Self {
+        Variable(v)
+    }
 }
 
 impl Into<OptVariable> for Variable {
@@ -422,6 +428,18 @@ pub enum Content {
     Error,
 }
 
+impl Content {
+    #[inline(always)]
+    pub fn is_number(&self) -> bool {
+        match &self {
+            Content::Structure(FlatType::Apply {
+                module_name, name, ..
+            }) => module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
     Apply {
@@ -435,6 +453,7 @@ pub enum FlatType {
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,
+    Boolean(boolean_algebra::Bool),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -478,6 +497,10 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                                 .values()
                                 .any(|vars| vars.iter().any(|var| occurs(subs, &new_seen, *var)))
                     }
+                    Boolean(b) => b
+                        .variables()
+                        .iter()
+                        .any(|var| occurs(subs, &new_seen, *var)),
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => false,
                 }
             }
@@ -556,6 +579,12 @@ fn get_var_names(
 
                     taken_names
                 }
+                FlatType::Boolean(b) => b
+                    .variables()
+                    .into_iter()
+                    .fold(taken_names, |answer, arg_var| {
+                        get_var_names(subs, arg_var, answer)
+                    }),
             },
         }
     }
@@ -755,6 +784,8 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
             }
         }
 
+        Boolean(b) => ErrorType::Boolean(b),
+
         Erroneous(_) => ErrorType::Error,
     }
 }
@@ -805,6 +836,11 @@ fn restore_content(subs: &mut Subs, content: &Content) {
                 }
 
                 subs.restore(*ext_var);
+            }
+            Boolean(b) => {
+                for var in b.variables() {
+                    subs.restore(var);
+                }
             }
             Erroneous(_) => (),
         },

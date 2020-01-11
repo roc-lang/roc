@@ -3,10 +3,25 @@ use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{BasicType, FunctionType};
 use inkwell::AddressSpace;
 
-use crate::ll::layout::Layout;
+use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
-use crate::subs::{Content, Subs};
+use crate::subs::{Content, Subs, Variable};
 use crate::types;
+
+pub fn type_from_var<'ctx>(
+    var: Variable,
+    subs: &Subs,
+    context: &'ctx Context,
+) -> BasicTypeEnum<'ctx> {
+    let content = subs.get_without_compacting(var).content;
+
+    content_to_basic_type(&content, subs, context).unwrap_or_else(|err| {
+        panic!(
+            "Error converting Content to basic type: {:?} - {:?}",
+            content, err
+        )
+    })
+}
 
 pub fn content_to_basic_type<'ctx>(
     content: &Content,
@@ -46,8 +61,9 @@ pub fn content_to_basic_type<'ctx>(
                     arg_basic_types.push(content_to_basic_type(&arg_content, subs, context)?);
                 }
                 let fn_type = get_fn_type(&ret_type, arg_basic_types.as_slice());
+                let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
 
-                Ok(fn_type.ptr_type(AddressSpace::Global).as_basic_type_enum())
+                Ok(ptr_type.as_basic_type_enum())
             }
             other => panic!("TODO handle content_to_basic_type for {:?}", other),
         },
@@ -99,7 +115,7 @@ fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTypeEnu
 }
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-fn get_fn_type<'ctx>(
+pub fn get_fn_type<'ctx>(
     bt_enum: &BasicTypeEnum<'ctx>,
     arg_types: &[BasicTypeEnum<'ctx>],
 ) -> FunctionType<'ctx> {
@@ -118,8 +134,8 @@ pub fn layout_to_basic_type<'ctx>(
     _subs: &Subs,
     context: &'ctx Context,
 ) -> BasicTypeEnum<'ctx> {
-    use crate::ll::layout::Builtin::*;
-    use crate::ll::layout::Layout::*;
+    use crate::mono::layout::Builtin::*;
+    use crate::mono::layout::Layout::*;
 
     match layout {
         FunctionPointer(_arg_layouts, _ret_layout) => {

@@ -607,20 +607,19 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // TODO FIXME this should work, but instead causes a stack overflow!
-    // fn recursive_identity() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //                 identity = \val -> val
+    #[test]
+    fn recursive_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    identity = \val -> val
 
-    //                 identity identity
-    //             "#
-    //         ),
-    //         "a -> a",
-    //     );
-    // }
+                    identity identity
+                "#
+            ),
+            "a -> a",
+        );
+    }
 
     #[test]
     fn identity_function() {
@@ -813,20 +812,20 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // fn if_with_int_literals() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             if 1 == 1 then
-    //                 42
-    //             else
-    //                 24
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+    #[test]
+    fn if_with_int_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                if True then
+                    42
+                else
+                    24
+            "#
+            ),
+            "Int",
+        );
+    }
 
     #[test]
     fn when_with_int_literals() {
@@ -1006,7 +1005,7 @@ mod test_infer {
                 { user & year: "foo" }
                 "#
             ),
-            "{ year : Str }{ name : Str }",
+            "{ name : Str, year : Str }",
         );
     }
 
@@ -1039,7 +1038,7 @@ mod test_infer {
                 r#"\@Foo -> 42
                 "#
             ),
-            "[ Test.Foo ]* -> Int",
+            "[ Test.@Foo ]* -> Int",
         );
     }
 
@@ -1068,16 +1067,95 @@ mod test_infer {
         );
     }
 
-    // currently doesn't work because of a parsing issue
-    // @Foo x y isn't turned into Apply(@Foo, [x,y]) currently
-    // #[test]
-    // fn private_tag_application() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"@Foo "happy" 2020
-    //             "#
-    //         ),
-    //         "[ Test.Foo Str Int ]*",
-    //     );
-    // }
+    #[test]
+    fn private_tag_application() {
+        infer_eq(
+            indoc!(
+                r#"@Foo "happy" 2020
+                "#
+            ),
+            "[ Test.@Foo Str Int ]*",
+        );
+    }
+
+    #[test]
+    fn record_extraction() {
+        with_larger_debug_stack(|| {
+            infer_eq(
+                indoc!(
+                    r#"
+                f = \x -> 
+                    when x is 
+                        { a, b } -> a
+
+                f
+                "#
+                ),
+                "{ a : a, b : * }* -> a",
+            );
+        });
+    }
+
+    #[test]
+    fn record_field_pattern_match_with_guard() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when foo is
+                        { x: 4 } -> x
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn tag_union_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x -> Foo x
+                "#
+            ),
+            "[ Foo a ]* -> [ Foo a ]*",
+        );
+    }
+
+    #[test]
+    fn tag_union_pattern_match_ignored_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x _ -> Foo x "y"
+                "#
+            ),
+            "[ Foo a * ]* -> [ Foo a Str ]*",
+        );
+    }
+
+    #[test]
+    fn global_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when Foo 4 is
+                        Foo x -> x
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn private_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when @Foo 4 is
+                        @Foo x -> x
+                "#
+            ),
+            "Int",
+        );
+    }
 }

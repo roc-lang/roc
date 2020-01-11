@@ -444,6 +444,59 @@ It's not even syntactically possible for me to expose the `@UserId` tag, because
 > Even trying to use `==` on them would be a type mismatch, because I would be comparing
 > a `[ UserId.@UserId Int ]*` with a `[ Main.@UserId Int ]*`, which are incompatible.
 
+## Phantom Types
+
+[Phantom types](https://medium.com/@ckoster22/advanced-types-in-elm-phantom-types-808044c5946d)
+exist in Elm but not in Roc. This is because phantom types can't be defined
+using type aliases (in fact, there is a custom error message in Elm if you
+try to do this), and Roc only has type aliases. However, in Roc, you can achieve
+the same API and runtime performance characteristics as if you had phantom types,
+only using *phantom values* instead.
+
+A phantom value is one which affects types, but which is never read at runtime.
+(It is similar to Rust's [`PhantomData`](https://doc.rust-lang.org/std/marker/struct.PhantomData.html)
+but not quite the same.)
+For example, let's say I wanted to define a units library - a classic example
+of phantom types. I could do that like this:
+
+```
+Quantity units : [ @Quantity Float units ]
+
+km : Float -> Quantity [ Km ]
+km = \quantity -> @Number quantity Km
+
+cm : Float -> Quantity [ Cm ]
+cm = \quantity -> @Number quantity Cm
+
+mm : Float -> Quantity [ Mm ]
+mm = \quantity -> @Number quantity Mm
+```
+
+Because `@Quantity` is a private tag, `Quantity` is opaque, meaning nobody
+outside this module can instantiate one. That in turn means that the only
+way other modules can get a `Quantity [ Km ]` value is by calling this
+`km` function. Phantom types can do this too; the usual benefit they bring
+is that `Quantity` would only have `units` in its type, not in its value,
+which in turn means you wouldn't be carrying the value around at runtime.
+
+In Roc, this is also true. Because the `units` value in `@Quantity Float units`
+is never read, it gets optimized away during code generation -
+as if it had never been defined at all. However, the fact that it *was*
+defined means it was present during type-checking, which was the whole goal.
+
+The above `Quantity` unit would compile to a plain `Float` representation
+at runtime, because `units` gets optimized away as phantom, and the
+remaining `[ @Quantity Float ]` gets unboxed to `Float`.
+
+> Phantom values are not quite the same as unused fields, because they
+> affect types. If we had `[ @Quantity Float Str ]` and the `Str` field
+> got set, but never read, it would generate a compiler warning for
+> being unused, becuase it is dead code that has no impact on anything.
+>
+> In contrast, phantom values - those which are set but never read, *and*
+> which affect types depending on which value is set, do not generate
+> warnings because they have exactly this useful purpose.
+
 ## Modules and Shadowing
 
 In Elm, my main module (where `main` lives) might begin like this:

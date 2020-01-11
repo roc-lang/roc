@@ -17,21 +17,14 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq(src: &str, expected: &str) {
-        let (
-            _output2,
-            _output1,
-            _,
-            mut subs1,
-            variable1,
-            mut subs2,
-            variable2,
-            constraint1,
-            constraint2,
-        ) = uniq_expr(src);
+        let (_output1, _, mut subs1, variable1, mut subs2, variable2, constraint1, constraint2) =
+            uniq_expr(src);
 
         let mut unify_problems = Vec::new();
         let content1 = infer_expr(&mut subs1, &mut unify_problems, &constraint1, variable1);
         let content2 = infer_expr(&mut subs2, &mut unify_problems, &constraint2, variable2);
+
+        dbg!(unify_problems);
 
         name_all_type_vars(variable1, &mut subs1);
         name_all_type_vars(variable2, &mut subs2);
@@ -514,15 +507,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                identity = \a -> a
+                    identity = \a -> a
+                    x = identity 5
 
-                x = identity 5
-
-                identity
-                "#
+                    identity
+                    "#
             ),
-            // TODO investigate why not shared
-            // perhaps because `x` is DCE'd?
+            // TODO investigate why not shared?
             "Attr.Attr * (a -> a)",
         );
     }
@@ -637,20 +628,19 @@ mod test_infer_uniq {
         );
     }
 
-    // #[test]
-    // TODO FIXME this should work, but instead causes a stack overflow!
-    // fn recursive_identity() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //                 identity = \val -> val
+    #[test]
+    fn recursive_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    identity = \val -> val
 
-    //                 identity identity
-    //             "#
-    //         ),
-    //         "a -> a",
-    //     );
-    // }
+                    identity identity
+                "#
+            ),
+            "Attr.Attr Attr.Shared (a -> a)",
+        );
+    }
 
     #[test]
     fn identity_function() {
@@ -843,20 +833,20 @@ mod test_infer_uniq {
         );
     }
 
-    // #[test]
-    // fn if_with_int_literals() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             if 1 == 1 then
-    //                 42
-    //             else
-    //                 24
-    //         "#
-    //         ),
-    //         "Int",
-    //     );
-    // }
+    #[test]
+    fn if_with_int_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                if True then
+                    42
+                else
+                    24
+            "#
+            ),
+            "Attr.Attr * Int",
+        );
+    }
 
     #[test]
     fn when_with_int_literals() {
@@ -873,11 +863,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn accessor_function() {
-        infer_eq(".foo", "Attr.Attr * { foo : a }* -> a");
-    }
-
-    #[test]
     fn record() {
         infer_eq("{ foo: 42 }", "Attr.Attr * { foo : (Attr.Attr * Int) }");
     }
@@ -885,19 +870,6 @@ mod test_infer_uniq {
     #[test]
     fn record_access() {
         infer_eq("{ foo: 42 }.foo", "Attr.Attr * Int");
-    }
-
-    #[test]
-    fn record_pattern_match_infer() {
-        infer_eq(
-            indoc!(
-                r#"
-                    when foo is
-                        { x: 4 }-> x
-                "#
-            ),
-            "Int",
-        );
     }
 
     #[test]
@@ -927,7 +899,226 @@ mod test_infer_uniq {
                 { user & year: "foo" }
                 "#
             ),
-            "Attr.Attr * { year : (Attr.Attr * Str) }{ name : (Attr.Attr * Str) }",
+            "Attr.Attr * { name : (Attr.Attr * Str), year : (Attr.Attr * Str) }",
         );
     }
+
+    #[test]
+    fn bare_tag() {
+        infer_eq(
+            indoc!(
+                r#"Foo
+                "#
+            ),
+            "Attr.Attr * [ Foo ]*",
+        );
+    }
+
+    #[test]
+    fn single_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\Foo -> 42
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr * [ Foo ]* -> Attr.Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn single_private_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\@Foo -> 42
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr * [ Test.@Foo ]* -> Attr.Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn two_tag_pattern() {
+        infer_eq(
+            indoc!(
+                r#"\x -> 
+                    when x is 
+                        True -> 1
+                        False -> 0
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr * [ False, True ]* -> Attr.Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn tag_application() {
+        infer_eq(
+            indoc!(
+                r#"Foo "happy" 2020
+                "#
+            ),
+            "Attr.Attr * [ Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
+        );
+    }
+
+    #[test]
+    fn private_tag_application() {
+        infer_eq(
+            indoc!(
+                r#"@Foo "happy" 2020
+                "#
+            ),
+            "Attr.Attr * [ Test.@Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
+        );
+    }
+
+    #[test]
+    fn record_field_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                \rec -> rec.left 
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
+    fn record_field_accessor_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                .left
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
+    fn record_field_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                \{ left } -> left
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
+    fn record_field_pattern_match_two() {
+        infer_eq(
+            indoc!(
+                r#"
+                \{ left, right } -> { left, right }
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (a | b) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
+        );
+    }
+
+    #[test]
+    fn record_field_pattern_match_with_guard() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when foo is
+                        { x: 4 } -> x
+                "#
+            ),
+            "Attr.Attr * Int",
+        );
+    }
+
+    #[test]
+    fn tag_union_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x -> Foo x
+                "#
+            ),
+            // NOTE: Foo loses the relation to the uniqueness attribute `a` 
+            // That is fine. Whenever we try to extract from it, the relation will be enforced
+            "Attr.Attr * (Attr.Attr a [ Foo (Attr.Attr a b) ]* -> Attr.Attr * [ Foo (Attr.Attr a b) ]*)",
+        );
+    }
+
+    #[test]
+    fn tag_union_pattern_match_ignored_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x _ -> Foo x "y"
+                "#
+            ),
+            // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
+            // i.e. the `a` could be ignored in this example, is that true in general?
+            // seems like it because we don't really extract anything.
+            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)"
+        );
+    }
+
+    #[test]
+    fn global_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when Foo 4 is
+                        Foo x -> x
+                "#
+            ),
+            "Attr.Attr a Int",
+        );
+    }
+
+    #[test]
+    fn private_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when @Foo 4 is
+                        @Foo x -> x
+                "#
+            ),
+            "Attr.Attr a Int",
+        );
+    }
+
+    #[test]
+    fn type_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                x : Int 
+                x = 4
+
+                x
+                "#
+            ),
+            "Attr.Attr a Int",
+        );
+    }
+
+    // TODO when type signatures are supported, ensure this works
+    //    #[test]
+    //    fn num_identity() {
+    //        infer_eq(
+    //            indoc!(
+    //                r#"
+    //                numIdentity : Num a -> Num a
+    //                numIdentity = \x -> x
+    //
+    //                x = numIdentity 42
+    //                y = numIdentity 3.14
+    //
+    //                numIdentity
+    //                "#
+    //            ),
+    //            "tbd",
+    //        );
+    //    }
 }

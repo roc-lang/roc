@@ -1,7 +1,8 @@
-use crate::subs::{Content, FlatType, Subs};
+use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use cranelift_codegen::isa::TargetFrontendConfig;
 use inlinable_string::InlinableString;
 
 /// Types for code gen must be monomorphic. No type variables allowed!
@@ -24,6 +25,11 @@ pub enum Builtin<'a> {
 }
 
 impl<'a> Layout<'a> {
+    pub fn from_var(arena: &'a Bump, var: Variable, subs: &Subs) -> Result<Self, ()> {
+        let content = subs.get_without_compacting(var).content;
+
+        Self::from_content(arena, content, subs)
+    }
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
@@ -39,6 +45,50 @@ impl<'a> Layout<'a> {
                 panic!("TODO recursively resolve type aliases in Layout::from_content");
             }
             Error => Err(()),
+        }
+    }
+
+    pub fn stack_size(&self, cfg: TargetFrontendConfig) -> u32 {
+        use Layout::*;
+
+        match self {
+            Builtin(builtin) => builtin.stack_size(cfg),
+            Struct(fields) => {
+                let mut sum = 0;
+
+                for (_, field_layout) in *fields {
+                    sum += field_layout.stack_size(cfg);
+                }
+
+                sum
+            }
+            Pointer(_) | FunctionPointer(_, _) => pointer_size(cfg),
+        }
+    }
+}
+
+fn pointer_size(cfg: TargetFrontendConfig) -> u32 {
+    cfg.pointer_bytes() as u32
+}
+
+impl<'a> Builtin<'a> {
+    const I64_SIZE: u32 = std::mem::size_of::<i64>() as u32;
+    const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
+
+    /// Number of machine words in an empty one of these
+    const STR_WORDS: u32 = 3;
+    const MAP_WORDS: u32 = 6;
+    const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
+
+    pub fn stack_size(&self, cfg: TargetFrontendConfig) -> u32 {
+        use Builtin::*;
+
+        match self {
+            Int64 => Builtin::I64_SIZE,
+            Float64 => Builtin::F64_SIZE,
+            Str => Builtin::STR_WORDS * pointer_size(cfg),
+            Map(_, _) => Builtin::MAP_WORDS * pointer_size(cfg),
+            Set(_) => Builtin::SET_WORDS * pointer_size(cfg),
         }
     }
 }
@@ -101,6 +151,9 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
+        }
+        Boolean(_) => {
+            panic!("TODO make Layout for Boolean");
         }
         Erroneous(_) => Err(()),
         EmptyRecord => Ok(Layout::Struct(&[])),

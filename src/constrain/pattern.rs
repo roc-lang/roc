@@ -4,7 +4,7 @@ use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
 use crate::region::{Located, Region};
 use crate::subs::Variable;
-use crate::types::{Constraint, PExpected, PatternCategory, RecordFieldLabel, Type};
+use crate::types::{Constraint, Expected, PExpected, PatternCategory, RecordFieldLabel, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
@@ -85,8 +85,14 @@ pub fn constrain_pattern(
 
                 field_types.insert(label.clone(), pat_type.clone());
 
-                // TODO investigate: shouldn't guard_var be constrained somewhere?
-                if let Some((_guard_var, loc_guard)) = guard {
+                if let Some((guard_var, loc_guard)) = guard {
+                    state.constraints.push(Constraint::Eq(
+                        Type::Variable(*guard_var),
+                        Expected::NoExpectation(pat_type.clone()),
+                        region,
+                    ));
+                    state.vars.push(*guard_var);
+
                     constrain_pattern(&loc_guard.value, loc_guard.region, expected, state);
                 }
 
@@ -99,12 +105,23 @@ pub fn constrain_pattern(
 
             state.constraints.push(record_con);
         }
-        AppliedTag(ext_var, symbol, _arguments) => {
+        AppliedTag(ext_var, symbol, patterns) => {
+            let mut argument_types = Vec::with_capacity(patterns.len());
+            for (pattern_var, loc_pattern) in patterns {
+                state.vars.push(*pattern_var);
+
+                let pattern_type = Type::Variable(*pattern_var);
+                argument_types.push(pattern_type.clone());
+
+                let expected = PExpected::NoExpectation(pattern_type);
+                constrain_pattern(&loc_pattern.value, loc_pattern.region, expected, state);
+            }
+
             let tag_con = Constraint::Pattern(
                 region,
                 PatternCategory::Ctor(symbol.clone()),
                 Type::TagUnion(
-                    vec![(symbol.clone(), vec![])],
+                    vec![(symbol.clone(), argument_types)],
                     Box::new(Type::Variable(*ext_var)),
                 ),
                 expected,
