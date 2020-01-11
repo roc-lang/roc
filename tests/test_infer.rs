@@ -21,6 +21,21 @@ mod test_infer {
         let (_, output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
+        // variables declared in constraint (flex_vars or rigid_vars)
+        // and variables actually used in constraints
+        let (declared, used) = roc::types::variable_usage(&constraint);
+
+        if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
+            println!("VARIABLE USAGE PROBLEM");
+            println!("used variable count: {}\n", used.len());
+
+            println!("used: {:?}", &used);
+            println!("rigids: {:?}", &declared.rigid_vars);
+            println!("flexs: {:?}", &declared.flex_vars);
+
+            assert_eq!(0, 1);
+        }
+
         for (var, name) in output.rigids {
             subs.rigid_var(var, name);
         }

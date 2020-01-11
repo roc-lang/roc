@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
-use crate::collections::{MutSet, SendMap};
+use crate::collections::{ImSet, MutSet, SendMap};
 use crate::ident::Ident;
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
@@ -246,6 +246,60 @@ impl Type {
             0
         }
     }
+
+    pub fn variables(&self) -> ImSet<Variable> {
+        let mut result = ImSet::default();
+        variables_help(self, &mut result);
+
+        result
+    }
+}
+
+fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
+    use Type::*;
+    match tipe {
+        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+        Boolean(b) => {
+            for v in b.variables() {
+                accum.insert(v);
+            }
+        }
+        Variable(v) => {
+            accum.insert(*v);
+        }
+
+        Function(args, ret) => {
+            for arg in args {
+                variables_help(arg, accum);
+            }
+            variables_help(ret, accum);
+        }
+        Record(fields, ext) => {
+            for (_, ftype) in fields {
+                variables_help(ftype, accum);
+            }
+            variables_help(ext, accum);
+        }
+        TagUnion(tags, ext) => {
+            for (_, args) in tags {
+                for arg in args {
+                    variables_help(arg, accum);
+                }
+            }
+            variables_help(ext, accum);
+        }
+        Alias(_, _, args, actual) => {
+            for (_, ftype) in args {
+                variables_help(ftype, accum);
+            }
+            variables_help(actual, accum);
+        }
+        Apply { args, .. } => {
+            for ftype in args {
+                variables_help(ftype, accum);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -437,5 +491,69 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
         taken.insert(generated_name.clone());
 
         (generated_name, letters_used + 1)
+    }
+}
+
+#[derive(Default)]
+pub struct SeenVariables {
+    pub rigid_vars: Vec<Variable>,
+    pub flex_vars: Vec<Variable>,
+}
+
+pub fn variable_usage(con: &Constraint) -> (SeenVariables, Vec<Variable>) {
+    let mut declared = SeenVariables::default();
+    let mut used = ImSet::default();
+    variable_usage_help(con, &mut declared, &mut used);
+
+    used.remove(&Variable::unsafe_debug_variable(1));
+
+    let mut used_vec: Vec<Variable> = used.into_iter().collect();
+    used_vec.sort();
+
+    declared.rigid_vars.sort();
+    declared.flex_vars.sort();
+
+    (declared, used_vec)
+}
+
+fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mut ImSet<Variable>) {
+    use self::Constraint::*;
+    match con {
+        True | SaveTheEnvironment => (),
+        Eq(tipe, expectation, _) => {
+            for v in tipe.variables() {
+                used.insert(v);
+            }
+
+            for v in expectation.get_type_ref().variables() {
+                used.insert(v);
+            }
+        }
+        Lookup(_, expectation, _) => {
+            for v in expectation.get_type_ref().variables() {
+                used.insert(v);
+            }
+        }
+        Pattern(_, _, tipe, pexpectation) => {
+            for v in tipe.variables() {
+                used.insert(v);
+            }
+
+            for v in pexpectation.get_type_ref().variables() {
+                used.insert(v);
+            }
+        }
+        Let(letcon) => {
+            declared.rigid_vars.extend(letcon.rigid_vars.clone());
+            declared.flex_vars.extend(letcon.flex_vars.clone());
+
+            variable_usage_help(&letcon.defs_constraint, declared, used);
+            variable_usage_help(&letcon.ret_constraint, declared, used);
+        }
+        And(constraints) => {
+            for sub in constraints {
+                variable_usage_help(sub, declared, used);
+            }
+        }
     }
 }

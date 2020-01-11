@@ -319,6 +319,14 @@ impl Subs {
             restore_content(self, &content);
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.utable.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.utable.is_empty()
+    }
 }
 
 #[inline(always)]
