@@ -17,7 +17,7 @@ mod test_infer {
 
     // HELPERS
 
-    fn infer_eq(src: &str, expected: &str) {
+    fn infer_eq(src: &str, expected: &str) -> Vec<roc::types::Problem> {
         let (_, output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
@@ -33,6 +33,13 @@ mod test_infer {
         let actual_str = content_to_string(content, &mut subs);
 
         assert_eq!(actual_str, expected.to_string());
+
+        unify_problems
+    }
+
+    fn infer_eq_without_problem(src: &str, expected: &str) {
+        let empty: Vec<roc::types::Problem> = Vec::new();
+        assert_eq!(empty, infer_eq(src, expected));
     }
 
     #[test]
@@ -1154,6 +1161,38 @@ mod test_infer {
                     when @Foo 4 is
                         @Foo x -> x
                 "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotation_using_num() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   int : Num.Num Int.Integer
+
+                   int
+                   "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotation_using_num_used() {
+        // There was a problem where `int`, because it is only an annotation
+        // wasn't added to the vars_by_symbol.
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   int : Num.Num Int.Integer
+
+                   p = (\x -> x) int
+
+                   p
+                   "#
             ),
             "Int",
         );

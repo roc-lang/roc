@@ -516,7 +516,8 @@ fn canonicalize_def<'a>(
 
             // Fabricate a body for this annotation, that will error at runtime
             let value = Expr::RuntimeError(NoImplementation);
-            let loc_can_expr = if arity > 0 {
+            let is_closure = arity > 0;
+            let loc_can_expr = if !is_closure {
                 Located {
                     value,
                     region: loc_annotation.region,
@@ -906,7 +907,7 @@ fn pattern_from_def<'a>(def: &'a ast::Def<'a>) -> Option<&'a Located<ast::Patter
     use crate::parse::ast::Def::*;
 
     match def {
-        Annotation(_, _) => None,
+        Annotation(ref loc_pattern, _) => Some(loc_pattern),
         Body(ref loc_pattern, _) => Some(loc_pattern),
         TypedDef(ref loc_pattern, _, _) => Some(loc_pattern),
         SpaceBefore(def, _) | SpaceAfter(def, _) | Nested(def) => pattern_from_def(def),
