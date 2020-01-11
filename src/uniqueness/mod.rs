@@ -109,7 +109,7 @@ fn constrain_pattern(
         }
 
         RecordDestructure(ext_var, patterns) => {
-            let mut pattern_uniq_vars = Vec::new();
+            let mut pattern_uniq_vars = Vec::with_capacity(patterns.len());
 
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
@@ -174,11 +174,39 @@ fn constrain_pattern(
             state.constraints.push(record_con);
         }
 
-        AppliedTag(ext_var, symbol, _arguments) => {
-            let union_type = constrain::lift(
-                var_store,
+        AppliedTag(ext_var, symbol, patterns) => {
+            let mut argument_types = Vec::with_capacity(patterns.len());
+            let mut pattern_uniq_vars = Vec::with_capacity(patterns.len());
+
+            for (pattern_var, loc_pattern) in patterns {
+                state.vars.push(*pattern_var);
+
+                let pat_uniq_var = var_store.fresh();
+                pattern_uniq_vars.push(pat_uniq_var);
+
+                let pattern_type = constrain::attr_type(
+                    Bool::Variable(pat_uniq_var),
+                    Type::Variable(*pattern_var),
+                );
+                argument_types.push(pattern_type.clone());
+
+                let expected = PExpected::NoExpectation(pattern_type);
+                constrain_pattern(var_store, state, loc_pattern, expected);
+            }
+
+            let record_uniq_type = if pattern_uniq_vars.is_empty() {
+                // explicitly keep uniqueness of empty tag union (match) free
+                let empty_var = var_store.fresh();
+                state.vars.push(empty_var);
+                Bool::Variable(empty_var)
+            } else {
+                boolean_algebra::any(pattern_uniq_vars.into_iter().map(Bool::Variable))
+            };
+
+            let union_type = constrain::attr_type(
+                record_uniq_type,
                 Type::TagUnion(
-                    vec![(symbol.clone(), vec![])],
+                    vec![(symbol.clone(), argument_types)],
                     Box::new(Type::Variable(*ext_var)),
                 ),
             );

@@ -1038,7 +1038,7 @@ mod test_infer {
                 r#"\@Foo -> 42
                 "#
             ),
-            "[ Test.Foo ]* -> Int",
+            "[ Test.@Foo ]* -> Int",
         );
     }
 
@@ -1103,6 +1103,56 @@ mod test_infer {
                 r#"
                     when foo is
                         { x: 4 } -> x
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn tag_union_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x -> Foo x
+                "#
+            ),
+            "[ Foo a ]* -> [ Foo a ]*",
+        );
+    }
+
+    #[test]
+    fn tag_union_pattern_match_ignored_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \Foo x _ -> Foo x "y"
+                "#
+            ),
+            "[ Foo a * ]* -> [ Foo a Str ]*",
+        );
+    }
+
+    #[test]
+    fn global_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when Foo 4 is
+                        Foo x -> x
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn private_tag_with_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                    when @Foo 4 is
+                        @Foo x -> x
                 "#
             ),
             "Int",

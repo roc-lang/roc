@@ -1,1 +1,3 @@
 target
+.direnv
+*.rs.bk
