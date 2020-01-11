@@ -249,7 +249,9 @@ mod test_crane {
 
             builder.build_return(Some(&ret));
 
-            if !main_fn.verify(true) {
+            if main_fn.verify(true) {
+                fpm.run_on(&main_fn);
+            } else {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
