@@ -1227,4 +1227,22 @@ mod test_infer {
             "{ numIdentity : Num a -> Num a, x : Int, y : Float }",
         );
     }
+
+    #[test]
+    fn when_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    x : Num.Num Int.Integer
+                    x =
+                        when 2 is
+                            3 -> 4
+                            _ -> 5
+
+                    x
+                   "#
+            ),
+            "Int",
+        );
+    }
 }

@@ -1147,4 +1147,22 @@ mod test_infer_uniq {
             ), "Attr.Attr * { numIdentity : (Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
         );
     }
+
+    #[test]
+    fn when_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    x : Num.Num Int.Integer
+                    x =
+                        when 2 is
+                            3 -> 4
+                            _ -> 5
+
+                    x
+                   "#
+            ),
+            "Attr.Attr * Int",
+        );
+    }
 }

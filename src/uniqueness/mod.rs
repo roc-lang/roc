@@ -258,6 +258,8 @@ pub fn constrain_expr(
     match expr {
         Int(var, _) => {
             let uniq_var = var_store.fresh();
+            let bvar = Bool::Variable(uniq_var);
+
             exists(
                 vec![*var, uniq_var],
                 And(vec![
@@ -265,7 +267,7 @@ pub fn constrain_expr(
                         Type::Variable(*var),
                         Expected::ForReason(
                             Reason::IntLiteral,
-                            constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
+                            constrain::attr_type(bvar, Type::int()),
                             region,
                         ),
                         region,
@@ -476,7 +478,7 @@ pub fn constrain_expr(
                 }
                 Some(sharing::ReferenceCount::Unique) => {
                     // no additional constraints, keep uniqueness unbound
-                    Lookup(symbol_for_lookup.clone(), expected.clone(), region)
+                    Lookup(symbol_for_lookup.clone(), expected, region)
                 }
                 None => panic!("symbol not analyzed"),
             }
@@ -692,11 +694,14 @@ pub fn constrain_expr(
             );
 
             let mut constraints = Vec::with_capacity(branches.len() + 1);
+            constraints.push(expr_con);
 
             let old_var_usage = var_usage.clone();
 
-            match expected {
+            match &expected {
                 Expected::FromAnnotation(name, arity, _, typ) => {
+                    constraints.push(Eq(Type::Variable(*expr_var), expected.clone(), region));
+
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = constrain_when_branch(
@@ -713,7 +718,7 @@ pub fn constrain_expr(
                             ),
                             Expected::FromAnnotation(
                                 name.clone(),
-                                arity,
+                                *arity,
                                 TypedWhenBranch(index),
                                 typ.clone(),
                             ),
@@ -732,12 +737,11 @@ pub fn constrain_expr(
 
                         var_usage.or(&branch_var_usage);
 
-                        constraints.push(exists(
-                            vec![cond_var],
+                        constraints.push(
                             // Each branch's pattern must have the same type
                             // as the condition expression did.
-                            And(vec![expr_con.clone(), branch_con]),
-                        ));
+                            branch_con,
+                        );
                     }
                 }
 
@@ -782,23 +786,18 @@ pub fn constrain_expr(
                         branch_cons.push(branch_con);
                     }
 
-                    constraints.push(exists(
-                        vec![cond_var, *expr_var],
-                        And(vec![
-                            // Record the original conditional expression's constraint.
-                            expr_con,
-                            // Each branch's pattern must have the same type
-                            // as the condition expression did.
-                            And(branch_cons),
-                            // The return type of each branch must equal
-                            // the return type of the entire case-expression.
-                            Eq(branch_type, expected, region),
-                        ]),
-                    ));
+                    constraints.push(And(vec![
+                        // Each branch's pattern must have the same type
+                        // as the condition expression did.
+                        And(branch_cons),
+                        // The return type of each branch must equal
+                        // the return type of the entire case-expression.
+                        Eq(branch_type, expected, region),
+                    ]))
                 }
             }
 
-            And(constraints)
+            exists(vec![cond_var, *expr_var], And(constraints))
         }
 
         Update {
@@ -1021,6 +1020,7 @@ fn constrain_def_pattern(
 
 /// Turn e.g. `Int` into `Attr.Attr * Int`
 fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, Type) {
+    use crate::types;
     use crate::types::Type::*;
 
     match ann {
@@ -1056,6 +1056,36 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             args,
         } => {
             let uniq_var = var_store.fresh();
+            if module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM {
+                let arg = args
+                    .iter()
+                    .next()
+                    .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
+
+                match arg {
+                    Apply {
+                        module_name, name, ..
+                    } if module_name.as_str() == types::MOD_INT
+                        && name.as_str() == types::TYPE_INTEGER =>
+                    {
+                        return (
+                            vec![uniq_var],
+                            constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
+                        )
+                    }
+                    Apply {
+                        module_name, name, ..
+                    } if module_name.as_str() == types::MOD_FLOAT
+                        && name.as_str() == types::TYPE_FLOATINGPOINT =>
+                    {
+                        return (
+                            vec![uniq_var],
+                            constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                        )
+                    }
+                    _ => {}
+                }
+            }
             let (mut arg_vars, args_lifted) = annotation_to_attr_type_many(var_store, args);
 
             arg_vars.push(uniq_var);

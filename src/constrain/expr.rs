@@ -399,9 +399,14 @@ pub fn constrain_expr(
             );
 
             let mut constraints = Vec::with_capacity(branches.len() + 1);
+            constraints.push(expr_con);
 
-            match expected {
+            match &expected {
                 FromAnnotation(name, arity, _, typ) => {
+                    // record the  type of the whole expression in the AST
+                    let ast_con = Eq(Type::Variable(*expr_var), expected.clone(), region);
+                    constraints.push(ast_con);
+
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             rigids,
@@ -415,21 +420,13 @@ pub fn constrain_expr(
                             ),
                             FromAnnotation(
                                 name.clone(),
-                                arity,
+                                *arity,
                                 TypedWhenBranch(index),
                                 typ.clone(),
                             ),
                         );
 
-                        // TODO doesn't use expr_var, because it checks each branch against the
-                        // annotation. But when we in code gen want the type of a branch, it is not
-                        // set.
-                        constraints.push(exists(
-                            vec![cond_var],
-                            // Each branch's pattern must have the same type
-                            // as the condition expression did.
-                            And(vec![expr_con.clone(), branch_con]),
-                        ));
+                        constraints.push(branch_con);
                     }
                 }
 
@@ -454,19 +451,15 @@ pub fn constrain_expr(
                         branch_cons.push(branch_con);
                     }
 
-                    constraints.push(exists(
-                        vec![cond_var, *expr_var],
-                        And(vec![
-                            // Record the original conditional expression's constraint.
-                            expr_con,
-                            // Each branch's pattern must have the same type
-                            // as the condition expression did.
-                            And(branch_cons),
-                            // The return type of each branch must equal
-                            // the return type of the entire when-expression.
-                            Eq(branch_type, expected, region),
-                        ]),
-                    ));
+                    constraints.push(And(vec![
+                        // Record the original conditional expression's constraint.
+                        // Each branch's pattern must have the same type
+                        // as the condition expression did.
+                        And(branch_cons),
+                        // The return type of each branch must equal
+                        // the return type of the entire when-expression.
+                        Eq(branch_type, expected, region),
+                    ]));
                 }
             }
 
@@ -475,7 +468,7 @@ pub fn constrain_expr(
             // 1. Record a Problem.
             // 2. Add an extra _ branch at the end which throws a runtime error.
 
-            And(constraints)
+            exists(vec![cond_var, *expr_var], And(constraints))
         }
         Access {
             ext_var,
