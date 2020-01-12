@@ -10,44 +10,16 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer_uniq {
-    use crate::helpers::uniq_expr;
+    use crate::helpers::{assert_correct_variable_usage, uniq_expr};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
 
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        use roc::collections::ImSet;
-        use roc::subs::Variable;
         let (_output, _problems, mut subs, variable, constraint) = uniq_expr(src);
 
-        // variables declared in constraint (flex_vars or rigid_vars)
-        // and variables actually used in constraints
-        let (declared, used) = roc::types::variable_usage(&constraint);
-
-        if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
-            dbg!(&constraint);
-            // dbg!(expr);
-            println!("VARIABLE USAGE PROBLEM");
-            println!("used variable count: {}\n", used.len());
-
-            println!("used: {:?}", &used);
-            println!("rigids: {:?}", &declared.rigid_vars);
-            println!("flexs: {:?}", &declared.flex_vars);
-
-            let used: ImSet<Variable> = used.clone().into();
-            let mut decl: ImSet<Variable> = declared.rigid_vars.clone().into();
-
-            for var in declared.flex_vars.clone() {
-                decl.insert(var);
-            }
-
-            let diff = used.relative_complement(decl);
-
-            println!("difference: {:?}", &diff);
-
-            assert_eq!(0, 1);
-        }
+        assert_correct_variable_usage(&constraint);
 
         let mut unify_problems = Vec::new();
         let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);

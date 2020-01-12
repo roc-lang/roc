@@ -10,7 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use crate::helpers::{can_expr, with_larger_debug_stack};
+    use crate::helpers::{assert_correct_variable_usage, can_expr, with_larger_debug_stack};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -18,25 +18,10 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (expr, output, _, var_store, variable, constraint) = can_expr(src);
+        let (_expr, output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
-        // variables declared in constraint (flex_vars or rigid_vars)
-        // and variables actually used in constraints
-        let (declared, used) = roc::types::variable_usage(&constraint);
-
-        if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
-            dbg!(&constraint);
-            dbg!(expr);
-            println!("VARIABLE USAGE PROBLEM");
-            println!("used variable count: {}\n", used.len());
-
-            println!("used: {:?}", &used);
-            println!("rigids: {:?}", &declared.rigid_vars);
-            println!("flexs: {:?}", &declared.flex_vars);
-
-            assert_eq!(0, 1);
-        }
+        assert_correct_variable_usage(&constraint);
 
         for (var, name) in output.rigids {
             subs.rigid_var(var, name);
