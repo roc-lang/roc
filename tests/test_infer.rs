@@ -25,7 +25,7 @@ mod test_infer {
         // and variables actually used in constraints
         let (declared, used) = roc::types::variable_usage(&constraint);
 
-        if false && declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
+        if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
             dbg!(&constraint);
             dbg!(expr);
             println!("VARIABLE USAGE PROBLEM");

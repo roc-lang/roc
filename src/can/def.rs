@@ -418,6 +418,15 @@ fn group_to_declaration(
         result
     };
 
+    // patterns like
+    //
+    // { x, y } = someDef
+    //
+    // Can Bind multiple symbols, when not incorrectly recursive (which is guaranteed in this function)
+    // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
+    // for a definition, so every definition is only inserted (thus typechecked, code-gen'd) once
+    let mut seen_pattern_regions: ImSet<Region> = ImSet::default();
+
     for cycle in strongly_connected_components(&group, filtered_successors) {
         if cycle.len() == 1 {
             let symbol = &cycle[0];
@@ -433,7 +442,10 @@ fn group_to_declaration(
                     new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                 }
 
-                declarations.push(Declare(new_def));
+                if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
+                    declarations.push(Declare(new_def.clone()));
+                }
+                seen_pattern_regions.insert(new_def.loc_pattern.region);
             }
         } else {
             // Topological sort gives us the reverse of the sorting we want!
@@ -451,7 +463,10 @@ fn group_to_declaration(
                         new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                     }
 
-                    can_defs.push(new_def);
+                    if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
+                        can_defs.push(new_def.clone());
+                    }
+                    seen_pattern_regions.insert(new_def.loc_pattern.region);
                 }
             }
             declarations.push(DeclareRec(can_defs));
