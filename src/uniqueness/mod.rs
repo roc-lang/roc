@@ -238,6 +238,8 @@ pub fn constrain_expr(
 ) -> Constraint {
     pub use crate::can::expr::Expr::*;
 
+    let expr_copy = expr.clone();
+
     match expr {
         Int(var, _) => And(vec![
             Eq(
@@ -803,6 +805,11 @@ pub fn constrain_expr(
             loc_expr,
             field,
         } => {
+            if let Some((fs, smb)) = traverse_access_chain(&expr_copy) {
+                let locced = Located::at(region, expr_copy);
+                return constrain_access_chain(var_store, var_usage, fs, smb, &locced, expected);
+            }
+
             let ext_type = Type::Variable(*ext_var);
 
             let field_uniq_var = var_store.fresh();
@@ -890,6 +897,120 @@ pub fn constrain_expr(
             )
         }
         RuntimeError(_) => True,
+    }
+}
+
+// Count `record.field` as separate from `record` in the usage analysis
+fn constrain_access_chain(
+    var_store: &VarStore,
+    var_usage: &mut VarUsage,
+    field_names: Vec<Lowercase>,
+    symbol: Symbol,
+    expr: &Located<Expr>,
+    expected: Expected<Type>,
+) -> Constraint {
+    let mut fine: Vec<String> = Vec::with_capacity(field_names.len());
+
+    for name in field_names.into_iter() {
+        fine.push(format!("{:?}", name));
+    }
+
+    let joined_name: &str = &*format!("{:?}.{}", symbol, fine.join("."));
+
+    let new_symbol: Symbol = joined_name.into();
+
+    var_usage.register(&new_symbol);
+
+    constrain_access_chain_help(var_store, expr, expected)
+}
+
+fn constrain_access_chain_help(
+    var_store: &VarStore,
+    expr: &Located<Expr>,
+    expected: Expected<Type>,
+) -> Constraint {
+    match &expr.value {
+        Access {
+            field,
+            loc_expr,
+            ext_var,
+            field_var,
+        } => {
+            let ext_type = Type::Variable(*ext_var);
+
+            let field_uniq_var = var_store.fresh();
+            let field_uniq_type = Bool::Variable(field_uniq_var);
+            let field_type =
+                constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
+
+            let mut rec_field_types = SendMap::default();
+
+            rec_field_types.insert(field.clone(), field_type.clone());
+
+            let record_uniq_var = var_store.fresh();
+            let record_uniq_type = Bool::Variable(record_uniq_var);
+            let record_type = constrain::attr_type(
+                record_uniq_type.clone(),
+                Type::Record(rec_field_types, Box::new(ext_type)),
+            );
+            let record_expected = Expected::NoExpectation(record_type);
+
+            let mut constraint = constrain_access_chain_help(var_store, &loc_expr, record_expected);
+            /*
+            let mut constraint = constrain_expr(
+                rigids,
+                var_store,
+                var_usage,
+                loc_expr.region,
+                &loc_expr.value,
+                record_expected,
+            );
+            */
+
+            let uniq_con = Eq(
+                Type::Boolean(field_uniq_type),
+                Expected::NoExpectation(Type::Boolean(record_uniq_type)),
+                expr.region,
+            );
+
+            constraint = exists(
+                vec![*field_var, *ext_var, field_uniq_var, record_uniq_var],
+                And(vec![
+                    constraint,
+                    Eq(field_type, expected, expr.region),
+                    uniq_con,
+                ]),
+            );
+
+            constraint
+        }
+        Var {
+            symbol_for_lookup, ..
+        } => Lookup(symbol_for_lookup.clone(), expected.clone(), expr.region),
+        _ => panic!(),
+    }
+}
+
+fn traverse_access_chain(expr: &Expr) -> Option<(Vec<Lowercase>, Symbol)> {
+    let mut field_names = Vec::new();
+    let opt_symbol = traverse_access_chain_help(expr, &mut field_names);
+
+    opt_symbol.map(|symbol| (field_names, symbol))
+}
+
+fn traverse_access_chain_help(expr: &Expr, field_names: &mut Vec<Lowercase>) -> Option<Symbol> {
+    match expr {
+        Access {
+            field, loc_expr, ..
+        } => {
+            field_names.push(field.clone());
+            traverse_access_chain_help(&loc_expr.value, field_names)
+        }
+        Var {
+            symbol_for_lookup, ..
+        } => Some(symbol_for_lookup.clone()),
+
+        _ => None,
     }
 }
 

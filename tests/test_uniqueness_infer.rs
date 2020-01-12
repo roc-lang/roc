@@ -1103,6 +1103,71 @@ mod test_infer_uniq {
         );
     }
 
+    #[test]
+    fn sharing_analysis_record_one_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                r = { x: 4, y: 3.14 }
+
+                v = r.x
+
+                r
+                "#
+            ),
+            "Attr.Attr a { x : (Attr.Attr a Int), y : (Attr.Attr * Float) }",
+        );
+    }
+
+    #[test]
+    fn sharing_analysis_record_update_use_once() {
+        infer_eq(
+            indoc!(
+                r#"
+                r = { x: 4, y: 3.14 }
+
+                r2 = { r & x: r.x } 
+
+                r
+                "#
+            ),
+            "Attr.Attr a { x : (Attr.Attr a Int), y : (Attr.Attr * Float) }",
+        );
+    }
+
+    #[test]
+    fn sharing_analysis_record_update_use_twice() {
+        infer_eq(
+            indoc!(
+                r#"
+                r = { x: 4, y: 5 }
+
+                r2 = { r & x: r.x, y: r.x } 
+
+                r
+                "#
+            ),
+            "Attr.Attr a { x : (Attr.Attr Attr.Shared Int), y : (Attr.Attr * Int) }",
+        );
+    }
+
+    #[test]
+    fn sharing_analysis_record_two_fields() {
+        infer_eq(
+            indoc!(
+                r#"
+                r = { x: 4, y: 3.14 }
+
+                v = r.x
+                w = r.y
+
+                r
+                "#
+            ),
+            "Attr.Attr (a | b) { x : (Attr.Attr a Int), y : (Attr.Attr b Float) }",
+        );
+    }
+
     // TODO when type signatures are supported, ensure this works
     //    #[test]
     //    fn num_identity() {
