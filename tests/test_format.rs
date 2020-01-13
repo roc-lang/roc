@@ -1224,6 +1224,22 @@ mod test_format {
     }
 
     #[test]
+    fn nested_alternatives_when() {
+        expr_formats_same(indoc!(
+            r#"
+            when b is
+                1 | 2 ->
+                    when c is
+                        6 | 7 ->
+                            8
+
+                3 | 4 ->
+                    5
+        "#
+        ));
+    }
+
+    #[test]
     fn when_with_moving_comments() {
         expr_formats_to(
             indoc!(
