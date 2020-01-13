@@ -10,16 +10,18 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use crate::helpers::{can_expr, with_larger_debug_stack};
+    use crate::helpers::{assert_correct_variable_usage, can_expr, with_larger_debug_stack};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
 
     // HELPERS
 
-    fn infer_eq(src: &str, expected: &str) {
-        let (_, output, _, var_store, variable, constraint) = can_expr(src);
+    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+        let (_expr, output, _, var_store, variable, constraint) = can_expr(src);
         let mut subs = Subs::new(var_store.into());
+
+        assert_correct_variable_usage(&constraint);
 
         for (var, name) in output.rigids {
             subs.rigid_var(var, name);
@@ -32,7 +34,25 @@ mod test_infer {
 
         let actual_str = content_to_string(content, &mut subs);
 
-        assert_eq!(actual_str, expected.to_string());
+        (unify_problems, actual_str)
+    }
+    fn infer_eq(src: &str, expected: &str) {
+        let (_, actual) = infer_eq_help(src);
+
+        assert_eq!(actual, expected.to_string());
+    }
+
+    fn infer_eq_without_problem(src: &str, expected: &str) {
+        let (problems, actual) = infer_eq_help(src);
+
+        if !problems.is_empty() {
+            // fail with an assert, but print the problems normally so rust doesn't try to diff
+            // an empty vec with the problems.
+            dbg!(problems);
+            println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
+            assert_eq!(0, 1);
+        }
+        assert_eq!(actual, expected.to_string());
     }
 
     #[test]
@@ -1154,6 +1174,73 @@ mod test_infer {
                     when @Foo 4 is
                         @Foo x -> x
                 "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotation_using_num() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   int : Num.Num Int.Integer
+
+                   int
+                   "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotation_using_num_used() {
+        // There was a problem where `int`, because it is only an annotation
+        // wasn't added to the vars_by_symbol.
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   int : Num.Num Int.Integer
+
+                   p = (\x -> x) int
+
+                   p
+                   "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn num_identity() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    numIdentity : Num.Num a -> Num.Num a
+                    numIdentity = \x -> x
+
+                    y = numIdentity 3.14
+
+                    { numIdentity, x : numIdentity 42, y }
+                    "#
+            ),
+            "{ numIdentity : Num a -> Num a, x : Int, y : Float }",
+        );
+    }
+
+    #[test]
+    fn when_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    x : Num.Num Int.Integer
+                    x =
+                        when 2 is
+                            3 -> 4
+                            _ -> 5
+
+                    x
+                   "#
             ),
             "Int",
         );

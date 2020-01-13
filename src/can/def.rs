@@ -418,6 +418,15 @@ fn group_to_declaration(
         result
     };
 
+    // patterns like
+    //
+    // { x, y } = someDef
+    //
+    // Can Bind multiple symbols, when not incorrectly recursive (which is guaranteed in this function)
+    // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
+    // for a definition, so every definition is only inserted (thus typechecked, code-gen'd) once
+    let mut seen_pattern_regions: ImSet<Region> = ImSet::default();
+
     for cycle in strongly_connected_components(&group, filtered_successors) {
         if cycle.len() == 1 {
             let symbol = &cycle[0];
@@ -433,7 +442,10 @@ fn group_to_declaration(
                     new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                 }
 
-                declarations.push(Declare(new_def));
+                if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
+                    declarations.push(Declare(new_def.clone()));
+                }
+                seen_pattern_regions.insert(new_def.loc_pattern.region);
             }
         } else {
             // Topological sort gives us the reverse of the sorting we want!
@@ -451,7 +463,10 @@ fn group_to_declaration(
                         new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                     }
 
-                    can_defs.push(new_def);
+                    if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
+                        can_defs.push(new_def.clone());
+                    }
+                    seen_pattern_regions.insert(new_def.loc_pattern.region);
                 }
             }
             declarations.push(DeclareRec(can_defs));
@@ -516,7 +531,8 @@ fn canonicalize_def<'a>(
 
             // Fabricate a body for this annotation, that will error at runtime
             let value = Expr::RuntimeError(NoImplementation);
-            let loc_can_expr = if arity > 0 {
+            let is_closure = arity > 0;
+            let loc_can_expr = if !is_closure {
                 Located {
                     value,
                     region: loc_annotation.region,
@@ -906,7 +922,7 @@ fn pattern_from_def<'a>(def: &'a ast::Def<'a>) -> Option<&'a Located<ast::Patter
     use crate::parse::ast::Def::*;
 
     match def {
-        Annotation(_, _) => None,
+        Annotation(ref loc_pattern, _) => Some(loc_pattern),
         Body(ref loc_pattern, _) => Some(loc_pattern),
         TypedDef(ref loc_pattern, _, _) => Some(loc_pattern),
         SpaceBefore(def, _) | SpaceAfter(def, _) | Nested(def) => pattern_from_def(def),

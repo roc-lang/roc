@@ -3,7 +3,7 @@ use std::fmt;
 /// TODO replace Located with this
 pub type Loc<T> = Located<T>;
 
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Region {
     pub start_line: u32,
     pub end_line: u32,

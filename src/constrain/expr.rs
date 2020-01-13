@@ -152,31 +152,32 @@ pub fn constrain_expr(
             exists(vars, And(cons))
         }
         Str(_) | BlockStr(_) => Eq(str_type(), expected, region),
-        List(list_var, loc_elems) => {
+        List {
+            entry_var,
+            loc_elems,
+            ..
+        } => {
             if loc_elems.is_empty() {
-                Eq(empty_list_type(*list_var), expected, region)
+                exists(
+                    vec![*entry_var],
+                    Eq(empty_list_type(*entry_var), expected, region),
+                )
             } else {
-                let list_elem_type = Type::Variable(*list_var);
-                let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
+                let list_elem_type = Type::Variable(*entry_var);
+                let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
-                for (elem_var, loc_elem) in loc_elems {
-                    let elem_type = Variable(*elem_var);
-                    let elem_expected = NoExpectation(elem_type.clone());
-                    let list_elem_constraint = Eq(
-                        list_elem_type.clone(),
-                        ForReason(Reason::ElemInList, elem_type, region),
-                        region,
-                    );
+                for loc_elem in loc_elems {
+                    let elem_expected =
+                        ForReason(Reason::ElemInList, list_elem_type.clone(), region);
                     let constraint =
                         constrain_expr(rigids, loc_elem.region, &loc_elem.value, elem_expected);
 
-                    constraints.push(list_elem_constraint);
                     constraints.push(constraint);
                 }
 
                 constraints.push(Eq(list_type(list_elem_type), expected, region));
 
-                And(constraints)
+                exists(vec![*entry_var], And(constraints))
             }
         }
         Call(boxed, loc_args, _application_style) => {
@@ -278,6 +279,7 @@ pub fn constrain_expr(
                 body_type,
             );
 
+            vars.push(*fn_var);
             let defs_constraint = And(state.constraints);
 
             exists(
@@ -397,9 +399,14 @@ pub fn constrain_expr(
             );
 
             let mut constraints = Vec::with_capacity(branches.len() + 1);
+            constraints.push(expr_con);
 
-            match expected {
+            match &expected {
                 FromAnnotation(name, arity, _, typ) => {
+                    // record the  type of the whole expression in the AST
+                    let ast_con = Eq(Type::Variable(*expr_var), expected.clone(), region);
+                    constraints.push(ast_con);
+
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             rigids,
@@ -413,20 +420,13 @@ pub fn constrain_expr(
                             ),
                             FromAnnotation(
                                 name.clone(),
-                                arity,
+                                *arity,
                                 TypedWhenBranch(index),
                                 typ.clone(),
                             ),
                         );
 
-                        // TODO investigate: why doesn't this use expr_var?
-                        // Shouldn't it?
-                        constraints.push(exists(
-                            vec![cond_var],
-                            // Each branch's pattern must have the same type
-                            // as the condition expression did.
-                            And(vec![expr_con.clone(), branch_con]),
-                        ));
+                        constraints.push(branch_con);
                     }
                 }
 
@@ -451,19 +451,15 @@ pub fn constrain_expr(
                         branch_cons.push(branch_con);
                     }
 
-                    constraints.push(exists(
-                        vec![cond_var],
-                        And(vec![
-                            // Record the original conditional expression's constraint.
-                            expr_con,
-                            // Each branch's pattern must have the same type
-                            // as the condition expression did.
-                            And(branch_cons),
-                            // The return type of each branch must equal
-                            // the return type of the entire when-expression.
-                            Eq(branch_type, expected, region),
-                        ]),
-                    ));
+                    constraints.push(And(vec![
+                        // Record the original conditional expression's constraint.
+                        // Each branch's pattern must have the same type
+                        // as the condition expression did.
+                        And(branch_cons),
+                        // The return type of each branch must equal
+                        // the return type of the entire when-expression.
+                        Eq(branch_type, expected, region),
+                    ]));
                 }
             }
 
@@ -472,7 +468,7 @@ pub fn constrain_expr(
             // 1. Record a Problem.
             // 2. Add an extra _ branch at the end which throws a runtime error.
 
-            And(constraints)
+            exists(vec![cond_var, *expr_var], And(constraints))
         }
         Access {
             ext_var,
@@ -527,22 +523,29 @@ pub fn constrain_expr(
         }
         LetRec(defs, loc_ret, var) => {
             let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
-            And(vec![
-                constrain_recursive_defs(rigids, defs, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                Eq(Type::Variable(*var), expected, loc_ret.region),
-            ])
+
+            exists(
+                vec![*var],
+                And(vec![
+                    constrain_recursive_defs(rigids, defs, body_con),
+                    // Record the type of tne entire def-expression in the variable.
+                    // Code gen will need that later!
+                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                ]),
+            )
         }
         LetNonRec(def, loc_ret, var) => {
             let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
 
-            And(vec![
-                constrain_def(rigids, def, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                Eq(Type::Variable(*var), expected, loc_ret.region),
-            ])
+            exists(
+                vec![*var],
+                And(vec![
+                    constrain_def(rigids, def, body_con),
+                    // Record the type of tne entire def-expression in the variable.
+                    // Code gen will need that later!
+                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                ]),
+            )
         }
         Tag {
             variant_var,
@@ -578,6 +581,7 @@ pub fn constrain_expr(
             let ast_con = Eq(Type::Variable(*variant_var), expected, region);
 
             vars.push(*variant_var);
+            vars.push(*ext_var);
             arg_cons.push(union_con);
             arg_cons.push(ast_con);
 
