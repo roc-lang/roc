@@ -896,7 +896,7 @@ pub fn case_branches<'a>(
 
         let (mut loc_first_pattern, state) = sep_by1(
             map!(and!(space0(min_indent), char('|')), |_| ()),
-            space0_before(loc!(pattern(min_indent)), min_indent),
+            space0_before(loc_pattern(min_indent), min_indent),
         )
         .parse(arena, state)?;
         let original_indent = state.indent_col;
@@ -929,7 +929,7 @@ pub fn case_branches<'a>(
             then(
                 sep_by1(
                     char('|'),
-                    space0_around(loc!(pattern(min_indent)), min_indent),
+                    space0_around(loc_pattern(min_indent), min_indent),
                 ),
                 move |_arena, state, loc_pattern| {
                     if state.indent_col == original_indent {
