@@ -687,7 +687,6 @@ fn reserved_keyword<'a>() -> impl Parser<'a, ()> {
         string(keyword::IF),
         string(keyword::THEN),
         string(keyword::ELSE),
-        string(keyword::CASE),
         string(keyword::WHEN),
         string(keyword::IS),
         string(keyword::AS)
@@ -887,27 +886,29 @@ pub fn when_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
 pub fn case_branches<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Vec<'a, &'a (Located<Pattern<'a>>, Located<Expr<'a>>)>> {
+) -> impl Parser<'a, Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)>> {
     move |arena, state| {
-        let mut branches: Vec<'a, &'a (Located<Pattern<'a>>, Located<Expr<'a>>)> =
+        let mut branches: Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)> =
             Vec::with_capacity_in(2, arena);
 
         // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
         // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
-        let (mut loc_first_pattern, state) =
-            space1_before(loc_pattern(min_indent), min_indent).parse(arena, state)?;
+        let (mut loc_first_pattern, state) = sep_by1(
+            map!(and!(space0(min_indent), char('|')), |_| ()),
+            space0_before(loc_pattern(min_indent), min_indent),
+        )
+        .parse(arena, state)?;
         let original_indent = state.indent_col;
         let indented_more = original_indent + 1;
         let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
 
         // Record the spaces before the first "->", if any.
         if !spaces_before_arrow.is_empty() {
-            let region = loc_first_pattern.region;
-            let value =
-                Pattern::SpaceAfter(arena.alloc(loc_first_pattern.value), spaces_before_arrow);
-
-            loc_first_pattern = Located { region, value };
+            let last = loc_first_pattern.pop().unwrap();
+            let region = last.region;
+            let value = Pattern::SpaceAfter(arena.alloc(last.value), spaces_before_arrow);
+            loc_first_pattern.push(Located { region, value });
         };
 
         // Parse the first "->" and the expression after it.
@@ -926,7 +927,10 @@ pub fn case_branches<'a>(
 
         let branch_parser = and!(
             then(
-                space1_around(loc_pattern(min_indent), min_indent),
+                sep_by1(
+                    char('|'),
+                    space0_around(loc_pattern(min_indent), min_indent),
+                ),
                 move |_arena, state, loc_pattern| {
                     if state.indent_col == original_indent {
                         Ok((loc_pattern, state))

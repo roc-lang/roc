@@ -486,14 +486,14 @@ pub fn canonicalize_expr(
             for (loc_pattern, loc_expr) in branches {
                 let mut shadowable_idents = scope.idents.clone();
 
-                remove_idents(&loc_pattern.value, &mut shadowable_idents);
+                remove_idents(&loc_pattern.first().unwrap().value, &mut shadowable_idents);
 
                 let (can_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
                     env,
                     var_store,
                     scope,
                     region,
-                    loc_pattern,
+                    loc_pattern.first().unwrap(),
                     loc_expr,
                     &mut output,
                 );
