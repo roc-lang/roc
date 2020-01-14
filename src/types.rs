@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
-use crate::collections::{MutSet, SendMap};
+use crate::collections::{ImSet, MutSet, SendMap};
 use crate::ident::Ident;
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
@@ -244,6 +244,60 @@ impl Type {
             args.len()
         } else {
             0
+        }
+    }
+
+    pub fn variables(&self) -> ImSet<Variable> {
+        let mut result = ImSet::default();
+        variables_help(self, &mut result);
+
+        result
+    }
+}
+
+fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
+    use Type::*;
+    match tipe {
+        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+        Boolean(b) => {
+            for v in b.variables() {
+                accum.insert(v);
+            }
+        }
+        Variable(v) => {
+            accum.insert(*v);
+        }
+
+        Function(args, ret) => {
+            for arg in args {
+                variables_help(arg, accum);
+            }
+            variables_help(ret, accum);
+        }
+        Record(fields, ext) => {
+            for (_, x) in fields {
+                variables_help(x, accum);
+            }
+            variables_help(ext, accum);
+        }
+        TagUnion(tags, ext) => {
+            for (_, args) in tags {
+                for x in args {
+                    variables_help(x, accum);
+                }
+            }
+            variables_help(ext, accum);
+        }
+        Alias(_, _, args, actual) => {
+            for (_, x) in args {
+                variables_help(x, accum);
+            }
+            variables_help(actual, accum);
+        }
+        Apply { args, .. } => {
+            for x in args {
+                variables_help(x, accum);
+            }
         }
     }
 }

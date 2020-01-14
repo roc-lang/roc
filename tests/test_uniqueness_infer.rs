@@ -10,30 +10,43 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer_uniq {
-    use crate::helpers::uniq_expr;
+    use crate::helpers::{assert_correct_variable_usage, uniq_expr};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
 
     // HELPERS
 
-    fn infer_eq(src: &str, expected: &str) {
-        let (_output1, _, mut subs1, variable1, mut subs2, variable2, constraint1, constraint2) =
-            uniq_expr(src);
+    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+        let (_output, _problems, mut subs, variable, constraint) = uniq_expr(src);
+
+        assert_correct_variable_usage(&constraint);
 
         let mut unify_problems = Vec::new();
-        let content1 = infer_expr(&mut subs1, &mut unify_problems, &constraint1, variable1);
-        let content2 = infer_expr(&mut subs2, &mut unify_problems, &constraint2, variable2);
+        let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
 
-        dbg!(unify_problems);
+        name_all_type_vars(variable, &mut subs);
 
-        name_all_type_vars(variable1, &mut subs1);
-        name_all_type_vars(variable2, &mut subs2);
+        let actual_str = content_to_string(content, &mut subs);
 
-        let _actual_str = content_to_string(content1, &mut subs1);
-        let uniq_actual_str = content_to_string(content2, &mut subs2);
+        (unify_problems, actual_str)
+    }
+    fn infer_eq(src: &str, expected: &str) {
+        let (_, actual) = infer_eq_help(src);
 
-        // assert_eq!(actual_str, expected.to_string());
-        assert_eq!(expected.to_string(), uniq_actual_str);
+        assert_eq!(actual, expected.to_string());
+    }
+
+    fn infer_eq_without_problem(src: &str, expected: &str) {
+        let (problems, actual) = infer_eq_help(src);
+
+        if !problems.is_empty() {
+            // fail with an assert, but print the problems normally so rust doesn't try to diff
+            // an empty vec with the problems.
+            dbg!(problems);
+            println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
+            assert_eq!(0, 1);
+        }
+        assert_eq!(actual, expected.to_string());
     }
 
     #[test]
@@ -91,7 +104,7 @@ mod test_infer_uniq {
     // LIST
 
     #[test]
-    fn empty_list() {
+    fn empty_list_literal() {
         infer_eq(
             indoc!(
                 r#"
@@ -1056,9 +1069,9 @@ mod test_infer_uniq {
                 "#
             ),
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
-            // i.e. the `a` could be ignored in this example, is that true in general?
+            // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)"
+            "Attr.Attr * (Attr.Attr (a | b) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
         );
     }
 
@@ -1103,22 +1116,53 @@ mod test_infer_uniq {
         );
     }
 
-    // TODO when type signatures are supported, ensure this works
-    //    #[test]
-    //    fn num_identity() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                numIdentity : Num a -> Num a
-    //                numIdentity = \x -> x
-    //
-    //                x = numIdentity 42
-    //                y = numIdentity 3.14
-    //
-    //                numIdentity
-    //                "#
-    //            ),
-    //            "tbd",
-    //        );
-    //    }
+    #[test]
+    fn num_identity_def() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   numIdentity : Num.Num a -> Num.Num a
+                   numIdentity = \x -> x
+
+                   numIdentity
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))",
+        );
+    }
+
+    #[test]
+    fn num_identity_applied() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   numIdentity : Num.Num b -> Num.Num b
+                   numIdentity = \foo -> foo
+
+                   p = numIdentity 42
+                   q = numIdentity 3.14
+
+                   { numIdentity, p, q }
+                   "#
+            ), "Attr.Attr * { numIdentity : (Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
+        );
+    }
+
+    #[test]
+    fn when_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    x : Num.Num Int.Integer
+                    x =
+                        when 2 is
+                            3 -> 4
+                            _ -> 5
+
+                    x
+                   "#
+            ),
+            "Attr.Attr * Int",
+        );
+    }
 }
