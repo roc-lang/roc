@@ -147,27 +147,22 @@ pub fn fmt_expr<'a>(
             while let Some((patterns, expr)) = it.next() {
                 add_spaces(buf, indent + INDENT);
                 let (first, rest) = patterns.split_first().unwrap();
-
-                match first.value {
-                    Pattern::SpaceBefore(nested, spaces) => {
-                        fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                        fmt_pattern(buf, nested, indent + INDENT, false);
-                    }
-                    _ => {
-                        fmt_pattern(buf, &first.value, indent + INDENT, false);
-                    }
+                let is_multiline = match rest.last() {
+                    None => false,
+                    Some(last) => first.region.start_line != last.region.end_line,
                 };
+
+                ignore_space_around(buf, &first.value, indent);
                 for pattern in rest {
-                    buf.push_str(" | ");
-                    match pattern.value {
-                        Pattern::SpaceBefore(nested, spaces) => {
-                            fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                            fmt_pattern(buf, nested, indent + INDENT, false);
-                        }
-                        _ => {
-                            fmt_pattern(buf, &pattern.value, indent + INDENT, false);
-                        }
+                    if is_multiline {
+                        buf.push_str("\n");
+                        add_spaces(buf, indent + INDENT);
+                        buf.push_str("| ");
+                    } else {
+                        buf.push_str(" | ");
                     }
+                    // TODO create a function to remove spaces before or after
+                    ignore_space_around(buf, &pattern.value, indent);
                 }
 
                 buf.push_str(" ->\n");
@@ -193,6 +188,34 @@ pub fn fmt_expr<'a>(
             fmt_list(buf, &loc_items, indent);
         }
         other => panic!("TODO implement Display for AST variant {:?}", other),
+    }
+}
+
+fn ignore_space_around<'a>(buf: &mut String<'a>, pattern: &'a Pattern<'a>, indent: u16) {
+    match pattern {
+        Pattern::SpaceAfter(nested_after, spaces) => match nested_after {
+            Pattern::SpaceBefore(nested, spaces) => {
+                fmt_comments_only(buf, spaces.iter(), indent + INDENT);
+                fmt_pattern(buf, nested, indent + INDENT, false);
+            }
+            _ => {
+                fmt_comments_only(buf, spaces.iter(), indent + INDENT);
+                fmt_pattern(buf, &nested_after, indent + INDENT, false);
+            }
+        },
+        Pattern::SpaceBefore(nested_before, spaces) => match nested_before {
+            Pattern::SpaceAfter(nested, spaces) => {
+                fmt_comments_only(buf, spaces.iter(), indent + INDENT);
+                fmt_pattern(buf, nested, indent + INDENT, false);
+            }
+            _ => {
+                fmt_comments_only(buf, spaces.iter(), indent + INDENT);
+                fmt_pattern(buf, nested_before, indent + INDENT, false);
+            }
+        },
+        _ => {
+            fmt_pattern(buf, &pattern, indent + INDENT, false);
+        }
     }
 }
 

@@ -894,13 +894,11 @@ pub fn case_branches<'a>(
         // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
         // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
-        let (mut loc_first_pattern, state) = sep_by1(
-            map!(and!(space0(min_indent), char('|')), |_| ()),
-            space0_before(loc_pattern(min_indent), min_indent),
-        )
-        .parse(arena, state)?;
-        let original_indent = state.indent_col;
+        let (mut loc_first_pattern, state) =
+            case_branch_alternatives(min_indent).parse(arena, state)?;
+        let original_indent = loc_first_pattern.first().unwrap().region.start_col;
         let indented_more = original_indent + 1;
+        // TODO we should do this in branch_parser as well.
         let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
 
         // Record the spaces before the first "->", if any.
@@ -927,12 +925,10 @@ pub fn case_branches<'a>(
 
         let branch_parser = and!(
             then(
-                sep_by1(
-                    char('|'),
-                    space0_around(loc_pattern(min_indent), min_indent),
-                ),
+                case_branch_alternatives(min_indent),
                 move |_arena, state, loc_pattern| {
-                    if state.indent_col == original_indent {
+                    // TODO this isn't enough :-(
+                    if loc_pattern.first().unwrap().region.start_col == original_indent {
                         Ok((loc_pattern, state))
                     } else {
                         panic!(
@@ -967,6 +963,13 @@ pub fn case_branches<'a>(
 
         Ok((branches, state))
     }
+}
+
+fn case_branch_alternatives<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>> {
+    sep_by1(
+        char('|'),
+        space0_around(loc_pattern(min_indent), min_indent),
+    )
 }
 
 pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
