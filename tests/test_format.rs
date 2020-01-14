@@ -1188,6 +1188,50 @@ mod test_format {
     }
 
     #[test]
+    fn when_with_alternatives() {
+        expr_formats_same(indoc!(
+            r#"
+            when b is
+                1 | 2 ->
+                    when c is
+                        6 | 7 ->
+                            8
+
+                3 | 4 ->
+                    5
+        "#
+        ));
+        expr_formats_same(indoc!(
+            r#"
+            when b is
+                # a comment here
+                1 | 2 ->
+                    # a comment there
+                    1
+        "#
+        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+            when b is
+            1   |   2 |3
+                ->
+
+                    1
+            "#
+            ),
+            indoc!(
+                r#"
+            when b is
+                1 | 2 | 3
+                 ->
+                    1
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn when_with_moving_comments() {
         expr_formats_to(
             indoc!(

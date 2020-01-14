@@ -170,10 +170,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 let desugared = desugar_expr(arena, &loc_branch_expr);
 
                 desugared_branches.push(&*arena.alloc((
-                    Located {
-                        region: loc_pattern.region,
-                        value: Pattern::Nested(&loc_pattern.value),
-                    },
+                    bumpalo::vec![in arena; Located {
+                        region: loc_pattern.first().unwrap().region,
+                        value: Pattern::Nested(&loc_pattern.first().unwrap().value),
+                    }],
                     Located {
                         region: desugared.region,
                         value: Nested(&desugared.value),
@@ -251,10 +251,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let pattern_region = condition.region;
 
             branches.push(&*arena.alloc((
-                Located {
+                bumpalo::vec![in arena; Located {
                     value: Pattern::GlobalTag("False"),
                     region: pattern_region,
-                },
+                }],
                 Located {
                     value: Nested(&else_branch.value),
                     region: else_branch.region,
@@ -262,10 +262,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             )));
 
             branches.push(&*arena.alloc((
-                Located {
+                bumpalo::vec![in arena; Located {
                     value: Pattern::Underscore,
                     region: pattern_region,
-                },
+                }],
                 Located {
                     value: Nested(&then_branch.value),
                     region: then_branch.region,
