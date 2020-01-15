@@ -900,15 +900,7 @@ pub fn case_branches<'a>(
         let indented_more = original_indent + 1;
 
         // Parse the first "->" and the expression after it.
-        let (loc_first_expr, mut state) = skip_first!(
-            string("->"),
-            // The expr must be indented more than the pattern preceding it
-            space0_before(
-                loc!(move |arena, state| parse_expr(indented_more, arena, state)),
-                indented_more,
-            )
-        )
-        .parse(arena, state)?;
+        let (loc_first_expr, mut state) = case_branch_result(indented_more).parse(arena, state)?;
 
         // Record this as the first branch, then optionally parse additional branches.
         branches.push(arena.alloc((loc_first_pattern, loc_first_expr)));
@@ -927,13 +919,7 @@ pub fn case_branches<'a>(
                     }
                 },
             ),
-            skip_first!(
-                string("->"),
-                space0_before(
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                    min_indent,
-                )
-            )
+            case_branch_result(indented_more)
         );
 
         loop {
@@ -959,6 +945,16 @@ fn case_branch_alternatives<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Loca
     sep_by1(
         char('|'),
         space0_around(loc_pattern(min_indent), min_indent),
+    )
+}
+
+fn case_branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
+    skip_first!(
+        string("->"),
+        space0_before(
+            loc!(move |arena, state| parse_expr(indent, arena, state)),
+            indent,
+        )
     )
 }
 
