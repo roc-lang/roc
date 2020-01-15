@@ -908,10 +908,9 @@ pub fn case_branches<'a>(
         let branch_parser = and!(
             then(
                 case_branch_alternatives(min_indent),
-                move |_arena, state, loc_pattern| {
-                    // TODO this isn't enough :-(
-                    if loc_pattern.first().unwrap().region.start_col == original_indent {
-                        Ok((loc_pattern, state))
+                move |_arena, state, loc_patterns| {
+                    if case_alternatives_indented_correctly(&loc_patterns, original_indent) {
+                        Ok((loc_patterns, state))
                     } else {
                         panic!(
                             "TODO additional branch didn't have same indentation as first branch"
@@ -946,6 +945,18 @@ fn case_branch_alternatives<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Loca
         char('|'),
         space0_around(loc_pattern(min_indent), min_indent),
     )
+}
+
+fn case_alternatives_indented_correctly<'a>(
+    loc_patterns: &'a Vec<'a, Located<Pattern<'a>>>,
+    original_indent: u16,
+) -> bool {
+    let (first, rest) = loc_patterns.split_first().unwrap();
+    let first_indented_correctly = first.region.start_col == original_indent;
+    let rest_indented_correctly = rest
+        .iter()
+        .all(|pattern| pattern.region.start_col >= original_indent);
+    first_indented_correctly && rest_indented_correctly
 }
 
 fn case_branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
