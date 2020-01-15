@@ -39,7 +39,10 @@ pub enum Expr {
     Float(Variable, f64),
     Str(Box<str>),
     BlockStr(Box<str>),
-    List(Variable, Vec<(Variable, Located<Expr>)>),
+    List {
+        entry_var: Variable,
+        loc_elems: Vec<Located<Expr>>,
+    },
 
     // Lookups
     Var {
@@ -215,7 +218,13 @@ pub fn canonicalize_expr(
         }
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
-                (List(var_store.fresh(), Vec::new()), Output::default())
+                (
+                    List {
+                        entry_var: var_store.fresh(),
+                        loc_elems: Vec::new(),
+                    },
+                    Output::default(),
+                )
             } else {
                 let mut can_elems = Vec::with_capacity(loc_elems.len());
                 let mut references = References::new();
@@ -226,7 +235,7 @@ pub fn canonicalize_expr(
 
                     references = references.union(elem_out.references);
 
-                    can_elems.push((var_store.fresh(), can_expr));
+                    can_elems.push(can_expr);
                 }
 
                 let mut output = Output::default();
@@ -236,7 +245,13 @@ pub fn canonicalize_expr(
                 // A list literal is never a tail call!
                 output.tail_call = None;
 
-                (List(var_store.fresh(), can_elems), output)
+                (
+                    List {
+                        entry_var: var_store.fresh(),
+                        loc_elems: can_elems,
+                    },
+                    output,
+                )
             }
         }
         ast::Expr::Apply(loc_fn, loc_args, application_style) => {
@@ -471,14 +486,14 @@ pub fn canonicalize_expr(
             for (loc_pattern, loc_expr) in branches {
                 let mut shadowable_idents = scope.idents.clone();
 
-                remove_idents(&loc_pattern.value, &mut shadowable_idents);
+                remove_idents(&loc_pattern.first().unwrap().value, &mut shadowable_idents);
 
                 let (can_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
                     env,
                     var_store,
                     scope,
                     region,
-                    loc_pattern,
+                    loc_pattern.first().unwrap(),
                     loc_expr,
                     &mut output,
                 );

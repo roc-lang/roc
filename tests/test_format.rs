@@ -752,30 +752,132 @@ mod test_format {
             ),
         );
 
-        //        expr_formats_to(indoc!(
-        //            r#"
-        //            [
-        //            # Thirty Seven
-        //
-        //            37
-        //            # Thirty Eight
-        //            , 38
-        //
-        //
-        //            , 39
-        //            ]
-        //            "#
-        //        ), indoc!(
-        //            r#"
-        //            [
-        //                # Thirty Seven
-        //                37,
-        //                # Thirty Eight
-        //                38,
-        //                39
-        //            ]
-        //            "#
-        //        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+                [
+                    157, 158,
+                    159
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    157,
+                    158,
+                    159
+                ]
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                [
+                    557, 648,
+                    759, 837
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    557,
+                    648,
+                    759,
+                    837
+                ]
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                [
+                    257, 358,
+                    # Hey!
+                    459
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    257,
+                    358,
+                    # Hey!
+                    459
+                ]
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                [
+                # Thirty Seven
+
+                37
+                # Thirty Eight
+                , 38
+
+
+                , 39
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    # Thirty Seven
+                    37,
+                    # Thirty Eight
+                    38,
+                    39
+                ]
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                [ # 47!
+                # Top 47
+                  47
+                # Bottom 47
+                # Top 48
+                , 48
+                # Bottom 48
+                # Top 49
+                , 49
+                # Bottom 49
+                # 49!
+                ]
+                "#
+            ),
+            indoc!(
+                r#"
+                [
+                    # 47!
+                    # Top 47
+                    47,
+                    # Bottom 47
+                    # Top 48
+                    48,
+                    # Bottom 48
+                    # Top 49
+                    49
+                    # Bottom 49
+                    # 49!
+                ]
+                "#
+            ),
+        );
     }
 
     // RECORD LITERALS
@@ -1185,6 +1287,50 @@ mod test_format {
                             1
             "#
         ));
+    }
+
+    #[test]
+    fn when_with_alternatives() {
+        expr_formats_same(indoc!(
+            r#"
+            when b is
+                1 | 2 ->
+                    when c is
+                        6 | 7 ->
+                            8
+
+                3 | 4 ->
+                    5
+        "#
+        ));
+        expr_formats_same(indoc!(
+            r#"
+            when b is
+                # a comment here
+                1 | 2 ->
+                    # a comment there
+                    1
+        "#
+        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+            when b is
+            1   |   2 |3
+                ->
+
+                    1
+            "#
+            ),
+            indoc!(
+                r#"
+            when b is
+                1 | 2 | 3
+                 ->
+                    1
+                "#
+            ),
+        );
     }
 
     #[test]

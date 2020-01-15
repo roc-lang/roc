@@ -83,32 +83,45 @@ fn constrain_pattern(
         }
 
         IntLiteral(_) => {
-            state.constraints.push(Constraint::Pattern(
-                pattern.region,
-                PatternCategory::Int,
-                constrain::lift(var_store, Type::int()),
-                expected,
+            let uniq_var = var_store.fresh();
+            state.constraints.push(exists(
+                vec![uniq_var],
+                Constraint::Pattern(
+                    pattern.region,
+                    PatternCategory::Int,
+                    constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
+                    expected,
+                ),
             ));
         }
         FloatLiteral(_) => {
-            state.constraints.push(Constraint::Pattern(
-                pattern.region,
-                PatternCategory::Float,
-                constrain::lift(var_store, Type::float()),
-                expected,
+            let uniq_var = var_store.fresh();
+            state.constraints.push(exists(
+                vec![uniq_var],
+                Constraint::Pattern(
+                    pattern.region,
+                    PatternCategory::Float,
+                    constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                    expected,
+                ),
             ));
         }
 
         StrLiteral(_) => {
-            state.constraints.push(Constraint::Pattern(
-                pattern.region,
-                PatternCategory::Str,
-                constrain::lift(var_store, Type::string()),
-                expected,
+            let uniq_var = var_store.fresh();
+            state.constraints.push(exists(
+                vec![uniq_var],
+                Constraint::Pattern(
+                    pattern.region,
+                    PatternCategory::Str,
+                    constrain::attr_type(Bool::Variable(uniq_var), Type::string()),
+                    expected,
+                ),
             ));
         }
 
         RecordDestructure(ext_var, patterns) => {
+            // TODO if a subpattern doesn't bind any identifiers, it doesn't count for uniqueness
             let mut pattern_uniq_vars = Vec::with_capacity(patterns.len());
 
             state.vars.push(*ext_var);
@@ -157,6 +170,7 @@ fn constrain_pattern(
                 state.vars.push(empty_var);
                 Bool::Variable(empty_var)
             } else {
+                state.vars.extend(pattern_uniq_vars.clone());
                 boolean_algebra::any(pattern_uniq_vars.into_iter().map(Bool::Variable))
             };
 
@@ -175,6 +189,7 @@ fn constrain_pattern(
         }
 
         AppliedTag(ext_var, symbol, patterns) => {
+            // TODO if a subpattern doesn't bind any identifiers, it doesn't count for uniqueness
             let mut argument_types = Vec::with_capacity(patterns.len());
             let mut pattern_uniq_vars = Vec::with_capacity(patterns.len());
 
@@ -200,6 +215,8 @@ fn constrain_pattern(
                 state.vars.push(empty_var);
                 Bool::Variable(empty_var)
             } else {
+                pattern_uniq_vars.sort();
+                state.vars.extend(pattern_uniq_vars.clone());
                 boolean_algebra::any(pattern_uniq_vars.into_iter().map(Bool::Variable))
             };
 
@@ -239,40 +256,68 @@ pub fn constrain_expr(
     pub use crate::can::expr::Expr::*;
 
     match expr {
-        Int(var, _) => And(vec![
-            Eq(
-                Type::Variable(*var),
-                Expected::ForReason(
-                    Reason::IntLiteral,
-                    constrain::lift(var_store, Type::int()),
-                    region,
-                ),
-                region,
-            ),
-            Eq(Type::Variable(*var), expected, region),
-        ]),
-        Float(var, _) => And(vec![
-            Eq(
-                Type::Variable(*var),
-                Expected::ForReason(
-                    Reason::FloatLiteral,
-                    constrain::lift(var_store, Type::float()),
-                    region,
-                ),
-                region,
-            ),
-            Eq(Type::Variable(*var), expected, region),
-        ]),
-        BlockStr(_) | Str(_) => {
-            let inferred = constrain::lift(var_store, Type::string());
-            Eq(inferred, expected, region)
+        Int(var, _) => {
+            let uniq_var = var_store.fresh();
+            let bvar = Bool::Variable(uniq_var);
+
+            exists(
+                vec![*var, uniq_var],
+                And(vec![
+                    Eq(
+                        Type::Variable(*var),
+                        Expected::ForReason(
+                            Reason::IntLiteral,
+                            constrain::attr_type(bvar, Type::int()),
+                            region,
+                        ),
+                        region,
+                    ),
+                    Eq(Type::Variable(*var), expected, region),
+                ]),
+            )
         }
-        EmptyRecord => Eq(constrain::lift(var_store, EmptyRec), expected, region),
+        Float(var, _) => {
+            let uniq_var = var_store.fresh();
+            exists(
+                vec![*var, uniq_var],
+                And(vec![
+                    Eq(
+                        Type::Variable(*var),
+                        Expected::ForReason(
+                            Reason::FloatLiteral,
+                            constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                            region,
+                        ),
+                        region,
+                    ),
+                    Eq(Type::Variable(*var), expected, region),
+                ]),
+            )
+        }
+        BlockStr(_) | Str(_) => {
+            let uniq_type = var_store.fresh();
+            let inferred = constrain::attr_type(Bool::Variable(uniq_type), Type::string());
+
+            exists(vec![uniq_type], Eq(inferred, expected, region))
+        }
+        EmptyRecord => {
+            let uniq_type = var_store.fresh();
+
+            exists(
+                vec![uniq_type],
+                Eq(
+                    constrain::attr_type(Bool::Variable(uniq_type), EmptyRec),
+                    expected,
+                    region,
+                ),
+            )
+        }
         Record(variable, fields) => {
             // NOTE: canonicalization guarantees at least one field
             // zero fields generates an EmptyRecord
             let mut field_types = SendMap::default();
             let mut field_vars = Vec::with_capacity(fields.len());
+            field_vars.push(*variable);
 
             // Constraints need capacity for each field + 1 for the record itself + 1 for ext
             let mut constraints = Vec::with_capacity(2 + fields.len());
@@ -297,8 +342,10 @@ pub fn constrain_expr(
                 constraints.push(field_con);
             }
 
-            let record_type = constrain::lift(
-                var_store,
+            let record_uniq_var = var_store.fresh();
+            field_vars.push(record_uniq_var);
+            let record_type = constrain::attr_type(
+                Bool::Variable(record_uniq_var),
                 Type::Record(
                     field_types,
                     // TODO can we avoid doing Box::new on every single one of these?
@@ -313,9 +360,7 @@ pub fn constrain_expr(
             constraints.push(record_con);
             constraints.push(ext_con);
 
-            let constraint = exists(field_vars, And(constraints));
-
-            (constraint)
+            exists(field_vars, And(constraints))
         }
         Tag {
             variant_var,
@@ -342,8 +387,10 @@ pub fn constrain_expr(
                 types.push(Type::Variable(*var));
             }
 
-            let union_type = constrain::lift(
-                var_store,
+            let uniq_var = var_store.fresh();
+
+            let union_type = constrain::attr_type(
+                Bool::Variable(uniq_var),
                 Type::TagUnion(
                     vec![(name.clone(), types)],
                     Box::new(Type::Variable(*ext_var)),
@@ -353,31 +400,33 @@ pub fn constrain_expr(
             let union_con = Eq(union_type, expected.clone(), region);
             let ast_con = Eq(Type::Variable(*variant_var), expected, region);
 
+            vars.push(uniq_var);
             vars.push(*variant_var);
+            vars.push(*ext_var);
             arg_cons.push(union_con);
             arg_cons.push(ast_con);
 
             exists(vars, And(arg_cons))
         }
-        List(variable, loc_elems) => {
+        List {
+            entry_var,
+            loc_elems,
+        } => {
+            let uniq_var = var_store.fresh();
             if loc_elems.is_empty() {
-                let list_var = *variable;
-                let inferred = constrain::lift(var_store, builtins::empty_list_type(list_var));
-                Eq(inferred, expected, region)
+                let inferred = constrain::attr_type(
+                    Bool::Variable(uniq_var),
+                    builtins::empty_list_type(*entry_var),
+                );
+                exists(vec![*entry_var, uniq_var], Eq(inferred, expected, region))
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
-                let list_var = *variable; // `v` in the type (List v)
-                let list_type = Type::Variable(list_var);
-                let mut constraints = Vec::with_capacity(1 + (loc_elems.len() * 2));
+                let entry_type = Type::Variable(*entry_var);
+                let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
-                for (elem_var, loc_elem) in loc_elems.iter() {
-                    let elem_type = Variable(*elem_var);
-                    let elem_expected = Expected::NoExpectation(elem_type.clone());
-                    let list_elem_constraint = Eq(
-                        list_type.clone(),
-                        Expected::ForReason(Reason::ElemInList, elem_type, region),
-                        region,
-                    );
+                for loc_elem in loc_elems.iter() {
+                    let elem_expected =
+                        Expected::ForReason(Reason::ElemInList, entry_type.clone(), region);
                     let constraint = constrain_expr(
                         rigids,
                         var_store,
@@ -387,13 +436,14 @@ pub fn constrain_expr(
                         elem_expected,
                     );
 
-                    constraints.push(list_elem_constraint);
                     constraints.push(constraint);
                 }
-                let inferred = constrain::lift(var_store, builtins::list_type(list_type));
+
+                let inferred =
+                    constrain::attr_type(Bool::Variable(uniq_var), builtins::list_type(entry_type));
                 constraints.push(Eq(inferred, expected, region));
 
-                And(constraints)
+                exists(vec![*entry_var, uniq_var], And(constraints))
             }
         }
         Var {
@@ -436,8 +486,11 @@ pub fn constrain_expr(
                 vars.push(*pattern_var);
             }
 
-            let fn_type = constrain::lift(
-                var_store,
+            let fn_uniq_var = var_store.fresh();
+            vars.push(fn_uniq_var);
+
+            let fn_type = constrain::attr_type(
+                Bool::Variable(fn_uniq_var),
                 Type::Function(pattern_types, Box::new(ret_type.clone())),
             );
             let body_type = Expected::NoExpectation(ret_type);
@@ -535,9 +588,14 @@ pub fn constrain_expr(
                 arg_cons.push(arg_con);
             }
 
+            let expected_uniq_type = var_store.fresh();
+            vars.push(expected_uniq_type);
             let expected_fn_type = Expected::ForReason(
                 fn_reason,
-                constrain::lift(var_store, Function(arg_types, Box::new(ret_type.clone()))),
+                constrain::attr_type(
+                    Bool::Variable(expected_uniq_type),
+                    Function(arg_types, Box::new(ret_type.clone())),
+                ),
                 region,
             );
 
@@ -562,13 +620,15 @@ pub fn constrain_expr(
                 &loc_ret.value,
                 expected.clone(),
             );
-
-            And(vec![
-                constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                Eq(Type::Variable(*var), expected, loc_ret.region),
-            ])
+            exists(
+                vec![*var],
+                And(vec![
+                    constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con),
+                    // Record the type of tne entire def-expression in the variable.
+                    // Code gen will need that later!
+                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                ]),
+            )
         }
         LetNonRec(def, loc_ret, var) => {
             // NOTE doesn't currently unregister bound symbols
@@ -582,19 +642,22 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            And(vec![
-                constrain_def(rigids, var_store, var_usage, def, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                Eq(Type::Variable(*var), expected, loc_ret.region),
-            ])
+            exists(
+                vec![*var],
+                And(vec![
+                    constrain_def(rigids, var_store, var_usage, def, body_con),
+                    // Record the type of tne entire def-expression in the variable.
+                    // Code gen will need that later!
+                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                ]),
+            )
         }
         If { .. } => panic!("TODO constrain uniq if"),
         When {
             cond_var,
+            expr_var,
             loc_cond,
             branches,
-            ..
         } => {
             let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
@@ -608,11 +671,14 @@ pub fn constrain_expr(
             );
 
             let mut constraints = Vec::with_capacity(branches.len() + 1);
+            constraints.push(expr_con);
 
             let old_var_usage = var_usage.clone();
 
-            match expected {
+            match &expected {
                 Expected::FromAnnotation(name, arity, _, typ) => {
+                    constraints.push(Eq(Type::Variable(*expr_var), expected.clone(), region));
+
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = constrain_when_branch(
@@ -629,7 +695,7 @@ pub fn constrain_expr(
                             ),
                             Expected::FromAnnotation(
                                 name.clone(),
-                                arity,
+                                *arity,
                                 TypedWhenBranch(index),
                                 typ.clone(),
                             ),
@@ -648,18 +714,16 @@ pub fn constrain_expr(
 
                         var_usage.or(&branch_var_usage);
 
-                        constraints.push(exists(
-                            vec![cond_var],
+                        constraints.push(
                             // Each branch's pattern must have the same type
                             // as the condition expression did.
-                            And(vec![expr_con.clone(), branch_con]),
-                        ));
+                            branch_con,
+                        );
                     }
                 }
 
                 _ => {
-                    let branch_var = var_store.fresh();
-                    let branch_type = Variable(branch_var);
+                    let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
@@ -699,23 +763,18 @@ pub fn constrain_expr(
                         branch_cons.push(branch_con);
                     }
 
-                    constraints.push(exists(
-                        vec![cond_var],
-                        And(vec![
-                            // Record the original conditional expression's constraint.
-                            expr_con,
-                            // Each branch's pattern must have the same type
-                            // as the condition expression did.
-                            And(branch_cons),
-                            // The return type of each branch must equal
-                            // the return type of the entire case-expression.
-                            Eq(branch_type, expected, region),
-                        ]),
-                    ));
+                    constraints.push(And(vec![
+                        // Each branch's pattern must have the same type
+                        // as the condition expression did.
+                        And(branch_cons),
+                        // The return type of each branch must equal
+                        // the return type of the entire case-expression.
+                        Eq(branch_type, expected, region),
+                    ]))
                 }
             }
 
-            And(constraints)
+            exists(vec![cond_var, *expr_var], And(constraints))
         }
 
         Update {
@@ -745,8 +804,11 @@ pub fn constrain_expr(
                 cons.push(con);
             }
 
-            let fields_type = constrain::lift(
-                var_store,
+            let uniq_var = var_store.fresh();
+            vars.push(uniq_var);
+
+            let fields_type = constrain::attr_type(
+                Bool::Variable(uniq_var),
                 Type::Record(fields.clone(), Box::new(Type::Variable(*ext_var))),
             );
             let record_type = Type::Variable(*record_var);
@@ -881,15 +943,18 @@ fn constrain_var(
 
             let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
 
-            And(vec![
-                Lookup(symbol_for_lookup, expected.clone(), region),
-                Eq(attr_type, expected, region),
-                Eq(
-                    Type::Boolean(uniq_type),
-                    Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
-                    region,
-                ),
-            ])
+            exists(
+                vec![val_var, uniq_var],
+                And(vec![
+                    Lookup(symbol_for_lookup, expected.clone(), region),
+                    Eq(attr_type, expected, region),
+                    Eq(
+                        Type::Boolean(uniq_type),
+                        Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
+                        region,
+                    ),
+                ]),
+            )
         }
         Some(sharing::ReferenceCount::Unique) => {
             // no additional constraints, keep uniqueness unbound
@@ -961,6 +1026,7 @@ fn constrain_def_pattern(
 
 /// Turn e.g. `Int` into `Attr.Attr * Int`
 fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, Type) {
+    use crate::types;
     use crate::types::Type::*;
 
     match ann {
@@ -996,6 +1062,36 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             args,
         } => {
             let uniq_var = var_store.fresh();
+            if module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM {
+                let arg = args
+                    .iter()
+                    .next()
+                    .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
+
+                match arg {
+                    Apply {
+                        module_name, name, ..
+                    } if module_name.as_str() == types::MOD_INT
+                        && name.as_str() == types::TYPE_INTEGER =>
+                    {
+                        return (
+                            vec![uniq_var],
+                            constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
+                        )
+                    }
+                    Apply {
+                        module_name, name, ..
+                    } if module_name.as_str() == types::MOD_FLOAT
+                        && name.as_str() == types::TYPE_FLOATINGPOINT =>
+                    {
+                        return (
+                            vec![uniq_var],
+                            constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                        )
+                    }
+                    _ => {}
+                }
+            }
             let (mut arg_vars, args_lifted) = annotation_to_attr_type_many(var_store, args);
 
             arg_vars.push(uniq_var);

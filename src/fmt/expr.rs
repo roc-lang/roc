@@ -144,16 +144,29 @@ pub fn fmt_expr<'a>(
             buf.push_str(" is\n");
 
             let mut it = branches.iter().peekable();
-            while let Some((pattern, expr)) = it.next() {
+            while let Some((patterns, expr)) = it.next() {
                 add_spaces(buf, indent + INDENT);
+                let (first, rest) = patterns.split_first().unwrap();
 
-                match pattern.value {
+                match first.value {
                     Pattern::SpaceBefore(nested, spaces) => {
                         fmt_comments_only(buf, spaces.iter(), indent + INDENT);
                         fmt_pattern(buf, nested, indent + INDENT, false);
                     }
                     _ => {
-                        fmt_pattern(buf, &pattern.value, indent + INDENT, false);
+                        fmt_pattern(buf, &first.value, indent + INDENT, false);
+                    }
+                };
+                for pattern in rest {
+                    buf.push_str(" | ");
+                    match pattern.value {
+                        Pattern::SpaceBefore(nested, spaces) => {
+                            fmt_comments_only(buf, spaces.iter(), indent + INDENT);
+                            fmt_pattern(buf, nested, indent + INDENT, false);
+                        }
+                        _ => {
+                            fmt_pattern(buf, &pattern.value, indent + INDENT, false);
+                        }
                     }
                 }
 
@@ -202,15 +215,56 @@ pub fn fmt_list<'a>(
 
     while let Some(item) = iter.next() {
         if is_multiline {
-            newline(buf, item_indent);
+            match &item.value {
+                Expr::SpaceBefore(expr_below, spaces_above_expr) => {
+                    newline(buf, item_indent);
+                    fmt_comments_only(buf, spaces_above_expr.iter(), item_indent);
+
+                    match &expr_below {
+                        Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                            fmt_expr(buf, expr_above, item_indent, false, false);
+
+                            if iter.peek().is_some() {
+                                buf.push(',');
+                            }
+
+                            fmt_if_spaces(buf, spaces_below_expr.iter(), item_indent);
+                        }
+                        _ => {
+                            fmt_expr(buf, expr_below, item_indent, false, false);
+                            if iter.peek().is_some() {
+                                buf.push(',');
+                            }
+                        }
+                    }
+                }
+
+                Expr::SpaceAfter(sub_expr, spaces) => {
+                    newline(buf, item_indent);
+
+                    fmt_expr(buf, sub_expr, item_indent, false, false);
+
+                    if iter.peek().is_some() {
+                        buf.push(',');
+                    }
+
+                    fmt_if_spaces(buf, spaces.iter(), item_indent);
+                }
+
+                _ => {
+                    newline(buf, item_indent);
+                    fmt_expr(buf, &item.value, item_indent, false, true);
+                    if iter.peek().is_some() {
+                        buf.push(',');
+                    }
+                }
+            }
         } else {
             buf.push(' ');
-        }
-
-        fmt_expr(buf, &item.value, item_indent, false, false);
-
-        if iter.peek().is_some() {
-            buf.push(',');
+            fmt_expr(buf, &item.value, item_indent, false, true);
+            if iter.peek().is_some() {
+                buf.push(',');
+            }
         }
     }
 
