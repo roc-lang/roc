@@ -973,18 +973,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn record_field_access() {
-        infer_eq(
-            indoc!(
-                r#"
-                \rec -> rec.left 
-                "#
-            ),
-            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
-        );
-    }
-
-    #[test]
     fn record_field_accessor_function() {
         infer_eq(
             indoc!(
@@ -992,19 +980,19 @@ mod test_infer_uniq {
                 .left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (a | *) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
     #[test]
-    fn record_field_pattern_match() {
+    fn record_field_access() {
         infer_eq(
             indoc!(
                 r#"
-                \{ left } -> left
+                \rec -> rec.left 
                 "#
             ),
-            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1016,7 +1004,7 @@ mod test_infer_uniq {
                 \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | b) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
+            "Attr.Attr * (Attr.Attr (b | a) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
         );
     }
 
@@ -1104,67 +1092,80 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn sharing_analysis_record_one_field() {
+    fn record_field_pattern_match() {
         infer_eq(
             indoc!(
                 r#"
-                r = { x: 4, y: 3.14 }
-
-                v = r.x
-
-                r
+                \{ left } -> left
                 "#
             ),
-            "Attr.Attr a { x : (Attr.Attr a Int), y : (Attr.Attr * Float) }",
+            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
     #[test]
-    fn sharing_analysis_record_update_use_once() {
+    fn sharing_analysis_record_one_field_pattern() {
         infer_eq(
             indoc!(
                 r#"
-                r = { x: 4, y: 3.14 }
-
-                r2 = { r & x: r.x } 
-
-                r
+                \{ x } -> x 
                 "#
             ),
-            "Attr.Attr a { x : (Attr.Attr a Int), y : (Attr.Attr * Float) }",
+            "Attr.Attr * (Attr.Attr a { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
     #[test]
-    fn sharing_analysis_record_update_use_twice() {
+    fn record_field_access_binding() {
         infer_eq(
             indoc!(
                 r#"
-                r = { x: 4, y: 5 }
+                \r -> 
+                    x = r.x 
 
-                r2 = { r & x: r.x, y: r.x } 
-
-                r
+                    x
                 "#
             ),
-            "Attr.Attr a { x : (Attr.Attr Attr.Shared Int), y : (Attr.Attr * Int) }",
+            "Attr.Attr * (Attr.Attr (* | a) { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
     #[test]
-    fn sharing_analysis_record_two_fields() {
+    fn sharing_analysis_record_one_field_access() {
         infer_eq(
             indoc!(
                 r#"
-                r = { x: 4, y: 3.14 }
+                \r -> 
+                    x = r.x 
 
-                v = r.x
-                w = r.y
-
-                r
+                    x
                 "#
             ),
-            "Attr.Attr (a | b) { x : (Attr.Attr a Int), y : (Attr.Attr b Float) }",
+            "Attr.Attr * (Attr.Attr (* | a) { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
+    fn sharing_analysis_record_update_use_twice_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r -> { r & x: r.x, y: r.y } 
+                "#
+            ),
+        "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)" ,
+        );
+    }
+
+    #[test]
+    fn sharing_analysis_record_update_duplicate_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r -> { r & x: r.x, y: r.x } 
+                "#
+            ),
+         "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared a) }b -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared a) }b)"
         );
     }
 
