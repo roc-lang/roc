@@ -67,7 +67,7 @@ struct State<'a> {
     subs_by_module: SendMap<ModuleName, &'a Subs>,
 }
 
-pub fn run<'a>(
+pub fn run(
     vars_by_symbol: &Env,
     subs_by_module: SendMap<ModuleName, &Subs>,
     problems: &mut Vec<Problem>,
