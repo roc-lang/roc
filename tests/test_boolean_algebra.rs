@@ -39,7 +39,9 @@ mod test_boolean_algebra {
     }
 
     fn absorbs_eq(a: ImSet<Bool>, b: ImSet<Bool>, expected: bool) {
-        assert_eq!(boolean_algebra::absorbs(&a, &b), expected);
+        let x: Vec<Bool> = a.into_iter().collect();
+        let y: Vec<Bool> = b.into_iter().collect();
+        assert_eq!(boolean_algebra::absorbs_vector(&x, &y), expected);
     }
 
     fn vecs_to_sets(input: Vec<Vec<Bool>>) -> ImSet<ImSet<Bool>> {
@@ -53,7 +55,8 @@ mod test_boolean_algebra {
     }
 
     fn absorptive_eq(actual: Vec<Vec<Bool>>, expected: Vec<Vec<Bool>>) {
-        let actual_vec: ImSet<ImSet<Bool>> = vecs_to_sets(actual);
+        let result = boolean_algebra::absorptive_vector(actual);
+        let actual_vec: ImSet<ImSet<Bool>> = vecs_to_sets(result);
         let expected_vec: ImSet<ImSet<Bool>> = vecs_to_sets(expected);
         assert_eq!(actual_vec, expected_vec);
     }
@@ -640,7 +643,7 @@ mod test_boolean_algebra {
         );
 
         assert_eq!(
-            boolean_algebra::simplify_sop(
+            boolean_algebra::simplify_sop_vector(
                 vec![
                     vec![Variable(a), Variable(d)].into(),
                     vec![Variable(a), Variable(c)].into(),
@@ -652,12 +655,11 @@ mod test_boolean_algebra {
                 .into()
             ),
             vec![
-                vec![Bool::not(Variable(b)), Variable(c)].into(),
-                vec![Bool::not(Variable(b)), Variable(d)].into(),
-                vec![Variable(a), Variable(c)].into(),
-                vec![Variable(a), Variable(d)].into()
+                vec![Bool::not(Variable(b)), Variable(c)],
+                vec![Bool::not(Variable(b)), Variable(d)],
+                vec![Variable(a), Variable(c)],
+                vec![Variable(a), Variable(d)]
             ]
-            .into()
         );
 
         assert_eq!(
@@ -684,33 +686,27 @@ mod test_boolean_algebra {
         );
 
         absorptive_eq(
-            boolean_algebra::absorptive(
-                vec![vec![Bool::not(Variable(b)), Variable(c)].into()].into(),
-            ),
+            vec![vec![Bool::not(Variable(b)), Variable(c)].into()].into(),
             vec![vec![Bool::not(Variable(b)), Variable(c)]],
         );
         absorptive_eq(
-            boolean_algebra::absorptive(
-                vec![
-                    vec![Bool::not(Variable(b)), Variable(c)].into(),
-                    vec![Bool::not(Variable(b)), Variable(d)].into(),
-                ]
-                .into(),
-            ),
+            vec![
+                vec![Bool::not(Variable(b)), Variable(c)].into(),
+                vec![Bool::not(Variable(b)), Variable(d)].into(),
+            ]
+            .into(),
             vec![
                 vec![Bool::not(Variable(b)), Variable(d)],
                 vec![Bool::not(Variable(b)), Variable(c)],
             ],
         );
         absorptive_eq(
-            boolean_algebra::absorptive(
-                vec![
-                    vec![Bool::not(Variable(b)), Variable(c)].into(),
-                    vec![Bool::not(Variable(b)), Variable(d)].into(),
-                    vec![Bool::not(Variable(b)), Bool::not(Variable(d)), Variable(c)].into(),
-                ]
-                .into(),
-            ),
+            vec![
+                vec![Bool::not(Variable(b)), Variable(c)].into(),
+                vec![Bool::not(Variable(b)), Variable(d)].into(),
+                vec![Bool::not(Variable(b)), Bool::not(Variable(d)), Variable(c)].into(),
+            ]
+            .into(),
             vec![
                 vec![Bool::not(Variable(b)), Bool::not(Variable(d)), Variable(c)],
                 vec![Bool::not(Variable(b)), Variable(d)],
@@ -718,15 +714,13 @@ mod test_boolean_algebra {
             ],
         );
         absorptive_eq(
-            boolean_algebra::absorptive(
-                vec![
-                    vec![Bool::not(Variable(b)), Variable(c)].into(),
-                    vec![Bool::not(Variable(b)), Variable(d)].into(),
-                    vec![Bool::not(Variable(b)), Bool::not(Variable(d)), Variable(c)].into(),
-                    vec![Bool::not(Variable(c)), Bool::not(Variable(b)), Variable(d)].into(),
-                ]
-                .into(),
-            ),
+            vec![
+                vec![Bool::not(Variable(b)), Variable(c)].into(),
+                vec![Bool::not(Variable(b)), Variable(d)].into(),
+                vec![Bool::not(Variable(b)), Bool::not(Variable(d)), Variable(c)].into(),
+                vec![Bool::not(Variable(c)), Bool::not(Variable(b)), Variable(d)].into(),
+            ]
+            .into(),
             vec![
                 vec![Bool::not(Variable(c)), Bool::not(Variable(b)), Variable(d)],
                 vec![Bool::not(Variable(b)), Bool::not(Variable(d)), Variable(c)],
@@ -735,16 +729,14 @@ mod test_boolean_algebra {
             ],
         );
         absorptive_eq(
-            boolean_algebra::absorptive(
-                vec![
-                    vec![Bool::not(Variable(b)), Variable(c)].into(),
-                    vec![Bool::not(Variable(b)), Variable(d)].into(),
-                    vec![Bool::not(Variable(b)), Bool::not(Variable(d)), Variable(c)].into(),
-                    vec![Bool::not(Variable(c)), Bool::not(Variable(b)), Variable(d)].into(),
-                    vec![Variable(a), Variable(c)].into(),
-                ]
-                .into(),
-            ),
+            vec![
+                vec![Bool::not(Variable(b)), Variable(c)].into(),
+                vec![Bool::not(Variable(b)), Variable(d)].into(),
+                vec![Bool::not(Variable(b)), Bool::not(Variable(d)), Variable(c)].into(),
+                vec![Bool::not(Variable(c)), Bool::not(Variable(b)), Variable(d)].into(),
+                vec![Variable(a), Variable(c)].into(),
+            ]
+            .into(),
             vec![
                 vec![Variable(a), Variable(c)].into(),
                 vec![Bool::not(Variable(c)), Bool::not(Variable(b)), Variable(d)],

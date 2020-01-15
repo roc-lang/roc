@@ -38,10 +38,11 @@ pub fn or(left: Bool, right: Bool) -> Bool {
     Or(Box::new(left), Box::new(right))
 }
 
-pub fn any<I>(mut it: I) -> Bool
+pub fn any<I>(iterable: I) -> Bool
 where
-    I: Iterator<Item = Bool>,
+    I: IntoIterator<Item = Bool>,
 {
+    let mut it = iterable.into_iter();
     if let Some(first) = it.next() {
         it.fold(first, |x, y| or(y, x))
     } else {
@@ -49,20 +50,11 @@ where
     }
 }
 
-pub fn all(terms: Product<Bool>) -> Bool {
-    let mut it = terms.into_iter();
-
-    if let Some(first) = it.next() {
-        it.fold(first, and)
-    } else {
-        One
-    }
-}
-
-pub fn all_iterator<I>(mut it: I) -> Bool
+pub fn all<I>(iterable: I) -> Bool
 where
-    I: Iterator<Item = Bool>,
+    I: IntoIterator<Item = Bool>,
 {
+    let mut it = iterable.into_iter();
     if let Some(first) = it.next() {
         it.fold(first, and)
     } else {
@@ -179,50 +171,27 @@ pub fn sop_to_term(sop: Sop) -> Bool {
 
     accum.sort_by(|x, y| (y.len().cmp(&x.len())));
 
-    println!("{:?}", &accum);
-
-    any(accum.into_iter().map(|v| all_iterator(v.into_iter())))
+    any(accum.into_iter().map(all))
 }
 
 #[inline(always)]
 pub fn sop_to_term_vector(sop: Vec<Vec<Bool>>) -> Bool {
-    any(sop.into_iter().rev().map(|v| all_iterator(v.into_iter())))
-}
-
-pub fn simplify_sop(sop: Sop) -> Sop {
-    // sort by length longest to shortest (proxy for how many variables there are)
-    let mut sorted: Vec<ImSet<Bool>> = sop.clone().into_iter().collect();
-
-    sorted.sort_by(|x, y| y.len().cmp(&x.len()));
-
-    // filter out anything that is included in the remaining elements
-    let mut active = sop;
-    let mut result = ImSet::default();
-    for t in sorted {
-        if !(active.remove(&t).is_some() && included(all(t.clone()), sop_to_term(active.clone()))) {
-            result.insert(t);
-        }
-    }
-
-    result
+    any(sop.into_iter().rev().map(all))
 }
 
 pub fn simplify_sop_vector(sorted: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
     // sort by length longest to shortest (proxy for how many variables there are)
     // sorted.sort_by(|x, y| y.len().cmp(&x.len()));
 
-    let sorted2 = sorted.clone();
+    let backup = sorted.clone();
 
     let mut p: Vec<Vec<Bool>> = Vec::new();
 
     for (i, t) in sorted.into_iter().enumerate() {
-        let ts = &sorted2[i + 1..];
+        let ts = &backup[i + 1..];
         ts.to_vec().extend(p.clone());
 
-        if included(
-            all_iterator(t.clone().into_iter()).clone(),
-            sop_to_term_vector(ts.to_vec()),
-        ) {
+        if included(all(t.clone()), sop_to_term_vector(ts.to_vec())) {
             // do nothing
         } else {
             p.insert(0, t.into_iter().collect());
@@ -231,21 +200,6 @@ pub fn simplify_sop_vector(sorted: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
 
     p
 }
-
-/*
-simplify_sop :: BooleanAlgebra a => Sum (Product a) -> Sum (Product a)
-simplify_sop terms =
-        let
-            sorted = (sortBy (\x y -> compare (length y) (length x)) terms)
-        in
-            f sorted []
-    where
-        f [] p = p
-        f (t:ts) p =
-            if list_to_conj t `included` sop_to_term (ts ++ p)
-            then f ts p
-            else f ts (t:p)
-*/
 
 /// Blake canonical form
 pub fn bcf(sop: Sop) -> Vec<Vec<Bool>> {
@@ -275,16 +229,8 @@ pub fn syllogistic(terms: Sop) -> Sop {
     }
 }
 
-/*
-absorptive :: BooleanAlgebra a => Sum (Product a) -> Sum (Product a)
-absorptive p = f p p
-    where
-        f [] p = p
-        f (t:ts) p = f ts (t : filter (not . absorbs t) p)
-*/
-
 /// Absorption (apply the identify p + pq = p)
-pub fn absorptive(sop: Sop) -> Vec<Vec<Bool>> {
+fn absorptive(sop: Sop) -> Vec<Vec<Bool>> {
     let mut accum: Vec<Vec<Bool>> = Vec::new();
 
     for s in sop {
@@ -302,18 +248,10 @@ pub fn absorptive_vector(mut accum: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
         accum.insert(0, product.clone());
     }
 
-    // accum.reverse();
-
     accum
 }
 
 pub fn absorbs_vector(p: &[Bool], q: &[Bool]) -> bool {
-    p.iter().all(|x| q.contains(x))
-}
-
-/// Does p absorb q? (can we replace p + q by p?)
-/// TODO investigate: either the comment or the implementation is wrong I think?
-pub fn absorbs(p: &Product<Bool>, q: &Product<Bool>) -> bool {
     p.iter().all(|x| q.contains(x))
 }
 
