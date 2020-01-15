@@ -238,8 +238,6 @@ pub fn constrain_expr(
 ) -> Constraint {
     pub use crate::can::expr::Expr::*;
 
-    let expr_copy = expr.clone();
-
     match expr {
         Int(var, _) => And(vec![
             Eq(

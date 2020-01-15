@@ -207,7 +207,7 @@ pub fn simplify_sop(sop: Sop) -> Sop {
     result
 }
 
-pub fn simplify_sop_vector(mut sorted: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
+pub fn simplify_sop_vector(sorted: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
     // sort by length longest to shortest (proxy for how many variables there are)
     // sorted.sort_by(|x, y| y.len().cmp(&x.len()));
 
@@ -216,7 +216,7 @@ pub fn simplify_sop_vector(mut sorted: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
     let mut p: Vec<Vec<Bool>> = Vec::new();
 
     for (i, t) in sorted.into_iter().enumerate() {
-        let mut ts = (&sorted2[i + 1..]).clone();
+        let ts = &sorted2[i + 1..];
         ts.to_vec().extend(p.clone());
 
         if included(
@@ -307,16 +307,14 @@ pub fn absorptive_vector(mut accum: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
     accum
 }
 
-pub fn absorbs_vector(p: &Vec<Bool>, q: &Vec<Bool>) -> bool {
-    let result = p.iter().all(|x| q.contains(x));
-    result
+pub fn absorbs_vector(p: &[Bool], q: &[Bool]) -> bool {
+    p.iter().all(|x| q.contains(x))
 }
 
 /// Does p absorb q? (can we replace p + q by p?)
 /// TODO investigate: either the comment or the implementation is wrong I think?
 pub fn absorbs(p: &Product<Bool>, q: &Product<Bool>) -> bool {
-    let result = p.iter().all(|x| q.contains(x));
-    result
+    p.iter().all(|x| q.contains(x))
 }
 
 fn consensus(p: &Product<Bool>, q: &Product<Bool>) -> Option<Product<Bool>> {
@@ -416,11 +414,11 @@ fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
     (substitution, simplify(term))
 }
 
-fn unify0_rec(names: Vec<Variable>, mut term: Bool) -> (Substitution, Bool) {
+fn unify0_rec(names: Vec<Variable>, term: Bool) -> (Substitution, Bool) {
     unify0_rec_help(names, term)
 }
 
-fn unify0_rec_help(mut names: Vec<Variable>, mut term: Bool) -> (Substitution, Bool) {
+fn unify0_rec_help(mut names: Vec<Variable>, term: Bool) -> (Substitution, Bool) {
     if let Some(x) = names.pop() {
         let xs = names;
 

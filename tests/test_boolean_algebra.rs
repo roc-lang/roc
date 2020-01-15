@@ -858,7 +858,7 @@ mod test_boolean_algebra {
         );
 
         simplify_eq(
-            (Bool::or(
+            Bool::or(
                 Bool::and(
                     Bool::or(
                         Bool::and(
@@ -906,14 +906,14 @@ mod test_boolean_algebra {
                         ),
                     )),
                 ),
-            )),
+            ),
             Bool::or(
                 Bool::and(Variable(b), Variable(c)),
                 Bool::and(Variable(b), Variable(d)),
             ),
         );
         simplify_eq(
-            (Bool::or(
+            Bool::or(
                 Bool::or(
                     Bool::and(
                         Bool::or(
@@ -961,7 +961,7 @@ mod test_boolean_algebra {
                         ),
                     )),
                 ),
-            )),
+            ),
             Bool::or(
                 Bool::and(Bool::not(Variable(b)), Variable(c)),
                 Bool::or(
