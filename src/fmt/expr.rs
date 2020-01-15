@@ -161,7 +161,6 @@ pub fn fmt_expr<'a>(
                     } else {
                         buf.push_str(" | ");
                     }
-                    // TODO create a function to remove spaces before or after
                     ignore_space_around(buf, &pattern.value, indent);
                 }
 
@@ -193,20 +192,10 @@ pub fn fmt_expr<'a>(
 
 fn ignore_space_around<'a>(buf: &mut String<'a>, pattern: &'a Pattern<'a>, indent: u16) {
     match pattern {
-        Pattern::SpaceAfter(nested_after, spaces) => match nested_after {
-            Pattern::SpaceBefore(nested, spaces) => {
-                fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                fmt_pattern(buf, nested, indent + INDENT, false);
-            }
-            _ => {
-                fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                fmt_pattern(buf, &nested_after, indent + INDENT, false);
-            }
-        },
         Pattern::SpaceBefore(nested_before, spaces) => match nested_before {
-            Pattern::SpaceAfter(nested, spaces) => {
+            Pattern::SpaceAfter(nested_after, spaces) => {
                 fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                fmt_pattern(buf, nested, indent + INDENT, false);
+                fmt_pattern(buf, nested_after, indent + INDENT, false);
             }
             _ => {
                 fmt_comments_only(buf, spaces.iter(), indent + INDENT);
