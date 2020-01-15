@@ -64,7 +64,7 @@ where
     I: Iterator<Item = Bool>,
 {
     if let Some(first) = it.next() {
-        it.fold(first, |a, b| and(a, b))
+        it.fold(first, and)
     } else {
         One
     }
