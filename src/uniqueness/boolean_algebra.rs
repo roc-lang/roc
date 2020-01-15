@@ -374,51 +374,12 @@ fn unify(p: Bool, q: Bool) -> (Substitution, Bool) {
         or(and(p.clone(), not(q.clone())), and(not(p), q))
     };
 
-    // unify0(t.variables(), t)
     let mut sorted_names: Vec<Variable> = t.variables().into_iter().collect();
-    sorted_names.sort();
-    sorted_names.reverse();
-    unify0_rec(sorted_names, t)
+    sorted_names.sort_by(|x, y| y.cmp(x));
+    unify0(sorted_names, t)
 }
 
-fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
-    // NOTE sort is required for stable test order that is the same as the Haskell ref. impl.
-    let mut substitution: Substitution = ImMap::default();
-
-    let mut sorted_names: Vec<Variable> = names.into_iter().collect();
-    sorted_names.sort();
-
-    for x in sorted_names.into_iter() {
-        let mut sub_zero = ImMap::default();
-        sub_zero.insert(x, Zero);
-
-        let mut sub_one = ImMap::default();
-        sub_one.insert(x, One);
-
-        let subbed_zero = term.substitute(&sub_zero);
-        let subbed_one = term.substitute(&sub_one);
-
-        term = and(subbed_zero.clone(), subbed_one.clone());
-
-        println!("> {:?} {:?} {:?}", &subbed_zero, &subbed_one, &substitution);
-        let raw = or(
-            subbed_zero.substitute(&substitution),
-            and(Variable(x), not(subbed_one.substitute(&substitution))),
-        );
-
-        let replacement = simplify(raw);
-
-        substitution.insert(x, replacement);
-    }
-
-    (substitution, simplify(term))
-}
-
-fn unify0_rec(names: Vec<Variable>, term: Bool) -> (Substitution, Bool) {
-    unify0_rec_help(names, term)
-}
-
-fn unify0_rec_help(mut names: Vec<Variable>, term: Bool) -> (Substitution, Bool) {
+fn unify0(mut names: Vec<Variable>, term: Bool) -> (Substitution, Bool) {
     if let Some(x) = names.pop() {
         let xs = names;
 
@@ -433,7 +394,7 @@ fn unify0_rec_help(mut names: Vec<Variable>, term: Bool) -> (Substitution, Bool)
 
         let e = and(subbed_zero.clone(), subbed_one.clone());
 
-        let (mut se, cc) = unify0_rec_help(xs, e);
+        let (mut se, cc) = unify0(xs, e);
 
         let input = or(
             subbed_zero.substitute(&se),
@@ -449,28 +410,6 @@ fn unify0_rec_help(mut names: Vec<Variable>, term: Bool) -> (Substitution, Bool)
         (ImMap::default(), simplify(term))
     }
 }
-
-/*
-
-unify0 :: BooleanAlgebra a => [Name] -> a -> (Subst a, a)
-unify0 [] t = ([], simplify t)
-unify0 (x:xs) t = (st, cc)
-    where
-        e = ( t @@ (x, zero)) `conj` (t @@ (x, one))
-
-        -- !foo = Debug.traceShowId ("----->", input, replacement )
-        (se,cc) = unify0 xs e
-
-        input = (apply se (t @@ (x, zero))) `disj` (var x `conj` apply se (comp (t @@ (x, one))))
-
-        !foo = Debug.traceShowId ("----->", t @@ (x, zero), t @@ (x, one) , se )
-
-
-        replacement = simplify $ ( input)
-
-
-        st = (x, replacement ):se
-    */
 
 // --- Simplification ---
 
