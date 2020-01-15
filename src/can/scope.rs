@@ -1,3 +1,4 @@
+use crate::can::ident::ModuleName;
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::ident::Ident;
@@ -6,14 +7,20 @@ use crate::region::Region;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
     pub idents: ImMap<Ident, (Symbol, Region)>,
+    pub module_name: ModuleName,
     symbol_prefix: Box<str>,
     next_unique_id: u64,
 }
 
 impl Scope {
-    pub fn new(symbol_prefix: Box<str>, declared_idents: ImMap<Ident, (Symbol, Region)>) -> Scope {
+    pub fn new(
+        module_name: ModuleName,
+        symbol_prefix: Box<str>,
+        declared_idents: ImMap<Ident, (Symbol, Region)>,
+    ) -> Scope {
         Scope {
             symbol_prefix,
+            module_name,
 
             // This is used to generate unique names for anonymous closures.
             // It always begins at 0.

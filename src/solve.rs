@@ -1,6 +1,6 @@
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::symbol::Symbol;
-use crate::collections::ImMap;
+use crate::collections::{ImMap, SendMap};
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
@@ -61,13 +61,15 @@ impl Pools {
 }
 
 #[derive(Clone)]
-struct State {
+struct State<'a> {
     vars_by_symbol: Env,
     mark: Mark,
+    subs_by_module: SendMap<ModuleName, &'a Subs>,
 }
 
-pub fn run(
+pub fn run<'a>(
     vars_by_symbol: &Env,
+    subs_by_module: SendMap<ModuleName, &Subs>,
     problems: &mut Vec<Problem>,
     subs: &mut Subs,
     constraint: &Constraint,
@@ -76,6 +78,7 @@ pub fn run(
     let state = State {
         vars_by_symbol: vars_by_symbol.clone(),
         mark: Mark::NONE.next(),
+        subs_by_module,
     };
     let rank = Rank::toplevel();
 
@@ -90,20 +93,22 @@ pub fn run(
     );
 }
 
-fn solve(
+fn solve<'a>(
     vars_by_symbol: &Env,
-    state: State,
+    state: State<'a>,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<Problem>,
     subs: &mut Subs,
     constraint: &Constraint,
-) -> State {
+) -> State<'a> {
     match constraint {
         True => state,
         SaveTheEnvironment => {
             let mut copy = state;
+
             copy.vars_by_symbol = vars_by_symbol.clone();
+
             copy
         }
         Eq(typ, expected_type, _region) => {
@@ -118,7 +123,7 @@ fn solve(
 
             state
         }
-        Lookup(symbol, expected_type, _region) => {
+        Lookup(module_name, symbol, expected_type, _region) => {
             let var = *vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
                 // a Problem ("module Foo does not expose `bar`") for later.
@@ -327,6 +332,7 @@ fn solve(
                         let temp_state = State {
                             vars_by_symbol: new_state.vars_by_symbol,
                             mark: final_mark,
+                            subs_by_module: new_state.subs_by_module,
                         };
 
                         // Now solve the body, using the new vars_by_symbol which includes

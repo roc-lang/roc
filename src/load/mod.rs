@@ -215,8 +215,12 @@ fn load_filename(
                         tx.send(deps).await.unwrap();
                     });
 
-                    let mut scope =
-                        Scope::new(format!("{}.", declared_name).into(), scope_from_imports);
+                    let symbol_prefix = format!("{}.", declared_name).into();
+                    let mut scope = Scope::new(
+                        declared_name.clone().into(),
+                        symbol_prefix,
+                        scope_from_imports,
+                    );
                     let (declarations, exposed_imports, constraint) = process_defs(
                         &arena,
                         state,
@@ -255,7 +259,7 @@ fn load_filename(
                         tx.send(deps).await.unwrap();
                     });
 
-                    let mut scope = Scope::new(".".into(), scope_from_imports);
+                    let mut scope = Scope::new(".".into(), ".".into(), scope_from_imports);
 
                     // The app module has no declared name. Pass it as "".
                     let (declarations, exposed_imports, constraint) = process_defs(
@@ -306,9 +310,9 @@ where
         declarations,
         exposed_imports,
         lookups,
-    } = canonicalize_module_defs(arena, parsed_defs, home, exposes, scope, var_store);
+    } = canonicalize_module_defs(arena, parsed_defs, home.clone(), exposes, scope, var_store);
 
-    let constraint = constrain_module(&declarations, lookups);
+    let constraint = constrain_module(home.into(), &declarations, lookups);
 
     (declarations, exposed_imports, constraint)
 }
@@ -425,7 +429,9 @@ pub fn solve_loaded(
                     }
                 }
 
-                dep_constraints.push(valid_dep.constraint);
+                let module_name: crate::can::ident::ModuleName = valid_dep.name.unwrap().into();
+
+                dep_constraints.push((module_name, valid_dep.constraint));
             }
 
             broken @ FileProblem { .. } => {
@@ -438,9 +444,25 @@ pub fn solve_loaded(
         }
     }
 
-    for dep_constraint in dep_constraints {
-        solve::run(&vars_by_symbol, problems, subs, &dep_constraint);
+    for (_module_name, dep_constraint) in dep_constraints {
+        let subs_by_module = SendMap::default();
+
+        solve::run(
+            &vars_by_symbol,
+            subs_by_module,
+            problems,
+            subs,
+            &dep_constraint,
+        );
     }
 
-    solve::run(&vars_by_symbol, problems, subs, &module.constraint);
+    let subs_by_module = SendMap::default();
+
+    solve::run(
+        &vars_by_symbol,
+        subs_by_module,
+        problems,
+        subs,
+        &module.constraint,
+    );
 }

@@ -24,6 +24,12 @@ impl<'a> From<&'a str> for ModuleName {
     }
 }
 
+impl<'a> From<Box<str>> for ModuleName {
+    fn from(string: Box<str>) -> Self {
+        Self((string.as_ref()).into())
+    }
+}
+
 impl<'a> From<String> for ModuleName {
     fn from(string: String) -> Self {
         Self(string.into())
