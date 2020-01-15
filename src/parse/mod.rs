@@ -856,6 +856,7 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 mod when {
     use super::*;
 
+    /// Parser for when expressions.
     pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         then(
             and!(
@@ -887,6 +888,16 @@ mod when {
         )
     }
 
+    /// Parsing when with indentation.
+    fn when_with_indent<'a>() -> impl Parser<'a, u16> {
+        move |arena, state: State<'a>| {
+            string(keyword::WHEN)
+                .parse(arena, state)
+                .map(|((), state)| (state.indent_col, state))
+        }
+    }
+
+    /// Parsing branches of when conditional.
     fn branches<'a>(
         min_indent: u16,
     ) -> impl Parser<'a, Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)>> {
@@ -942,6 +953,7 @@ mod when {
         }
     }
 
+    /// Parsing alternative patterns in when branches.
     fn branch_alternatives<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>> {
         sep_by1(
             char('|'),
@@ -949,6 +961,7 @@ mod when {
         )
     }
 
+    /// Check if alternatives of a when branch are indented correctly.
     fn alternatives_indented_correctly<'a>(
         loc_patterns: &'a Vec<'a, Located<Pattern<'a>>>,
         original_indent: u16,
@@ -961,6 +974,7 @@ mod when {
         first_indented_correctly && rest_indented_correctly
     }
 
+    /// Parsing the righthandside of a branch in a when conditional.
     fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
         skip_first!(
             string("->"),
@@ -969,14 +983,6 @@ mod when {
                 indent,
             )
         )
-    }
-
-    fn when_with_indent<'a>() -> impl Parser<'a, u16> {
-        move |arena, state: State<'a>| {
-            string(keyword::WHEN)
-                .parse(arena, state)
-                .map(|((), state)| (state.indent_col, state))
-        }
     }
 }
 
