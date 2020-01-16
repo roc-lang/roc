@@ -152,7 +152,7 @@ pub fn fmt_expr<'a>(
                     Some(last) => first.region.start_line != last.region.end_line,
                 };
 
-                ignore_space_around(buf, &first.value, indent);
+                fmt_pattern(buf, &first.value, indent + INDENT, false, true);
                 for pattern in rest {
                     if is_multiline {
                         buf.push_str("\n");
@@ -161,7 +161,7 @@ pub fn fmt_expr<'a>(
                     } else {
                         buf.push_str(" | ");
                     }
-                    ignore_space_around(buf, &pattern.value, indent);
+                    fmt_pattern(buf, &pattern.value, indent + INDENT, false, true);
                 }
 
                 buf.push_str(" ->\n");
@@ -187,24 +187,6 @@ pub fn fmt_expr<'a>(
             fmt_list(buf, &loc_items, indent);
         }
         other => panic!("TODO implement Display for AST variant {:?}", other),
-    }
-}
-
-fn ignore_space_around<'a>(buf: &mut String<'a>, pattern: &'a Pattern<'a>, indent: u16) {
-    match pattern {
-        Pattern::SpaceBefore(nested_before, spaces) => match nested_before {
-            Pattern::SpaceAfter(nested_after, spaces) => {
-                fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                fmt_pattern(buf, nested_after, indent + INDENT, false);
-            }
-            _ => {
-                fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                fmt_pattern(buf, nested_before, indent + INDENT, false);
-            }
-        },
-        _ => {
-            fmt_pattern(buf, &pattern, indent + INDENT, false);
-        }
     }
 }
 
@@ -596,7 +578,7 @@ pub fn fmt_closure<'a>(
             any_args_printed = true;
         }
 
-        fmt_pattern(buf, &loc_pattern.value, indent, false);
+        fmt_pattern(buf, &loc_pattern.value, indent, false, false);
     }
 
     if !arguments_are_multiline {
