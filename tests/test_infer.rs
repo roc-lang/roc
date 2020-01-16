@@ -1245,4 +1245,47 @@ mod test_infer {
             "Int",
         );
     }
+
+    #[test]
+    fn integer_sum() {
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
+                f = \n -> 
+                    when n is 
+                        0 -> 0
+                        _ -> f n
+
+                f
+                   "#
+                ),
+                "Int -> Int",
+            );
+        });
+    }
+
+    // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
+    //    #[test]
+    //    fn linked_list_map() {
+    //        with_larger_debug_stack(|| {
+    //            infer_eq_without_problem(
+    //                indoc!(
+    //                    r#"
+    //                map = \f, list ->
+    //                    when list is
+    //                        Nil -> Nil
+    //                        Cons x xs ->
+    //                            a = f x
+    //                            b = map f xs
+    //
+    //                            b
+    //
+    //                map
+    //                   "#
+    //                ),
+    //                "Attr.Attr * Int",
+    //            );
+    //        });
+    //    }
 }
