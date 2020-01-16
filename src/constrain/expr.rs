@@ -2,7 +2,7 @@ use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::Field;
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
@@ -18,11 +18,6 @@ use crate::types::Expected::{self, *};
 use crate::types::PReason;
 use crate::types::Type::{self, *};
 use crate::types::{LetConstraint, PExpected, Reason};
-
-/// Whenever we encounter a user-defined type variable (a "rigid" var for short),
-/// for example `a` in the annotation `identity : a -> a`, we add it to this
-/// map so that expressions within that annotation can share these vars.
-pub type Rigids = ImMap<Lowercase, Type>;
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -53,8 +48,16 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
     }))
 }
 
+pub struct Env {
+    /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
+    /// for example `a` in the annotation `identity : a -> a`, we add it to this
+    /// map so that expressions within that annotation can share these vars.
+    pub rigids: ImMap<Lowercase, Type>,
+    pub module_name: ModuleName,
+}
+
 pub fn constrain_expr(
-    rigids: &Rigids,
+    env: &Env,
     region: Region,
     expr: &Expr,
     expected: Expected<Type>,
@@ -78,8 +81,7 @@ pub fn constrain_expr(
                 for (label, field) in fields {
                     let field_var = field.var;
                     let loc_field_expr = &field.loc_expr;
-                    let (field_type, field_con) =
-                        constrain_field(rigids, field_var, &*loc_field_expr);
+                    let (field_type, field_con) = constrain_field(env, field_var, &*loc_field_expr);
 
                     field_vars.push(field_var);
                     field_exprs.insert(label.clone(), loc_field_expr);
@@ -109,6 +111,7 @@ pub fn constrain_expr(
         }
         Update {
             record_var,
+            module,
             ext_var,
             ident,
             symbol,
@@ -119,7 +122,7 @@ pub fn constrain_expr(
             let mut cons = Vec::with_capacity(updates.len() + 1);
             for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
                 let (var, tipe, con) =
-                    constrain_field_update(rigids, var, region, field_name.clone(), &loc_expr);
+                    constrain_field_update(env, var, region, field_name.clone(), &loc_expr);
                 fields.insert(field_name, tipe);
                 vars.push(var);
                 cons.push(con);
@@ -136,6 +139,7 @@ pub fn constrain_expr(
             vars.push(*ext_var);
 
             let con = Lookup(
+                module.clone(),
                 symbol.clone(),
                 ForReason(
                     Reason::RecordUpdateKeys(ident.clone(), fields),
@@ -170,7 +174,7 @@ pub fn constrain_expr(
                     let elem_expected =
                         ForReason(Reason::ElemInList, list_elem_type.clone(), region);
                     let constraint =
-                        constrain_expr(rigids, loc_elem.region, &loc_elem.value, elem_expected);
+                        constrain_expr(env, loc_elem.region, &loc_elem.value, elem_expected);
 
                     constraints.push(constraint);
                 }
@@ -192,7 +196,7 @@ pub fn constrain_expr(
                 arity: loc_args.len() as u8,
             };
 
-            let fn_con = constrain_expr(rigids, loc_fn.region, &loc_fn.value, fn_expected);
+            let fn_con = constrain_expr(env, loc_fn.region, &loc_fn.value, fn_expected);
 
             // The function's return type
             let ret_type = Variable(*ret_var);
@@ -214,7 +218,7 @@ pub fn constrain_expr(
                     arg_index: index as u8,
                 };
                 let expected_arg = ForReason(reason, arg_type.clone(), region);
-                let arg_con = constrain_expr(rigids, loc_arg.region, &loc_arg.value, expected_arg);
+                let arg_con = constrain_expr(env, loc_arg.region, &loc_arg.value, expected_arg);
 
                 vars.push(*arg_var);
                 arg_types.push(arg_type);
@@ -238,8 +242,10 @@ pub fn constrain_expr(
             )
         }
         Var {
-            symbol_for_lookup, ..
-        } => Lookup(symbol_for_lookup.clone(), expected, region),
+            symbol_for_lookup,
+            module,
+            ..
+        } => Lookup(module.clone(), symbol_for_lookup.clone(), expected, region),
         Closure(fn_var, _symbol, _recursive, args, boxed) => {
             let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
@@ -272,12 +278,8 @@ pub fn constrain_expr(
 
             let fn_type = Type::Function(pattern_types, Box::new(ret_type.clone()));
             let body_type = NoExpectation(ret_type);
-            let ret_constraint = constrain_expr(
-                rigids,
-                loc_body_expr.region,
-                &loc_body_expr.value,
-                body_type,
-            );
+            let ret_constraint =
+                constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
 
             vars.push(*fn_var);
             let defs_constraint = And(state.constraints);
@@ -319,7 +321,7 @@ pub fn constrain_expr(
             match expected {
                 FromAnnotation(name, arity, _, tipe) => {
                     let then_con = constrain_expr(
-                        rigids,
+                        env,
                         loc_then.region,
                         &loc_then.value,
                         FromAnnotation(
@@ -330,7 +332,7 @@ pub fn constrain_expr(
                         ),
                     );
                     let else_con = constrain_expr(
-                        rigids,
+                        env,
                         loc_else.region,
                         &loc_else.value,
                         FromAnnotation(
@@ -350,7 +352,7 @@ pub fn constrain_expr(
                 }
                 _ => {
                     let then_con = constrain_expr(
-                        rigids,
+                        env,
                         loc_then.region,
                         &loc_then.value,
                         ForReason(
@@ -360,7 +362,7 @@ pub fn constrain_expr(
                         ),
                     );
                     let else_con = constrain_expr(
-                        rigids,
+                        env,
                         loc_else.region,
                         &loc_else.value,
                         ForReason(
@@ -392,7 +394,7 @@ pub fn constrain_expr(
             let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
             let expr_con = constrain_expr(
-                rigids,
+                env,
                 region,
                 &loc_cond.value,
                 NoExpectation(cond_type.clone()),
@@ -409,7 +411,7 @@ pub fn constrain_expr(
 
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
-                            rigids,
+                            env,
                             region,
                             loc_pattern,
                             loc_expr,
@@ -436,7 +438,7 @@ pub fn constrain_expr(
 
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
-                            rigids,
+                            env,
                             region,
                             loc_pattern,
                             loc_expr,
@@ -489,8 +491,15 @@ pub fn constrain_expr(
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
 
-            let constraint =
-                constrain_expr(&ImMap::default(), region, &loc_expr.value, record_expected);
+            let constraint = constrain_expr(
+                &Env {
+                    module_name: env.module_name.clone(),
+                    rigids: ImMap::default(),
+                },
+                region,
+                &loc_expr.value,
+                record_expected,
+            );
 
             exists(
                 vec![field_var, ext_var],
@@ -522,12 +531,12 @@ pub fn constrain_expr(
             )
         }
         LetRec(defs, loc_ret, var) => {
-            let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
+            let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
             exists(
                 vec![*var],
                 And(vec![
-                    constrain_recursive_defs(rigids, defs, body_con),
+                    constrain_recursive_defs(env, defs, body_con),
                     // Record the type of tne entire def-expression in the variable.
                     // Code gen will need that later!
                     Eq(Type::Variable(*var), expected, loc_ret.region),
@@ -535,12 +544,12 @@ pub fn constrain_expr(
             )
         }
         LetNonRec(def, loc_ret, var) => {
-            let body_con = constrain_expr(rigids, loc_ret.region, &loc_ret.value, expected.clone());
+            let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
             exists(
                 vec![*var],
                 And(vec![
-                    constrain_def(rigids, def, body_con),
+                    constrain_def(env, def, body_con),
                     // Record the type of tne entire def-expression in the variable.
                     // Code gen will need that later!
                     Eq(Type::Variable(*var), expected, loc_ret.region),
@@ -559,7 +568,7 @@ pub fn constrain_expr(
 
             for (var, loc_expr) in arguments {
                 let arg_con = constrain_expr(
-                    rigids,
+                    env,
                     loc_expr.region,
                     &loc_expr.value,
                     Expected::NoExpectation(Type::Variable(*var)),
@@ -593,14 +602,14 @@ pub fn constrain_expr(
 
 #[inline(always)]
 fn constrain_when_branch(
-    rigids: &Rigids,
+    env: &Env,
     region: Region,
     loc_pattern: &Located<Pattern>,
     loc_expr: &Located<Expr>,
     pattern_expected: PExpected<Type>,
     expr_expected: Expected<Type>,
 ) -> Constraint {
-    let ret_constraint = constrain_expr(rigids, region, &loc_expr.value, expr_expected);
+    let ret_constraint = constrain_expr(env, region, &loc_expr.value, expr_expected);
 
     let mut state = PatternState {
         headers: SendMap::default(),
@@ -624,14 +633,10 @@ fn constrain_when_branch(
     }))
 }
 
-fn constrain_field(
-    rigids: &Rigids,
-    field_var: Variable,
-    loc_expr: &Located<Expr>,
-) -> (Type, Constraint) {
+fn constrain_field(env: &Env, field_var: Variable, loc_expr: &Located<Expr>) -> (Type, Constraint) {
     let field_type = Variable(field_var);
     let field_expected = NoExpectation(field_type.clone());
-    let constraint = constrain_expr(rigids, loc_expr.region, &loc_expr.value, field_expected);
+    let constraint = constrain_expr(env, loc_expr.region, &loc_expr.value, field_expected);
 
     (field_type, constraint)
 }
@@ -642,16 +647,30 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 }
 
 #[inline(always)]
-pub fn constrain_decls(decls: &[Declaration]) -> Constraint {
+pub fn constrain_decls(module_name: ModuleName, decls: &[Declaration]) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
         match decl {
             Declaration::Declare(def) => {
-                constraint = constrain_def(&ImMap::default(), def, constraint);
+                constraint = constrain_def(
+                    &Env {
+                        module_name: module_name.clone(),
+                        rigids: ImMap::default(),
+                    },
+                    def,
+                    constraint,
+                );
             }
             Declaration::DeclareRec(defs) => {
-                constraint = constrain_recursive_defs(&ImMap::default(), defs, constraint);
+                constraint = constrain_recursive_defs(
+                    &Env {
+                        module_name: module_name.clone(),
+                        rigids: ImMap::default(),
+                    },
+                    defs,
+                    constraint,
+                );
             }
             Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
         }
@@ -681,7 +700,7 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
     state
 }
 
-pub fn constrain_def(rigids: &Rigids, def: &Def, body_con: Constraint) -> Constraint {
+pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
@@ -693,7 +712,8 @@ pub fn constrain_def(rigids: &Rigids, def: &Def, body_con: Constraint) -> Constr
 
     let expr_con = match &def.annotation {
         Some((annotation, free_vars)) => {
-            let mut ftv: Rigids = rigids.clone();
+            let rigids = &env.rigids;
+            let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
 
             for (var, name) in free_vars {
                 // if the rigid is known already, nothing needs to happen
@@ -720,14 +740,17 @@ pub fn constrain_def(rigids: &Rigids, def: &Def, body_con: Constraint) -> Constr
             ));
 
             constrain_expr(
-                &ftv,
+                &Env {
+                    module_name: env.module_name.clone(),
+                    rigids: ftv,
+                },
                 def.loc_expr.region,
                 &def.loc_expr.value,
                 annotation_expected,
             )
         }
         None => constrain_expr(
-            rigids,
+            env,
             def.loc_expr.region,
             &def.loc_expr.value,
             NoExpectation(expr_type),
@@ -749,9 +772,9 @@ pub fn constrain_def(rigids: &Rigids, def: &Def, body_con: Constraint) -> Constr
     }))
 }
 
-fn constrain_recursive_defs(rigids: &Rigids, defs: &[Def], body_con: Constraint) -> Constraint {
+fn constrain_recursive_defs(env: &Env, defs: &[Def], body_con: Constraint) -> Constraint {
     rec_defs_help(
-        rigids,
+        env,
         defs,
         body_con,
         Info::with_capacity(defs.len()),
@@ -760,7 +783,7 @@ fn constrain_recursive_defs(rigids: &Rigids, defs: &[Def], body_con: Constraint)
 }
 
 pub fn rec_defs_help(
-    rigids: &Rigids,
+    env: &Env,
     defs: &[Def],
     body_con: Constraint,
     mut rigid_info: Info,
@@ -791,7 +814,7 @@ pub fn rec_defs_help(
         match &def.annotation {
             None => {
                 let expr_con = constrain_expr(
-                    rigids,
+                    env,
                     def.loc_expr.region,
                     &def.loc_expr.value,
                     NoExpectation(expr_type),
@@ -812,7 +835,8 @@ pub fn rec_defs_help(
             }
 
             Some((annotation, seen_rigids)) => {
-                let mut ftv: Rigids = rigids.clone();
+                let rigids = &env.rigids;
+                let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
 
                 for (var, name) in seen_rigids {
                     // if the rigid is known already, nothing needs to happen
@@ -832,7 +856,10 @@ pub fn rec_defs_help(
                     annotation.clone(),
                 );
                 let expr_con = constrain_expr(
-                    &ftv,
+                    &Env {
+                        rigids: ftv,
+                        module_name: env.module_name.clone(),
+                    },
                     def.loc_expr.region,
                     &def.loc_expr.value,
                     NoExpectation(expr_type.clone()),
@@ -890,7 +917,7 @@ pub fn rec_defs_help(
 
 #[inline(always)]
 fn constrain_field_update(
-    rigids: &Rigids,
+    env: &Env,
     var: Variable,
     region: Region,
     field: Lowercase,
@@ -899,7 +926,7 @@ fn constrain_field_update(
     let field_type = Type::Variable(var);
     let reason = Reason::RecordUpdateValue(field);
     let expected = ForReason(reason, field_type.clone(), region);
-    let con = constrain_expr(rigids, loc_expr.region, &loc_expr.value, expected);
+    let con = constrain_expr(env, loc_expr.region, &loc_expr.value, expected);
 
     (var, field_type, con)
 }
