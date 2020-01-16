@@ -459,7 +459,9 @@ pub fn constrain_expr(
                 expected,
             )
         }
-        Closure(fn_var, _symbol, _recursion, args, boxed) => {
+        Closure(fn_var, _symbol, recursion, args, boxed) => {
+            use crate::can::expr::Recursive;
+
             let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
                 headers: SendMap::default(),
@@ -485,11 +487,18 @@ pub fn constrain_expr(
                 vars.push(*pattern_var);
             }
 
-            let fn_uniq_var = var_store.fresh();
-            vars.push(fn_uniq_var);
+            let fn_uniq_type;
+            if let Recursive::NotRecursive = recursion {
+                let fn_uniq_var = var_store.fresh();
+                vars.push(fn_uniq_var);
+                fn_uniq_type = Bool::Variable(fn_uniq_var);
+            } else {
+                // recursive definitions MUST be Shared
+                fn_uniq_type = Bool::Zero
+            }
 
             let fn_type = constrain::attr_type(
-                Bool::Variable(fn_uniq_var),
+                fn_uniq_type,
                 Type::Function(pattern_types, Box::new(ret_type.clone())),
             );
             let body_type = Expected::NoExpectation(ret_type);

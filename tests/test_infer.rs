@@ -1246,23 +1246,22 @@ mod test_infer {
         );
     }
 
+    // TODO add more realistic function when able
     #[test]
     fn integer_sum() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
-                f = \n -> 
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f = \n ->
                     when n is 
                         0 -> 0
                         _ -> f n
 
                 f
                    "#
-                ),
-                "Int -> Int",
-            );
-        });
+            ),
+            "Int -> Int",
+        );
     }
 
     // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
