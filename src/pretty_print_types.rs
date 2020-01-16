@@ -196,7 +196,10 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
 }
 
 fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, parens: Parens) {
+    use crate::collections::ImMap;
+    use crate::subs::Content::Structure;
     use crate::subs::FlatType::*;
+    use crate::uniqueness::boolean_algebra;
 
     match flat_type {
         Apply {
@@ -309,7 +312,21 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
             }
         }
         Boolean(b) => {
-            write_boolean(b, subs, buf, Parens::InTypeParam);
+            // push global substitutions into the boolean
+            let mut global_substitution = ImMap::default();
+
+            for v in b.variables() {
+                if let Structure(Boolean(replacement)) = subs.get(v).content {
+                    global_substitution.insert(v, replacement);
+                }
+            }
+
+            write_boolean(
+                boolean_algebra::simplify(b.substitute(&global_substitution)),
+                subs,
+                buf,
+                Parens::InTypeParam,
+            );
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));

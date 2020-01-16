@@ -23,7 +23,7 @@ use crate::types::Reason;
 use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::Bool;
-use crate::uniqueness::sharing::VarUsage;
+use crate::uniqueness::sharing::{ReferenceCount, VarUsage};
 
 pub use crate::can::expr::Expr::*;
 
@@ -452,36 +452,13 @@ pub fn constrain_expr(
             var_usage.register(symbol_for_lookup);
             let usage = var_usage.get_usage(symbol_for_lookup);
 
-            match usage {
-                Some(sharing::ReferenceCount::Shared) => {
-                    // the variable is used/consumed more than once, so it must be Shared
-                    let val_var = var_store.fresh();
-                    let uniq_var = var_store.fresh();
-
-                    let val_type = Variable(val_var);
-                    let uniq_type = Bool::Variable(uniq_var);
-
-                    let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
-
-                    exists(
-                        vec![val_var, uniq_var],
-                        And(vec![
-                            Lookup(symbol_for_lookup.clone(), expected.clone(), region),
-                            Eq(attr_type, expected, region),
-                            Eq(
-                                Type::Boolean(uniq_type),
-                                Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
-                                region,
-                            ),
-                        ]),
-                    )
-                }
-                Some(sharing::ReferenceCount::Unique) => {
-                    // no additional constraints, keep uniqueness unbound
-                    Lookup(symbol_for_lookup.clone(), expected, region)
-                }
-                None => panic!("symbol not analyzed"),
-            }
+            constrain_var(
+                var_store,
+                symbol_for_lookup.clone(),
+                usage,
+                region,
+                expected,
+            )
         }
         Closure(fn_var, _symbol, _recursion, args, boxed) => {
             let (loc_body_expr, ret_var) = &**boxed;
@@ -807,6 +784,8 @@ pub fn constrain_expr(
             symbol,
             updates,
         } => {
+            var_usage.register(symbol);
+
             let mut fields: SendMap<Lowercase, Type> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
             let mut cons = Vec::with_capacity(updates.len() + 3);
@@ -868,26 +847,26 @@ pub fn constrain_expr(
             loc_expr,
             field,
         } => {
-            let ext_type = Type::Variable(*ext_var);
+            let mut field_types = SendMap::default();
 
             let field_uniq_var = var_store.fresh();
             let field_uniq_type = Bool::Variable(field_uniq_var);
-            let field_type =
-                constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
+            let field_type = constrain::attr_type(field_uniq_type, Type::Variable(*field_var));
 
-            let mut rec_field_types = SendMap::default();
-
-            rec_field_types.insert(field.clone(), field_type.clone());
+            field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type = Bool::Variable(record_uniq_var);
-            let record_type = constrain::attr_type(
-                record_uniq_type.clone(),
-                Type::Record(rec_field_types, Box::new(ext_type)),
+            let record_uniq_type = Bool::or(
+                Bool::Variable(record_uniq_var),
+                Bool::Variable(field_uniq_var),
             );
-            let record_expected = Expected::NoExpectation(record_type);
+            let record_type = constrain::attr_type(
+                record_uniq_type,
+                Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
+            );
 
-            let mut constraint = constrain_expr(
+            let record_expected = Expected::NoExpectation(record_type);
+            let inner_constraint = constrain_expr(
                 rigids,
                 var_store,
                 var_usage,
@@ -896,18 +875,10 @@ pub fn constrain_expr(
                 record_expected,
             );
 
-            let uniq_con = Eq(
-                Type::Boolean(field_uniq_type),
-                Expected::NoExpectation(Type::Boolean(record_uniq_type)),
-                region,
-            );
-
-            constraint = exists(
+            exists(
                 vec![*field_var, *ext_var, field_uniq_var, record_uniq_var],
-                And(vec![constraint, Eq(field_type, expected, region), uniq_con]),
-            );
-
-            constraint
+                And(vec![Eq(field_type, expected, region), inner_constraint]),
+            )
         }
 
         Accessor {
@@ -919,15 +890,17 @@ pub fn constrain_expr(
 
             let field_uniq_var = var_store.fresh();
             let field_uniq_type = Bool::Variable(field_uniq_var);
-            let field_type =
-                constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
+            let field_type = constrain::attr_type(field_uniq_type, Type::Variable(*field_var));
 
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type = Bool::Variable(record_uniq_var);
+            let record_uniq_type = Bool::or(
+                Bool::Variable(field_uniq_var),
+                Bool::Variable(record_uniq_var),
+            );
             let record_type = constrain::attr_type(
-                record_uniq_type.clone(),
+                record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
             );
 
@@ -935,12 +908,6 @@ pub fn constrain_expr(
             let fn_type = constrain::attr_type(
                 Bool::Variable(fn_uniq_var),
                 Type::Function(vec![record_type], Box::new(field_type)),
-            );
-
-            let uniq_con = Eq(
-                Type::Boolean(field_uniq_type),
-                Expected::NoExpectation(Type::Boolean(record_uniq_type)),
-                region,
             );
 
             exists(
@@ -951,10 +918,49 @@ pub fn constrain_expr(
                     field_uniq_var,
                     record_uniq_var,
                 ],
-                And(vec![Eq(fn_type, expected, region), uniq_con]),
+                And(vec![Eq(fn_type, expected, region)]),
             )
         }
         RuntimeError(_) => True,
+    }
+}
+
+fn constrain_var(
+    var_store: &VarStore,
+    symbol_for_lookup: Symbol,
+    usage: Option<&ReferenceCount>,
+    region: Region,
+    expected: Expected<Type>,
+) -> Constraint {
+    match usage {
+        Some(sharing::ReferenceCount::Shared) => {
+            // the variable is used/consumed more than once, so it must be Shared
+            let val_var = var_store.fresh();
+            let uniq_var = var_store.fresh();
+
+            let val_type = Variable(val_var);
+            let uniq_type = Bool::Variable(uniq_var);
+
+            let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
+
+            exists(
+                vec![val_var, uniq_var],
+                And(vec![
+                    Lookup(symbol_for_lookup, expected.clone(), region),
+                    Eq(attr_type, expected, region),
+                    Eq(
+                        Type::Boolean(uniq_type),
+                        Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
+                        region,
+                    ),
+                ]),
+            )
+        }
+        Some(sharing::ReferenceCount::Unique) => {
+            // no additional constraints, keep uniqueness unbound
+            Lookup(symbol_for_lookup, expected, region)
+        }
+        None => panic!("symbol not analyzed"),
     }
 }
 
