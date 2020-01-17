@@ -835,7 +835,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             EmptyTagUnion => (),
 
             Record(fields, ext_var) => {
-                for (_, var) in fields {
+                for var in fields.values() {
                     subs.restore(*var);
                 }
 

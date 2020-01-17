@@ -168,7 +168,7 @@ pub async fn load<'a>(
                         }
                     }
 
-                    subs_results.insert(module.name.clone().into(), Ok(arc_subs));
+                    subs_results.insert(module.name.clone(), Ok(arc_subs));
 
                     dbg!("TODO loaded_deps.push this as a module");
                 }
@@ -324,7 +324,7 @@ async fn load_filename(env: &Env, filename: PathBuf, dep_tx: DepSender) -> Loade
                         while let Some(result) = subs_rx.recv().await {
                             match result {
                                 Ok((module_name, dep_subs)) => {
-                                    subs_by_module.insert(module_name.into(), dep_subs);
+                                    subs_by_module.insert(module_name, dep_subs);
 
                                     if subs_by_module.len() == deps_needed {
                                         // We now have all the Subs we need, so
@@ -396,7 +396,7 @@ where
             exposed_imports,
             lookups,
         }) => {
-            let constraint = constrain_module(home.into(), &declarations, lookups);
+            let constraint = constrain_module(home, &declarations, lookups);
             let problems = Vec::new();
 
             (declarations, problems, exposed_imports, constraint)
