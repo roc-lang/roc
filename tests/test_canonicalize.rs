@@ -262,13 +262,21 @@ mod test_canonicalize {
 
     fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
-            LetRec(assignments, _, _) => match &assignments.get(i).map(|def| &def.loc_expr.value) {
-                Some(Closure(_, _, recursion, _, _)) => recursion.clone(),
-                Some(other @ _) => {
-                    panic!("assignment at {} is not a closure, but a {:?}", i, other)
+            LetRec(assignments, body, _) => {
+                match &assignments.get(i).map(|def| &def.loc_expr.value) {
+                    Some(Closure(_, _, recursion, _, _)) => recursion.clone(),
+                    Some(other @ _) => {
+                        panic!("assignment at {} is not a closure, but a {:?}", i, other)
+                    }
+                    None => {
+                        if i > 0 {
+                            get_closure(&body.value, i - 1)
+                        } else {
+                            panic!("Looking for assignment at {} but the list is too short", i)
+                        }
+                    }
                 }
-                None => panic!("Looking for assignment at {} but the list is too short", i),
-            },
+            }
             LetNonRec(def, body, _) => {
                 if i > 0 {
                     // recurse in the body (not the def!)
@@ -298,32 +306,33 @@ mod test_canonicalize {
                     _ -> g (x - 1)
 
             h = \x ->
-                when x is
-                    0 -> 0
-                    _ -> g (x - 1)
-
+                 when x is
+                     0 -> 0
+                     _ -> g (x - 1)
+             
             p = \x ->
-                when x is
-                    0 -> 0
-                    1 -> g (x - 1)
-                    _ -> p (x - 1)
+                 when x is
+                     0 -> 0
+                     1 -> g (x - 1)
+                     _ -> p (x - 1)
+
 
             # variables must be (indirectly) referenced in the body for analysis to work
-            { x: p, y: h }
+            # { x: p, y: h }
+            g
         "#
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
                 can_expr_with(&arena, "Blah", src, &ImMap::default());
 
-            let detected = get_closure(&actual.value, 0);
-            assert_eq!(detected, Recursive::TailRecursive);
+            let detected0 = get_closure(&actual.value, 0);
+            let detected1 = get_closure(&actual.value, 1);
+            let detected2 = get_closure(&actual.value, 2);
 
-            let detected = get_closure(&actual.value, 1);
-            assert_eq!(detected, Recursive::NotRecursive);
-
-            let detected = get_closure(&actual.value, 2);
-            assert_eq!(detected, Recursive::TailRecursive);
+            assert_eq!(detected0, Recursive::TailRecursive);
+            assert_eq!(detected1, Recursive::NotRecursive);
+            assert_eq!(detected2, Recursive::TailRecursive);
         });
     }
 

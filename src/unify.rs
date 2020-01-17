@@ -405,8 +405,24 @@ fn unify_flat_type(
             unify_tag_union(subs, pool, ctx, union1, union2)
         }
 
-        (Boolean(b1), Boolean(b2)) => {
-            if let Some(substitution) = boolean_algebra::try_unify(b1.clone(), b2.clone()) {
+        (Boolean(b1_raw), Boolean(b2_raw)) => {
+            // first propagate Subs substitiutions into the booleans
+            let mut global_substitution = ImMap::default();
+
+            for v in b1_raw
+                .variables()
+                .into_iter()
+                .chain(b2_raw.variables().into_iter())
+            {
+                if let Structure(Boolean(replacement)) = subs.get(v).content {
+                    global_substitution.insert(v, replacement);
+                }
+            }
+
+            let b1 = boolean_algebra::simplify(b1_raw.substitute(&global_substitution));
+            let b2 = boolean_algebra::simplify(b2_raw.substitute(&global_substitution));
+
+            if let Some(substitution) = boolean_algebra::try_unify(b1, b2) {
                 for (var, replacement) in substitution {
                     subs.set_content(var, Structure(FlatType::Boolean(replacement)));
                 }

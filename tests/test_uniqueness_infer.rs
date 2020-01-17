@@ -986,18 +986,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn record_field_access() {
-        infer_eq(
-            indoc!(
-                r#"
-                \rec -> rec.left 
-                "#
-            ),
-            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
-        );
-    }
-
-    #[test]
     fn record_field_accessor_function() {
         infer_eq(
             indoc!(
@@ -1005,19 +993,19 @@ mod test_infer_uniq {
                 .left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (a | *) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
     #[test]
-    fn record_field_pattern_match() {
+    fn record_field_access() {
         infer_eq(
             indoc!(
                 r#"
-                \{ left } -> left
+                \rec -> rec.left 
                 "#
             ),
-            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1029,7 +1017,7 @@ mod test_infer_uniq {
                 \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | b) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
+            "Attr.Attr * (Attr.Attr (b | a) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
         );
     }
 
@@ -1071,7 +1059,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr.Attr * (Attr.Attr (a | b) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
+            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
         );
     }
 
@@ -1117,6 +1105,30 @@ mod test_infer_uniq {
     }
 
     #[test]
+    fn record_field_pattern_match() {
+        infer_eq(
+            indoc!(
+                r#"
+                \{ left } -> left
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
+    fn sharing_analysis_record_one_field_pattern() {
+        infer_eq(
+            indoc!(
+                r#"
+                \{ x } -> x 
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
     fn num_identity_def() {
         infer_eq_without_problem(
             indoc!(
@@ -1128,6 +1140,36 @@ mod test_infer_uniq {
                    "#
             ),
             "Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))",
+        );
+    }
+
+    #[test]
+    fn record_field_access_binding() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r -> 
+                    x = r.x 
+
+                    x
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (a | *) { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
+        );
+    }
+
+    #[test]
+    fn sharing_analysis_record_one_field_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r -> 
+                    x = r.x 
+
+                    x
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (a | *) { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1149,6 +1191,30 @@ mod test_infer_uniq {
     }
 
     #[test]
+    fn sharing_analysis_record_update_use_twice_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r -> { r & x: r.x, y: r.y } 
+                "#
+            ),
+        "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)" ,
+        );
+    }
+
+    #[test]
+    fn sharing_analysis_record_update_duplicate_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r -> { r & x: r.x, y: r.x } 
+                "#
+            ),
+         "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared a) }b -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared a) }b)"
+        );
+    }
+
+    #[test]
     fn when_with_annotation() {
         infer_eq_without_problem(
             indoc!(
@@ -1163,6 +1229,43 @@ mod test_infer_uniq {
                    "#
             ),
             "Attr.Attr * Int",
+        );
+    }
+
+    // TODO add more realistic recursive example when able
+    #[test]
+    fn factorial_is_shared() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    factorial = \n ->
+                        when n is
+                            0 -> 1
+                            1 -> 1
+                            m -> factorial m
+
+                    factorial
+                   "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr * Int -> Attr.Attr * Int)",
+        );
+    }
+
+    // TODO add more realistic recursive example when able
+    #[test]
+    fn factorial_without_recursive_case_can_be_unique() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    factorial = \n ->
+                        when n is
+                            0 -> 1
+                            _ -> 1
+
+                    factorial
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr * Int -> Attr.Attr * Int)",
         );
     }
 }

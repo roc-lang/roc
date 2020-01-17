@@ -11,7 +11,7 @@
 use crate::collections::{ImMap, ImSet};
 use crate::subs::Variable;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Bool {
     Zero,
     One,
@@ -38,20 +38,23 @@ pub fn or(left: Bool, right: Bool) -> Bool {
     Or(Box::new(left), Box::new(right))
 }
 
-pub fn any<I>(mut it: I) -> Bool
+pub fn any<I>(iterable: I) -> Bool
 where
-    I: Iterator<Item = Bool>,
+    I: IntoIterator<Item = Bool>,
 {
+    let mut it = iterable.into_iter();
     if let Some(first) = it.next() {
-        it.fold(first, or)
+        it.fold(first, |x, y| or(y, x))
     } else {
         Zero
     }
 }
 
-pub fn all(terms: Product<Bool>) -> Bool {
-    let mut it = terms.into_iter();
-
+pub fn all<I>(iterable: I) -> Bool
+where
+    I: IntoIterator<Item = Bool>,
+{
+    let mut it = iterable.into_iter();
     if let Some(first) = it.next() {
         it.fold(first, and)
     } else {
@@ -155,38 +158,55 @@ pub fn simplify(term: Bool) -> Bool {
     let a = term_to_sop(normalized);
     let b = normalize_sop(a);
     let after_bcf = bcf(b);
-    sop_to_term(simplify_sop(after_bcf))
+    sop_to_term_vector(simplify_sop_vector(after_bcf))
 }
 
 #[inline(always)]
 pub fn sop_to_term(sop: Sop) -> Bool {
-    any(sop.into_iter().map(all))
+    let mut accum: Vec<Vec<Bool>> = Vec::new();
+
+    for s in sop {
+        accum.push(s.iter().cloned().collect());
+    }
+
+    accum.sort_by(|x, y| (y.len().cmp(&x.len())));
+
+    any(accum.into_iter().map(all))
 }
 
-pub fn simplify_sop(sop: Sop) -> Sop {
+#[inline(always)]
+pub fn sop_to_term_vector(sop: Vec<Vec<Bool>>) -> Bool {
+    any(sop.into_iter().rev().map(all))
+}
+
+pub fn simplify_sop_vector(sorted: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
     // sort by length longest to shortest (proxy for how many variables there are)
-    let mut sorted: Vec<ImSet<Bool>> = sop.clone().into_iter().collect();
+    // sorted.sort_by(|x, y| y.len().cmp(&x.len()));
 
-    sorted.sort_by(|x, y| y.len().cmp(&x.len()));
+    let backup = sorted.clone();
 
-    // filter out anything that is included in the remaining elements
-    let mut active = sop;
-    let mut result = ImSet::default();
-    for t in sorted {
-        if !(active.remove(&t).is_some() && included(all(t.clone()), sop_to_term(active.clone()))) {
-            result.insert(t);
+    let mut p: Vec<Vec<Bool>> = Vec::new();
+
+    for (i, t) in sorted.into_iter().enumerate() {
+        let ts = &backup[i + 1..];
+        ts.to_vec().extend(p.clone());
+
+        if included(all(t.clone()), sop_to_term_vector(ts.to_vec())) {
+            // do nothing
+        } else {
+            p.insert(0, t.into_iter().collect());
         }
     }
 
-    result
+    p
 }
 
 /// Blake canonical form
-fn bcf(sop: Sop) -> Sop {
+pub fn bcf(sop: Sop) -> Vec<Vec<Bool>> {
     absorptive(syllogistic(sop))
 }
 
-fn syllogistic(terms: Sop) -> Sop {
+pub fn syllogistic(terms: Sop) -> Sop {
     let mut cs_prime = ImSet::default();
 
     for c in cartesian_product(terms.clone())
@@ -210,24 +230,28 @@ fn syllogistic(terms: Sop) -> Sop {
 }
 
 /// Absorption (apply the identify p + pq = p)
-fn absorptive(sop: Sop) -> Sop {
-    // TODO this is extremely inefficient!
-    let mut accum: Vec<Product<Bool>> = Vec::new();
+fn absorptive(sop: Sop) -> Vec<Vec<Bool>> {
+    let mut accum: Vec<Vec<Bool>> = Vec::new();
 
-    for product in sop {
-        accum = accum
-            .into_iter()
-            .filter(|v| !absorbs(&product, v))
-            .collect();
-        accum.push(product);
+    for s in sop {
+        accum.push(s.iter().cloned().collect());
     }
 
-    accum.into()
+    accum.sort_by(|x, y| (x.len().cmp(&y.len())));
+
+    absorptive_vector(accum)
 }
 
-/// Does p absorb q? (can we replace p + q by p?)
-/// TODO investigate: either the comment or the implementation is wrong I think?
-fn absorbs(p: &Product<Bool>, q: &Product<Bool>) -> bool {
+pub fn absorptive_vector(mut accum: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
+    for product in accum.clone().into_iter() {
+        accum.retain(|v| !absorbs_vector(&product, v));
+        accum.insert(0, product);
+    }
+
+    accum
+}
+
+pub fn absorbs_vector(p: &[Bool], q: &[Bool]) -> bool {
     p.iter().all(|x| q.contains(x))
 }
 
@@ -288,17 +312,15 @@ fn unify(p: Bool, q: Bool) -> (Substitution, Bool) {
         or(and(p.clone(), not(q.clone())), and(not(p), q))
     };
 
-    unify0(t.variables(), t)
+    let mut sorted_names: Vec<Variable> = t.variables().into_iter().collect();
+    sorted_names.sort_by(|x, y| y.cmp(x));
+    unify0(sorted_names, t)
 }
 
-fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
-    // NOTE sort is required for stable test order that is the same as the Haskell ref. impl.
-    let mut substitution: Substitution = ImMap::default();
+fn unify0(mut names: Vec<Variable>, term: Bool) -> (Substitution, Bool) {
+    if let Some(x) = names.pop() {
+        let xs = names;
 
-    let mut sorted_names: Vec<Variable> = names.into_iter().collect();
-    sorted_names.sort();
-
-    for x in sorted_names.into_iter() {
         let mut sub_zero = ImMap::default();
         sub_zero.insert(x, Zero);
 
@@ -308,17 +330,23 @@ fn unify0(names: ImSet<Variable>, mut term: Bool) -> (Substitution, Bool) {
         let subbed_zero = term.substitute(&sub_zero);
         let subbed_one = term.substitute(&sub_one);
 
-        term = and(subbed_zero.clone(), subbed_one.clone());
+        let e = and(subbed_zero.clone(), subbed_one.clone());
 
-        let replacement = simplify(or(
-            subbed_zero.substitute(&substitution),
-            and(Variable(x), not(subbed_one.substitute(&substitution))),
-        ));
+        let (mut se, cc) = unify0(xs, e);
 
-        substitution.insert(x, replacement);
+        let input = or(
+            subbed_zero.substitute(&se),
+            and(Variable(x), (not(subbed_one)).substitute(&se)),
+        );
+
+        let replacement = simplify(input);
+
+        se.insert(x, replacement);
+
+        (se, cc)
+    } else {
+        (ImMap::default(), simplify(term))
     }
-
-    (substitution, simplify(term))
 }
 
 // --- Simplification ---

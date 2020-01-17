@@ -1,6 +1,6 @@
 use crate::can::def::{can_defs_with_return, Def};
 use crate::can::env::Env;
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
@@ -46,6 +46,7 @@ pub enum Expr {
 
     // Lookups
     Var {
+        module: ModuleName,
         symbol_for_lookup: Symbol,
         resolved_symbol: Symbol,
     },
@@ -107,6 +108,7 @@ pub enum Expr {
     Update {
         record_var: Variable,
         ext_var: Variable,
+        module: ModuleName,
         symbol: Symbol,
         ident: Ident,
         updates: SendMap<Lowercase, Field>,
@@ -175,7 +177,9 @@ pub fn canonicalize_expr(
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var {
-                resolved_symbol, ..
+                resolved_symbol,
+                module,
+                ..
             } = can_update.value
             {
                 let (can_fields, mut output) = canonicalize_fields(env, var_store, scope, fields);
@@ -183,6 +187,7 @@ pub fn canonicalize_expr(
                 output.references = output.references.union(update_out.references);
 
                 let answer = Update {
+                    module,
                     record_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     symbol: resolved_symbol,
@@ -699,7 +704,8 @@ fn canonicalize_lookup(
 
     let mut output = Output::default();
     let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
-        Ok(resolved_symbol) => Var {
+        Ok((module, resolved_symbol)) => Var {
+            module,
             symbol_for_lookup,
             resolved_symbol,
         },
@@ -927,7 +933,7 @@ fn resolve_ident<'a>(
     scope: &Scope,
     ident: Ident,
     references: &mut References,
-) -> Result<Symbol, Ident> {
+) -> Result<(ModuleName, Symbol), Ident> {
     if scope.idents.contains_key(&ident) {
         let recognized = match ident {
             Ident::Unqualified(name) => {
@@ -935,14 +941,14 @@ fn resolve_ident<'a>(
 
                 references.locals.insert(symbol.clone());
 
-                symbol
+                ("".into(), symbol)
             }
             Ident::Qualified(path, name) => {
                 let symbol = Symbol::new(&path, &name);
 
                 references.globals.insert(symbol.clone());
 
-                symbol
+                (ModuleName::from(path), symbol)
             }
         };
 
@@ -958,18 +964,18 @@ fn resolve_ident<'a>(
 
                     references.globals.insert(symbol.clone());
 
-                    Ok(symbol)
+                    Ok(("".into(), symbol))
                 } else {
                     // We couldn't find the unqualified ident in scope. NAMING PROBLEM!
                     Err(Ident::Unqualified(name))
                 }
             }
             Ident::Qualified(module_name, name) => {
-                let symbol = Symbol::from_qualified_ident(module_name, name);
+                let symbol = Symbol::from_qualified_ident(module_name.clone(), name);
 
                 references.globals.insert(symbol.clone());
 
-                Ok(symbol)
+                Ok((ModuleName::from(module_name), symbol))
             }
         }
     }
