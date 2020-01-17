@@ -589,6 +589,7 @@ fn pool_to_rank_table(
             },
         );
 
+        debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
         pools.get_mut(rank).push(var);
     }
 

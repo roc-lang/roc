@@ -1231,4 +1231,41 @@ mod test_infer_uniq {
             "Attr.Attr * Int",
         );
     }
+
+    // TODO add more realistic recursive example when able
+    #[test]
+    fn factorial_is_shared() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    factorial = \n ->
+                        when n is
+                            0 -> 1
+                            1 -> 1
+                            m -> factorial m
+
+                    factorial
+                   "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr * Int -> Attr.Attr * Int)",
+        );
+    }
+
+    // TODO add more realistic recursive example when able
+    #[test]
+    fn factorial_without_recursive_case_can_be_unique() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    factorial = \n ->
+                        when n is
+                            0 -> 1
+                            _ -> 1
+
+                    factorial
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr * Int -> Attr.Attr * Int)",
+        );
+    }
 }
