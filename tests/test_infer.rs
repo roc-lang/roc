@@ -1264,6 +1264,24 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn result_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                map : (a -> b), [ Ok a, Err e ] -> [ Ok b, Err e ]
+                map = \f, result -> 
+                    when result is 
+                        Ok v -> Ok (f v)
+                        Err e -> Err e
+
+                map
+                   "#
+            ),
+            "(a -> b), [ Ok a, Err e ] -> [ Ok b, Err e ]",
+        );
+    }
+
     // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
     //    #[test]
     //    fn linked_list_map() {

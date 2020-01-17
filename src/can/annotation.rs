@@ -1,6 +1,7 @@
 use crate::can::ident::Lowercase;
+use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
-use crate::parse::ast::{AssignedField, TypeAnnotation};
+use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::subs::{VarStore, Variable};
 use crate::types::RecordFieldLabel;
 use crate::types::Type;
@@ -88,10 +89,18 @@ fn can_annotation_help(
             Type::Record(field_types, Box::new(ext_type))
         }
         TagUnion { tags, ext } => {
-            panic!(
-                "TODO canonicalize tag union annotation: {:?} {:?}",
-                tags, ext
-            );
+            let mut tag_types = Vec::with_capacity(tags.len());
+
+            for tag in tags.iter() {
+                can_tag(&tag.value, var_store, rigids, &mut tag_types);
+            }
+
+            let ext_type = match ext {
+                Some(loc_ann) => can_annotation_help(&loc_ann.value, var_store, rigids),
+                None => Type::EmptyTagUnion,
+            };
+
+            Type::TagUnion(tag_types, Box::new(ext_type))
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
             can_annotation_help(nested, var_store, rigids)
@@ -135,5 +144,40 @@ fn can_assigned_field<'a>(
             can_assigned_field(nested, var_store, rigids, field_types)
         }
         Malformed(_) => {}
+    }
+}
+
+fn can_tag<'a>(
+    tag: &Tag<'a>,
+    var_store: &VarStore,
+    rigids: &mut ImMap<Lowercase, Variable>,
+    tag_types: &mut Vec<(Symbol, Vec<Type>)>,
+) {
+    match tag {
+        Tag::Global { name, args } => {
+            let symbol = Symbol::from_global_tag(name.value);
+
+            let arg_types = args
+                .iter()
+                .map(|arg| can_annotation_help(&arg.value, var_store, rigids))
+                .collect();
+
+            tag_types.push((symbol, arg_types));
+        }
+        Tag::Private { name, args } => {
+            let home = "incorrect home don't know";
+            let symbol = Symbol::from_private_tag(home, name.value);
+
+            let arg_types = args
+                .iter()
+                .map(|arg| can_annotation_help(&arg.value, var_store, rigids))
+                .collect();
+
+            tag_types.push((symbol, arg_types));
+        }
+        Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => {
+            can_tag(nested, var_store, rigids, tag_types)
+        }
+        Tag::Malformed(_) => {}
     }
 }
