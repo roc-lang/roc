@@ -580,7 +580,7 @@ pub fn canonicalize_expr(
                 Output::default(),
             )
         }
-        ast::Expr::If((cond, then_branch, else_branch)) => {
+        ast::Expr::If(cond, then_branch, else_branch) => {
             let (loc_cond, mut output) =
                 canonicalize_expr(env, var_store, scope, cond.region, &cond.value);
             let (loc_then, then_output) = canonicalize_expr(

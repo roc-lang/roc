@@ -155,7 +155,7 @@ pub enum Expr<'a> {
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
     // Conditionals
-    If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
+    If(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     When(
         &'a Loc<Expr<'a>>,
         Vec<'a, &'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)>,

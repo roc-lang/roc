@@ -132,7 +132,7 @@ pub fn fmt_expr<'a>(
             // still print the return value.
             fmt_expr(buf, &ret.value, indent, false, true);
         }
-        If((loc_condition, loc_then, loc_else)) => {
+        If(loc_condition, loc_then, loc_else) => {
             fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
         When(loc_condition, branches) => {
@@ -412,7 +412,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
                 || args.iter().any(|loc_arg| is_multiline_expr(&loc_arg.value))
         }
 
-        If((loc_cond, loc_if_true, loc_if_false)) => {
+        If(loc_cond, loc_if_true, loc_if_false) => {
             is_multiline_expr(&loc_cond.value)
                 || is_multiline_expr(&loc_if_true.value)
                 || is_multiline_expr(&loc_if_false.value)
