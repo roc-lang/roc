@@ -17,7 +17,7 @@ mod test_load {
     use roc::can::def::Declaration::*;
     use roc::can::module::Module;
     use roc::collections::SendMap;
-    use roc::load::{load, solve_loaded, Loaded, LoadedModule};
+    use roc::load::{load, solve_loaded, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::{Subs, VarStore, Variable};
     use std::collections::HashMap;

@@ -1,4 +1,4 @@
-use crate::collections::{ImMap, SendMap};
+use crate::collections::{ImMap, MutMap};
 use crate::solve;
 use crate::subs::{Content, Subs, Variable};
 use crate::types::{Constraint, Problem};
@@ -11,7 +11,7 @@ pub fn infer_expr(
 ) -> Content {
     solve::run(
         &ImMap::default(),
-        SendMap::default(),
+        MutMap::default(),
         problems,
         subs,
         constraint,
