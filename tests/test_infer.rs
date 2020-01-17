@@ -1265,22 +1265,68 @@ mod test_infer {
     }
 
     #[test]
-    fn result_map() {
+    fn identity_map() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                map : (a -> b), [ Ok a, Err e ] -> [ Ok b, Err e ]
-                map = \f, result -> 
-                    when result is 
-                        Ok v -> Ok (f v)
-                        Err e -> Err e
+                map : (a -> b), [ Identity a ] -> [ Identity b ]
+                map = \f, identity ->
+                    when identity is
+                        Identity v -> Identity (f v)
+                map
+                   "#
+            ),
+            "(a -> b), [ Identity a ] -> [ Identity b ]",
+        );
+    }
+
+    #[test]
+    fn identity_for_identity() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                map : [ Identity a ] -> [ Identity a ]
+                map = \(Identity v) -> Identity v
 
                 map
                    "#
             ),
-            "(a -> b), [ Ok a, Err e ] -> [ Ok b, Err e ]",
+            "[ Identity a ] -> [ Identity a ]",
         );
     }
+
+    #[test]
+    fn map_identity() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                map : (a -> b), [ Identity a ] -> [ Identity b ]
+                map = \f, (Identity v) -> Identity ( f v)
+
+                map
+                   "#
+            ),
+            "(a -> b), [ Identity a ] -> [ Identity b ]",
+        );
+    }
+
+    //    #[test
+    //    fn result_map() {
+    //        infer_eq_without_problem(
+    //            indoc!(
+    //                r#"
+    //                map : (a -> b), [ Ok a, Err e ] -> [ Ok b, Err e ]
+    //                map = \f, result ->
+    //                    when result is
+    //                        Ok v -> Ok (f v)
+    //                        Err e -> Err e
+    //
+    //                map
+    //                   "#
+    //            ),
+    //            "(a -> b), [ Ok a, Err e ] -> [ Ok b, Err e ]",
+    //        );
+    //    }
 
     // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
     //    #[test]

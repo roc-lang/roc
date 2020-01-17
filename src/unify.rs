@@ -21,6 +21,7 @@ pub struct RecordStructure {
     pub ext: Variable,
 }
 
+#[derive(Debug)]
 struct TagUnionStructure {
     tags: ImMap<Symbol, Vec<Variable>>,
     ext: Variable,
@@ -346,7 +347,7 @@ fn unify_shared_tags(
         }
 
         // only do this check after unification so the error message has more info
-        if actual_len == expected_len && actual_len == matching_tags.len() {
+        if actual_len == expected_len && actual_len == matching_vars.len() {
             matching_tags.insert(name, matching_vars);
         }
     }
