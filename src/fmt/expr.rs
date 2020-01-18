@@ -147,27 +147,21 @@ pub fn fmt_expr<'a>(
             while let Some((patterns, expr)) = it.next() {
                 add_spaces(buf, indent + INDENT);
                 let (first, rest) = patterns.split_first().unwrap();
-
-                match first.value {
-                    Pattern::SpaceBefore(nested, spaces) => {
-                        fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                        fmt_pattern(buf, nested, indent + INDENT, false);
-                    }
-                    _ => {
-                        fmt_pattern(buf, &first.value, indent + INDENT, false);
-                    }
+                let is_multiline = match rest.last() {
+                    None => false,
+                    Some(last) => first.region.start_line != last.region.end_line,
                 };
+
+                fmt_pattern(buf, &first.value, indent + INDENT, false, true);
                 for pattern in rest {
-                    buf.push_str(" | ");
-                    match pattern.value {
-                        Pattern::SpaceBefore(nested, spaces) => {
-                            fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                            fmt_pattern(buf, nested, indent + INDENT, false);
-                        }
-                        _ => {
-                            fmt_pattern(buf, &pattern.value, indent + INDENT, false);
-                        }
+                    if is_multiline {
+                        buf.push_str("\n");
+                        add_spaces(buf, indent + INDENT);
+                        buf.push_str("| ");
+                    } else {
+                        buf.push_str(" | ");
                     }
+                    fmt_pattern(buf, &pattern.value, indent + INDENT, false, true);
                 }
 
                 buf.push_str(" ->\n");
@@ -584,7 +578,7 @@ pub fn fmt_closure<'a>(
             any_args_printed = true;
         }
 
-        fmt_pattern(buf, &loc_pattern.value, indent, false);
+        fmt_pattern(buf, &loc_pattern.value, indent, false, false);
     }
 
     if !arguments_are_multiline {
