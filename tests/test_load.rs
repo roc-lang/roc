@@ -16,7 +16,7 @@ mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
     use roc::can::def::Declaration::*;
     use roc::can::ident::ModuleName;
-    use roc::collections::{MutMap, SendMap};
+    use roc::collections::MutMap;
     use roc::load::{load, LoadedModule};
     use roc::module::ModuleId;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
@@ -281,87 +281,87 @@ mod test_load {
         });
     }
 
-    #[test]
-    fn load_records() {
-        test_async(async {
-            use roc::types::{ErrorType, Mismatch, Problem, TypeExt};
+    // #[test]
+    // fn load_records() {
+    //     test_async(async {
+    //         use roc::types::{ErrorType, Mismatch, Problem, TypeExt};
 
-            let mut subs_by_module = MutMap::default();
-            let loaded_module =
-                load_without_builtins("interface_with_deps", "Records", &mut subs_by_module).await;
+    //         let mut subs_by_module = MutMap::default();
+    //         let loaded_module =
+    //             load_without_builtins("interface_with_deps", "Records", &mut subs_by_module).await;
 
-            // NOTE: `a` here is unconstrained, so unifies with <type error>
-            let expected_types = hashmap! {
-                "Records.intVal" => "a",
-            };
+    //         // NOTE: `a` here is unconstrained, so unifies with <type error>
+    //         let expected_types = hashmap! {
+    //             "Records.intVal" => "a",
+    //         };
 
-            let a = ErrorType::FlexVar("a".into());
+    //         let a = ErrorType::FlexVar("a".into());
 
-            let mut record = SendMap::default();
-            record.insert("x".into(), a);
+    //         let mut record = SendMap::default();
+    //         record.insert("x".into(), a);
 
-            let problem = Problem::Mismatch(
-                Mismatch::TypeMismatch,
-                ErrorType::Record(SendMap::default(), TypeExt::Closed),
-                ErrorType::Record(record, TypeExt::FlexOpen("b".into())),
-            );
+    //         let problem = Problem::Mismatch(
+    //             Mismatch::TypeMismatch,
+    //             ErrorType::Record(SendMap::default(), TypeExt::Closed),
+    //             ErrorType::Record(record, TypeExt::FlexOpen("b".into())),
+    //         );
 
-            assert_eq!(loaded_module.problems, vec![problem]);
-            assert_eq!(expected_types.len(), loaded_module.declarations.len());
+    //         assert_eq!(loaded_module.problems, vec![problem]);
+    //         assert_eq!(expected_types.len(), loaded_module.declarations.len());
 
-            let mut subs = loaded_module.solved.into_inner();
+    //         let mut subs = loaded_module.solved.into_inner();
 
-            for decl in loaded_module.declarations {
-                let def = match decl {
-                    Declare(def) => def,
-                    rec_decl @ DeclareRec(_) => {
-                        panic!(
-                            "Unexpected recursive def in module declarations: {:?}",
-                            rec_decl
-                        );
-                    }
-                    cycle @ InvalidCycle(_, _) => {
-                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
-                    }
-                };
+    //         for decl in loaded_module.declarations {
+    //             let def = match decl {
+    //                 Declare(def) => def,
+    //                 rec_decl @ DeclareRec(_) => {
+    //                     panic!(
+    //                         "Unexpected recursive def in module declarations: {:?}",
+    //                         rec_decl
+    //                     );
+    //                 }
+    //                 cycle @ InvalidCycle(_, _) => {
+    //                     panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+    //                 }
+    //             };
 
-                for (symbol, expr_var) in def.pattern_vars {
-                    let content = subs.get(expr_var).content;
+    //             for (symbol, expr_var) in def.pattern_vars {
+    //                 let content = subs.get(expr_var).content;
 
-                    name_all_type_vars(expr_var, &mut subs);
+    //                 name_all_type_vars(expr_var, &mut subs);
 
-                    let actual_str = content_to_string(content, &mut subs);
-                    let expected_type = expected_types.get(symbol.as_str()).unwrap_or_else(|| {
-                        panic!("Defs included an unexpected symbol: {:?}", symbol)
-                    });
+    //                 let actual_str = content_to_string(content, &mut subs);
+    //                 let expected_type = expected_types.get(symbol.as_str()).unwrap_or_else(|| {
+    //                     panic!("Defs included an unexpected symbol: {:?}", symbol)
+    //                 });
 
-                    assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
-                }
-            }
-        });
-    }
+    //                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
+    //             }
+    //         }
+    //     });
+    // }
 
-    #[test]
-    fn load_and_infer_without_builtins() {
-        test_async(async {
-            let mut subs_by_module = MutMap::default();
-            let loaded_module = load_without_builtins(
-                "interface_with_deps",
-                "WithoutBuiltins",
-                &mut subs_by_module,
-            )
-            .await;
+    // #[test]
+    // fn load_and_infer_without_builtins() {
+    //     test_async(async {
+    //         let mut subs_by_module = MutMap::default();
+    //         let loaded_module = load_without_builtins(
+    //             "interface_with_deps",
+    //             "WithoutBuiltins",
+    //             &mut subs_by_module,
+    //         )
+    //         .await;
 
-            expect_types(
-                loaded_module,
-                hashmap! {
-                    "WithoutBuiltins.alwaysThreePointZero" => "* -> Float",
-                    "WithoutBuiltins.answer" => "Int",
-                    "WithoutBuiltins.fromDep2" => "Float",
-                    "WithoutBuiltins.identity" => "a -> a",
-                    "WithoutBuiltins.threePointZero" => "Float",
-                },
-            );
-        });
-    }
+    //         expect_types(
+    //             loaded_module,
+    //             hashmap! {
+    //                 "WithoutBuiltins.alwaysThreePointZero" => "* -> Float",
+    //                 "WithoutBuiltins.answer" => "Int",
+    //                 "WithoutBuiltins.fromDep2" => "Float",
+    //                 "WithoutBuiltins.identity" => "a -> a",
+    //                 "WithoutBuiltins.threePointZero" => "Float",
+    //             },
+    //         );
+    //     });
+    // }
 }
