@@ -16,7 +16,6 @@ mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
     use roc::can::def::Declaration::*;
     use roc::can::ident::ModuleName;
-    use roc::can::module::Module;
     use roc::collections::{MutMap, SendMap};
     use roc::load::{load, LoadedModule};
     use roc::module::ModuleId;
@@ -24,6 +23,7 @@ mod test_load {
     use roc::solve::ModuleSubs;
     use roc::subs::Subs;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     /// TODO change solve::SubsByModule to be this
     type SubsByModule = MutMap<ModuleId, ModuleSubs>;
@@ -58,6 +58,9 @@ mod test_load {
         let filename = src_dir.join(format!("{}.roc", module_name));
         let loaded = load(src_dir, filename, subs_by_module).await;
         let loaded_module = loaded.expect("Test module failed to load");
+
+        assert_eq!(loaded_module.problems, Vec::new());
+
         let expected_name = loaded_module
             .module_ids
             .get_name(loaded_module.module_id)
@@ -73,7 +76,8 @@ mod test_load {
         module_name: &str,
         subs_by_module: &mut SubsByModule,
     ) -> LoadedModule {
-        let next_var = load_builtins(subs_by_module).await;
+        load_builtins(subs_by_module).await;
+
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
         let loaded = load(src_dir, filename, subs_by_module).await;
@@ -88,46 +92,55 @@ mod test_load {
         loaded_module
     }
 
-    // fn expect_types(
-    //     module: Module,
-    //     subs: &mut Subs,
-    //     deps: Vec<LoadedModule>,
-    //     expected_types: HashMap<&str, &str>,
-    // ) {
-    //     let mut unify_problems = Vec::new();
-    //     solve_loaded(&module, &mut unify_problems, subs, deps);
+    fn get_plain_subs(module_subs: ModuleSubs) -> Subs {
+        use ModuleSubs::*;
 
-    //     assert_eq!(unify_problems, Vec::new());
-    //     assert_eq!(expected_types.len(), module.declarations.len());
+        match module_subs {
+            Valid(arc_solved) => Arc::try_unwrap(arc_solved)
+                .expect("Valid subs still had an Arc reference")
+                .into_inner(),
+            Invalid => panic!("Got an Invalid ModuleSubs"),
+        }
+    }
 
-    //     for decl in module.declarations {
-    //         let def = match decl {
-    //             Declare(def) => def,
-    //             rec_decl @ DeclareRec(_) => {
-    //                 panic!(
-    //                     "Unexpected recursive def in module declarations: {:?}",
-    //                     rec_decl
-    //                 );
-    //             }
-    //             cycle @ InvalidCycle(_, _) => {
-    //                 panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
-    //             }
-    //         };
+    fn expect_types(
+        loaded_module: LoadedModule,
+        subs_by_module: &mut SubsByModule,
+        expected_types: HashMap<&str, &str>,
+    ) {
+        let mut subs = get_plain_subs(subs_by_module.remove(&loaded_module.module_id).unwrap());
 
-    //         for (symbol, expr_var) in def.pattern_vars {
-    //             let content = subs.get(expr_var).content;
+        assert_eq!(loaded_module.problems, Vec::new());
+        assert_eq!(expected_types.len(), loaded_module.declarations.len());
 
-    //             name_all_type_vars(expr_var, subs);
+        for decl in loaded_module.declarations {
+            let def = match decl {
+                Declare(def) => def,
+                rec_decl @ DeclareRec(_) => {
+                    panic!(
+                        "Unexpected recursive def in module declarations: {:?}",
+                        rec_decl
+                    );
+                }
+                cycle @ InvalidCycle(_, _) => {
+                    panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                }
+            };
 
-    //             let actual_str = content_to_string(content, subs);
-    //             let expected_type = expected_types
-    //                 .get(symbol.as_str())
-    //                 .unwrap_or_else(|| panic!("Defs included an unexpected symbol: {:?}", symbol));
+            for (symbol, expr_var) in def.pattern_vars {
+                let content = subs.get(expr_var).content;
 
-    //             assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
-    //         }
-    //     }
-    // }
+                name_all_type_vars(expr_var, &mut subs);
+
+                let actual_str = content_to_string(content, &mut subs);
+                let expected_type = expected_types
+                    .get(symbol.as_str())
+                    .unwrap_or_else(|| panic!("Defs included an unexpected symbol: {:?}", symbol));
+
+                assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
+            }
+        }
+    }
 
     // TESTS
 
@@ -140,6 +153,7 @@ mod test_load {
         test_async(async {
             let loaded = load(src_dir, filename, &mut subs_by_module).await;
             let loaded_module = loaded.expect("Test module failed to load");
+            assert_eq!(loaded_module.problems, Vec::new());
 
             let def_count: usize = loaded_module
                 .declarations
@@ -166,6 +180,7 @@ mod test_load {
         test_async(async {
             let loaded = load(src_dir, filename, &mut subs_by_module).await;
             let loaded_module = loaded.expect("Test module failed to load");
+            assert_eq!(loaded_module.problems, Vec::new());
 
             let def_count: usize = loaded_module
                 .declarations
@@ -195,164 +210,178 @@ mod test_load {
         });
     }
 
-    // #[test]
-    // fn interface_with_builtins() {
-    //     test_async(async {
-    //         let mut deps = Vec::new();
-    //         let (module, _subs) =
-    //             load_with_builtins("interface_with_deps", "WithBuiltins", &mut deps).await;
-    //
-    //         let def_count: usize = module
-    //             .declarations
-    //             .iter()
-    //             .map(|decl| decl.def_count())
-    //             .sum();
-    //         assert_eq!(module.name, "Primary".into());
-    //         assert_eq!(def_count, 6);
-    //
-    //         let module_names: Vec<ModuleName> = deps
-    //             .into_iter()
-    //             .map(|dep| dep.into_module().unwrap().name)
-    //             .collect();
-    //
-    //         assert_eq!(
-    //             module_names,
-    //             vec![
-    //                 "Int".into(),
-    //                 "Map".into(),
-    //                 "Set".into(),
-    //                 "Float".into(),
-    //                 "Dep1".into(),
-    //                 "Dep3.Blah".into(),
-    //                 "Dep2".into()
-    //             ]
-    //         );
-    //     });
-    // }
+    #[test]
+    fn interface_with_builtins() {
+        test_async(async {
+            let mut subs_by_module = MutMap::default();
+            let loaded_module =
+                load_with_builtins("interface_with_deps", "WithBuiltins", &mut subs_by_module)
+                    .await;
 
-    // #[test]
-    // fn load_and_infer_with_builtins() {
-    //     test_async(async {
-    //         let mut deps = Vec::new();
-    //         let (module, mut subs) = load_with_builtins("interface_with_deps", "WithBuiltins", &mut deps).await;
-    //
-    //         expect_types(
-    //             module,
-    //             &mut subs,
-    //             deps,
-    //             hashmap! {
-    //                 "WithBuiltins.floatTest" => "Float",
-    //                 "WithBuiltins.divisionFn" => "Float, Float -> Float",
-    //                 "WithBuiltins.divisionTest" => "Float",
-    //                 "WithBuiltins.intTest" => "Int",
-    //                 "WithBuiltins.x" => "Float",
-    //                 "WithBuiltins.constantInt" => "Int",
-    //                 "WithBuiltins.divDep1ByDep2" => "Float",
-    //                 "WithBuiltins.fromDep2" => "Float",
-    //             },
-    //         );
-    //     });
-    // }
+            assert_eq!(loaded_module.problems, Vec::new());
 
-    // #[test]
-    // fn load_principal_types() {
-    //     test_async(async {
-    //         let mut deps = Vec::new();
-    //         let (module, mut subs) =
-    //             load_without_builtins("interface_with_deps", "Principal", &mut deps).await;
+            let module_ids = loaded_module.module_ids;
+            let expected_name = module_ids
+                .get_name(loaded_module.module_id)
+                .expect("Test ModuleID not found in module_ids");
 
-    //         expect_types(
-    //             module,
-    //             &mut subs,
-    //             deps,
-    //             hashmap! {
-    //                 "Principal.intVal" => "Int",
-    //                 "Principal.identity" => "a -> a",
-    //             },
-    //         );
-    //     });
-    // }
+            assert_eq!(expected_name, &ModuleName::from("Primary"));
 
-    // #[test]
-    // fn load_records() {
-    //     test_async(async {
-    //         use roc::types::{ErrorType, Mismatch, Problem, TypeExt};
+            let def_count: usize = loaded_module
+                .declarations
+                .iter()
+                .map(|decl| decl.def_count())
+                .sum();
+            assert_eq!(def_count, 6);
 
-    //         let mut deps = Vec::new();
-    //         let (module, mut subs) =
-    //             load_without_builtins("interface_with_deps", "Records", &mut deps).await;
+            let mut all_loaded_modules: Vec<ModuleName> = subs_by_module
+                .keys()
+                .map(|module_id| module_ids.get_name(*module_id).unwrap().clone())
+                .collect();
 
-    //         // NOTE: `a` here is unconstrained, so unifies with <type error>
-    //         let expected_types = hashmap! {
-    //             "Records.intVal" => "a",
-    //         };
+            all_loaded_modules.sort();
 
-    //         let mut unify_problems = Vec::new();
-    //         solve_loaded(&module, &mut unify_problems, &mut subs, deps);
+            assert_eq!(
+                all_loaded_modules,
+                vec![
+                    "Int".into(),
+                    "Map".into(),
+                    "Set".into(),
+                    "Float".into(),
+                    "Dep1".into(),
+                    "Dep3.Blah".into(),
+                    "Dep2".into()
+                ]
+            );
+        });
+    }
 
-    //         let a = ErrorType::FlexVar("a".into());
+    #[test]
+    fn load_and_infer_with_builtins() {
+        test_async(async {
+            let mut subs_by_module = MutMap::default();
+            let loaded_module =
+                load_with_builtins("interface_with_deps", "WithBuiltins", &mut subs_by_module)
+                    .await;
 
-    //         let mut record = SendMap::default();
-    //         record.insert("x".into(), a);
+            expect_types(
+                loaded_module,
+                &mut subs_by_module,
+                hashmap! {
+                    "WithBuiltins.floatTest" => "Float",
+                    "WithBuiltins.divisionFn" => "Float, Float -> Float",
+                    "WithBuiltins.divisionTest" => "Float",
+                    "WithBuiltins.intTest" => "Int",
+                    "WithBuiltins.x" => "Float",
+                    "WithBuiltins.constantInt" => "Int",
+                    "WithBuiltins.divDep1ByDep2" => "Float",
+                    "WithBuiltins.fromDep2" => "Float",
+                },
+            );
+        });
+    }
 
-    //         let problem = Problem::Mismatch(
-    //             Mismatch::TypeMismatch,
-    //             ErrorType::Record(SendMap::default(), TypeExt::Closed),
-    //             ErrorType::Record(record, TypeExt::FlexOpen("b".into())),
-    //         );
+    #[test]
+    fn load_principal_types() {
+        test_async(async {
+            let mut subs_by_module = MutMap::default();
+            let loaded_module =
+                load_without_builtins("interface_with_deps", "Principal", &mut subs_by_module)
+                    .await;
 
-    //         assert_eq!(unify_problems, vec![problem]);
-    //         assert_eq!(expected_types.len(), module.declarations.len());
+            expect_types(
+                loaded_module,
+                &mut subs_by_module,
+                hashmap! {
+                    "Principal.intVal" => "Int",
+                    "Principal.identity" => "a -> a",
+                },
+            );
+        });
+    }
 
-    //         for decl in module.declarations {
-    //             let def = match decl {
-    //                 Declare(def) => def,
-    //                 rec_decl @ DeclareRec(_) => {
-    //                     panic!(
-    //                         "Unexpected recursive def in module declarations: {:?}",
-    //                         rec_decl
-    //                     );
-    //                 }
-    //                 cycle @ InvalidCycle(_, _) => {
-    //                     panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
-    //                 }
-    //             };
+    #[test]
+    fn load_records() {
+        test_async(async {
+            use roc::types::{ErrorType, Mismatch, Problem, TypeExt};
 
-    //             for (symbol, expr_var) in def.pattern_vars {
-    //                 let content = subs.get(expr_var).content;
+            let mut subs_by_module = MutMap::default();
+            let loaded_module =
+                load_without_builtins("interface_with_deps", "Records", &mut subs_by_module).await;
 
-    //                 name_all_type_vars(expr_var, &mut subs);
+            // NOTE: `a` here is unconstrained, so unifies with <type error>
+            let expected_types = hashmap! {
+                "Records.intVal" => "a",
+            };
 
-    //                 let actual_str = content_to_string(content, &mut subs);
-    //                 let expected_type = expected_types.get(symbol.as_str()).unwrap_or_else(|| {
-    //                     panic!("Defs included an unexpected symbol: {:?}", symbol)
-    //                 });
+            let a = ErrorType::FlexVar("a".into());
 
-    //                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
-    //             }
-    //         }
-    //     });
-    // }
+            let mut record = SendMap::default();
+            record.insert("x".into(), a);
 
-    // #[test]
-    // fn load_and_infer_without_builtins() {
-    //     test_async(async {
-    //         let mut deps = Vec::new();
-    //         let (module, mut subs) =
-    //             load_without_builtins("interface_with_deps", "WithoutBuiltins", &mut deps).await;
-    //
-    //         expect_types(
-    //             module,
-    //             &mut subs,
-    //             deps,
-    //             hashmap! {
-    //                 "WithoutBuiltins.alwaysThreePointZero" => "* -> Float",
-    //                 "WithoutBuiltins.answer" => "Int",
-    //                 "WithoutBuiltins.fromDep2" => "Float",
-    //                 "WithoutBuiltins.identity" => "a -> a",
-    //                 "WithoutBuiltins.threePointZero" => "Float",
-    //             },
-    //         );
-    //     });
-    // }
+            let problem = Problem::Mismatch(
+                Mismatch::TypeMismatch,
+                ErrorType::Record(SendMap::default(), TypeExt::Closed),
+                ErrorType::Record(record, TypeExt::FlexOpen("b".into())),
+            );
+
+            assert_eq!(loaded_module.problems, vec![problem]);
+            assert_eq!(expected_types.len(), loaded_module.declarations.len());
+
+            let mut subs = get_plain_subs(subs_by_module.remove(&loaded_module.module_id).unwrap());
+
+            for decl in loaded_module.declarations {
+                let def = match decl {
+                    Declare(def) => def,
+                    rec_decl @ DeclareRec(_) => {
+                        panic!(
+                            "Unexpected recursive def in module declarations: {:?}",
+                            rec_decl
+                        );
+                    }
+                    cycle @ InvalidCycle(_, _) => {
+                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                    }
+                };
+
+                for (symbol, expr_var) in def.pattern_vars {
+                    let content = subs.get(expr_var).content;
+
+                    name_all_type_vars(expr_var, &mut subs);
+
+                    let actual_str = content_to_string(content, &mut subs);
+                    let expected_type = expected_types.get(symbol.as_str()).unwrap_or_else(|| {
+                        panic!("Defs included an unexpected symbol: {:?}", symbol)
+                    });
+
+                    assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn load_and_infer_without_builtins() {
+        test_async(async {
+            let mut subs_by_module = MutMap::default();
+            let loaded_module = load_without_builtins(
+                "interface_with_deps",
+                "WithoutBuiltins",
+                &mut subs_by_module,
+            )
+            .await;
+
+            expect_types(
+                loaded_module,
+                &mut subs_by_module,
+                hashmap! {
+                    "WithoutBuiltins.alwaysThreePointZero" => "* -> Float",
+                    "WithoutBuiltins.answer" => "Int",
+                    "WithoutBuiltins.fromDep2" => "Float",
+                    "WithoutBuiltins.identity" => "a -> a",
+                    "WithoutBuiltins.threePointZero" => "Float",
+                },
+            );
+        });
+    }
 }
