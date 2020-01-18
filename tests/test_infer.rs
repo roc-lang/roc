@@ -1264,27 +1264,116 @@ mod test_infer {
         );
     }
 
-    // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
-    //    #[test]
-    //    fn linked_list_map() {
-    //        with_larger_debug_stack(|| {
-    //            infer_eq_without_problem(
-    //                indoc!(
-    //                    r#"
-    //                map = \f, list ->
-    //                    when list is
-    //                        Nil -> Nil
-    //                        Cons x xs ->
-    //                            a = f x
-    //                            b = map f xs
+    #[test]
+    fn identity_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                map : (a -> b), [ Identity a ] -> [ Identity b ]
+                map = \f, identity ->
+                    when identity is
+                        Identity v -> Identity (f v)
+                map
+                   "#
+            ),
+            "(a -> b), [ Identity a ] -> [ Identity b ]",
+        );
+    }
+
+    #[test]
+    fn to_bit() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   # toBit : [ False, True ] -> Num.Num Int.Integer
+                   toBit = \bool ->
+                       when bool is
+                           True -> 1 
+                           False -> 0  
+    
+                   toBit
+                      "#
+            ),
+            "[ False, True ]* -> Int",
+        );
+    }
+
+    // this test is related to a bug where ext_var would have an incorrect rank.
+    // This match has duplicate cases, but that's not important because exhaustiveness happens
+    // after inference.
+    #[test]
+    fn to_bit_record() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo = \rec -> 
+                        when rec is 
+                            { x } -> "1"
+                            { y } -> "2"
+                    
+                foo
+                      "#
+            ),
+            "{ x : *, y : * }* -> Str",
+        );
+    }
+
+    #[test]
+    fn from_bit() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   fromBit = \int ->
+                       when int is
+                           0 -> False
+                           _ -> True
+    
+                   fromBit
+                      "#
+            ),
+            "Int -> [ False, True ]*",
+        );
+    }
+
+    #[test]
+    fn result_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    map : (a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]
+                    map = \f, result ->
+                        when result is
+                            Ok v -> Ok (f v)
+                            Err e -> Err e
+    
+                    map
+                       "#
+            ),
+            "(a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]",
+        );
+    }
+
+    // // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
+    // #[test]
+    // fn linked_list_map() {
+    //     with_larger_debug_stack(|| {
+    //         infer_eq_without_problem(
+    //             indoc!(
+    //                 r#"
+    //                 map = \f, list ->
+    //                     when list is
+    //                         Nil -> Nil
+    //                         Cons x xs ->
+    //                             a = f x
+    //                             b = map f xs
     //
-    //                            b
+    //                             Cons a b
     //
-    //                map
-    //                   "#
-    //                ),
-    //                "Attr.Attr * Int",
-    //            );
-    //        });
-    //    }
+    //                 map
+    //                    "#
+    //             ),
+    //             "Attr.Attr * Int",
+    //         );
+    //     });
+    // }
 }

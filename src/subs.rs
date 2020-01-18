@@ -219,7 +219,10 @@ impl Subs {
         let l_root = self.utable.get_root_key(left);
         let r_root = self.utable.get_root_key(right);
 
-        self.utable.unify_roots(l_root, r_root, desc)
+        // NOTE this swapping is intentional! most of our unifying commands are based on the elm
+        // source, but unify_roots is from `ena`, not the elm source. Turns out that they have
+        // different ideas of how the merge should go (l into r or the reverse), and this matters!
+        self.utable.unify_roots(r_root, l_root, desc)
     }
 
     pub fn get(&mut self, key: Variable) -> Descriptor {

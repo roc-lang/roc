@@ -1,11 +1,14 @@
+use crate::can::env::Env;
 use crate::can::ident::Lowercase;
+use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
-use crate::parse::ast::{AssignedField, TypeAnnotation};
+use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::subs::{VarStore, Variable};
 use crate::types::RecordFieldLabel;
 use crate::types::Type;
 
 pub fn canonicalize_annotation(
+    env: &Env,
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
 ) -> (SendMap<Variable, Lowercase>, crate::types::Type) {
@@ -20,7 +23,7 @@ pub fn canonicalize_annotation(
     // but a variable can only have one name. Therefore
     // `ftv : SendMap<Variable, Lowercase>`.
     let mut rigids = ImMap::default();
-    let result = can_annotation_help(annotation, var_store, &mut rigids);
+    let result = can_annotation_help(env, annotation, var_store, &mut rigids);
 
     let mut ftv = SendMap::default();
 
@@ -32,6 +35,7 @@ pub fn canonicalize_annotation(
 }
 
 fn can_annotation_help(
+    env: &Env,
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
@@ -43,17 +47,17 @@ fn can_annotation_help(
             let mut args = Vec::new();
 
             for arg in *argument_types {
-                args.push(can_annotation_help(&arg.value, var_store, rigids));
+                args.push(can_annotation_help(env, &arg.value, var_store, rigids));
             }
 
-            let ret = can_annotation_help(&return_type.value, var_store, rigids);
+            let ret = can_annotation_help(env, &return_type.value, var_store, rigids);
             Type::Function(args, Box::new(ret))
         }
         Apply(module_name, name, type_arguments) => {
             let mut args = Vec::new();
 
             for arg in *type_arguments {
-                args.push(can_annotation_help(&arg.value, var_store, rigids));
+                args.push(can_annotation_help(env, &arg.value, var_store, rigids));
             }
 
             Type::Apply {
@@ -77,24 +81,32 @@ fn can_annotation_help(
             let mut field_types = SendMap::default();
 
             for field in fields.iter() {
-                can_assigned_field(&field.value, var_store, rigids, &mut field_types);
+                can_assigned_field(env, &field.value, var_store, rigids, &mut field_types);
             }
 
             let ext_type = match ext {
-                Some(loc_ann) => can_annotation_help(&loc_ann.value, var_store, rigids),
+                Some(loc_ann) => can_annotation_help(env, &loc_ann.value, var_store, rigids),
                 None => Type::EmptyRec,
             };
 
             Type::Record(field_types, Box::new(ext_type))
         }
         TagUnion { tags, ext } => {
-            panic!(
-                "TODO canonicalize tag union annotation: {:?} {:?}",
-                tags, ext
-            );
+            let mut tag_types = Vec::with_capacity(tags.len());
+
+            for tag in tags.iter() {
+                can_tag(env, &tag.value, var_store, rigids, &mut tag_types);
+            }
+
+            let ext_type = match ext {
+                Some(loc_ann) => can_annotation_help(env, &loc_ann.value, var_store, rigids),
+                None => Type::EmptyTagUnion,
+            };
+
+            Type::TagUnion(tag_types, Box::new(ext_type))
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            can_annotation_help(nested, var_store, rigids)
+            can_annotation_help(env, nested, var_store, rigids)
         }
         Wildcard | Malformed(_) => {
             let var = var_store.fresh();
@@ -104,6 +116,7 @@ fn can_annotation_help(
 }
 
 fn can_assigned_field<'a>(
+    env: &Env,
     field: &AssignedField<'a, TypeAnnotation<'a>>,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
@@ -113,7 +126,7 @@ fn can_assigned_field<'a>(
 
     match field {
         LabeledValue(field_name, _, annotation) => {
-            let field_type = can_annotation_help(&annotation.value, var_store, rigids);
+            let field_type = can_annotation_help(env, &annotation.value, var_store, rigids);
             let label = Lowercase::from(field_name.value);
             field_types.insert(label, field_type);
         }
@@ -132,8 +145,43 @@ fn can_assigned_field<'a>(
             field_types.insert(field_name, field_type);
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            can_assigned_field(nested, var_store, rigids, field_types)
+            can_assigned_field(env, nested, var_store, rigids, field_types)
         }
         Malformed(_) => {}
+    }
+}
+
+fn can_tag<'a>(
+    env: &Env,
+    tag: &Tag<'a>,
+    var_store: &VarStore,
+    rigids: &mut ImMap<Lowercase, Variable>,
+    tag_types: &mut Vec<(Symbol, Vec<Type>)>,
+) {
+    match tag {
+        Tag::Global { name, args } => {
+            let symbol = Symbol::from_global_tag(name.value);
+
+            let arg_types = args
+                .iter()
+                .map(|arg| can_annotation_help(env, &arg.value, var_store, rigids))
+                .collect();
+
+            tag_types.push((symbol, arg_types));
+        }
+        Tag::Private { name, args } => {
+            let symbol = Symbol::from_private_tag(&env.home, name.value);
+
+            let arg_types = args
+                .iter()
+                .map(|arg| can_annotation_help(env, &arg.value, var_store, rigids))
+                .collect();
+
+            tag_types.push((symbol, arg_types));
+        }
+        Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => {
+            can_tag(env, nested, var_store, rigids, tag_types)
+        }
+        Tag::Malformed(_) => {}
     }
 }
