@@ -170,7 +170,7 @@ fn can_tag<'a>(
             tag_types.push((symbol, arg_types));
         }
         Tag::Private { name, args } => {
-            let symbol = Symbol::from_private_tag(&env.home, name.value);
+            let symbol = Symbol::from_private_tag(env.home.as_str(), name.value);
 
             let arg_types = args
                 .iter()

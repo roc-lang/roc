@@ -1,11 +1,12 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::symbol::Symbol;
-use crate::collections::ImMap;
+use crate::collections::{relative_complement, union, ImMap, MutMap};
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
 use crate::uniqueness::boolean_algebra;
+use std::hash::Hash;
 
 type Pool = Vec<Variable>;
 
@@ -17,13 +18,13 @@ struct Context {
 }
 
 pub struct RecordStructure {
-    pub fields: ImMap<RecordFieldLabel, Variable>,
+    pub fields: MutMap<RecordFieldLabel, Variable>,
     pub ext: Variable,
 }
 
 #[derive(Debug)]
 struct TagUnionStructure {
-    tags: ImMap<Symbol, Vec<Variable>>,
+    tags: MutMap<Symbol, Vec<Variable>>,
     ext: Variable,
 }
 
@@ -153,6 +154,28 @@ fn unify_structure(
     }
 }
 
+/// Like intersection_with, except for MutMap and specialized to return
+/// a tuple. Also, only clones the values that will be actually returned,
+/// rather than cloning everything.
+fn get_shared<K, V>(map1: &MutMap<K, V>, map2: &MutMap<K, V>) -> MutMap<K, (V, V)>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    let mut answer = MutMap::default();
+
+    for (key, right_value) in map2 {
+        match std::collections::HashMap::get(map1, &key) {
+            None => (),
+            Some(left_value) => {
+                answer.insert(key.clone(), (left_value.clone(), right_value.clone()));
+            }
+        }
+    }
+
+    answer
+}
+
 fn unify_record(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -160,21 +183,19 @@ fn unify_record(
     rec1: RecordStructure,
     rec2: RecordStructure,
 ) -> Outcome {
-    // This is a bit more complicated because of optional fields
     let fields1 = rec1.fields;
     let fields2 = rec2.fields;
-    let shared_fields = fields1
-        .clone()
-        .intersection_with(fields2.clone(), |one, two| (one, two));
-    // NOTE: don't use `difference` here, in contrast to Haskell, im-rc `difference` is symmetric
-    let unique_fields1 = fields1.clone().relative_complement(fields2.clone());
-    let unique_fields2 = fields2.relative_complement(fields1);
+    let shared_fields = get_shared(&fields1, &fields2);
+    // NOTE: don't use `difference` here. In contrast to Haskell, im's `difference` is symmetric
+    let unique_fields1 = relative_complement(&fields1, &fields2);
+    let unique_fields2 = relative_complement(&fields2, &fields1);
 
     if unique_fields1.is_empty() {
         if unique_fields2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
+            let other_fields = MutMap::default();
             let mut field_problems =
-                unify_shared_fields(subs, pool, ctx, shared_fields, ImMap::default(), rec1.ext);
+                unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, rec1.ext);
 
             field_problems.extend(ext_problems);
 
@@ -183,8 +204,9 @@ fn unify_record(
             let flat_type = FlatType::Record(unique_fields2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
+            let other_fields = MutMap::default();
             let mut field_problems =
-                unify_shared_fields(subs, pool, ctx, shared_fields, ImMap::default(), sub_record);
+                unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
 
             field_problems.extend(ext_problems);
 
@@ -194,14 +216,15 @@ fn unify_record(
         let flat_type = FlatType::Record(unique_fields1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
+        let other_fields = MutMap::default();
         let mut field_problems =
-            unify_shared_fields(subs, pool, ctx, shared_fields, ImMap::default(), sub_record);
+            unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
 
         field_problems.extend(ext_problems);
 
         field_problems
     } else {
-        let other_fields = unique_fields1.clone().union(unique_fields2.clone());
+        let other_fields = union(unique_fields1.clone(), &unique_fields2);
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
         let flat_type1 = FlatType::Record(unique_fields1, rec1.ext);
@@ -228,11 +251,11 @@ fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: ImMap<RecordFieldLabel, (Variable, Variable)>,
-    other_fields: ImMap<RecordFieldLabel, Variable>,
+    shared_fields: MutMap<RecordFieldLabel, (Variable, Variable)>,
+    other_fields: MutMap<RecordFieldLabel, Variable>,
     ext: Variable,
 ) -> Outcome {
-    let mut matching_fields = ImMap::default();
+    let mut matching_fields = MutMap::default();
     let num_shared_fields = shared_fields.len();
 
     for (name, (actual, expected)) in shared_fields {
@@ -244,7 +267,7 @@ fn unify_shared_fields(
     }
 
     if num_shared_fields == matching_fields.len() {
-        let flat_type = FlatType::Record(matching_fields.union(other_fields), ext);
+        let flat_type = FlatType::Record(union(matching_fields, &other_fields), ext);
 
         merge(subs, ctx, Structure(flat_type))
     } else {
@@ -261,18 +284,16 @@ fn unify_tag_union(
 ) -> Outcome {
     let tags1 = rec1.tags;
     let tags2 = rec2.tags;
-    let shared_tags = tags1
-        .clone()
-        .intersection_with(tags2.clone(), |one, two| (one, two));
-    // NOTE: don't use `difference` here, in contrast to Haskell, im-rc `difference` is symmetric
-    let unique_tags1 = tags1.clone().relative_complement(tags2.clone());
-    let unique_tags2 = tags2.relative_complement(tags1);
+    let shared_tags = get_shared(&tags1, &tags2);
+    // NOTE: don't use `difference` here. In contrast to Haskell, im's `difference` is symmetric
+    let unique_tags1 = relative_complement(&tags1, &tags2);
+    let unique_tags2 = relative_complement(&tags2, &tags1);
 
     if unique_tags1.is_empty() {
         if unique_tags2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
             let mut tag_problems =
-                unify_shared_tags(subs, pool, ctx, shared_tags, ImMap::default(), rec1.ext);
+                unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), rec1.ext);
 
             tag_problems.extend(ext_problems);
 
@@ -282,7 +303,7 @@ fn unify_tag_union(
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
             let mut tag_problems =
-                unify_shared_tags(subs, pool, ctx, shared_tags, ImMap::default(), sub_record);
+                unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), sub_record);
 
             tag_problems.extend(ext_problems);
 
@@ -293,13 +314,13 @@ fn unify_tag_union(
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
         let mut tag_problems =
-            unify_shared_tags(subs, pool, ctx, shared_tags, ImMap::default(), sub_record);
+            unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), sub_record);
 
         tag_problems.extend(ext_problems);
 
         tag_problems
     } else {
-        let other_tags = unique_tags1.clone().union(unique_tags2.clone());
+        let other_tags = union(unique_tags1.clone(), &unique_tags2);
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
         let flat_type1 = FlatType::TagUnion(unique_tags1, rec1.ext);
@@ -325,11 +346,11 @@ fn unify_shared_tags(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_tags: ImMap<Symbol, (Vec<Variable>, Vec<Variable>)>,
-    other_tags: ImMap<Symbol, Vec<Variable>>,
+    shared_tags: MutMap<Symbol, (Vec<Variable>, Vec<Variable>)>,
+    other_tags: MutMap<Symbol, Vec<Variable>>,
     ext: Variable,
 ) -> Outcome {
-    let mut matching_tags = ImMap::default();
+    let mut matching_tags = MutMap::default();
     let num_shared_tags = shared_tags.len();
 
     for (name, (actual_vars, expected_vars)) in shared_tags {
@@ -353,7 +374,7 @@ fn unify_shared_tags(
     }
 
     if num_shared_tags == matching_tags.len() {
-        let flat_type = FlatType::TagUnion(matching_tags.union(other_tags), ext);
+        let flat_type = FlatType::TagUnion(union(matching_tags, &other_tags), ext);
 
         merge(subs, ctx, Structure(flat_type))
     } else {
@@ -538,14 +559,14 @@ fn unify_flex(
 
 pub fn gather_fields(
     subs: &mut Subs,
-    fields: ImMap<RecordFieldLabel, Variable>,
+    fields: MutMap<RecordFieldLabel, Variable>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::FlatType::*;
 
     match subs.get(var).content {
         Structure(Record(sub_fields, sub_ext)) => {
-            gather_fields(subs, fields.union(sub_fields), sub_ext)
+            gather_fields(subs, union(fields, &sub_fields), sub_ext)
         }
 
         Alias(_, _, _, var) => {
@@ -559,13 +580,15 @@ pub fn gather_fields(
 
 fn gather_tags(
     subs: &mut Subs,
-    tags: ImMap<Symbol, Vec<Variable>>,
+    tags: MutMap<Symbol, Vec<Variable>>,
     var: Variable,
 ) -> TagUnionStructure {
     use crate::subs::FlatType::*;
 
     match subs.get(var).content {
-        Structure(TagUnion(sub_tags, sub_ext)) => gather_tags(subs, tags.union(sub_tags), sub_ext),
+        Structure(TagUnion(sub_tags, sub_ext)) => {
+            gather_tags(subs, union(tags, &sub_tags), sub_ext)
+        }
 
         Alias(_, _, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"

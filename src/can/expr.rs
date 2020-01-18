@@ -572,7 +572,7 @@ pub fn canonicalize_expr(
 
             (
                 Tag {
-                    name: Symbol::from_private_tag(&env.home, tag),
+                    name: Symbol::from_private_tag(env.home.as_str(), tag),
                     arguments: vec![],
                     variant_var,
                     ext_var,
@@ -957,10 +957,10 @@ fn resolve_ident<'a>(
         match ident {
             Ident::Unqualified(name) => {
                 // Try again, this time using the current module as the path.
-                let qualified = Ident::Qualified(env.home.clone(), name.clone());
+                let qualified = Ident::Qualified(env.home.as_str().into(), name.clone());
 
                 if scope.idents.contains_key(&qualified) {
-                    let symbol = Symbol::new(&env.home, &name);
+                    let symbol = Symbol::new(env.home.as_str(), &name);
 
                     references.globals.insert(symbol.clone());
 

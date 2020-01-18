@@ -257,8 +257,6 @@ pub fn assert_correct_variable_usage(constraint: &Constraint) {
     let (declared, used) = variable_usage(constraint);
 
     if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
-        dbg!(&constraint);
-        // dbg!(expr);
         println!("VARIABLE USAGE PROBLEM");
         println!("used variable count: {}\n", used.len());
 

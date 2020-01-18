@@ -499,8 +499,8 @@ fn group_to_declaration(
                 seen_pattern_regions.insert(new_def.loc_pattern.region);
             }
         } else {
-            // Topological sort gives us the reverse of the sorting we want!
             let mut can_defs = Vec::new();
+            // Topological sort gives us the reverse of the sorting we want!
             for symbol in cycle.into_iter().rev() {
                 if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
                     let mut new_def = can_def.clone();

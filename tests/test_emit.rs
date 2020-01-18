@@ -45,9 +45,9 @@ mod test_crane {
             let mut func_ctx = FunctionBuilderContext::new();
 
             let (expr, _output, _problems, var_store, variable, constraint) = can_expr($src);
-            let mut subs = Subs::new(var_store.into());
+            let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
+            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
             let cfg = match isa::lookup(HOST) {
@@ -67,6 +67,7 @@ mod test_crane {
             let main_fn_name = "$Test.main";
 
             // Compute main_fn_ret_type before moving subs to Env
+            let mut subs = solved.into_inner();
             let main_ret_type = type_from_content(&content, &mut subs, cfg);
 
             // Compile and add all the Procs before adding main
@@ -169,9 +170,9 @@ mod test_crane {
         ($src:expr, $expected:expr, $ty:ty) => {
             let arena = Bump::new();
             let (expr, _output, _problems, var_store, variable, constraint) = can_expr($src);
-            let mut subs = Subs::new(var_store.into());
+            let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
+            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
 
             let context = Context::create();
             let module = context.create_module("app");
@@ -195,6 +196,7 @@ mod test_crane {
             fpm.initialize();
 
             // Compute main_fn_type before moving subs to Env
+            let mut subs = solved.into_inner();
             let main_fn_type = content_to_basic_type(&content, &mut subs, &context)
                 .expect("Unable to infer type for test expr")
                 .fn_type(&[], false);

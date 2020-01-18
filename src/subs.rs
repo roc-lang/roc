@@ -1,6 +1,6 @@
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, ImSet, MutSet, SendMap};
+use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types;
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
@@ -459,8 +459,8 @@ pub enum FlatType {
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
-    Record(ImMap<RecordFieldLabel, Variable>, Variable),
-    TagUnion(ImMap<Symbol, Vec<Variable>>, Variable),
+    Record(MutMap<RecordFieldLabel, Variable>, Variable),
+    TagUnion(MutMap<Symbol, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,
@@ -835,7 +835,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             EmptyTagUnion => (),
 
             Record(fields, ext_var) => {
-                for (_, var) in fields {
+                for var in fields.values() {
                     subs.restore(*var);
                 }
 
