@@ -267,7 +267,7 @@ pub async fn load<'a>(
                     // Notify all the listeners that this solved.
                     if let Some(listeners) = solve_listeners.remove(&module_id) {
                         for listener_id in listeners {
-                            // It's no longer waiting for this module,
+                            // This listener is longer waiting for this module,
                             // because this module has now been solved!
                             let waiting_for = waiting_for_solve
                                 .get_mut(&listener_id)
