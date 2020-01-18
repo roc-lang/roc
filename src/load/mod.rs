@@ -193,7 +193,9 @@ pub async fn load<'a>(
                 next_var,
             } => {
                 let module_id = module.module_id;
-                let waiting_for = waiting_for_solve.get(&module_id).expect("1");
+                let waiting_for = waiting_for_solve
+                    .get(&module_id)
+                    .expect("Could not find module ID in waiting_for_solve");
 
                 if waiting_for.is_empty() {
                     // All of our dependencies have already been solved. Great!
@@ -267,14 +269,17 @@ pub async fn load<'a>(
                         for listener_id in listeners {
                             // It's no longer waiting for this module,
                             // because this module has now been solved!
-                            let waiting_for = waiting_for_solve.get_mut(&listener_id).expect("2");
+                            let waiting_for = waiting_for_solve
+                                .get_mut(&listener_id)
+                                .expect("Unable to find module ID in waiting_for_solve");
 
                             waiting_for.remove(&module_id);
 
                             // If it's no longer waiting for anything else, solve it.
                             if waiting_for.is_empty() {
-                                let (module, constraint, next_var) =
-                                    unsolved_modules.remove(&listener_id).expect("3");
+                                let (module, constraint, next_var) = unsolved_modules
+                                    .remove(&listener_id)
+                                    .expect("Could not find listener ID in unsolved_modules");
 
                                 solve_module(
                                     module,
@@ -381,10 +386,14 @@ fn load_filename(
 
                     // Make sure the module_ids has ModuleIds for all our deps,
                     // then record those ModuleIds in can_module_ids for later.
-                    let module_id = match module_ids {
+                    let module_id;
+
+                    match module_ids {
                         Shared(arc) => {
                             // Lock just long enough to perform these operations.
                             let mut unlocked = (*arc).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
+
+                            module_id = unlocked.get_id(&declared_name);
 
                             for dep in deps.iter() {
                                 let id = unlocked.get_id(dep);
@@ -392,15 +401,13 @@ fn load_filename(
                                 can_module_ids.insert(&dep, id);
                                 deps_by_id.push((id, dep.clone()));
                             }
-
-                            unlocked.get_id(&declared_name)
                         }
 
                         Unique(mut_ref) => {
                             // If this is the original file the user loaded,
                             // then we already have a mutable reference,
                             // and won't need to pay locking costs.
-                            let module_id = mut_ref.get_id(&declared_name);
+                            module_id = mut_ref.get_id(&declared_name);
 
                             for dep in deps.iter() {
                                 let id = mut_ref.get_id(dep);
@@ -408,10 +415,8 @@ fn load_filename(
                                 can_module_ids.insert(&dep, id);
                                 deps_by_id.push((id, dep.clone()));
                             }
-
-                            module_id
                         }
-                    };
+                    }
 
                     // Insert our own module_id into the can_module_ids.
                     // (It's already in the shared module_ids, but we insert
@@ -505,10 +510,17 @@ fn solve_module(
     // conversion!
     let subs_by_module = {
         let mut converted = MutMap::default();
-        let unlocked = (*module_ids).lock().expect("5");
+        let unlocked = (*module_ids).lock().expect("Could not lock module_ids");
 
         for (module_id, v) in subs_by_module {
-            converted.insert(unlocked.get_name(*module_id).expect("6").clone(), v.clone());
+            let module_name = unlocked.get_name(*module_id).unwrap_or_else(|| {
+                panic!(
+                    "Could not find module name for {:?} in {:?}",
+                    module_id, unlocked
+                )
+            });
+
+            converted.insert(module_name.clone(), v.clone());
         }
 
         converted
