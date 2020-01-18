@@ -1353,6 +1353,40 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn record_from_load() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo = \{ x } -> x
+
+                foo { x: 5 }
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn defs_from_load() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    alwaysThreePointZero = \_ -> 3.0
+
+                    answer = 42
+
+                    identity = \a -> a
+
+                    threePointZero = identity (alwaysThreePointZero {})
+
+                    threePointZero
+                "#
+            ),
+            "Float",
+        );
+    }
+
     // // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
     // #[test]
     // fn linked_list_map() {
