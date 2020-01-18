@@ -44,16 +44,20 @@ macro_rules! tag_union {
 
 pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     one_of!(
-        // The `*` type variable, e.g. in (List *) Wildcard,
-        map!(loc!(char('*')), |loc_val: Located<()>| {
-            loc_val.map(|_| TypeAnnotation::Wildcard)
-        }),
+        loc_wildcard(),
         loc_parenthetical_type(min_indent),
         loc!(record_type(min_indent)),
         loc!(tag_union!(min_indent)),
         loc!(applied_type(min_indent)),
         loc!(parse_type_variable)
     )
+}
+
+/// The `*` type variable, e.g. in (List *) Wildcard,
+fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    map!(loc!(char('*')), |loc_val: Located<()>| {
+        loc_val.map(|_| TypeAnnotation::Wildcard)
+    })
 }
 
 #[inline(always)]
