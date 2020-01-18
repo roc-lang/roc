@@ -21,9 +21,7 @@ mod test_load {
     use roc::module::ModuleId;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::solve::ModuleSubs;
-    use roc::subs::Subs;
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     /// TODO change solve::SubsByModule to be this
     type SubsByModule = MutMap<ModuleId, ModuleSubs>;
@@ -92,23 +90,8 @@ mod test_load {
         loaded_module
     }
 
-    fn get_plain_subs(module_subs: ModuleSubs) -> Subs {
-        use ModuleSubs::*;
-
-        match module_subs {
-            Valid(arc_solved) => Arc::try_unwrap(arc_solved)
-                .expect("Valid subs still had an Arc reference")
-                .into_inner(),
-            Invalid => panic!("Got an Invalid ModuleSubs"),
-        }
-    }
-
-    fn expect_types(
-        loaded_module: LoadedModule,
-        subs_by_module: &mut SubsByModule,
-        expected_types: HashMap<&str, &str>,
-    ) {
-        let mut subs = get_plain_subs(subs_by_module.remove(&loaded_module.module_id).unwrap());
+    fn expect_types(loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
+        let mut subs = loaded_module.solved.into_inner();
 
         assert_eq!(loaded_module.problems, Vec::new());
         assert_eq!(expected_types.len(), loaded_module.declarations.len());
@@ -266,7 +249,6 @@ mod test_load {
 
             expect_types(
                 loaded_module,
-                &mut subs_by_module,
                 hashmap! {
                     "WithBuiltins.floatTest" => "Float",
                     "WithBuiltins.divisionFn" => "Float, Float -> Float",
@@ -291,7 +273,6 @@ mod test_load {
 
             expect_types(
                 loaded_module,
-                &mut subs_by_module,
                 hashmap! {
                     "Principal.intVal" => "Int",
                     "Principal.identity" => "a -> a",
@@ -328,7 +309,7 @@ mod test_load {
             assert_eq!(loaded_module.problems, vec![problem]);
             assert_eq!(expected_types.len(), loaded_module.declarations.len());
 
-            let mut subs = get_plain_subs(subs_by_module.remove(&loaded_module.module_id).unwrap());
+            let mut subs = loaded_module.solved.into_inner();
 
             for decl in loaded_module.declarations {
                 let def = match decl {
@@ -373,7 +354,6 @@ mod test_load {
 
             expect_types(
                 loaded_module,
-                &mut subs_by_module,
                 hashmap! {
                     "WithoutBuiltins.alwaysThreePointZero" => "* -> Float",
                     "WithoutBuiltins.answer" => "Int",

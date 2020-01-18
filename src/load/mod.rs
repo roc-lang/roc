@@ -193,7 +193,7 @@ pub async fn load<'a>(
                 next_var,
             } => {
                 let module_id = module.module_id;
-                let waiting_for = waiting_for_solve.get(&module_id).unwrap();
+                let waiting_for = waiting_for_solve.get(&module_id).expect("1");
 
                 if waiting_for.is_empty() {
                     // All of our dependencies have already been solved. Great!
@@ -258,23 +258,23 @@ pub async fn load<'a>(
                     });
                 } else {
                     // This was a dependency. Write it down and keep processing messaages.
-                    subs_by_module.insert(module_id, ModuleSubs::Valid(subs));
-
                     vars_by_symbol = vars_by_symbol.union(new_vars_by_symbol);
+
+                    subs_by_module.insert(module_id, ModuleSubs::Valid(subs));
 
                     // Notify all the listeners that this solved.
                     for listeners in solve_listeners.remove(&module_id) {
                         for listener_id in listeners {
                             // It's no longer waiting for this module,
                             // because this module has now been solved!
-                            let waiting_for = waiting_for_solve.get_mut(&listener_id).unwrap();
+                            let waiting_for = waiting_for_solve.get_mut(&listener_id).expect("2");
 
                             waiting_for.remove(&module_id);
 
                             // If it's no longer waiting for anything else, solve it.
                             if waiting_for.is_empty() {
                                 let (module, constraint, next_var) =
-                                    unsolved_modules.remove(&listener_id).unwrap();
+                                    unsolved_modules.remove(&listener_id).expect("3");
 
                                 solve_module(
                                     module,
@@ -384,7 +384,7 @@ fn load_filename(
                     let module_id = match module_ids {
                         Shared(arc) => {
                             // Lock just long enough to perform these operations.
-                            let mut unlocked = (*arc).lock().unwrap();
+                            let mut unlocked = (*arc).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
 
                             for dep in deps.iter() {
                                 let id = unlocked.get_id(dep);
@@ -505,10 +505,10 @@ fn solve_module(
     // conversion!
     let subs_by_module = {
         let mut converted = MutMap::default();
-        let unlocked = (*module_ids).lock().unwrap();
+        let unlocked = (*module_ids).lock().expect("5");
 
         for (module_id, v) in subs_by_module {
-            converted.insert(unlocked.get_name(*module_id).unwrap().clone(), v.clone());
+            converted.insert(unlocked.get_name(*module_id).expect("6").clone(), v.clone());
         }
 
         converted

@@ -43,7 +43,6 @@ mod test_infer_uniq {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            dbg!(problems);
             println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
             assert_eq!(0, 1);
         }

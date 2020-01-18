@@ -49,7 +49,6 @@ mod test_infer {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            dbg!(problems);
             println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
             assert_eq!(0, 1);
         }
@@ -1254,7 +1253,7 @@ mod test_infer {
             indoc!(
                 r#"
                 f = \n ->
-                    when n is 
+                    when n is
                         0 -> 0
                         _ -> f n
 
@@ -1289,9 +1288,9 @@ mod test_infer {
                    # toBit : [ False, True ] -> Num.Num Int.Integer
                    toBit = \bool ->
                        when bool is
-                           True -> 1 
-                           False -> 0  
-    
+                           True -> 1
+                           False -> 0
+
                    toBit
                       "#
             ),
@@ -1307,11 +1306,11 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo = \rec -> 
-                        when rec is 
+                foo = \rec ->
+                        when rec is
                             { x } -> "1"
                             { y } -> "2"
-                    
+
                 foo
                       "#
             ),
@@ -1328,7 +1327,7 @@ mod test_infer {
                        when int is
                            0 -> False
                            _ -> True
-    
+
                    fromBit
                       "#
             ),
@@ -1346,7 +1345,7 @@ mod test_infer {
                         when result is
                             Ok v -> Ok (f v)
                             Err e -> Err e
-    
+
                     map
                        "#
             ),
