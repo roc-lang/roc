@@ -67,7 +67,7 @@ enum Msg {
         module_id: ModuleId,
         subs: Arc<Solved<Subs>>,
         problems: Vec<Problem>,
-        new_vars_by_symbol: SendMap<Symbol, Variable>
+        new_vars_by_symbol: SendMap<Symbol, Variable>,
     },
 }
 
@@ -206,7 +206,7 @@ pub async fn load<'a>(
                         subs_by_module,
                         Arc::clone(&module_ids),
                         &mut declarations_by_id,
-                        vars_by_symbol.clone()
+                        vars_by_symbol.clone(),
                     );
                 } else {
                     // We will have to wait for our depednencies to be solved.
@@ -226,7 +226,7 @@ pub async fn load<'a>(
                 module_id,
                 subs,
                 problems,
-                new_vars_by_symbol
+                new_vars_by_symbol,
             } => {
                 all_problems.extend(problems);
 
@@ -284,7 +284,7 @@ pub async fn load<'a>(
                                     subs_by_module,
                                     Arc::clone(&module_ids),
                                     &mut declarations_by_id,
-                                    vars_by_symbol.clone()
+                                    vars_by_symbol.clone(),
                                 );
                             }
                         }
@@ -499,7 +499,7 @@ fn solve_module(
     subs_by_module: &mut SubsByModule,
     module_ids: Arc<Mutex<ModuleIdStore>>,
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
-    mut vars_by_symbol: SendMap<Symbol, Variable>
+    mut vars_by_symbol: SendMap<Symbol, Variable>,
 ) {
     // TODO change solve::run to expect SubsById to be keyed on ModuleId instead of doing this
     // conversion!
