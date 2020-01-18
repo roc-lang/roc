@@ -60,6 +60,17 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     })
 }
 
+pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    one_of!(
+        loc_wildcard(),
+        loc_parenthetical_type(min_indent),
+        loc!(record_type(min_indent)),
+        loc!(tag_union!(min_indent)),
+        loc!(parse_concrete_type),
+        loc!(parse_type_variable)
+    )
+}
+
 #[inline(always)]
 fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     between!(
@@ -81,7 +92,7 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `ok err` in `Result ok err`
             zero_or_more!(space1_before(
-                move |arena, state| term(min_indent).parse(arena, state),
+                move |arena, state| loc_applied_arg(min_indent).parse(arena, state),
                 min_indent,
             ))
         ),
@@ -133,7 +144,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
             zero_or_more!(space1_before(
-                move |arena, state| term(min_indent).parse(arena, state),
+                move |arena, state| loc_applied_arg(min_indent).parse(arena, state),
                 min_indent,
             ))
         ),
