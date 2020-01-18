@@ -1353,27 +1353,28 @@ mod test_infer {
         );
     }
 
-    // // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
-    // #[test]
-    // fn linked_list_map() {
-    //     with_larger_debug_stack(|| {
-    //         infer_eq_without_problem(
-    //             indoc!(
-    //                 r#"
-    //                 map = \f, list ->
-    //                     when list is
-    //                         Nil -> Nil
-    //                         Cons x xs ->
-    //                             a = f x
-    //                             b = map f xs
-    //
-    //                             Cons a b
-    //
-    //                 map
-    //                    "#
-    //             ),
-    //             "Attr.Attr * Int",
-    //         );
-    //     });
-    // }
+    // currently fails, cyclic type
+    #[test]
+    fn linked_list_map() {
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
+                    map : (a -> b), ([ Cons a r, Nil ] as r) -> ([ Cons a r, Nil ] as r)
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons x xs ->
+                                a = f x
+                                b = map f xs
+    
+                                Cons a b
+    
+                    map
+                       "#
+                ),
+                "Attr.Attr * Int",
+            );
+        });
+    }
 }

@@ -507,6 +507,7 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
+        As(_, _) => panic!("TODO turn As into a variable"),
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem.clone()));
 

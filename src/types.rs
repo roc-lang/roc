@@ -43,6 +43,8 @@ pub enum Type {
     /// Boolean type used in uniqueness inference
     Boolean(boolean_algebra::Bool),
     Variable(Variable),
+    /// recursive variants, e.g. [ Cons a r, Nil ] as r
+    As(Box<Type>, Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
@@ -104,6 +106,7 @@ impl fmt::Debug for Type {
             Type::Alias(_, _, _, _) => {
                 panic!("TODO fmt type aliases");
             }
+            Type::As(inner, variable) => write!(f, "({:?} as {:?})", inner, variable),
             Type::Record(fields, ext) => {
                 write!(f, "{{")?;
 
@@ -293,6 +296,11 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(x, accum);
             }
             variables_help(actual, accum);
+        }
+        As(inner, variable) => {
+            variables_help(inner, accum);
+            // the `inner` type should contain the bound variable
+            debug_assert!(accum.contains(variable));
         }
         Apply { args, .. } => {
             for x in args {

@@ -1184,6 +1184,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                 ),
             )
         }
+        As(_, _) => panic!("TODO implement lifting for As"),
     }
 }
 
