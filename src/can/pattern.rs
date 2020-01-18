@@ -191,6 +191,7 @@ pub fn canonicalize_pattern<'a>(
             )
         }
         &RecordDestructure(patterns) => {
+            let ext_var = var_store.fresh();
             let mut fields = Vec::with_capacity(patterns.len());
 
             for loc_pattern in patterns {
@@ -263,7 +264,7 @@ pub fn canonicalize_pattern<'a>(
                 }
             }
 
-            Pattern::RecordDestructure(var_store.fresh(), fields)
+            Pattern::RecordDestructure(ext_var, fields)
         }
         &RecordField(_name, _loc_pattern) => {
             unreachable!("should be handled in RecordDestructure");
