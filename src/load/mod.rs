@@ -3,23 +3,22 @@ use crate::can::ident::ModuleName;
 use crate::can::module::{canonicalize_module_defs, Module, ModuleOutput};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{insert_all, ImMap, MutMap, SendMap, SendSet};
+use crate::collections::{insert_all, ImMap, MutMap, MutSet, SendMap};
 use crate::constrain::module::constrain_module;
 use crate::ident::Ident;
+use crate::module::{ModuleId, ModuleIdStore};
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
-use crate::solve;
-use crate::subs::VarStore;
-use crate::subs::{Subs, Variable};
+use crate::solve::{self, ModuleSubs, Solved, SubsByModule};
+use crate::subs::{Subs, VarStore, Variable};
 use crate::types::{Constraint, Problem};
 use bumpalo::Bump;
-use futures::future::join_all;
 use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::task::spawn_blocking;
 
@@ -39,19 +38,25 @@ pub enum BuildProblem<'a> {
     FileNotFound(&'a Path),
 }
 
-type LoadedDeps = Vec<LoadedModule>;
-type DepNames = SendSet<ModuleName>;
-type SubsByModule = MutMap<ModuleName, Arc<Subs>>;
-
-// Info used to communicate with the coordinator thread about dependencies
-type DepChannelInfo = (DepNames, DepListener);
-type DepSender = mpsc::Sender<DepChannelInfo>;
-type DepReceiver = mpsc::Receiver<DepChannelInfo>;
-type DepListener = mpsc::Sender<Result<(ModuleName, Arc<Subs>), ()>>;
+enum Msg {
+    DepsRequested {
+        module_id: ModuleId,
+        dep_names: Vec<ModuleName>,
+    },
+    Constrained {
+        module: Module,
+        constraint: Constraint,
+        next_var: Variable,
+    },
+    Solved {
+        module_id: ModuleId,
+        subs: Arc<Solved<Subs>>,
+        problems: Vec<Problem>,
+    },
+}
 
 #[derive(Debug)]
-pub enum LoadedModule {
-    Valid(Module, Subs),
+pub enum LoadingProblem {
     FileProblem {
         filename: PathBuf,
         error: io::ErrorKind,
@@ -60,16 +65,16 @@ pub enum LoadedModule {
         filename: PathBuf,
         fail: Fail,
     },
+    MsgChannelDied,
 }
 
-impl LoadedModule {
-    pub fn into_module(self) -> Option<Module> {
-        match self {
-            LoadedModule::Valid(module, _) => Some(module),
-            _ => None,
-        }
-    }
+enum MaybeShared<'a, T> {
+    Shared(Arc<Mutex<T>>),
+    Unique(&'a mut T),
 }
+
+type MsgSender = mpsc::Sender<Msg>;
+type MsgReceiver = mpsc::Receiver<Msg>;
 
 /// The loading process works like this, starting from the given filename (e.g. "main.roc"):
 ///
@@ -92,111 +97,108 @@ impl LoadedModule {
 pub async fn load<'a>(
     src_dir: PathBuf,
     filename: PathBuf,
-    loaded_deps: &mut LoadedDeps,
-) -> LoadedModule {
+    subs_by_module: &mut SubsByModule,
+) -> Result<(ModuleId, ModuleIdStore, Arc<Solved<Subs>>, Vec<Problem>), LoadingProblem> {
+    use self::MaybeShared::*;
+    use self::Msg::*;
+
+    let mut all_problems = Vec::new();
     let env = Env {
         src_dir: src_dir.clone(),
     };
-    let (can_tx, mut can_rx): (DepSender, DepReceiver) = mpsc::channel(1024);
-    let main_can_tx = can_tx.clone();
 
-    let requested_module = load_filename(&env, filename, main_can_tx).await;
-    let mut all_deps: SendSet<ModuleName> = SendSet::default();
+    let (msg_tx, mut msg_rx): (MsgSender, MsgReceiver) = mpsc::channel(1024);
+    let mut module_ids = ModuleIdStore::default();
 
-    // Get a fresh env, since the previous one has been consumed
-    let env = Env { src_dir };
-    // At first, 1 module is pending (namely the `filename` one).
-    let mut pending = 1;
+    // Load the root module synchronously; we can't proceed until it's done anyway.
+    let root_id = load_filename(&env, filename, msg_tx.clone(), Unique(&mut module_ids))?;
 
-    let mut subs_results: MutMap<ModuleName, Result<Arc<Subs>, ()>> = MutMap::default();
+    // From now on, this will be used by multiple threads; time to make it an Arc<Mutex<_>>!
+    let module_ids = Arc::new(Mutex::new(module_ids));
 
-    // These are the Senders waiting to hear about when their deps are finished.
-    let mut listeners: MutMap<ModuleName, Vec<DepListener>> = MutMap::default();
+    // All the dependent modules for which we've already begun loading
+    // (meaning we should never kick off another load_module on them!)
+    let mut loading_started: MutSet<ModuleName> = MutSet::default();
+
+    // The Result we got back when we tried to solve a given module
+    let mut solved_modules: SubsByModule = SendMap::default();
+
+    let mut deps_by_id: MutMap<ModuleId, Vec<ModuleName>> = MutMap::default();
 
     // Parse and canonicalize the module's deps
-    while let Some((module_deps, mut subs_tx)) = can_rx.recv().await {
-        for dep in &module_deps {
-            match subs_results.get(&dep) {
-                Some(Ok(subs)) => {
-                    // We already happened to have this module loaded, so send it now!
-                    subs_tx.send(Ok((dep.clone(), Arc::clone(subs)))).await.unwrap();
-                }
-                Some(Err(())) => {
-                    // We tried to load that module, but there was a problem.
-                    subs_tx.send(Err(())).await.unwrap();
-                }
-                None => {
-                    // We have not yet loaded that module, so register a listener for it.
-                    match listeners.get_mut(&dep) {
-                        Some(existing_listeners) => {
-                            existing_listeners.push(subs_tx.clone());
-                        }
-                        None => {
-                            listeners.insert(dep.clone(), vec![subs_tx.clone()]);
-                        }
+    while let Some(msg) = msg_rx.recv().await {
+        match msg {
+            DepsRequested {
+                module_id,
+                dep_names,
+            } => {
+                deps_by_id.insert(module_id, dep_names);
+
+                for dep_name in dep_names {
+                    if !loading_started.contains(&dep_name) {
+                        // Record that we've started loading the module *before*
+                        // we actually start loading it.
+                        loading_started.insert(dep_name);
+
+                        // Start loading this module in the background.
+                        spawn_blocking(move || {
+                            load_module(&env, dep_name, msg_tx.clone(), Shared(module_ids))
+                        });
                     }
                 }
             }
-        }
+            Constrained {
+                module,
+                constraint,
+                next_var,
+            } => {
+                panic!("TODO detect when we're ready to start solving this module, and ONLY THEN begin solving it! {:?}", module.module_id);
 
-        // We ned to load all the module_deps we just received,
-        // except the ones we'd already loaded previously.
-        let deps_to_load = module_deps.relative_complement(all_deps.clone());
+                let subs_by_module = im::hashmap::HashMap::clone(subs_by_module);
 
-        // We just loaded 1 module, and gained deps_to_load more
-        pending = pending + deps_to_load.len() - 1;
+                // Start solving this module in the background.
+                spawn_blocking(move || {
+                    solve_module(module, constraint, next_var, subs_by_module, msg_tx.clone())
+                });
+            }
+            Solved {
+                module_id,
+                subs,
+                problems,
+            } => {
+                all_problems.extend(problems);
 
-        // Record that these are loaded *before* spawning threads to load them.
-        // We don't want to accidentally process them more than once!
-        all_deps = all_deps.union(deps_to_load.clone());
+                if module_id == root_id {
+                    // Once we've solved the originally requested module, we're done!
+                    msg_rx.close();
 
-        let loaded_modules = join_all(
-            deps_to_load
-                .into_iter()
-                .map(|dep| load_module(&env, dep, can_tx.clone())),
-        )
-        .await;
+                    let module_ids = Arc::try_unwrap(module_ids)
+                        .unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to module_ids")
+                        })
+                        .into_inner()
+                        .expect("Unwrapping mutex for module_ids");
 
-        for loaded_module in loaded_modules {
-            match loaded_module {
-                LoadedModule::Valid(module, subs) => {
-                    let arc_subs = Arc::new(subs);
-
-                    if let Some(applicable_listeners) = listeners.get_mut(&module.name) {
-                        for listener in applicable_listeners {
-                            listener.send(Ok((module.name.clone(), Arc::clone(&arc_subs)))).await.unwrap();
-                        }
-                    }
-
-                    subs_results.insert(module.name.clone(), Ok(arc_subs));
-
-                    dbg!("TODO loaded_deps.push this as a module");
-                }
-                loaded_module => {
-                    dbg!("TODO insert an Err into subs_results - means we need to know the module name here - and send to all the listeners:");
-
-                    // TODO: also send to all the listeners!
-                    // if let Some(applicable_listeners) = listeners.get(&module.name) {
-                    //     for listener in applicable_listeners {
-                    //         listener.send(Ok((module.name.clone(), Arc::clone(&arc_subs))));
-                    //     }
-                    // }
-
-                    loaded_deps.push(loaded_module);
+                    return Ok((root_id, module_ids, subs, all_problems));
+                } else {
+                    // This was a dependency. Write it down and keep processing messaages.
+                    subs_by_module.insert(module_id, ModuleSubs::Valid(subs));
                 }
             }
-        }
-
-        // Once we've run out of pending modules to process, we're done!
-        if pending == 0 {
-            break;
         }
     }
 
-    requested_module
+    // The msg_rx receiver closed unexpectedly before we finished solving everything
+    Err(LoadingProblem::MsgChannelDied)
 }
 
-async fn load_module(env: &Env, module_name: ModuleName, dep_tx: DepSender) -> LoadedModule {
+/// Load a module by its module name, rather than by its filename
+fn load_module(
+    env: &Env,
+    module_name: ModuleName,
+    msg_tx: MsgSender,
+    module_ids: MaybeShared<'_, ModuleIdStore>,
+) -> Result<ModuleId, LoadingProblem> {
     let mut filename = PathBuf::new();
 
     filename.push(env.src_dir.clone());
@@ -209,10 +211,18 @@ async fn load_module(env: &Env, module_name: ModuleName, dep_tx: DepSender) -> L
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
 
-    load_filename(env, filename, dep_tx).await
+    load_filename(env, filename, msg_tx, module_ids)
 }
 
-async fn load_filename(env: &Env, filename: PathBuf, dep_tx: DepSender) -> LoadedModule {
+/// Load a module by its filename
+fn load_filename(
+    env: &Env,
+    filename: PathBuf,
+    msg_tx: MsgSender,
+    module_ids: MaybeShared<'_, ModuleIdStore>,
+) -> Result<ModuleId, LoadingProblem> {
+    use MaybeShared::*;
+
     match read_to_string(&filename) {
         Ok(src) => {
             let var_store = VarStore::default();
@@ -225,8 +235,6 @@ async fn load_filename(env: &Env, filename: PathBuf, dep_tx: DepSender) -> Loade
             // after read_to_string completes.
             let state = State::new(&src, Attempting::Module);
 
-            dbg!("spawn_blocking on module.parse() here");
-
             // TODO figure out if there's a way to address this clippy error
             // without introducing a borrow error. ("let and return" is literally
             // what the borrow checker suggested using here to fix the problem, so...)
@@ -234,30 +242,65 @@ async fn load_filename(env: &Env, filename: PathBuf, dep_tx: DepSender) -> Loade
             let answer = match module::module().parse(&arena, state) {
                 Ok((ast::Module::Interface { header }, state)) => {
                     let declared_name: ModuleName = header.name.value.as_str().into();
-                    let (subs_tx, mut subs_rx) = mpsc::channel(1024);
 
                     // TODO check to see if declared_name is consistent with filename.
                     // If it isn't, report a problem!
 
                     let mut scope_from_imports = ImMap::default();
-                    let mut deps = SendSet::default();
+                    let mut deps = Vec::with_capacity(header.imports.len());
 
                     for loc_entry in header.imports {
-                        deps.insert(load_import(
+                        deps.push(load_import(
                             env,
                             loc_entry.region,
                             &loc_entry.value,
                             &mut scope_from_imports,
                         ));
                     }
-                    let deps_needed = deps.len();
-                    let has_no_deps = deps_needed == 0;
 
-                    if has_no_deps {
-                        // We don't have any Subs to receive, so preemptively
-                        // make sure the coordinator never sends us any unnecessarily.
-                        subs_rx.close();
-                    }
+                    // Canonicalization will use this map to resolve names into
+                    // ModuleIds without having to wait for a lock every time
+                    // it looks something up. We know the module will only
+                    // be able to reference modules it has imported, so this
+                    // list should cover every valid lookup it performs.
+                    let mut can_module_ids = MutMap::default();
+
+                    // Make sure the module_ids has ModuleIds for all our deps,
+                    // then record those ModuleIds in can_module_ids for later.
+                    let module_id = match module_ids {
+                        Shared(arc) => {
+                            // Lock just long enough to perform these operations.
+                            let mut unlocked = (*arc).lock().unwrap();
+
+                            for dep in deps {
+                                let id = unlocked.get(declared_name);
+
+                                can_module_ids.insert(declared_name, id);
+                            }
+
+                            unlocked.get(declared_name)
+                        }
+
+                        Unique(mut_ref) => {
+                            // If this is the original file the user loaded,
+                            // then we already have a mutable reference,
+                            // and won't need to pay locking costs.
+                            let module_id = mut_ref.get(declared_name.into());
+
+                            for dep in deps {
+                                let id = mut_ref.get(declared_name);
+
+                                can_module_ids.insert(declared_name, id);
+                            }
+
+                            module_id
+                        },
+                    };
+
+                    // Insert our own module_id into the can_module_ids.
+                    // (It's already in the shared module_ids, but we insert
+                    // this after the lock has expired.)
+                    can_module_ids.insert(declared_name, module_id);
 
                     // Send the deps to the coordinator thread for processing,
                     // then continue on to parsing and canonicalizing defs.
@@ -265,108 +308,131 @@ async fn load_filename(env: &Env, filename: PathBuf, dep_tx: DepSender) -> Loade
                     // We always need to send these, even if deps is empty,
                     // because the coordinator thread needs to receive this message
                     // to decrement its "pending" count.
-                    //
-                    // While we're at it, also send subs_tx, so once all our
-                    // deps' Subs have finished being processed, the coordinator
-                    // can send them to us on subs_rx.
                     tokio::spawn(async move {
-                        let mut tx = dep_tx;
+                        let mut tx = msg_tx;
 
                         // Send the deps to the main thread for processing,
                         // then continue on to parsing and canonicalizing defs.
-                        tx.send((deps, subs_tx)).await.unwrap();
+                        tx.send(Msg::DepsRequested {
+                            module_id,
+                            dep_names: deps,
+                        })
+                        .await;
                     });
-
-                    // Use spawn_blocking here so that we can proceed to the recv() loop
-                    // while this is doing blocking work like reading and parsing the file.
-                    dbg!("TODO spawn_blocking on process_defs here");
 
                     let mut scope = Scope::new(
                         header.name.value.as_str().into(),
                         format!("{}.", declared_name.as_str()).into(),
                         scope_from_imports,
                     );
-                    let (declarations, mut problems, exposed_imports, constraint) =
-                        process_defs(
-                            &arena,
-                            state,
-                            declared_name.clone(),
-                            header.exposes.into_iter(),
-                            &mut scope,
-                            &var_store,
-                        );
 
-                    // Now that the module is parsed, canonicalized, and constrained,
-                    // we just need to type check it.
-                    //
-                    // We'll use a fresh Subs for this, because we're starting from
-                    // other modules' Subs plus the variables we've generated during
-                    // our own canonicalization.
-                    let subs = Subs::new(var_store.into());
+                    let (declarations, mut problems, exposed_imports, constraint) = process_defs(
+                        &arena,
+                        state,
+                        declared_name.clone(),
+                        can_module_ids,
+                        header.exposes.into_iter(),
+                        &mut scope,
+                        &var_store,
+                    );
 
-                    // If we have no deps, we already have all the info we need
-                    // to perform type checking.
-                    if has_no_deps {
-                        solve_loaded(
-                            declared_name,
+                    let next_var = var_store.into();
+                    let module = Module {
+                        module_id,
+                        declarations,
+                        exposed_imports,
+                    };
+
+                    tokio::spawn(async move {
+                        let mut tx = msg_tx;
+
+                        // Send the constraint to the main thread for processing.
+                        tx.send(Msg::Constrained {
+                            module,
                             constraint,
-                            declarations,
-                            exposed_imports,
-                            &mut problems,
-                            subs,
-                            MutMap::default(),
-                        )
-                    } else {
-                        let mut subs_by_module: SubsByModule = MutMap::default();
+                            next_var,
+                        })
+                        .await;
+                    });
 
-                        // Until we have Subs for all of our dependencies,
-                        // keep waiting for more to come in from the sucbcription.
-                        while let Some(result) = subs_rx.recv().await {
-                            match result {
-                                Ok((module_name, dep_subs)) => {
-                                    subs_by_module.insert(module_name, dep_subs);
-
-                                    if subs_by_module.len() == deps_needed {
-                                        // We now have all the Subs we need, so
-                                        // we won't be needing any more!
-
-                                        subs_rx.close();
-
-                                        break;
-                                    }
-                                }
-                                Err(()) => {
-                                    panic!("TODO gracefully handle dep loading error");
-                                }
-                            }
-                        }
-
-                        dbg!("TODO spawn_blocking on the rest of this too");
-
-                        solve_loaded(
-                            declared_name,
-                            constraint,
-                            declarations,
-                            exposed_imports,
-                            &mut problems,
-                            subs,
-                            subs_by_module,
-                        )
-                    }
+                    Ok(module_id)
                 }
                 Ok((ast::Module::App { .. }, _)) => {
                     panic!("TODO finish loading an App module");
                 }
-                Err((fail, _)) => LoadedModule::ParsingFailed { filename, fail },
+                Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
             };
 
             answer
         }
-        Err(err) => LoadedModule::FileProblem {
+        Err(err) => Err(LoadingProblem::FileProblem {
             filename,
             error: err.kind(),
-        },
+        }),
     }
+}
+
+fn solve_module(
+    module: Module,
+    constraint: Constraint,
+    next_var: Variable,
+    subs_by_module: SubsByModule,
+    msg_tx: MsgSender,
+) {
+    use Declaration::*;
+
+    // Now that the module is parsed, canonicalized, and constrained,
+    // we just need to type check it.
+    //
+    // We'll use a fresh Subs for this, because we're starting from
+    // other modules' Subs plus the variables we've generated during
+    // our own canonicalization.
+    let subs = Subs::new(next_var);
+
+    let mut vars_by_symbol: ImMap<Symbol, Variable> = ImMap::default();
+
+    // All the exposed imports should be available in the solver's vars_by_symbol
+    for (symbol, expr_var) in im::HashMap::clone(&module.exposed_imports) {
+        vars_by_symbol.insert(symbol, expr_var);
+    }
+
+    // All the top-level defs should also be available in vars_by_symbol
+    for decl in &module.declarations {
+        match decl {
+            Declare(def) => {
+                insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
+            }
+            DeclareRec(defs) => {
+                for def in defs {
+                    insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
+                }
+            }
+            InvalidCycle(_, _) => panic!("TODO handle invalid cycles"),
+        }
+    }
+
+    let mut problems = Vec::new();
+
+    // Run the solver to populate Subs.
+    let solved = solve::run(
+        &vars_by_symbol,
+        subs_by_module,
+        &mut problems,
+        subs,
+        &constraint,
+    );
+
+    tokio::spawn(async move {
+        let mut tx = msg_tx;
+
+        // Send the subs to the main thread for processing,
+        tx.send(Msg::Solved {
+            module_id: module.module_id,
+            subs: Arc::new(solved),
+            problems,
+        })
+        .await;
+    });
 }
 
 /// Parse, canonicalize, and constrain
@@ -374,6 +440,7 @@ fn process_defs<'a, I>(
     arena: &'a Bump,
     state: State<'a>,
     home: ModuleName,
+    _module_ids: MutMap<ModuleName, ModuleId>, // TODO use this to canonicalize into ModuleIds
     exposes: I,
     scope: &mut Scope,
     var_store: &VarStore,
@@ -452,56 +519,4 @@ fn expose(
             expose(module_name, *sub_entry, region)
         }
     }
-}
-
-fn solve_loaded(
-    declared_name: ModuleName,
-    constraint: Constraint,
-    declarations: Vec<Declaration>,
-    exposed_imports: SendMap<Symbol, Variable>,
-    problems: &mut Vec<Problem>,
-    mut subs: Subs,
-    subs_by_module: SubsByModule,
-) -> LoadedModule {
-    use Declaration::*;
-
-    let mut vars_by_symbol: ImMap<Symbol, Variable> = ImMap::default();
-
-    // All the exposed imports should be available in the solver's vars_by_symbol
-    for (symbol, expr_var) in im::HashMap::clone(&exposed_imports) {
-        vars_by_symbol.insert(symbol, expr_var);
-    }
-
-    // All the top-level defs should also be available in vars_by_symbol
-    for decl in &declarations {
-        match decl {
-            Declare(def) => {
-                insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
-            }
-            DeclareRec(defs) => {
-                for def in defs {
-                    insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
-                }
-            }
-            InvalidCycle(_, _) => panic!("TODO handle invalid cycles"),
-        }
-    }
-
-    // Run the solver to populate Subs.
-    solve::run(
-        &vars_by_symbol,
-        subs_by_module,
-        problems,
-        &mut subs,
-        &constraint,
-    );
-
-    LoadedModule::Valid(
-        Module {
-            name: declared_name,
-            declarations,
-            exposed_imports,
-        },
-        subs,
-    )
 }

@@ -40,6 +40,12 @@ impl<'a> From<String> for ModuleName {
     }
 }
 
+impl<'a> Into<InlinableString> for ModuleName {
+    fn into(self) -> InlinableString {
+        self.0
+    }
+}
+
 impl Uppercase {
     pub fn as_str(&self) -> &str {
         &*self.0

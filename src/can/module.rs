@@ -7,6 +7,7 @@ use crate::can::problem::RuntimeError;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
+use crate::module::ModuleId;
 use crate::parse::ast::{self, ExposesEntry};
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
@@ -14,7 +15,7 @@ use bumpalo::Bump;
 
 #[derive(Debug)]
 pub struct Module {
-    pub name: ModuleName,
+    pub module_id: ModuleId,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: SendMap<Symbol, Variable>,
 }

@@ -1,6 +1,7 @@
-use crate::can::ident::{Lowercase, ModuleName};
+use crate::can::ident::Lowercase;
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, MutMap};
+use crate::collections::{ImMap, MutMap, SendMap};
+use crate::module::ModuleId;
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
@@ -9,6 +10,14 @@ use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
 use crate::uniqueness::boolean_algebra;
 use std::sync::Arc;
+
+pub type SubsByModule = SendMap<ModuleId, ModuleSubs>;
+
+#[derive(Clone, Debug)]
+pub enum ModuleSubs {
+    Invalid,
+    Valid(Arc<Solved<Subs>>),
+}
 
 type Env = ImMap<Symbol, Variable>;
 
@@ -65,16 +74,27 @@ impl Pools {
 struct State {
     vars_by_symbol: Env,
     mark: Mark,
-    subs_by_module: MutMap<ModuleName, Arc<Subs>>,
+    subs_by_module: SubsByModule,
+}
+
+/// A marker that a given Subs has been solved.
+/// The only way to obtain a Solved<Subs> is by running the solver on it.
+#[derive(Clone, Debug)]
+pub struct Solved<T>(T);
+
+impl<T> Solved<T> {
+    fn get(self) -> T {
+        self.0
+    }
 }
 
 pub fn run<'a>(
     vars_by_symbol: &Env,
-    subs_by_module: MutMap<ModuleName, Arc<Subs>>,
+    subs_by_module: SubsByModule,
     problems: &mut Vec<Problem>,
-    subs: &mut Subs,
+    mut subs: Subs,
     constraint: &Constraint,
-) {
+) -> Solved<Subs> {
     let mut pools = Pools::default();
     let state = State {
         vars_by_symbol: vars_by_symbol.clone(),
@@ -89,9 +109,11 @@ pub fn run<'a>(
         rank,
         &mut pools,
         problems,
-        subs,
+        &mut subs,
         constraint,
     );
+
+    Solved(subs)
 }
 
 fn solve(
