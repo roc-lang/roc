@@ -987,18 +987,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn record_field_access() {
-        infer_eq(
-            indoc!(
-                r#"
-                \rec -> rec.left
-                "#
-            ),
-            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
-        );
-    }
-
-    #[test]
     fn record_field_accessor_function() {
         infer_eq(
             indoc!(
