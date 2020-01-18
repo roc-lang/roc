@@ -212,6 +212,7 @@ pub async fn load<'a>(
                     );
                 } else {
                     // We will have to wait for our depednencies to be solved.
+                    debug_assert!(!unsolved_modules.contains_key(&module_id));
                     unsolved_modules.insert(module_id, (module, constraint, next_var));
 
                     // Register a listener with each of these.
