@@ -440,7 +440,7 @@ fn load_filename(
                             exposes,
                         })
                         .await
-                        .unwrap_or_else(|_| panic!("Failed to send DepsRequested message"));
+                        .unwrap_or_else(|_| panic!("Failed to send Header message"));
                     });
 
                     let mut scope = Scope::new(
