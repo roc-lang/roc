@@ -69,14 +69,29 @@ macro_rules! tag_union {
 
 pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     one_of!(
-        // The `*` type variable, e.g. in (List *) Wildcard,
-        map!(loc!(char('*')), |loc_val: Located<()>| {
-            loc_val.map(|_| TypeAnnotation::Wildcard)
-        }),
+        loc_wildcard(),
         loc_parenthetical_type(min_indent),
         loc!(record_type(min_indent)),
         loc!(tag_union!(min_indent)),
         loc!(applied_type(min_indent)),
+        loc!(parse_type_variable)
+    )
+}
+
+/// The `*` type variable, e.g. in (List *) Wildcard,
+fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    map!(loc!(char('*')), |loc_val: Located<()>| {
+        loc_val.map(|_| TypeAnnotation::Wildcard)
+    })
+}
+
+pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    one_of!(
+        loc_wildcard(),
+        loc_parenthetical_type(min_indent),
+        loc!(record_type(min_indent)),
+        loc!(tag_union!(min_indent)),
+        loc!(parse_concrete_type),
         loc!(parse_type_variable)
     )
 }
@@ -102,7 +117,7 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `ok err` in `Result ok err`
             zero_or_more!(space1_before(
-                move |arena, state| term(min_indent).parse(arena, state),
+                move |arena, state| loc_applied_arg(min_indent).parse(arena, state),
                 min_indent,
             ))
         ),
@@ -154,7 +169,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
             zero_or_more!(space1_before(
-                move |arena, state| term(min_indent).parse(arena, state),
+                move |arena, state| loc_applied_arg(min_indent).parse(arena, state),
                 min_indent,
             ))
         ),
