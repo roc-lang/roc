@@ -36,7 +36,7 @@ impl<T> Insertion<T> {
     /// that may be of a different type.
     ///
     /// # Example
-    /// ```
+    ///
     /// use symbol_map::indexing::{HashIndexing, Indexing, Insertion};
     /// use std::str::FromStr;
     ///
@@ -56,7 +56,6 @@ impl<T> Insertion<T> {
     /// assert!(id1 != id3);
     /// // But the symbol IDs for identical values are the same.
     /// assert!(id1.unwrap() == id2.unwrap());
-    /// ```
     pub fn map<F, X>(&self, f: F) -> Insertion<X>
     where
         F: FnOnce(&T) -> X,
