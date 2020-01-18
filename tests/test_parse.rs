@@ -1373,24 +1373,25 @@ mod test_parse {
             name: Located::new(0, 0, 8, 13, "@True"),
             args: &[],
         };
-        let tag2arg = Located::new(0, 0, 24, 29, TypeAnnotation::Apply(&[], "Thing", &[]));
-        let tag2args = bumpalo::vec![in &arena; tag2arg];
+        let tag2arg1 = Located::new(0, 0, 24, 27, TypeAnnotation::Apply(&[], "Two", &[]));
+        let tag2arg2 = Located::new(0, 0, 28, 34, TypeAnnotation::Apply(&[], "Things", &[]));
+        let tag2args = bumpalo::vec![in &arena; tag2arg1, tag2arg2];
         let tag2 = Tag::Private {
             name: Located::new(0, 0, 15, 23, "@Perhaps"),
             args: tag2args.into_bump_slice(),
         };
         let tags = bumpalo::vec![in &arena;
             Located::new(0, 0, 8, 13, tag1),
-            Located::new(0, 0, 15, 29, tag2)
+            Located::new(0, 0, 15, 34, tag2)
         ];
-        let loc_wildcard = Located::new(0, 0, 31, 32, TypeAnnotation::Wildcard);
+        let loc_wildcard = Located::new(0, 0, 36, 37, TypeAnnotation::Wildcard);
         let applied_ann = TypeAnnotation::TagUnion {
             tags: tags.into_bump_slice(),
             ext: Some(arena.alloc(loc_wildcard)),
         };
         let signature = Def::Annotation(
             Located::new(0, 0, 0, 3, Identifier("foo")),
-            Located::new(0, 0, 6, 32, applied_ann),
+            Located::new(0, 0, 6, 37, applied_ann),
         );
         let def = Def::Body(
             arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
@@ -1408,7 +1409,7 @@ mod test_parse {
         assert_parses_to(
             indoc!(
                 r#"
-                foo : [ @True, @Perhaps Thing ]*
+                foo : [ @True, @Perhaps Two Things ]*
                 foo = True
 
                 42
