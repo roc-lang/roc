@@ -38,14 +38,14 @@ mod test_load {
         rt.block_on(future)
     }
 
-    async fn load_builtins(subs_by_module: &mut SubsByModule) -> LoadedModule {
-        let src_dir = builtins_dir();
-        let filename = src_dir.join("Defaults.roc");
+    // async fn load_builtins(subs_by_module: &mut SubsByModule) -> LoadedModule {
+    //     let src_dir = builtins_dir();
+    //     let filename = src_dir.join("Defaults.roc");
 
-        load(src_dir, filename, subs_by_module)
-            .await
-            .expect("Failed to load builtins from Defaults.roc")
-    }
+    //     load(src_dir, filename, subs_by_module)
+    //         .await
+    //         .expect("Failed to load builtins from Defaults.roc")
+    // }
 
     async fn load_without_builtins(
         dir_name: &str,
@@ -69,26 +69,26 @@ mod test_load {
         loaded_module
     }
 
-    async fn load_with_builtins(
-        dir_name: &str,
-        module_name: &str,
-        subs_by_module: &mut SubsByModule,
-    ) -> LoadedModule {
-        load_builtins(subs_by_module).await;
+    // async fn load_with_builtins(
+    //     dir_name: &str,
+    //     module_name: &str,
+    //     subs_by_module: &mut SubsByModule,
+    // ) -> LoadedModule {
+    //     load_builtins(subs_by_module).await;
 
-        let src_dir = fixtures_dir().join(dir_name);
-        let filename = src_dir.join(format!("{}.roc", module_name));
-        let loaded = load(src_dir, filename, subs_by_module).await;
-        let loaded_module = loaded.expect("Test module failed to load");
-        let expected_name = loaded_module
-            .module_ids
-            .get_name(loaded_module.module_id)
-            .expect("Test ModuleID not found in module_ids");
+    //     let src_dir = fixtures_dir().join(dir_name);
+    //     let filename = src_dir.join(format!("{}.roc", module_name));
+    //     let loaded = load(src_dir, filename, subs_by_module).await;
+    //     let loaded_module = loaded.expect("Test module failed to load");
+    //     let expected_name = loaded_module
+    //         .module_ids
+    //         .get_name(loaded_module.module_id)
+    //         .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(expected_name, &ModuleName::from(module_name));
+    //     assert_eq!(expected_name, &ModuleName::from(module_name));
 
-        loaded_module
-    }
+    //     loaded_module
+    // }
 
     fn expect_types(loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
         let mut subs = loaded_module.solved.into_inner();
@@ -193,75 +193,75 @@ mod test_load {
         });
     }
 
-    #[test]
-    fn interface_with_builtins() {
-        test_async(async {
-            let mut subs_by_module = MutMap::default();
-            let loaded_module =
-                load_with_builtins("interface_with_deps", "WithBuiltins", &mut subs_by_module)
-                    .await;
+    // #[test]
+    // fn interface_with_builtins() {
+    //     test_async(async {
+    //         let mut subs_by_module = MutMap::default();
+    //         let loaded_module =
+    //             load_with_builtins("interface_with_deps", "WithBuiltins", &mut subs_by_module)
+    //                 .await;
 
-            assert_eq!(loaded_module.problems, Vec::new());
+    //         assert_eq!(loaded_module.problems, Vec::new());
 
-            let module_ids = loaded_module.module_ids;
-            let expected_name = module_ids
-                .get_name(loaded_module.module_id)
-                .expect("Test ModuleID not found in module_ids");
+    //         let module_ids = loaded_module.module_ids;
+    //         let expected_name = module_ids
+    //             .get_name(loaded_module.module_id)
+    //             .expect("Test ModuleID not found in module_ids");
 
-            assert_eq!(expected_name, &ModuleName::from("Primary"));
+    //         assert_eq!(expected_name, &ModuleName::from("Primary"));
 
-            let def_count: usize = loaded_module
-                .declarations
-                .iter()
-                .map(|decl| decl.def_count())
-                .sum();
-            assert_eq!(def_count, 6);
+    //         let def_count: usize = loaded_module
+    //             .declarations
+    //             .iter()
+    //             .map(|decl| decl.def_count())
+    //             .sum();
+    //         assert_eq!(def_count, 6);
 
-            let mut all_loaded_modules: Vec<ModuleName> = subs_by_module
-                .keys()
-                .map(|module_id| module_ids.get_name(*module_id).unwrap().clone())
-                .collect();
+    //         let mut all_loaded_modules: Vec<ModuleName> = subs_by_module
+    //             .keys()
+    //             .map(|module_id| module_ids.get_name(*module_id).unwrap().clone())
+    //             .collect();
 
-            all_loaded_modules.sort();
+    //         all_loaded_modules.sort();
 
-            assert_eq!(
-                all_loaded_modules,
-                vec![
-                    "Int".into(),
-                    "Map".into(),
-                    "Set".into(),
-                    "Float".into(),
-                    "Dep1".into(),
-                    "Dep3.Blah".into(),
-                    "Dep2".into()
-                ]
-            );
-        });
-    }
+    //         assert_eq!(
+    //             all_loaded_modules,
+    //             vec![
+    //                 "Int".into(),
+    //                 "Map".into(),
+    //                 "Set".into(),
+    //                 "Float".into(),
+    //                 "Dep1".into(),
+    //                 "Dep3.Blah".into(),
+    //                 "Dep2".into()
+    //             ]
+    //         );
+    //     });
+    // }
 
-    #[test]
-    fn load_and_infer_with_builtins() {
-        test_async(async {
-            let mut subs_by_module = MutMap::default();
-            let loaded_module =
-                load_with_builtins("interface_with_deps", "WithBuiltins", &mut subs_by_module)
-                    .await;
+    // #[test]
+    // fn load_and_infer_with_builtins() {
+    //     test_async(async {
+    //         let mut subs_by_module = MutMap::default();
+    //         let loaded_module =
+    //             load_with_builtins("interface_with_deps", "WithBuiltins", &mut subs_by_module)
+    //                 .await;
 
-            expect_types(
-                loaded_module,
-                hashmap! {
-                    "WithBuiltins.floatTest" => "Float",
-                    "WithBuiltins.divisionFn" => "Float, Float -> Float",
-                    "WithBuiltins.divisionTest" => "Float",
-                    "WithBuiltins.intTest" => "Int",
-                    "WithBuiltins.x" => "Float",
-                    "WithBuiltins.constantInt" => "Int",
-                    "WithBuiltins.divDep1ByDep2" => "Float",
-                    "WithBuiltins.fromDep2" => "Float",
-                },
-            );
-        });
-    }
+    //         expect_types(
+    //             loaded_module,
+    //             hashmap! {
+    //                 "WithBuiltins.floatTest" => "Float",
+    //                 "WithBuiltins.divisionFn" => "Float, Float -> Float",
+    //                 "WithBuiltins.divisionTest" => "Float",
+    //                 "WithBuiltins.intTest" => "Int",
+    //                 "WithBuiltins.x" => "Float",
+    //                 "WithBuiltins.constantInt" => "Int",
+    //                 "WithBuiltins.divDep1ByDep2" => "Float",
+    //                 "WithBuiltins.fromDep2" => "Float",
+    //             },
+    //         );
+    //     });
+    // }
 
     #[test]
     fn load_principal_types() {
