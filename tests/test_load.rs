@@ -17,11 +17,16 @@ mod test_load {
     use roc::can::def::Declaration::*;
     use roc::can::ident::ModuleName;
     use roc::can::module::Module;
-    use roc::collections::SendMap;
+    use roc::collections::{MutMap, SendMap};
     use roc::load::{load, LoadedModule};
+    use roc::module::ModuleId;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
-    use roc::subs::{Subs, Variable};
+    use roc::solve::ModuleSubs;
+    use roc::subs::Subs;
     use std::collections::HashMap;
+
+    /// TODO change solve::SubsByModule to be this
+    type SubsByModule = MutMap<ModuleId, ModuleSubs>;
 
     // HELPERS
 
@@ -35,55 +40,52 @@ mod test_load {
         rt.block_on(future)
     }
 
-    fn expect_module(loaded_module: LoadedModule) -> (Module, Subs) {
-        match loaded_module {
-            LoadedModule::Valid(module, subs) => (module, subs),
-            LoadedModule::FileProblem { filename, error } => panic!(
-                "{:?} failed to load with FileProblem: {:?}",
-                filename, error
-            ),
-            LoadedModule::ParsingFailed { filename, fail } => panic!(
-                "{:?} failed to load with ParsingFailed: {:?}",
-                filename, fail
-            ),
-        }
-    }
-
-    async fn load_builtins(deps: &mut Vec<LoadedModule>) -> LoadedModule {
+    async fn load_builtins(subs_by_module: &mut SubsByModule) -> LoadedModule {
         let src_dir = builtins_dir();
         let filename = src_dir.join("Defaults.roc");
-        load(src_dir, filename, deps).await
+
+        load(src_dir, filename, subs_by_module)
+            .await
+            .expect("Failed to load builtins from Defaults.roc")
     }
 
     async fn load_without_builtins(
         dir_name: &str,
         module_name: &str,
-        deps: &mut Vec<LoadedModule>,
-    ) -> (Module, Subs) {
+        subs_by_module: &mut SubsByModule,
+    ) -> LoadedModule {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
-        let loaded = load(src_dir, filename, deps).await;
-        let (module, subs) = expect_module(loaded);
+        let loaded = load(src_dir, filename, subs_by_module).await;
+        let loaded_module = loaded.expect("Test module failed to load");
+        let expected_name = loaded_module
+            .module_ids
+            .get_name(loaded_module.module_id)
+            .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(module.name, module_name.into());
+        assert_eq!(expected_name, &ModuleName::from(module_name));
 
-        (module, subs)
+        loaded_module
     }
 
     async fn load_with_builtins(
         dir_name: &str,
         module_name: &str,
-        deps: &mut Vec<LoadedModule>,
-    ) -> (Module, Subs) {
-        let next_var = load_builtins(deps).await;
+        subs_by_module: &mut SubsByModule,
+    ) -> LoadedModule {
+        let next_var = load_builtins(subs_by_module).await;
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
-        let loaded = load(src_dir, filename, deps).await;
-        let (module, subs) = expect_module(loaded);
+        let loaded = load(src_dir, filename, subs_by_module).await;
+        let loaded_module = loaded.expect("Test module failed to load");
+        let expected_name = loaded_module
+            .module_ids
+            .get_name(loaded_module.module_id)
+            .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(module.name, module_name.into());
+        assert_eq!(expected_name, &ModuleName::from(module_name));
 
-        (module, subs)
+        loaded_module
     }
 
     // fn expect_types(
@@ -131,30 +133,27 @@ mod test_load {
 
     #[test]
     fn interface_with_deps() {
-        let mut deps = Vec::new();
+        let mut subs_by_module = MutMap::default();
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
 
         test_async(async {
-            let (module, subs) = expect_module(load(src_dir, filename, &mut deps).await);
+            let loaded = load(src_dir, filename, &mut subs_by_module).await;
+            let loaded_module = loaded.expect("Test module failed to load");
 
-            let def_count: usize = module
+            let def_count: usize = loaded_module
                 .declarations
                 .iter()
                 .map(|decl| decl.def_count())
                 .sum();
-            assert_eq!(module.name, "Primary".into());
+
+            let expected_name = loaded_module
+                .module_ids
+                .get_name(loaded_module.module_id)
+                .expect("Test ModuleID not found in module_ids");
+
+            assert_eq!(expected_name, &ModuleName::from("Primary"));
             assert_eq!(def_count, 6);
-
-            let module_names: Vec<ModuleName> = deps
-                .into_iter()
-                .map(|dep| dep.into_module().unwrap().name)
-                .collect();
-
-            assert_eq!(
-                module_names,
-                vec!["Dep1".into(), "Dep3.Blah".into(), "Dep2".into()]
-            );
         });
     }
 
@@ -165,7 +164,8 @@ mod test_load {
     //         let filename = src_dir.join("Defaults.roc");
 
     //         test_async(async {
-    //             let (module, subs) = expect_module(load(src_dir, filename, &mut deps).await);
+    //             let loaded = load(src_dir, filename, deps).await;
+    //             let LoadedModule { module_id, module_ids, solved, problems } = loaded.expect("Test module failed to load");
 
     //             let def_count: usize = module
     //                 .declarations

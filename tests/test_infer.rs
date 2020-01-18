@@ -28,7 +28,8 @@ mod test_infer {
         }
 
         let mut unify_problems = Vec::new();
-        let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
+        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
+        let mut subs = solved.into_inner();
 
         name_all_type_vars(variable, &mut subs);
 
@@ -1066,8 +1067,8 @@ mod test_infer {
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
-                r#"\x -> 
-                    when x is 
+                r#"\x ->
+                    when x is
                         True -> 1
                         False -> 0
                 "#
@@ -1104,8 +1105,8 @@ mod test_infer {
             infer_eq(
                 indoc!(
                     r#"
-                f = \x -> 
-                    when x is 
+                f = \x ->
+                    when x is
                         { a, b } -> a
 
                 f

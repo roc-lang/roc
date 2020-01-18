@@ -48,7 +48,7 @@ where
     buf
 }
 
-pub fn insert_all<K, V, I>(map: &mut ImMap<K, V>, elems: I)
+pub fn insert_all<K, V, I>(map: &mut MutMap<K, V>, elems: I)
 where
     K: Clone + Eq + Hash,
     V: Clone,

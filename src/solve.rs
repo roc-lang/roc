@@ -1,7 +1,6 @@
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, MutMap, SendMap};
-use crate::module::ModuleId;
+use crate::collections::{ImMap, MutMap};
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
@@ -11,7 +10,7 @@ use crate::unify::{unify, Unified};
 use crate::uniqueness::boolean_algebra;
 use std::sync::Arc;
 
-pub type SubsByModule = SendMap<ModuleId, ModuleSubs>;
+pub type SubsByModule = MutMap<ModuleName, ModuleSubs>;
 
 #[derive(Clone, Debug)]
 pub enum ModuleSubs {
@@ -83,7 +82,11 @@ struct State {
 pub struct Solved<T>(T);
 
 impl<T> Solved<T> {
-    fn get(self) -> T {
+    pub fn inner<'a>(&'a self) -> &'a T {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> T {
         self.0
     }
 }
@@ -933,7 +936,7 @@ fn deep_copy_local_var_help(
 }
 
 fn deep_copy_foreign_var(
-    source_subs: &Subs,
+    source_subs: &ModuleSubs,
     dest_subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -947,7 +950,7 @@ fn deep_copy_foreign_var(
 }
 
 fn deep_copy_foreign_var_help(
-    source_subs: &Subs,
+    source_subs: &ModuleSubs,
     dest_subs: &mut Subs,
     max_rank: Rank,
     pools: &mut Pools,
@@ -955,8 +958,12 @@ fn deep_copy_foreign_var_help(
 ) -> Variable {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
+    use ModuleSubs::*;
 
-    let desc = source_subs.get_without_compacting(var);
+    let desc = match source_subs {
+        Valid(arc_solved) => (&arc_solved).inner().get_without_compacting(var),
+        Invalid => panic!("TODO gracefully handle lookups on invalid modules"),
+    };
 
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
