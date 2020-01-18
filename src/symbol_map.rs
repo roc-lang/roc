@@ -117,7 +117,7 @@ impl<T> Ref<T> {
     /// match the lifetime of the parent `Table` that the wrapped pointer points
     /// into. Care should be taken not to call this method if the integrity of
     /// the reference passed to `new()` cannot be verified.
-    unsafe fn deref<'a>(&self) -> &'a T {
+    unsafe fn deref<'a>(self) -> &'a T {
         &*self.ptr
     }
 }
@@ -275,9 +275,9 @@ where
             by_id[symbol.id().as_usize()] = Ref::new(symbol);
         }
         HashIndexing {
-            table: table,
-            by_symbol: by_symbol,
-            by_id: by_id,
+            table,
+            by_symbol,
+            by_id,
         }
     }
 

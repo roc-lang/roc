@@ -82,7 +82,7 @@ struct State {
 pub struct Solved<T>(T);
 
 impl<T> Solved<T> {
-    pub fn inner<'a>(&'a self) -> &'a T {
+    pub fn inner(&self) -> &'_ T {
         &self.0
     }
 
@@ -91,7 +91,7 @@ impl<T> Solved<T> {
     }
 }
 
-pub fn run<'a>(
+pub fn run(
     vars_by_symbol: &Env,
     subs_by_module: SubsByModule,
     problems: &mut Vec<Problem>,

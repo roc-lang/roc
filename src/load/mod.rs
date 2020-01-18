@@ -374,7 +374,7 @@ fn load_filename(
                     // it looks something up. We know the module will only
                     // be able to reference modules it has imported, so this
                     // list should cover every valid lookup it performs.
-                    let mut can_module_ids: MutMap<&ModuleName, ModuleId> =
+                    let mut can_module_ids: MutMap<ModuleName, ModuleId> =
                         HashMap::with_capacity_and_hasher(deps.len(), default_hasher());
                     let mut deps_by_id: Vec<(ModuleId, ModuleName)> =
                         Vec::with_capacity(header.exposes.len());
@@ -398,7 +398,7 @@ fn load_filename(
                             for dep in deps.iter() {
                                 let id = unlocked.get_id(dep);
 
-                                can_module_ids.insert(&dep, id);
+                                can_module_ids.insert(dep.clone(), id);
                                 deps_by_id.push((id, dep.clone()));
                             }
                         }
@@ -412,7 +412,7 @@ fn load_filename(
                             for dep in deps.iter() {
                                 let id = mut_ref.get_id(dep);
 
-                                can_module_ids.insert(&dep, id);
+                                can_module_ids.insert(dep.clone(), id);
                                 deps_by_id.push((id, dep.clone()));
                             }
                         }
@@ -421,7 +421,7 @@ fn load_filename(
                     // Insert our own module_id into the can_module_ids.
                     // (It's already in the shared module_ids, but we insert
                     // this after the lock has expired.)
-                    can_module_ids.insert(&declared_name, module_id);
+                    can_module_ids.insert(declared_name.clone(), module_id);
 
                     // Send the deps to the coordinator thread for processing,
                     // then continue on to parsing and canonicalizing defs.
@@ -452,7 +452,7 @@ fn load_filename(
                     let (declarations, _problems, exposed_imports, constraint) = process_defs(
                         &arena,
                         state,
-                        declared_name.clone(),
+                        declared_name,
                         can_module_ids,
                         header.exposes.into_iter(),
                         &mut scope,
@@ -496,6 +496,8 @@ fn load_filename(
     }
 }
 
+// TODO trim down these arguments - possibly by moving Constraint into Module
+#[allow(clippy::too_many_arguments)]
 fn solve_module(
     module: Module,
     constraint: Constraint,
@@ -578,7 +580,7 @@ fn solve_module(
 
             // Send the subs to the main thread for processing,
             tx.send(Msg::Solved {
-                module_id: module_id,
+                module_id,
                 subs: Arc::new(solved),
                 new_vars_by_symbol,
                 problems,
@@ -594,7 +596,7 @@ fn process_defs<'a, I>(
     arena: &'a Bump,
     state: State<'a>,
     home: ModuleName,
-    _module_ids: MutMap<&ModuleName, ModuleId>, // TODO use this to canonicalize into ModuleIds
+    _module_ids: MutMap<ModuleName, ModuleId>, // TODO use this to canonicalize into ModuleIds
     exposes: I,
     scope: &mut Scope,
     var_store: &VarStore,

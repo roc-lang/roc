@@ -22,7 +22,7 @@ impl ModuleIdStore {
         }
     }
 
-    pub fn get_name<'a>(&'a self, id: ModuleId) -> Option<&'a ident::ModuleName> {
+    pub fn get_name(&self, id: ModuleId) -> Option<&ident::ModuleName> {
         self.store.get_symbol(&id.0).map(Symbol::data)
     }
 }
