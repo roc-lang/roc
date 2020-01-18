@@ -1,4 +1,4 @@
-use crate::collections::{ImMap, MutMap};
+use crate::collections::{MutMap, SendMap};
 use crate::solve::{self, Solved};
 use crate::subs::{Content, Subs, Variable};
 use crate::types::{Constraint, Problem};
@@ -9,8 +9,8 @@ pub fn infer_expr(
     constraint: &Constraint,
     expr_var: Variable,
 ) -> (Content, Solved<Subs>) {
-    let solved = solve::run(
-        &ImMap::default(),
+    let (solved, _) = solve::run(
+        &SendMap::default(),
         MutMap::default(),
         problems,
         subs,

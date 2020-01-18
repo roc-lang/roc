@@ -1,6 +1,6 @@
 use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, MutMap};
+use crate::collections::{ImMap, MutMap, SendMap};
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
@@ -18,7 +18,7 @@ pub enum ModuleSubs {
     Valid(Arc<Solved<Subs>>),
 }
 
-type Env = ImMap<Symbol, Variable>;
+type Env = SendMap<Symbol, Variable>;
 
 const DEFAULT_POOLS: usize = 8;
 
@@ -97,7 +97,7 @@ pub fn run<'a>(
     problems: &mut Vec<Problem>,
     mut subs: Subs,
     constraint: &Constraint,
-) -> Solved<Subs> {
+) -> (Solved<Subs>, Env) {
     let mut pools = Pools::default();
     let state = State {
         vars_by_symbol: vars_by_symbol.clone(),
@@ -105,8 +105,7 @@ pub fn run<'a>(
         subs_by_module,
     };
     let rank = Rank::toplevel();
-
-    solve(
+    let state = solve(
         vars_by_symbol,
         state,
         rank,
@@ -116,7 +115,7 @@ pub fn run<'a>(
         constraint,
     );
 
-    Solved(subs)
+    (Solved(subs), state.vars_by_symbol)
 }
 
 fn solve(

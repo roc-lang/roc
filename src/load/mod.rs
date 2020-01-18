@@ -3,7 +3,7 @@ use crate::can::ident::ModuleName;
 use crate::can::module::{canonicalize_module_defs, Module, ModuleOutput};
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
-use crate::collections::{insert_all, ImMap, MutMap, MutSet, SendMap};
+use crate::collections::{default_hasher, insert_all, ImMap, MutMap, MutSet, SendMap};
 use crate::constrain::module::constrain_module;
 use crate::ident::Ident;
 use crate::module::{ModuleId, ModuleIdStore};
@@ -15,6 +15,8 @@ use crate::solve::{self, ModuleSubs, Solved};
 use crate::subs::{Subs, VarStore, Variable};
 use crate::types::{Constraint, Problem};
 use bumpalo::Bump;
+use inlinable_string::InlinableString;
+use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -49,10 +51,12 @@ pub enum BuildProblem<'a> {
     FileNotFound(&'a Path),
 }
 
+#[derive(Debug)]
 enum Msg {
-    DepsRequested {
+    Header {
         module_id: ModuleId,
-        dep_names: Vec<ModuleName>,
+        deps_by_id: Vec<(ModuleId, ModuleName)>,
+        exposes: Vec<InlinableString>,
     },
     Constrained {
         module: Module,
@@ -63,6 +67,7 @@ enum Msg {
         module_id: ModuleId,
         subs: Arc<Solved<Subs>>,
         problems: Vec<Problem>,
+        new_vars_by_symbol: SendMap<Symbol, Variable>
     },
 }
 
@@ -111,7 +116,6 @@ pub async fn load<'a>(
     subs_by_module: &mut SubsByModule,
 ) -> Result<LoadedModule, LoadingProblem> {
     use self::MaybeShared::*;
-    use self::Msg::*;
 
     let mut all_problems = Vec::new();
     let env = Env {
@@ -129,30 +133,48 @@ pub async fn load<'a>(
 
     // All the dependent modules for which we've already begun loading
     // (meaning we should never kick off another load_module on them!)
-    let mut loading_started: MutSet<ModuleName> = MutSet::default();
-
-    // The Result we got back when we tried to solve a given module
-    let mut solved_modules: MutMap<ModuleId, SubsByModule> = MutMap::default();
+    let mut loading_started: MutSet<ModuleId> = MutSet::default();
 
     // The declarations we'll ultimately be returning
     let mut declarations_by_id: MutMap<ModuleId, Vec<Declaration>> = MutMap::default();
 
-    let mut deps_by_id: MutMap<ModuleId, Vec<ModuleName>> = MutMap::default();
+    // The modules which are waiting for certain deps to be solved
+    let mut waiting_for_solve: MutMap<ModuleId, MutSet<ModuleId>> = MutMap::default();
+
+    // When the key ModuleId gets solved, iterate through each of the given modules
+    // and remove that ModuleId from the appropriate waiting_for_solve entry.
+    // If the relevant module's waiting_for_solve entry is now empty, solve the module.
+    let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
+
+    let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, Variable)> = MutMap::default();
+    let mut vars_by_symbol = SendMap::default();
 
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {
-        match msg {
-            DepsRequested {
-                module_id,
-                dep_names,
-            } => {
-                deps_by_id.insert(module_id, dep_names.clone());
+        use self::Msg::*;
 
-                for dep_name in dep_names {
-                    if !loading_started.contains(&dep_name) {
+        match msg {
+            Header {
+                module_id,
+                deps_by_id,
+                exposes: _exposes,
+            } => {
+                let mut dep_set =
+                    HashSet::with_capacity_and_hasher(deps_by_id.len(), default_hasher());
+
+                for (dep_id, _) in deps_by_id.iter() {
+                    if !subs_by_module.contains_key(dep_id) {
+                        dep_set.insert(*dep_id);
+                    }
+                }
+
+                waiting_for_solve.insert(module_id, dep_set);
+
+                for (dep_id, dep_name) in deps_by_id {
+                    if !loading_started.contains(&dep_id) {
                         // Record that we've started loading the module *before*
                         // we actually start loading it.
-                        loading_started.insert(dep_name.clone());
+                        loading_started.insert(dep_id.clone());
 
                         let env = env.clone();
                         let msg_tx = msg_tx.clone();
@@ -170,80 +192,41 @@ pub async fn load<'a>(
                 constraint,
                 next_var,
             } => {
-                use Declaration::*;
-
-                dbg!("TODO detect when we're ready to start solving this module, and ONLY THEN begin solving it! {:?}", module.module_id);
-
-                let subs_by_module = solved_modules
-                    .remove(&module.module_id)
-                    .unwrap_or_else(|| MutMap::default());
-
-                // TODO change solve::run to expect SubsById to be keyed on ModuleId instead of doing this
-                // conversion!
-                let subs_by_module = {
-                    let mut converted = MutMap::default();
-                    let unlocked = (*module_ids).lock().unwrap();
-
-                    for (module_id, v) in subs_by_module {
-                        converted.insert(unlocked.get_name(module_id).unwrap().clone(), v);
-                    }
-
-                    converted
-                };
-
-                let mut vars_by_symbol: MutMap<Symbol, Variable> = MutMap::default();
-
-                // All the exposed imports should be available in the solver's vars_by_symbol
-                for (symbol, expr_var) in im::HashMap::clone(&module.exposed_imports) {
-                    vars_by_symbol.insert(symbol, expr_var);
-                }
-
-                // All the top-level defs should also be available in vars_by_symbol
-                for decl in &module.declarations {
-                    match decl {
-                        Declare(def) => {
-                            insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
-                        }
-                        DeclareRec(defs) => {
-                            for def in defs {
-                                insert_all(
-                                    &mut vars_by_symbol,
-                                    def.pattern_vars.clone().into_iter(),
-                                );
-                            }
-                        }
-                        InvalidCycle(_, _) => panic!("TODO handle invalid cycles"),
-                    }
-                }
-
                 let module_id = module.module_id;
+                let waiting_for = waiting_for_solve.get(&module_id).unwrap();
 
-                declarations_by_id.insert(module.module_id, module.declarations);
-
-                let msg_tx = msg_tx.clone();
-
-                // Start solving this module in the background.
-                spawn_blocking(move || {
-                    let mut im_vars_by_symbol = ImMap::default();
-
-                    for (k, v) in vars_by_symbol {
-                        im_vars_by_symbol.insert(k, v);
-                    }
-
+                if waiting_for.is_empty() {
+                    // All of our dependencies have already been solved. Great!
+                    // That means we can proceed directly to solving.
                     solve_module(
-                        module_id,
-                        im_vars_by_symbol,
+                        module,
                         constraint,
                         next_var,
+                        msg_tx.clone(),
                         subs_by_module,
-                        msg_tx,
-                    )
-                });
+                        Arc::clone(&module_ids),
+                        &mut declarations_by_id,
+                        vars_by_symbol.clone()
+                    );
+                } else {
+                    // We will have to wait for our depednencies to be solved.
+                    unsolved_modules.insert(module_id, (module, constraint, next_var));
+
+                    // Register a listener with each of these.
+                    for dep_id in waiting_for {
+                        let listeners = solve_listeners
+                            .entry(*dep_id)
+                            .or_insert_with(|| Vec::with_capacity(1));
+
+                        (*listeners).push(module_id);
+                    }
+                }
             }
             Solved {
                 module_id,
                 subs,
                 problems,
+                new_vars_by_symbol
             } => {
                 all_problems.extend(problems);
 
@@ -276,6 +259,36 @@ pub async fn load<'a>(
                 } else {
                     // This was a dependency. Write it down and keep processing messaages.
                     subs_by_module.insert(module_id, ModuleSubs::Valid(subs));
+
+                    vars_by_symbol = vars_by_symbol.union(new_vars_by_symbol);
+
+                    // Notify all the listeners that this solved.
+                    for listeners in solve_listeners.remove(&module_id) {
+                        for listener_id in listeners {
+                            // It's no longer waiting for this module,
+                            // because this module has now been solved!
+                            let waiting_for = waiting_for_solve.get_mut(&listener_id).unwrap();
+
+                            waiting_for.remove(&module_id);
+
+                            // If it's no longer waiting for anything else, solve it.
+                            if waiting_for.is_empty() {
+                                let (module, constraint, next_var) =
+                                    unsolved_modules.remove(&listener_id).unwrap();
+
+                                solve_module(
+                                    module,
+                                    constraint,
+                                    next_var,
+                                    msg_tx.clone(),
+                                    subs_by_module,
+                                    Arc::clone(&module_ids),
+                                    &mut declarations_by_id,
+                                    vars_by_symbol.clone()
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -356,7 +369,15 @@ fn load_filename(
                     // it looks something up. We know the module will only
                     // be able to reference modules it has imported, so this
                     // list should cover every valid lookup it performs.
-                    let mut can_module_ids: MutMap<&ModuleName, ModuleId> = MutMap::default();
+                    let mut can_module_ids: MutMap<&ModuleName, ModuleId> =
+                        HashMap::with_capacity_and_hasher(deps.len(), default_hasher());
+                    let mut deps_by_id: Vec<(ModuleId, ModuleName)> =
+                        Vec::with_capacity(header.exposes.len());
+                    let mut exposes = Vec::with_capacity(header.exposes.len());
+
+                    for loc_exposed in header.exposes.iter() {
+                        exposes.push(loc_exposed.value.as_str().into());
+                    }
 
                     // Make sure the module_ids has ModuleIds for all our deps,
                     // then record those ModuleIds in can_module_ids for later.
@@ -369,6 +390,7 @@ fn load_filename(
                                 let id = unlocked.get_id(dep);
 
                                 can_module_ids.insert(&dep, id);
+                                deps_by_id.push((id, dep.clone()));
                             }
 
                             unlocked.get_id(&declared_name)
@@ -384,6 +406,7 @@ fn load_filename(
                                 let id = mut_ref.get_id(dep);
 
                                 can_module_ids.insert(&dep, id);
+                                deps_by_id.push((id, dep.clone()));
                             }
 
                             module_id
@@ -402,14 +425,14 @@ fn load_filename(
                     // because the coordinator thread needs to receive this message
                     // to decrement its "pending" count.
                     let mut tx = msg_tx.clone();
-                    let dep_names = deps.clone();
 
                     tokio::spawn(async move {
                         // Send the deps to the main thread for processing,
                         // then continue on to parsing and canonicalizing defs.
-                        tx.send(Msg::DepsRequested {
+                        tx.send(Msg::Header {
                             module_id,
-                            dep_names,
+                            deps_by_id,
+                            exposes,
                         })
                         .await
                         .unwrap_or_else(|_| panic!("Failed to send DepsRequested message"));
@@ -469,43 +492,88 @@ fn load_filename(
 }
 
 fn solve_module(
-    module_id: ModuleId,
-    vars_by_symbol: ImMap<Symbol, Variable>,
+    module: Module,
     constraint: Constraint,
     next_var: Variable,
-    subs_by_module: MutMap<ModuleName, ModuleSubs>,
     msg_tx: MsgSender,
+    subs_by_module: &mut SubsByModule,
+    module_ids: Arc<Mutex<ModuleIdStore>>,
+    declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
+    mut vars_by_symbol: SendMap<Symbol, Variable>
 ) {
-    // Now that the module is parsed, canonicalized, and constrained,
-    // we just need to type check it.
-    //
-    // We'll use a fresh Subs for this, because we're starting from
-    // other modules' Subs plus the variables we've generated during
-    // our own canonicalization.
-    let subs = Subs::new(next_var);
+    // TODO change solve::run to expect SubsById to be keyed on ModuleId instead of doing this
+    // conversion!
+    let subs_by_module = {
+        let mut converted = MutMap::default();
+        let unlocked = (*module_ids).lock().unwrap();
 
-    let mut problems = Vec::new();
+        for (module_id, v) in subs_by_module {
+            converted.insert(unlocked.get_name(*module_id).unwrap().clone(), v.clone());
+        }
 
-    // Run the solver to populate Subs.
-    let solved = solve::run(
-        &vars_by_symbol,
-        subs_by_module,
-        &mut problems,
-        subs,
-        &constraint,
-    );
+        converted
+    };
 
-    tokio::spawn(async move {
-        let mut tx = msg_tx;
+    // All the exposed imports should be available in the solver's vars_by_symbol
+    for (symbol, expr_var) in im::HashMap::clone(&module.exposed_imports) {
+        vars_by_symbol.insert(symbol, expr_var);
+    }
 
-        // Send the subs to the main thread for processing,
-        tx.send(Msg::Solved {
-            module_id: module_id,
-            subs: Arc::new(solved),
-            problems,
-        })
-        .await
-        .unwrap_or_else(|_| panic!("Failed to send Solved message"));
+    // All the top-level defs should also be available in vars_by_symbol
+    for decl in &module.declarations {
+        use Declaration::*;
+
+        match decl {
+            Declare(def) => {
+                insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
+            }
+            DeclareRec(defs) => {
+                for def in defs {
+                    insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
+                }
+            }
+            InvalidCycle(_, _) => panic!("TODO handle invalid cycles"),
+        }
+    }
+
+    let module_id = module.module_id;
+
+    declarations_by_id.insert(module.module_id, module.declarations);
+
+    // Start solving this module in the background.
+    spawn_blocking(move || {
+        // Now that the module is parsed, canonicalized, and constrained,
+        // we just need to type check it.
+        //
+        // We'll use a fresh Subs for this, because we're starting from
+        // other modules' Subs plus the variables we've generated during
+        // our own canonicalization.
+        let subs = Subs::new(next_var);
+
+        let mut problems = Vec::new();
+
+        // Run the solver to populate Subs.
+        let (solved, new_vars_by_symbol) = solve::run(
+            &vars_by_symbol,
+            subs_by_module,
+            &mut problems,
+            subs,
+            &constraint,
+        );
+
+        tokio::spawn(async move {
+            let mut tx = msg_tx;
+
+            // Send the subs to the main thread for processing,
+            tx.send(Msg::Solved {
+                module_id: module_id,
+                subs: Arc::new(solved),
+                new_vars_by_symbol,
+                problems,
+            })
+            .await
+            .unwrap_or_else(|_| panic!("Failed to send Solved message"));
+        });
     });
 }
 

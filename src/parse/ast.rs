@@ -56,6 +56,17 @@ pub enum ImportsEntry<'a> {
     SpaceAfter(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
 }
 
+impl<'a> ExposesEntry<'a> {
+    pub fn as_str(&'a self) -> &'a str {
+        use ExposesEntry::*;
+
+        match self {
+            Ident(string) => string,
+            SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => sub_entry.as_str(),
+        }
+    }
+}
+
 /// An optional qualifier (the `Foo.Bar` in `Foo.Bar.baz`).
 /// If module_parts is empty, this is unqualified.
 #[derive(Debug, Clone, PartialEq, Eq)]
