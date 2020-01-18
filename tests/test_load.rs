@@ -157,40 +157,43 @@ mod test_load {
         });
     }
 
-    //     #[test]
-    //     fn load_only_builtins() {
-    //         let mut deps = Vec::new();
-    //         let src_dir = builtins_dir();
-    //         let filename = src_dir.join("Defaults.roc");
+    #[test]
+    fn load_only_builtins() {
+        let mut subs_by_module = MutMap::default();
+        let src_dir = builtins_dir();
+        let filename = src_dir.join("Defaults.roc");
 
-    //         test_async(async {
-    //             let loaded = load(src_dir, filename, deps).await;
-    //             let LoadedModule { module_id, module_ids, solved, problems } = loaded.expect("Test module failed to load");
+        test_async(async {
+            let loaded = load(src_dir, filename, &mut subs_by_module).await;
+            let loaded_module = loaded.expect("Test module failed to load");
 
-    //             let def_count: usize = module
-    //                 .declarations
-    //                 .iter()
-    //                 .map(|decl| decl.def_count())
-    //                 .sum();
-    //             assert_eq!(module.name, "Defaults".into());
-    //             assert_eq!(def_count, 0);
+            let def_count: usize = loaded_module
+                .declarations
+                .iter()
+                .map(|decl| decl.def_count())
+                .sum();
 
-    //             let module_names: Vec<ModuleName> = deps
-    //                 .into_iter()
-    //                 .map(|dep| dep.into_module().unwrap().name)
-    //                 .collect();
+            let module_ids = loaded_module.module_ids;
+            let expected_name = module_ids
+                .get_name(loaded_module.module_id)
+                .expect("Test ModuleID not found in module_ids");
 
-    //             assert_eq!(
-    //                 module_names,
-    //                 vec![
-    //                     "Int".into(),
-    //                     "Map".into(),
-    //                     "Set".into(),
-    //                     "Float".into()
-    //                 ]
-    //             );
-    //         });
-    //     }
+            assert_eq!(expected_name, &ModuleName::from("Defaults"));
+            assert_eq!(def_count, 0);
+
+            let mut all_loaded_modules: Vec<ModuleName> = subs_by_module
+                .keys()
+                .map(|module_id| module_ids.get_name(*module_id).unwrap().clone())
+                .collect();
+
+            all_loaded_modules.sort();
+
+            assert_eq!(
+                all_loaded_modules,
+                vec!["Float".into(), "Int".into(), "Map".into(), "Set".into()]
+            );
+        });
+    }
 
     // #[test]
     // fn interface_with_builtins() {
