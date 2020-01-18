@@ -1072,7 +1072,7 @@ mod test_infer_uniq {
                         Foo x -> x
                 "#
             ),
-            "Attr.Attr a Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -1085,7 +1085,7 @@ mod test_infer_uniq {
                         @Foo x -> x
                 "#
             ),
-            "Attr.Attr a Int",
+            "Attr.Attr * Int",
         );
     }
 
