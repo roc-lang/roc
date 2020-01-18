@@ -265,7 +265,7 @@ pub async fn load<'a>(
                     subs_by_module.insert(module_id, ModuleSubs::Valid(subs));
 
                     // Notify all the listeners that this solved.
-                    for listeners in solve_listeners.remove(&module_id) {
+                    if let Some(listeners) = solve_listeners.remove(&module_id) {
                         for listener_id in listeners {
                             // It's no longer waiting for this module,
                             // because this module has now been solved!
