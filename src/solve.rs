@@ -13,7 +13,7 @@ type Env = ImMap<Symbol, Variable>;
 
 const DEFAULT_POOLS: usize = 8;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
@@ -324,6 +324,21 @@ fn solve<'a>(
                         let visit_mark = young_mark.next();
                         let final_mark = visit_mark.next();
 
+                        debug_assert!({
+                            let offenders = next_pools
+                                .get(next_rank)
+                                .iter()
+                                .filter(|var| {
+                                    subs.get_without_compacting(crate::subs::Variable::clone(var))
+                                        .rank
+                                        .into_usize()
+                                        > next_rank.into_usize()
+                                })
+                                .collect::<Vec<&crate::subs::Variable>>();
+
+                            offenders.is_empty()
+                        });
+
                         // pop pool
                         generalize(subs, young_mark, visit_mark, next_rank, next_pools);
 
@@ -372,6 +387,7 @@ fn solve<'a>(
                     if next_rank.into_usize() < pools.len() {
                         work_in_next_pools(pools)
                     } else {
+                        // TODO shouldn't this grow the pool, it does in the elm source
                         work_in_next_pools(&mut pools.clone())
                     }
                 }
