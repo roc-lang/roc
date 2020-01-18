@@ -194,8 +194,15 @@ pub async fn load<'a>(
             } => {
                 let module_id = module.module_id;
                 let waiting_for = waiting_for_solve
-                    .get(&module_id)
+                    .get_mut(&module_id)
                     .expect("Could not find module ID in waiting_for_solve");
+
+                // It's possible that some modules have been solved since
+                // we began waiting for them. Remove those from waiting_for,
+                // because we no longer need to wait for them!
+                waiting_for.retain(|id|
+                    !subs_by_module.contains_key(id)
+                );
 
                 if waiting_for.is_empty() {
                     // All of our dependencies have already been solved. Great!
@@ -216,7 +223,7 @@ pub async fn load<'a>(
                     unsolved_modules.insert(module_id, (module, constraint, next_var));
 
                     // Register a listener with each of these.
-                    for dep_id in waiting_for {
+                    for dep_id in waiting_for.iter() {
                         let listeners = solve_listeners
                             .entry(*dep_id)
                             .or_insert_with(|| Vec::with_capacity(1));
