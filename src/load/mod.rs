@@ -200,9 +200,7 @@ pub async fn load<'a>(
                 // It's possible that some modules have been solved since
                 // we began waiting for them. Remove those from waiting_for,
                 // because we no longer need to wait for them!
-                waiting_for.retain(|id|
-                    !subs_by_module.contains_key(id)
-                );
+                waiting_for.retain(|id| !subs_by_module.contains_key(id));
 
                 if waiting_for.is_empty() {
                     // All of our dependencies have already been solved. Great!
