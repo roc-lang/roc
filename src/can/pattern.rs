@@ -90,7 +90,7 @@ pub fn canonicalize_pattern<'a>(
             // Canonicalize the tag's name.
             Pattern::AppliedTag(
                 var_store.fresh(),
-                Symbol::from_private_tag(&env.home, name),
+                Symbol::from_private_tag(env.home.as_str(), name),
                 vec![],
             )
         }
@@ -113,7 +113,7 @@ pub fn canonicalize_pattern<'a>(
 
             let symbol = match tag.value {
                 GlobalTag(name) => Symbol::from_global_tag(name),
-                PrivateTag(name) => Symbol::from_private_tag(&env.home, name),
+                PrivateTag(name) => Symbol::from_private_tag(env.home.as_str(), name),
                 _ => unreachable!("Other patterns cannot be applied"),
             };
 
@@ -312,7 +312,8 @@ pub fn canonicalize_pattern_identifier<'a>(
         }
         None => {
             // Make sure we aren't shadowing something in the home module's scope.
-            let qualified_ident = Ident::Qualified(env.home.clone(), lowercase_ident.name());
+            let qualified_ident =
+                Ident::Qualified(env.home.as_str().into(), lowercase_ident.name());
 
             match scope.idents.get(&qualified_ident) {
                 Some((_, region)) => {

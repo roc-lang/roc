@@ -268,8 +268,6 @@ pub fn assert_correct_variable_usage(constraint: &Constraint) {
     // NOTE: this checks whether we're using variables that are not declared. For recursive type
     // definitions,  their rigid types are declared twice, which is correct!
     if !diff.is_empty() {
-        dbg!(&constraint);
-        // dbg!(expr);
         println!("VARIABLE USAGE PROBLEM");
 
         println!("used: {:?}", &used);

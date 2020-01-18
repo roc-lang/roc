@@ -1,6 +1,6 @@
 use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, SendMap};
+use crate::collections::{ImMap, MutMap, SendMap};
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
@@ -8,8 +8,17 @@ use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
 use crate::uniqueness::boolean_algebra;
+use std::sync::Arc;
 
-type Env = ImMap<Symbol, Variable>;
+pub type SubsByModule = MutMap<ModuleName, ModuleSubs>;
+
+#[derive(Clone, Debug)]
+pub enum ModuleSubs {
+    Invalid,
+    Valid(Arc<Solved<Subs>>),
+}
+
+type Env = SendMap<Symbol, Variable>;
 
 const DEFAULT_POOLS: usize = 8;
 
@@ -61,19 +70,34 @@ impl Pools {
 }
 
 #[derive(Clone)]
-struct State<'a> {
+struct State {
     vars_by_symbol: Env,
     mark: Mark,
-    subs_by_module: SendMap<ModuleName, &'a Subs>,
+    subs_by_module: SubsByModule,
+}
+
+/// A marker that a given Subs has been solved.
+/// The only way to obtain a Solved<Subs> is by running the solver on it.
+#[derive(Clone, Debug)]
+pub struct Solved<T>(T);
+
+impl<T> Solved<T> {
+    pub fn inner(&self) -> &'_ T {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
 }
 
 pub fn run(
     vars_by_symbol: &Env,
-    subs_by_module: SendMap<ModuleName, &Subs>,
+    subs_by_module: SubsByModule,
     problems: &mut Vec<Problem>,
-    subs: &mut Subs,
+    mut subs: Subs,
     constraint: &Constraint,
-) {
+) -> (Solved<Subs>, Env) {
     let mut pools = Pools::default();
     let state = State {
         vars_by_symbol: vars_by_symbol.clone(),
@@ -81,27 +105,28 @@ pub fn run(
         subs_by_module,
     };
     let rank = Rank::toplevel();
-
-    solve(
+    let state = solve(
         vars_by_symbol,
         state,
         rank,
         &mut pools,
         problems,
-        subs,
+        &mut subs,
         constraint,
     );
+
+    (Solved(subs), state.vars_by_symbol)
 }
 
-fn solve<'a>(
+fn solve(
     vars_by_symbol: &Env,
-    state: State<'a>,
+    state: State,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<Problem>,
     subs: &mut Subs,
     constraint: &Constraint,
-) -> State<'a> {
+) -> State {
     match constraint {
         True => state,
         SaveTheEnvironment => {
@@ -459,7 +484,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         Record(fields, ext) => {
-            let mut field_vars = ImMap::default();
+            let mut field_vars = MutMap::default();
 
             for (field, field_type) in fields {
                 field_vars.insert(
@@ -474,7 +499,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         TagUnion(tags, ext) => {
-            let mut tag_vars = ImMap::default();
+            let mut tag_vars = MutMap::default();
 
             for (tag, tag_argument_types) in tags {
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
@@ -845,7 +870,7 @@ fn deep_copy_local_var_help(
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
-                    let mut new_fields = ImMap::default();
+                    let mut new_fields = MutMap::default();
 
                     for (label, var) in fields {
                         new_fields
@@ -859,7 +884,7 @@ fn deep_copy_local_var_help(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut new_tags = ImMap::default();
+                    let mut new_tags = MutMap::default();
 
                     for (tag, vars) in tags {
                         let new_vars: Vec<Variable> = vars
@@ -911,7 +936,7 @@ fn deep_copy_local_var_help(
 }
 
 fn deep_copy_foreign_var(
-    source_subs: &Subs,
+    source_subs: &ModuleSubs,
     dest_subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -925,7 +950,7 @@ fn deep_copy_foreign_var(
 }
 
 fn deep_copy_foreign_var_help(
-    source_subs: &Subs,
+    source_subs: &ModuleSubs,
     dest_subs: &mut Subs,
     max_rank: Rank,
     pools: &mut Pools,
@@ -933,8 +958,12 @@ fn deep_copy_foreign_var_help(
 ) -> Variable {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
+    use ModuleSubs::*;
 
-    let desc = source_subs.get_without_compacting(var);
+    let desc = match source_subs {
+        Valid(arc_solved) => (&arc_solved).inner().get_without_compacting(var),
+        Invalid => panic!("TODO gracefully handle lookups on invalid modules"),
+    };
 
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
@@ -1014,7 +1043,7 @@ fn deep_copy_foreign_var_help(
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
-                    let mut new_fields = ImMap::default();
+                    let mut new_fields = MutMap::default();
 
                     for (label, var) in fields {
                         new_fields.insert(
@@ -1042,7 +1071,7 @@ fn deep_copy_foreign_var_help(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut new_tags = ImMap::default();
+                    let mut new_tags = MutMap::default();
 
                     for (tag, vars) in tags {
                         let new_vars: Vec<Variable> = vars
