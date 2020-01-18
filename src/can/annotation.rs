@@ -77,6 +77,17 @@ fn can_annotation_help(
                 Type::Variable(var)
             }
         }
+        As(inner, v) => {
+            let inner_type = can_annotation_help(env, inner, var_store, rigids);
+            let name = Lowercase::from(*v);
+
+            if let Some(rigid_variable) = rigids.get(&name) {
+                Type::As(Box::new(inner_type), *rigid_variable)
+            } else {
+                panic!("TODO variable bound by as does not occur in type")
+            }
+        }
+
         Record { fields, ext } => {
             let mut field_types = SendMap::default();
 

@@ -217,6 +217,9 @@ pub enum TypeAnnotation<'a> {
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
 
+    /// variants with recursion, e.g. `as r` in `[ Cons a r, Nil ] as r`
+    As(&'a TypeAnnotation<'a>, &'a str),
+
     Record {
         fields: &'a [Loc<AssignedField<'a, TypeAnnotation<'a>>>],
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
