@@ -228,8 +228,12 @@ pub enum TypeAnnotation<'a> {
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
 
-    /// variants with recursion, e.g. `as r` in `[ Cons a r, Nil ] as r`
-    As(&'a TypeAnnotation<'a>, &'a str),
+    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    As(
+        &'a Loc<TypeAnnotation<'a>>,
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<TypeAnnotation<'a>>,
+    ),
 
     Record {
         fields: &'a [Loc<AssignedField<'a, TypeAnnotation<'a>>>],

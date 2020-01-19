@@ -1,12 +1,13 @@
 use crate::collections::arena_join;
-use crate::parse::ast::{AssignedField, Attempting, Tag, TypeAnnotation};
-use crate::parse::blankspace::{space0_around, space0_before, space1_before};
+use crate::parse::ast::{AssignedField, Attempting, CommentOrNewline, Tag, TypeAnnotation};
+use crate::parse::blankspace::{space0_around, space0_before, space1, space1_before};
+use crate::parse::keyword;
 use crate::parse::parser::{
     allocated, char, optional, string, unexpected, unexpected_eof, Either, ParseResult, Parser,
     State,
 };
 use crate::parse::{global_tag, private_tag};
-use crate::region::Located;
+use crate::region::{Located, Region};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -19,62 +20,69 @@ macro_rules! tag_union {
     ($min_indent:expr) => {
         map_with_arena!(
             and!(
-                and!(
-                    collection!(
-                        char('['),
-                        loc!(tag_type($min_indent)),
-                        char(','),
-                        char(']'),
-                        $min_indent
-                    ),
-                    optional(
-                        // This could be an open tag union, e.g. `[ Foo, Bar ]a`
-                        move |arena, state| allocated(term($min_indent)).parse(arena, state)
-                    )
+                collection!(
+                    char('['),
+                    loc!(tag_type($min_indent)),
+                    char(','),
+                    char(']'),
+                    $min_indent
                 ),
                 optional(
-                    // this could be a recursive tag union, e.g. [ Nil, Cons a r ] as r
-                    move |arena, state| {
-                        let (_, state) = string(" as ").parse(arena, state)?;
-                        parse_type_variable_str(arena, state)
-                    }
+                    // This could be an open tag union, e.g. `[ Foo, Bar ]a`
+                    move |arena, state| allocated(term($min_indent)).parse(arena, state)
                 )
             ),
             |arena: &'a Bump,
-             ((tags, ext), as_variable): (
-                (
-                    Vec<'a, Located<Tag<'a>>>,
-                    Option<&'a Located<TypeAnnotation<'a>>>,
-                ),
-                Option<&'a str>
-            )| if let Some(v) = as_variable {
-                TypeAnnotation::As(
-                    arena.alloc({
-                        TypeAnnotation::TagUnion {
-                            tags: tags.into_bump_slice(),
-                            ext,
-                        }
-                    }),
-                    v,
-                )
-            } else {
-                TypeAnnotation::TagUnion {
-                    tags: tags.into_bump_slice(),
-                    ext,
-                }
+             (tags, ext): (
+                Vec<'a, Located<Tag<'a>>>,
+                Option<&'a Located<TypeAnnotation<'a>>>,
+            )| TypeAnnotation::TagUnion {
+                tags: tags.into_bump_slice(),
+                ext,
             }
         )
     };
 }
 
 pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    one_of!(
-        loc_wildcard(),
-        loc_parenthetical_type(min_indent),
-        loc!(record_type(min_indent)),
-        loc!(tag_union!(min_indent)),
-        loc!(applied_type(min_indent)),
-        loc!(parse_type_variable)
+    map_with_arena!(
+        and!(
+            one_of!(
+                loc_wildcard(),
+                loc_parenthetical_type(min_indent),
+                loc!(record_type(min_indent)),
+                loc!(tag_union!(min_indent)),
+                loc!(applied_type(min_indent)),
+                loc!(parse_type_variable)
+            ),
+            optional(
+                // Inline type annotation, e.g. [ Nil, Cons a (List a) ] as List a
+                and!(
+                    space1(min_indent),
+                    skip_first!(
+                        string(keyword::AS),
+                        space1_before(term(min_indent), min_indent)
+                    )
+                )
+            )
+        ),
+        |arena: &'a Bump,
+         (loc_ann, opt_as): (
+            Located<TypeAnnotation<'a>>,
+            Option<(&'a [CommentOrNewline<'a>], Located<TypeAnnotation<'a>>)>
+        )| {
+            match opt_as {
+                Some((spaces, loc_as)) => {
+                    let region = Region::span_across(&loc_ann.region, &loc_as.region);
+                    let value =
+                        TypeAnnotation::As(arena.alloc(loc_ann), spaces, arena.alloc(loc_as));
+
+                    Located { value, region }
+                }
+
+                None => loc_ann,
+            }
+        }
     )
 }
 
