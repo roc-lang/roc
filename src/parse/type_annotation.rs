@@ -3,8 +3,8 @@ use crate::parse::ast::{AssignedField, Attempting, CommentOrNewline, Tag, TypeAn
 use crate::parse::blankspace::{space0_around, space0_before, space1, space1_before};
 use crate::parse::keyword;
 use crate::parse::parser::{
-    allocated, char, optional, string, unexpected, unexpected_eof, Either, ParseResult, Parser,
-    State,
+    allocated, char, not, optional, string, unexpected, unexpected_eof, Either, ParseResult,
+    Parser, State,
 };
 use crate::parse::{global_tag, private_tag};
 use crate::region::{Located, Region};
@@ -93,13 +93,17 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
 }
 
 pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    one_of!(
-        loc_wildcard(),
-        loc_parenthetical_type(min_indent),
-        loc!(record_type(min_indent)),
-        loc!(tag_union!(min_indent)),
-        loc!(parse_concrete_type),
-        loc!(parse_type_variable)
+    skip_first!(
+        // Once we hit an "as", stop parsing args
+        not(string(keyword::AS)),
+        one_of!(
+            loc_wildcard(),
+            loc_parenthetical_type(min_indent),
+            loc!(record_type(min_indent)),
+            loc!(tag_union!(min_indent)),
+            loc!(parse_concrete_type),
+            loc!(parse_type_variable)
+        )
     )
 }
 
