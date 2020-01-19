@@ -1,11 +1,11 @@
 use crate::can::env::Env;
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::subs::{VarStore, Variable};
 use crate::types::RecordFieldLabel;
-use crate::types::Type;
+use crate::types::{Problem, Type};
 
 pub fn canonicalize_annotation(
     env: &Env,
@@ -77,18 +77,33 @@ fn can_annotation_help(
                 Type::Variable(var)
             }
         }
-        As(loc_inner, _spaces, loc_as) => {
-            let inner_type = can_annotation_help(env, &loc_inner.value, var_store, rigids);
-            let as_type = can_annotation_help(env, &loc_as.value, var_store, rigids);
+        As(loc_inner, _spaces, loc_as) => match loc_as.value {
+            TypeAnnotation::Apply(module_name, name, loc_vars) => {
+                let inner_type = can_annotation_help(env, &loc_inner.value, var_store, rigids);
+                let module_name = ModuleName::from(module_name.join("."));
+                let name = Uppercase::from(name);
+                let mut vars = Vec::with_capacity(loc_vars.len());
 
-            panic!("TODO convert parsed `As` noode to Type::Alias");
-            // Alias(
-            //     ModuleName,
-            //     Uppercase,
-            //     Vec<(Lowercase, ErrorType)>,
-            //     Box<ErrorType>,
-            // ),
-        }
+                for loc_var in loc_vars {
+                    match loc_var.value {
+                        BoundVariable(ident) => {
+                            vars.push((Lowercase::from(ident), var_store.fresh()));
+                        }
+                        _ => {
+                            // If anything other than a lowercase identifier
+                            // appears here, the whole annotation is invalid.
+                            return Type::Erroneous(Problem::CanonicalizationProblem);
+                        }
+                    }
+                }
+
+                Type::Alias(module_name, name, vars, Box::new(inner_type))
+            }
+            _ => {
+                // This is a syntactically invalid type alias.
+                Type::Erroneous(Problem::CanonicalizationProblem)
+            }
+        },
 
         Record { fields, ext } => {
             let mut field_types = SendMap::default();
