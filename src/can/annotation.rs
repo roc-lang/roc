@@ -77,15 +77,17 @@ fn can_annotation_help(
                 Type::Variable(var)
             }
         }
-        As(inner, v) => {
-            let inner_type = can_annotation_help(env, inner, var_store, rigids);
-            let name = Lowercase::from(*v);
+        As(loc_inner, _spaces, loc_as) => {
+            let inner_type = can_annotation_help(env, &loc_inner.value, var_store, rigids);
+            let as_type = can_annotation_help(env, &loc_as.value, var_store, rigids);
 
-            if let Some(rigid_variable) = rigids.get(&name) {
-                Type::As(Box::new(inner_type), *rigid_variable)
-            } else {
-                panic!("TODO variable bound by as does not occur in type")
-            }
+            panic!("TODO convert parsed `As` noode to Type::Alias");
+            // Alias(
+            //     ModuleName,
+            //     Uppercase,
+            //     Vec<(Lowercase, ErrorType)>,
+            //     Box<ErrorType>,
+            // ),
         }
 
         Record { fields, ext } => {
