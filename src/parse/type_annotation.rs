@@ -18,7 +18,7 @@ pub fn located<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a
 
 macro_rules! tag_union {
     ($min_indent:expr) => {
-        map_with_arena!(
+        map!(
             and!(
                 collection!(
                     char('['),
@@ -32,8 +32,7 @@ macro_rules! tag_union {
                     move |arena, state| allocated(term($min_indent)).parse(arena, state)
                 )
             ),
-            |arena: &'a Bump,
-             (tags, ext): (
+            |(tags, ext): (
                 Vec<'a, Located<Tag<'a>>>,
                 Option<&'a Located<TypeAnnotation<'a>>>,
             )| TypeAnnotation::TagUnion {
