@@ -741,11 +741,7 @@ fn canonicalize_when_branch<'a>(
     loc_pattern_and_guard: &(Located<ast::Pattern<'a>>, Option<Located<ast::Expr<'a>>>),
     loc_expr: &Located<ast::Expr<'a>>,
     output: &mut Output,
-) -> (
-    WhenPattern,
-    Located<Expr>,
-    References,
-) {
+) -> (WhenPattern, Located<Expr>, References) {
     // Each case branch gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the
     // rest of this block.
@@ -809,7 +805,10 @@ fn canonicalize_when_branch<'a>(
     };
 
     (
-        WhenPattern { pattern: loc_can_pattern, guard: loc_can_guard },
+        WhenPattern {
+            pattern: loc_can_pattern,
+            guard: loc_can_guard,
+        },
         can_expr,
         branch_output.references,
     )

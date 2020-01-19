@@ -900,15 +900,30 @@ mod when {
     /// Parsing branches of when conditional.
     fn branches<'a>(
         min_indent: u16,
-    ) -> impl Parser<'a, Vec<'a, &'a (Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>, Located<Expr<'a>>)>> {
+    ) -> impl Parser<
+        'a,
+        Vec<
+            'a,
+            &'a (
+                Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
+                Located<Expr<'a>>,
+            ),
+        >,
+    > {
         move |arena, state| {
-            let mut branches: Vec<'a, &'a (Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>, Located<Expr<'a>>)> =
-                Vec::with_capacity_in(2, arena);
+            let mut branches: Vec<
+                'a,
+                &'a (
+                    Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
+                    Located<Expr<'a>>,
+                ),
+            > = Vec::with_capacity_in(2, arena);
 
             // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
             // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
-            let (loc_first_patterns, state) = branch_alternatives(min_indent).parse(arena, state)?;
+            let (loc_first_patterns, state) =
+                branch_alternatives(min_indent).parse(arena, state)?;
             let (loc_first_pattern, _first_guard) = loc_first_patterns.first().unwrap();
             let original_indent = loc_first_pattern.region.start_col;
             let indented_more = original_indent + 1;
@@ -955,10 +970,15 @@ mod when {
     }
 
     /// Parsing alternative patterns in when branches.
-    fn branch_alternatives<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>> {
+    fn branch_alternatives<'a>(
+        min_indent: u16,
+    ) -> impl Parser<'a, Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>> {
         sep_by1(
             char('|'),
-            map!(space0_around(loc_pattern(min_indent), min_indent), |pattern| (pattern, None)),
+            map!(
+                space0_around(loc_pattern(min_indent), min_indent),
+                |pattern| (pattern, None)
+            ),
         )
     }
 

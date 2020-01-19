@@ -306,10 +306,7 @@ fn from_can_when<'a>(
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<can::expr::Expr>,
-    branches: std::vec::Vec<(
-        can::expr::WhenPattern,
-        Located<can::expr::Expr>,
-    )>,
+    branches: std::vec::Vec<(can::expr::WhenPattern, Located<can::expr::Expr>)>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
     use crate::can::pattern::Pattern::*;

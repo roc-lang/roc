@@ -149,7 +149,9 @@ pub fn fmt_expr<'a>(
                 let ((first_pattern, _first_guard), rest) = patterns.split_first().unwrap();
                 let is_multiline = match rest.last() {
                     None => false,
-                    Some((last_pattern, _last_guard)) => first_pattern.region.start_line != last_pattern.region.end_line,
+                    Some((last_pattern, _last_guard)) => {
+                        first_pattern.region.start_line != last_pattern.region.end_line
+                    }
                 };
 
                 fmt_pattern(buf, &first_pattern.value, indent + INDENT, false, true);
