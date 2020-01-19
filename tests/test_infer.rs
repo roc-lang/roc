@@ -1414,7 +1414,7 @@ mod test_infer {
                     empty
                        "#
             ),
-            "Test.List d",
+            "Test.List a",
         );
     }
 
