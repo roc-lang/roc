@@ -43,6 +43,7 @@ macro_rules! tag_union {
     };
 }
 
+#[allow(clippy::type_complexity)]
 pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     map_with_arena!(
         and!(
