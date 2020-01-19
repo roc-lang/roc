@@ -192,7 +192,6 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
         RigidVar(name) => buf.push_str(name.as_str()),
         Structure(flat_type) => write_flat_type(flat_type, subs, buf, parens),
         Alias(module_name, name, args, _actual) => {
-            // Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Variable),
             buf.push_str(module_name.as_str());
             buf.push('.');
             buf.push_str(name.as_str());
