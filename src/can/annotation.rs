@@ -1,5 +1,5 @@
 use crate::can::env::Env;
-use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::ident::{Lowercase, Uppercase};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
@@ -78,9 +78,8 @@ fn can_annotation_help(
             }
         }
         As(loc_inner, _spaces, loc_as) => match loc_as.value {
-            TypeAnnotation::Apply(module_name, name, loc_vars) => {
+            TypeAnnotation::Apply(module_name, name, loc_vars) if module_name.is_empty() => {
                 let inner_type = can_annotation_help(env, &loc_inner.value, var_store, rigids);
-                let module_name = ModuleName::from(module_name.join("."));
                 let name = Uppercase::from(name);
                 let mut vars = Vec::with_capacity(loc_vars.len());
 
@@ -97,7 +96,7 @@ fn can_annotation_help(
                     }
                 }
 
-                Type::Alias(module_name, name, vars, Box::new(inner_type))
+                Type::Alias(env.home.clone(), name, vars, Box::new(inner_type))
             }
             _ => {
                 // This is a syntactically invalid type alias.
