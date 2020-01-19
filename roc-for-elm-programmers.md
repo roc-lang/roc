@@ -453,10 +453,8 @@ try to do this), and Roc only has type aliases. However, in Roc, you can achieve
 the same API and runtime performance characteristics as if you had phantom types,
 only using *phantom values* instead.
 
-A phantom value is one which affects types, but which is never read at runtime.
-(It is similar to Rust's [`PhantomData`](https://doc.rust-lang.org/std/marker/struct.PhantomData.html)
-but not quite the same.)
-For example, let's say I wanted to define a [units library](https://package.elm-lang.org/packages/ianmackenzie/elm-units/latest/) -
+A phantom value is one which affects types, but which holds no information at runtime.
+As an example, let's say I wanted to define a [units library](https://package.elm-lang.org/packages/ianmackenzie/elm-units/latest/) -
 a classic example of phantom types. I could do that like this:
 
 ```
@@ -480,13 +478,13 @@ add = \Quantity units a, Quantity _ b ->
 ```
 
 From a performance perspective, it's relevant here that `[ Km ]`, `[ Cm ]`, and `[ Mm ]`
-are all unions containing a single tag. That means they have no data at runtime
-(they would always destructure to the same tag), which means they can be "unboxed away" -
+are all unions containing a single tag. That means they hold no information at runtime
+(they would always destructure to the same tag), which means they can be "unboxed" away -
 that is, discarded prior to code generation.
 
-This means that for code generation purposes, Roc will treat `Quantity [ Km ] Int`
-as equivalent to `Quantity Int`. Then, becaue `Quantity Int` is an alias for
-`[ Quantity Int ]`, it will unbox again and reduce that all the way down to to `Int`.
+During code generation, Roc treats `Quantity [ Km ] Int` as equivalent to `Quantity Int`.
+Then, becaue `Quantity Int` is an alias for `[ Quantity Int ]`, it will unbox again
+and reduce that all the way down to to `Int`.
 
 This means that, just like phantom *types*, phantom *values* affect type checking
 only, and have no runtime overhead. Rust has a related concept called [phantom data](https://doc.rust-lang.org/nomicon/phantom-data.html).

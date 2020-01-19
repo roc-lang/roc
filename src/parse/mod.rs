@@ -45,7 +45,7 @@ fn loc_parse_expr_body_without_operators<'a>(
         loc!(record_literal(min_indent)),
         loc!(list_literal(min_indent)),
         loc!(unary_op(min_indent)),
-        loc!(when_expr(min_indent)),
+        loc!(when::expr(min_indent)),
         loc!(if_expr(min_indent)),
         loc!(ident_etc(min_indent))
     )
@@ -675,7 +675,7 @@ fn loc_parse_function_arg<'a>(
         loc!(record_literal(min_indent)),
         loc!(list_literal(min_indent)),
         loc!(unary_op(min_indent)),
-        loc!(when_expr(min_indent)),
+        loc!(when::expr(min_indent)),
         loc!(if_expr(min_indent)),
         loc!(ident_without_apply())
     )
@@ -853,151 +853,137 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
     map!(lowercase_ident(), Pattern::Identifier)
 }
 
-pub fn when_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
-    then(
-        and!(
-            when_with_indent(),
-            attempt!(
-                Attempting::WhenCondition,
-                skip_second!(
-                    space1_around(
-                        loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                        min_indent,
-                    ),
-                    string(keyword::IS)
+mod when {
+    use super::*;
+
+    /// Parser for when expressions.
+    pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+        then(
+            and!(
+                when_with_indent(),
+                attempt!(
+                    Attempting::WhenCondition,
+                    skip_second!(
+                        space1_around(
+                            loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                            min_indent,
+                        ),
+                        string(keyword::IS)
+                    )
                 )
-            )
-        ),
-        move |arena, state, (case_indent, loc_condition)| {
-            if case_indent < min_indent {
-                panic!("TODO case wasn't indented enough");
-            }
-
-            // Everything in the branches must be indented at least as much as the case itself.
-            let min_indent = case_indent;
-
-            let (branches, state) =
-                attempt!(Attempting::WhenBranch, when_branches(min_indent)).parse(arena, state)?;
-
-            Ok((Expr::When(arena.alloc(loc_condition), branches), state))
-        },
-    )
-}
-
-pub fn when_branches<'a>(
-    min_indent: u16,
-) -> impl Parser<
-    'a,
-    Vec<
-        'a,
-        &'a (
-            Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
-            Located<Expr<'a>>,
-        ),
-    >,
-> {
-    move |arena, state| {
-        let mut branches: Vec<
-            'a,
-            &'a (
-                Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
-                Located<Expr<'a>>,
             ),
-        > = Vec::with_capacity_in(2, arena);
-
-        // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
-        // 2. Parse the other branches. Their indentation levels must be == the first branch's.
-
-        let (mut loc_first_pattern, state) = sep_by1(
-            //            map!(and!(space0(min_indent), char('|')), |_| ()),
-            //            space0_before(
-            //                skip_first!(
-            //                        string("if"),
-            //                        space0_before(
-            //                            loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-            //                            indented_more,
-            //                        )
-            //                    ),
-            //                min_indent
-            //            ),
-            //        )
-            map!(and!(space0(min_indent), char('|')), |_| ()),
-            map!(
-                space0_before(loc_pattern(min_indent), min_indent),
-                |pattern| (pattern, None)
-            ),
-        )
-        .parse(arena, state)?;
-        let original_indent = state.indent_col;
-        let indented_more = original_indent + 1;
-        let (spaces_before_arrow, state) = space0(min_indent).parse(arena, state)?;
-
-        // Record the spaces before the first "->", if any.
-        if !spaces_before_arrow.is_empty() {
-            let (last, guard) = loc_first_pattern.pop().unwrap();
-            let region = last.region;
-            let value = Pattern::SpaceAfter(arena.alloc(last.value), spaces_before_arrow);
-            loc_first_pattern.push((Located { region, value }, guard));
-        };
-
-        // Parse the first "->" and the expression after it.
-        let (loc_first_expr, mut state) = skip_first!(
-            string("->"),
-            // The expr must be indented more than the pattern preceding it
-            space0_before(
-                loc!(move |arena, state| parse_expr(indented_more, arena, state)),
-                indented_more,
-            )
-        )
-        .parse(arena, state)?;
-
-        // Record this as the first branch, then optionally parse additional branches.
-        branches.push(arena.alloc((loc_first_pattern, loc_first_expr)));
-
-        let branch_parser = and!(
-            then(
-                sep_by1(
-                    char('|'),
-                    map!(
-                        space0_around(loc_pattern(min_indent), min_indent),
-                        |pattern| (pattern, None)
-                    ),
-                ),
-                move |_arena, state, loc_patterns| {
-                    if state.indent_col == original_indent {
-                        Ok((loc_patterns, state))
-                    } else {
-                        panic!(
-                            "TODO additional branch didn't have same indentation as first branch"
-                        );
-                    }
-                },
-            ),
-            skip_first!(
-                string("->"),
-                space1_before(
-                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                    min_indent,
-                )
-            )
-        );
-
-        loop {
-            match branch_parser.parse(arena, state) {
-                Ok((next_output, next_state)) => {
-                    state = next_state;
-
-                    branches.push(arena.alloc(next_output));
+            move |arena, state, (case_indent, loc_condition)| {
+                if case_indent < min_indent {
+                    panic!("TODO case wasn't indented enough");
                 }
-                Err((_, old_state)) => {
-                    state = old_state;
 
-                    break;
-                }
-            }
+                // Everything in the branches must be indented at least as much as the case itself.
+                let min_indent = case_indent;
+
+                let (branches, state) =
+                    attempt!(Attempting::WhenBranch, branches(min_indent)).parse(arena, state)?;
+
+                Ok((Expr::When(arena.alloc(loc_condition), branches), state))
+            },
+        )
+    }
+
+    /// Parsing when with indentation.
+    fn when_with_indent<'a>() -> impl Parser<'a, u16> {
+        move |arena, state: State<'a>| {
+            string(keyword::WHEN)
+                .parse(arena, state)
+                .map(|((), state)| (state.indent_col, state))
         }
+    }
 
-        Ok((branches, state))
+    /// Parsing branches of when conditional.
+    fn branches<'a>(
+        min_indent: u16,
+    ) -> impl Parser<'a, Vec<'a, &'a (Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>, Located<Expr<'a>>)>> {
+        move |arena, state| {
+            let mut branches: Vec<'a, &'a (Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>, Located<Expr<'a>>)> =
+                Vec::with_capacity_in(2, arena);
+
+            // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
+            // 2. Parse the other branches. Their indentation levels must be == the first branch's.
+
+            let (loc_first_patterns, state) = branch_alternatives(min_indent).parse(arena, state)?;
+            let (loc_first_pattern, _first_guard) = loc_first_patterns.first().unwrap();
+            let original_indent = loc_first_pattern.region.start_col;
+            let indented_more = original_indent + 1;
+
+            // Parse the first "->" and the expression after it.
+            let (loc_first_expr, mut state) = branch_result(indented_more).parse(arena, state)?;
+
+            // Record this as the first branch, then optionally parse additional branches.
+            branches.push(arena.alloc((loc_first_patterns, loc_first_expr)));
+
+            let branch_parser = and!(
+                then(
+                    branch_alternatives(min_indent),
+                    move |_arena, state, loc_patterns| {
+                        if alternatives_indented_correctly(&loc_patterns, original_indent) {
+                            Ok((loc_patterns, state))
+                        } else {
+                            panic!(
+                                "TODO additional branch didn't have same indentation as first branch"
+                            );
+                        }
+                    },
+                ),
+                branch_result(indented_more)
+            );
+
+            loop {
+                match branch_parser.parse(arena, state) {
+                    Ok((next_output, next_state)) => {
+                        state = next_state;
+
+                        branches.push(arena.alloc(next_output));
+                    }
+                    Err((_, old_state)) => {
+                        state = old_state;
+
+                        break;
+                    }
+                }
+            }
+
+            Ok((branches, state))
+        }
+    }
+
+    /// Parsing alternative patterns in when branches.
+    fn branch_alternatives<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>> {
+        sep_by1(
+            char('|'),
+            map!(space0_around(loc_pattern(min_indent), min_indent), |pattern| (pattern, None)),
+        )
+    }
+
+    /// Check if alternatives of a when branch are indented correctly.
+    fn alternatives_indented_correctly<'a>(
+        loc_patterns: &'a Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
+        original_indent: u16,
+    ) -> bool {
+        let ((first, _first_guard), rest) = loc_patterns.split_first().unwrap();
+        let first_indented_correctly = first.region.start_col == original_indent;
+        let rest_indented_correctly = rest
+            .iter()
+            .all(|(pattern, _guard)| pattern.region.start_col >= original_indent);
+        first_indented_correctly && rest_indented_correctly
+    }
+
+    /// Parsing the righthandside of a branch in a when conditional.
+    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
+        skip_first!(
+            string("->"),
+            space0_before(
+                loc!(move |arena, state| parse_expr(indent, arena, state)),
+                indent,
+            )
+        )
     }
 }
 
@@ -1268,14 +1254,6 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
             Some(ch) => Err(unexpected(ch, 0, state, Attempting::Def)),
             None => Err(unexpected_eof(0, Attempting::Def, state)),
         }
-    }
-}
-
-pub fn when_with_indent<'a>() -> impl Parser<'a, u16> {
-    move |arena, state: State<'a>| {
-        string(keyword::WHEN)
-            .parse(arena, state)
-            .map(|((), state)| (state.indent_col, state))
     }
 }
 

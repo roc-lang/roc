@@ -4,7 +4,7 @@ interface Primary
 
 blah = 1
 
-two = 2
+two = 2 # TODO FIXME this should error due to shadowing!
 
 str = foo
 
@@ -12,4 +12,4 @@ alwaysThree = \_ -> Dep1.three
 
 identity = \a -> a
 
-three = identity (alwaysThree {}) 
+three = identity (alwaysThree {})

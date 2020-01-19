@@ -1,6 +1,6 @@
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::symbol::Symbol;
-use crate::collections::ImMap;
+use crate::collections::{ImMap, MutMap, SendMap};
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use crate::types::Constraint::{self, *};
@@ -8,12 +8,21 @@ use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
 use crate::uniqueness::boolean_algebra;
+use std::sync::Arc;
 
-type Env = ImMap<Symbol, Variable>;
+pub type SubsByModule = MutMap<ModuleName, ModuleSubs>;
+
+#[derive(Clone, Debug)]
+pub enum ModuleSubs {
+    Invalid,
+    Valid(Arc<Solved<Subs>>),
+}
+
+type Env = SendMap<Symbol, Variable>;
 
 const DEFAULT_POOLS: usize = 8;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
@@ -64,30 +73,49 @@ impl Pools {
 struct State {
     vars_by_symbol: Env,
     mark: Mark,
+    subs_by_module: SubsByModule,
+}
+
+/// A marker that a given Subs has been solved.
+/// The only way to obtain a Solved<Subs> is by running the solver on it.
+#[derive(Clone, Debug)]
+pub struct Solved<T>(T);
+
+impl<T> Solved<T> {
+    pub fn inner(&self) -> &'_ T {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
 }
 
 pub fn run(
     vars_by_symbol: &Env,
+    subs_by_module: SubsByModule,
     problems: &mut Vec<Problem>,
-    subs: &mut Subs,
+    mut subs: Subs,
     constraint: &Constraint,
-) {
+) -> (Solved<Subs>, Env) {
     let mut pools = Pools::default();
     let state = State {
         vars_by_symbol: vars_by_symbol.clone(),
         mark: Mark::NONE.next(),
+        subs_by_module,
     };
     let rank = Rank::toplevel();
-
-    solve(
+    let state = solve(
         vars_by_symbol,
         state,
         rank,
         &mut pools,
         problems,
-        subs,
+        &mut subs,
         constraint,
     );
+
+    (Solved(subs), state.vars_by_symbol)
 }
 
 fn solve(
@@ -103,7 +131,9 @@ fn solve(
         True => state,
         SaveTheEnvironment => {
             let mut copy = state;
+
             copy.vars_by_symbol = vars_by_symbol.clone();
+
             copy
         }
         Eq(typ, expected_type, _region) => {
@@ -118,7 +148,7 @@ fn solve(
 
             state
         }
-        Lookup(symbol, expected_type, _region) => {
+        Lookup(module_name, symbol, expected_type, _region) => {
             let var = *vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
                 // a Problem ("module Foo does not expose `bar`") for later.
@@ -144,7 +174,22 @@ fn solve(
             // successfully (in this case, to `Int -> Int`), we can use that to
             // infer the type of this lookup (in this case, `Int`) without ever
             // having mutated the original.
-            let actual = deep_copy_var(subs, rank, pools, var);
+            //
+            // If this Lookup is targeting a value in another module,
+            // then we copy from that module's Subs into our own. If the value
+            // is being looked up in this module, then we use our Subs as both
+            // the source and destination.
+            let actual = if module_name.is_empty() {
+                // If this Lookup has no module_name, that means it's the current module
+                deep_copy_local_var(subs, rank, pools, var)
+            } else {
+                let source_subs = state
+                    .subs_by_module
+                    .get(module_name)
+                    .unwrap_or_else(|| panic!("Could not find Subs for module {:?}", module_name));
+
+                deep_copy_foreign_var(source_subs, subs, rank, pools, var)
+            };
             let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
@@ -304,6 +349,21 @@ fn solve(
                         let visit_mark = young_mark.next();
                         let final_mark = visit_mark.next();
 
+                        debug_assert!({
+                            let offenders = next_pools
+                                .get(next_rank)
+                                .iter()
+                                .filter(|var| {
+                                    subs.get_without_compacting(crate::subs::Variable::clone(var))
+                                        .rank
+                                        .into_usize()
+                                        > next_rank.into_usize()
+                                })
+                                .collect::<Vec<&crate::subs::Variable>>();
+
+                            offenders.is_empty()
+                        });
+
                         // pop pool
                         generalize(subs, young_mark, visit_mark, next_rank, next_pools);
 
@@ -327,6 +387,7 @@ fn solve(
                         let temp_state = State {
                             vars_by_symbol: new_state.vars_by_symbol,
                             mark: final_mark,
+                            subs_by_module: new_state.subs_by_module,
                         };
 
                         // Now solve the body, using the new vars_by_symbol which includes
@@ -351,6 +412,7 @@ fn solve(
                     if next_rank.into_usize() < pools.len() {
                         work_in_next_pools(pools)
                     } else {
+                        // TODO shouldn't this grow the pool, it does in the elm source
                         work_in_next_pools(&mut pools.clone())
                     }
                 }
@@ -422,7 +484,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         Record(fields, ext) => {
-            let mut field_vars = ImMap::default();
+            let mut field_vars = MutMap::default();
 
             for (field, field_type) in fields {
                 field_vars.insert(
@@ -437,7 +499,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         TagUnion(tags, ext) => {
-            let mut tag_vars = ImMap::default();
+            let mut tag_vars = MutMap::default();
 
             for (tag, tag_argument_types) in tags {
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
@@ -568,6 +630,7 @@ fn pool_to_rank_table(
             },
         );
 
+        debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
         pools.get_mut(rank).push(var);
     }
 
@@ -719,7 +782,15 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
     pool.extend(vars);
 }
 
-fn deep_copy_var_help(
+fn deep_copy_local_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
+    let copy = deep_copy_local_var_help(subs, rank, pools, var);
+
+    subs.restore(var);
+
+    copy
+}
+
+fn deep_copy_local_var_help(
     subs: &mut Subs,
     max_rank: Rank,
     pools: &mut Pools,
@@ -728,7 +799,7 @@ fn deep_copy_var_help(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    let desc = subs.get(var);
+    let desc = subs.get_without_compacting(var);
 
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
@@ -775,7 +846,7 @@ fn deep_copy_var_help(
                 } => {
                     let args = args
                         .into_iter()
-                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                        .map(|var| deep_copy_local_var_help(subs, max_rank, pools, var))
                         .collect();
 
                     Apply {
@@ -786,10 +857,10 @@ fn deep_copy_var_help(
                 }
 
                 Func(arg_vars, ret_var) => {
-                    let new_ret_var = deep_copy_var_help(subs, max_rank, pools, ret_var);
+                    let new_ret_var = deep_copy_local_var_help(subs, max_rank, pools, ret_var);
                     let arg_vars = arg_vars
                         .into_iter()
-                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                        .map(|var| deep_copy_local_var_help(subs, max_rank, pools, var))
                         .collect();
 
                     Func(arg_vars, new_ret_var)
@@ -798,34 +869,38 @@ fn deep_copy_var_help(
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
-                    let mut new_fields = ImMap::default();
+                    let mut new_fields = MutMap::default();
 
                     for (label, var) in fields {
-                        new_fields.insert(label, deep_copy_var_help(subs, max_rank, pools, var));
+                        new_fields
+                            .insert(label, deep_copy_local_var_help(subs, max_rank, pools, var));
                     }
 
                     Record(
                         new_fields,
-                        deep_copy_var_help(subs, max_rank, pools, ext_var),
+                        deep_copy_local_var_help(subs, max_rank, pools, ext_var),
                     )
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut new_tags = ImMap::default();
+                    let mut new_tags = MutMap::default();
 
                     for (tag, vars) in tags {
                         let new_vars: Vec<Variable> = vars
                             .into_iter()
-                            .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                            .map(|var| deep_copy_local_var_help(subs, max_rank, pools, var))
                             .collect();
                         new_tags.insert(tag, new_vars);
                     }
 
-                    TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))
+                    TagUnion(
+                        new_tags,
+                        deep_copy_local_var_help(subs, max_rank, pools, ext_var),
+                    )
                 }
 
                 Boolean(b) => {
-                    let mut mapper = |var| deep_copy_var_help(subs, max_rank, pools, var);
+                    let mut mapper = |var| deep_copy_local_var_help(subs, max_rank, pools, var);
 
                     Boolean(b.map_variables(&mut mapper))
                 }
@@ -847,9 +922,9 @@ fn deep_copy_var_help(
         Alias(module_name, name, args, real_type_var) => {
             let new_args = args
                 .into_iter()
-                .map(|(name, var)| (name, deep_copy_var_help(subs, max_rank, pools, var)))
+                .map(|(name, var)| (name, deep_copy_local_var_help(subs, max_rank, pools, var)))
                 .collect();
-            let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
+            let new_real_type_var = deep_copy_local_var_help(subs, max_rank, pools, real_type_var);
             let new_content = Alias(module_name, name, new_args, new_real_type_var);
 
             subs.set(copy, make_descriptor(new_content));
@@ -859,12 +934,213 @@ fn deep_copy_var_help(
     }
 }
 
-fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
-    let copy = deep_copy_var_help(subs, rank, pools, var);
+fn deep_copy_foreign_var(
+    source_subs: &ModuleSubs,
+    dest_subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    var: Variable,
+) -> Variable {
+    let copy = deep_copy_foreign_var_help(source_subs, dest_subs, rank, pools, var);
 
-    subs.restore(var);
+    dest_subs.restore(var);
 
     copy
+}
+
+fn deep_copy_foreign_var_help(
+    source_subs: &ModuleSubs,
+    dest_subs: &mut Subs,
+    max_rank: Rank,
+    pools: &mut Pools,
+    var: Variable,
+) -> Variable {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+    use ModuleSubs::*;
+
+    let desc = match source_subs {
+        Valid(arc_solved) => (&arc_solved).inner().get_without_compacting(var),
+        Invalid => panic!("TODO gracefully handle lookups on invalid modules"),
+    };
+
+    if let Some(copy) = desc.copy.into_variable() {
+        return copy;
+    } else if desc.rank != Rank::NONE {
+        return var;
+    }
+
+    let make_descriptor = |content| Descriptor {
+        content,
+        rank: max_rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    let content = desc.content;
+    let copy = dest_subs.fresh(make_descriptor(content.clone()));
+
+    pools.get_mut(max_rank).push(copy);
+
+    // Link the original variable to the new variable. This lets us
+    // avoid making multiple copies of the variable we are instantiating.
+    //
+    // Need to do this before recursively copying to avoid looping.
+    dest_subs.set(
+        var,
+        Descriptor {
+            content: content.clone(),
+            rank: desc.rank,
+            mark: Mark::NONE,
+            copy: copy.into(),
+        },
+    );
+
+    // Now we recursively copy the content of the variable.
+    // We have already marked the variable as copied, so we
+    // will not repeat this work or crawl this variable again.
+    match content {
+        Structure(flat_type) => {
+            let new_flat_type = match flat_type {
+                Apply {
+                    module_name,
+                    name,
+                    args,
+                } => {
+                    let args = args
+                        .into_iter()
+                        .map(|var| {
+                            deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, var)
+                        })
+                        .collect();
+
+                    Apply {
+                        module_name,
+                        name,
+                        args,
+                    }
+                }
+
+                Func(arg_vars, ret_var) => {
+                    let new_ret_var = deep_copy_foreign_var_help(
+                        source_subs,
+                        dest_subs,
+                        max_rank,
+                        pools,
+                        ret_var,
+                    );
+                    let arg_vars = arg_vars
+                        .into_iter()
+                        .map(|var| {
+                            deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, var)
+                        })
+                        .collect();
+
+                    Func(arg_vars, new_ret_var)
+                }
+
+                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+
+                Record(fields, ext_var) => {
+                    let mut new_fields = MutMap::default();
+
+                    for (label, var) in fields {
+                        new_fields.insert(
+                            label,
+                            deep_copy_foreign_var_help(
+                                source_subs,
+                                dest_subs,
+                                max_rank,
+                                pools,
+                                var,
+                            ),
+                        );
+                    }
+
+                    Record(
+                        new_fields,
+                        deep_copy_foreign_var_help(
+                            source_subs,
+                            dest_subs,
+                            max_rank,
+                            pools,
+                            ext_var,
+                        ),
+                    )
+                }
+
+                TagUnion(tags, ext_var) => {
+                    let mut new_tags = MutMap::default();
+
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| {
+                                deep_copy_foreign_var_help(
+                                    source_subs,
+                                    dest_subs,
+                                    max_rank,
+                                    pools,
+                                    var,
+                                )
+                            })
+                            .collect();
+                        new_tags.insert(tag, new_vars);
+                    }
+
+                    TagUnion(
+                        new_tags,
+                        deep_copy_foreign_var_help(
+                            source_subs,
+                            dest_subs,
+                            max_rank,
+                            pools,
+                            ext_var,
+                        ),
+                    )
+                }
+
+                Boolean(b) => {
+                    let mut mapper = |var| {
+                        deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, var)
+                    };
+
+                    Boolean(b.map_variables(&mut mapper))
+                }
+            };
+
+            dest_subs.set(copy, make_descriptor(Structure(new_flat_type)));
+
+            copy
+        }
+
+        FlexVar(_) | Error => copy,
+
+        RigidVar(name) => {
+            dest_subs.set(copy, make_descriptor(FlexVar(Some(name))));
+
+            copy
+        }
+
+        Alias(module_name, name, args, real_type_var) => {
+            let new_args = args
+                .into_iter()
+                .map(|(name, var)| {
+                    (
+                        name,
+                        deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, var),
+                    )
+                })
+                .collect();
+            let new_real_type_var =
+                deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, real_type_var);
+            let new_content = Alias(module_name, name, new_args, new_real_type_var);
+
+            dest_subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+    }
 }
 
 fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) -> Variable {

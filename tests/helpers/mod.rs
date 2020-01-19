@@ -105,6 +105,7 @@ pub fn uniq_expr_with(
 
     let expected2 = Expected::NoExpectation(Type::Variable(variable));
     let constraint2 = roc::uniqueness::constrain_declaration(
+        home.into(),
         &var_store2,
         Region::zero(),
         loc_expr,
@@ -155,7 +156,7 @@ pub fn can_expr_with(
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
     let scope_prefix = format!("{}.{}$", home, name).into();
-    let mut scope = Scope::new(scope_prefix, declared_idents.clone());
+    let mut scope = Scope::new(home.clone().into(), scope_prefix, declared_idents.clone());
     let mut env = Env::new(home.into());
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
@@ -166,7 +167,10 @@ pub fn can_expr_with(
     );
 
     let constraint = constrain_expr(
-        &ImMap::default(),
+        &roc::constrain::expr::Env {
+            rigids: ImMap::default(),
+            module_name: home.into(),
+        },
         loc_expr.region,
         &loc_expr.value,
         expected,
@@ -253,8 +257,6 @@ pub fn assert_correct_variable_usage(constraint: &Constraint) {
     let (declared, used) = variable_usage(constraint);
 
     if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
-        dbg!(&constraint);
-        // dbg!(expr);
         println!("VARIABLE USAGE PROBLEM");
         println!("used variable count: {}\n", used.len());
 
@@ -312,7 +314,7 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
                 used.insert(v);
             }
         }
-        Lookup(_, expectation, _) => {
+        Lookup(_, _, expectation, _) => {
             for v in expectation.get_type_ref().variables() {
                 used.insert(v);
             }

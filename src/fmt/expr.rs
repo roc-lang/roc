@@ -147,27 +147,21 @@ pub fn fmt_expr<'a>(
             while let Some((patterns, expr)) = it.next() {
                 add_spaces(buf, indent + INDENT);
                 let ((first_pattern, _first_guard), rest) = patterns.split_first().unwrap();
-
-                match first_pattern.value {
-                    Pattern::SpaceBefore(nested, spaces) => {
-                        fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                        fmt_pattern(buf, nested, indent + INDENT, false);
-                    }
-                    _ => {
-                        fmt_pattern(buf, &first_pattern.value, indent + INDENT, false);
-                    }
+                let is_multiline = match rest.last() {
+                    None => false,
+                    Some((last_pattern, _last_guard)) => first_pattern.region.start_line != last_pattern.region.end_line,
                 };
+
+                fmt_pattern(buf, &first_pattern.value, indent + INDENT, false, true);
                 for (pattern, _guard) in rest {
-                    buf.push_str(" | ");
-                    match pattern.value {
-                        Pattern::SpaceBefore(nested, spaces) => {
-                            fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                            fmt_pattern(buf, nested, indent + INDENT, false);
-                        }
-                        _ => {
-                            fmt_pattern(buf, &pattern.value, indent + INDENT, false);
-                        }
+                    if is_multiline {
+                        buf.push_str("\n");
+                        add_spaces(buf, indent + INDENT);
+                        buf.push_str("| ");
+                    } else {
+                        buf.push_str(" | ");
                     }
+                    fmt_pattern(buf, &pattern.value, indent + INDENT, false, true);
                 }
 
                 buf.push_str(" ->\n");
@@ -584,7 +578,7 @@ pub fn fmt_closure<'a>(
             any_args_printed = true;
         }
 
-        fmt_pattern(buf, &loc_pattern.value, indent, false);
+        fmt_pattern(buf, &loc_pattern.value, indent, false, false);
     }
 
     if !arguments_are_multiline {

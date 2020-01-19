@@ -16,6 +16,10 @@ impl ModuleName {
     pub fn as_str(&self) -> &str {
         &*self.0
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl<'a> From<&'a str> for ModuleName {
@@ -24,9 +28,27 @@ impl<'a> From<&'a str> for ModuleName {
     }
 }
 
-impl<'a> From<String> for ModuleName {
+impl From<Box<str>> for ModuleName {
+    fn from(string: Box<str>) -> Self {
+        Self((string.as_ref()).into())
+    }
+}
+
+impl From<String> for ModuleName {
     fn from(string: String) -> Self {
         Self(string.into())
+    }
+}
+
+impl From<InlinableString> for ModuleName {
+    fn from(string: InlinableString) -> Self {
+        Self(string)
+    }
+}
+
+impl<'a> Into<InlinableString> for ModuleName {
+    fn into(self) -> InlinableString {
+        self.0
     }
 }
 

@@ -764,6 +764,7 @@ dependencies = [
  "pretty_assertions 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "quickcheck 0.8.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "quickcheck_macros 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "symbol-map 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "target-lexicon 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "wyhash 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -812,6 +813,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "smallvec"
 version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "symbol-map"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -1026,6 +1032,7 @@ dependencies = [
 "checksum sized-chunks 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)" = "6f59f81ec9833a580d2448e958d16bd872637798f3ab300b693c48f136fb76ff"
 "checksum slab 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "c111b5bd5695e56cffe5129854aa230b39c93a305372fdbb2668ca2394eea9f8"
 "checksum smallvec 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "44e59e0c9fa00817912ae6e4e6e3c4fe04455e75699d06eedc7d85917ed8e8f4"
+"checksum symbol-map 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "61d9cc91822af02f09aa1244db257390074da43541d18f699246a8665de3592c"
 "checksum syn 0.15.44 (registry+https://github.com/rust-lang/crates.io-index)" = "9ca4b3b69a77cbe1ffc9e198781b7acb0c7365a883670e8f1c1bc66fba79a5c5"
 "checksum syn 1.0.12 (registry+https://github.com/rust-lang/crates.io-index)" = "ddc157159e2a7df58cd67b1cace10b8ed256a404fb0070593f137d8ba6bef4de"
 "checksum target-lexicon 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "6f4c118a7a38378f305a9e111fcb2f7f838c0be324bfb31a77ea04f7f6e684b4"

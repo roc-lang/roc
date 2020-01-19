@@ -28,7 +28,8 @@ mod test_infer {
         }
 
         let mut unify_problems = Vec::new();
-        let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
+        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
+        let mut subs = solved.into_inner();
 
         name_all_type_vars(variable, &mut subs);
 
@@ -48,7 +49,6 @@ mod test_infer {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            dbg!(problems);
             println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
             assert_eq!(0, 1);
         }
@@ -1066,8 +1066,8 @@ mod test_infer {
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
-                r#"\x -> 
-                    when x is 
+                r#"\x ->
+                    when x is
                         True -> 1
                         False -> 0
                 "#
@@ -1104,8 +1104,8 @@ mod test_infer {
             infer_eq(
                 indoc!(
                     r#"
-                f = \x -> 
-                    when x is 
+                f = \x ->
+                    when x is
                         { a, b } -> a
 
                 f
@@ -1245,4 +1245,169 @@ mod test_infer {
             "Int",
         );
     }
+
+    // TODO add more realistic function when able
+    #[test]
+    fn integer_sum() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f = \n ->
+                    when n is
+                        0 -> 0
+                        _ -> f n
+
+                f
+                   "#
+            ),
+            "Int -> Int",
+        );
+    }
+
+    #[test]
+    fn identity_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                map : (a -> b), [ Identity a ] -> [ Identity b ]
+                map = \f, identity ->
+                    when identity is
+                        Identity v -> Identity (f v)
+                map
+                   "#
+            ),
+            "(a -> b), [ Identity a ] -> [ Identity b ]",
+        );
+    }
+
+    #[test]
+    fn to_bit() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   # toBit : [ False, True ] -> Num.Num Int.Integer
+                   toBit = \bool ->
+                       when bool is
+                           True -> 1
+                           False -> 0
+
+                   toBit
+                      "#
+            ),
+            "[ False, True ]* -> Int",
+        );
+    }
+
+    // this test is related to a bug where ext_var would have an incorrect rank.
+    // This match has duplicate cases, but that's not important because exhaustiveness happens
+    // after inference.
+    #[test]
+    fn to_bit_record() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo = \rec ->
+                        when rec is
+                            { x } -> "1"
+                            { y } -> "2"
+
+                foo
+                      "#
+            ),
+            "{ x : *, y : * }* -> Str",
+        );
+    }
+
+    #[test]
+    fn from_bit() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   fromBit = \int ->
+                       when int is
+                           0 -> False
+                           _ -> True
+
+                   fromBit
+                      "#
+            ),
+            "Int -> [ False, True ]*",
+        );
+    }
+
+    #[test]
+    fn result_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    map : (a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]
+                    map = \f, result ->
+                        when result is
+                            Ok v -> Ok (f v)
+                            Err e -> Err e
+
+                    map
+                       "#
+            ),
+            "(a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]",
+        );
+    }
+
+    #[test]
+    fn record_from_load() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo = \{ x } -> x
+
+                foo { x: 5 }
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn defs_from_load() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    alwaysThreePointZero = \_ -> 3.0
+
+                    answer = 42
+
+                    identity = \a -> a
+
+                    threePointZero = identity (alwaysThreePointZero {})
+
+                    threePointZero
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    // // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
+    // #[test]
+    // fn linked_list_map() {
+    //     with_larger_debug_stack(|| {
+    //         infer_eq_without_problem(
+    //             indoc!(
+    //                 r#"
+    //                 map = \f, list ->
+    //                     when list is
+    //                         Nil -> Nil
+    //                         Cons x xs ->
+    //                             a = f x
+    //                             b = map f xs
+    //
+    //                             Cons a b
+    //
+    //                 map
+    //                    "#
+    //             ),
+    //             "Attr.Attr * Int",
+    //         );
+    //     });
+    // }
 }

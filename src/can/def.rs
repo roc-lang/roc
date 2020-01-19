@@ -229,7 +229,7 @@ pub fn sort_can_defs(
     // recursive definitions.
 
     // All successors that occur in the body of a symbol.
-    let mut all_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
         // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
         //
         // f = \z -> z
@@ -272,6 +272,49 @@ pub fn sort_can_defs(
         }
     };
 
+    // All successors that occur in the body of a symbol, including the symbol itself
+    // This is required to determine whether a symbol is recursive. Recursive symbols
+    // (that are not faulty) always need a DeclareRec, even if there is just one symbol in the
+    // group
+    let mut all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+        // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
+        //
+        // f = \z -> z
+        //
+        // (\x ->
+        //     a = f x
+        //     x
+        // )
+        //
+        // It's not part of the current defs (the one with `a = f x`); rather,
+        // it's in the enclosing scope. It's still referenced though, so successors
+        // will receive it as an argument!
+        match refs_by_symbol.get(symbol) {
+            Some((_, references)) => {
+                // We can only sort the symbols at the current level. That is safe because
+                // symbols defined at higher levels cannot refer to symbols at lower levels.
+                // Therefore they can never form a cycle!
+                //
+                // In the above example, `f` cannot reference `a`, and in the closure
+                // a call to `f` cannot cycle back to `a`.
+                let mut loc_succ = local_successors(&references, &env.closures);
+
+                // if the current symbol is a closure, peek into its body
+                if let Some(References { locals, .. }) = env.closures.get(symbol) {
+                    for s in locals.clone() {
+                        loc_succ.insert(s);
+                    }
+                }
+
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| defined_symbols_set.contains(key));
+
+                loc_succ
+            }
+            None => ImSet::default(),
+        }
+    };
+
     // If a symbol is a direct successor of itself, there is an invalid cycle.
     // The difference with the function above is that this one does not look behind lambdas,
     // but does consider direct self-recursion.
@@ -295,15 +338,16 @@ pub fn sort_can_defs(
 
     // TODO also do the same `addDirects` check elm/compiler does, so we can
     // report an error if a recursive definition can't possibly terminate!
-    match topological_sort_into_groups(defined_symbols.as_slice(), all_successors) {
+    match topological_sort_into_groups(defined_symbols.as_slice(), all_successors_without_self) {
         Ok(groups) => {
             let mut declarations = Vec::new();
+
             // groups are in reversed order
             for group in groups.into_iter().rev() {
                 group_to_declaration(
                     group,
                     &env.closures,
-                    &mut all_successors,
+                    &mut all_successors_with_self,
                     &can_defs_by_symbol,
                     &mut declarations,
                 );
@@ -320,7 +364,7 @@ pub fn sort_can_defs(
                 group_to_declaration(
                     group,
                     &env.closures,
-                    &mut all_successors,
+                    &mut all_successors_with_self,
                     &can_defs_by_symbol,
                     &mut declarations,
                 );
@@ -337,7 +381,8 @@ pub fn sort_can_defs(
             //
             // foo = if b then foo else bar
 
-            for cycle in strongly_connected_components(&nodes_in_cycle, all_successors) {
+            for cycle in strongly_connected_components(&nodes_in_cycle, all_successors_without_self)
+            {
                 // check whether the cycle is faulty, which is when has a direct successor in the
                 // current cycle. This catches things like:
                 //
@@ -386,7 +431,7 @@ pub fn sort_can_defs(
                     group_to_declaration(
                         cycle,
                         &env.closures,
-                        &mut all_successors,
+                        &mut all_successors_with_self,
                         &can_defs_by_symbol,
                         &mut declarations,
                     );
@@ -442,14 +487,20 @@ fn group_to_declaration(
                     new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                 }
 
+                let is_recursive = successors(&symbol).contains(&symbol);
+
                 if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                    declarations.push(Declare(new_def.clone()));
+                    if is_recursive {
+                        declarations.push(DeclareRec(vec![new_def.clone()]));
+                    } else {
+                        declarations.push(Declare(new_def.clone()));
+                    }
                 }
                 seen_pattern_regions.insert(new_def.loc_pattern.region);
             }
         } else {
-            // Topological sort gives us the reverse of the sorting we want!
             let mut can_defs = Vec::new();
+            // Topological sort gives us the reverse of the sorting we want!
             for symbol in cycle.into_iter().rev() {
                 if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
                     let mut new_def = can_def.clone();
@@ -520,7 +571,7 @@ fn canonicalize_def<'a>(
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
             let (seen_rigids, can_annotation) =
-                canonicalize_annotation(&loc_annotation.value, var_store);
+                canonicalize_annotation(env, &loc_annotation.value, var_store);
 
             // union seen rigids with already found ones
             for (k, v) in seen_rigids {
@@ -592,7 +643,7 @@ fn canonicalize_def<'a>(
 
         TypedDef(loc_pattern, loc_annotation, loc_expr) => {
             let (seen_rigids, can_annotation) =
-                canonicalize_annotation(&loc_annotation.value, var_store);
+                canonicalize_annotation(env, &loc_annotation.value, var_store);
 
             // union seen rigids with already found ones
             for (k, v) in seen_rigids {

@@ -166,24 +166,33 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let loc_desugared_cond = &*arena.alloc(desugar_expr(arena, &loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
-            for (patterns, loc_branch_expr) in branches.into_iter() {
+            for (loc_patterns, loc_branch_expr) in branches.into_iter() {
                 let desugared = desugar_expr(arena, &loc_branch_expr);
 
-                let (first_pattern, first_guard) = patterns.first().unwrap();
+                let mut alternatives = Vec::with_capacity_in(loc_patterns.len(), arena);
+                for (loc_pattern, loc_guard) in loc_patterns {
+                    let alternative_loc_guard =
+                        match &loc_guard {
+                            None => {
+                                None
+                            },
+                            Some(guard) => {
+                                Some(Located {
+                                    region: guard.region,
+                                    value: Nested(&guard.value),
+                                })
+                            },
+                        };
 
-                let first_guard_unwrapped = match first_guard {
-                    None => None,
-                    Some(v) => Some(Located {
-                        region: v.region,
-                        value: Nested(&v.value),
-                    }),
-                };
+
+                    alternatives.push((Located {
+                        region: loc_pattern.region,
+                        value: Pattern::Nested(&loc_pattern.value),
+                    }, alternative_loc_guard))
+                }
 
                 desugared_branches.push(&*arena.alloc((
-                    bumpalo::vec![in arena; (Located {
-                        region: first_pattern.region,
-                        value: Pattern::Nested(&first_pattern.value),
-                    }, first_guard_unwrapped)],
+                    alternatives,
                     Located {
                         region: desugared.region,
                         value: Nested(&desugared.value),

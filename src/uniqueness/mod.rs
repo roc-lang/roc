@@ -1,15 +1,13 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
-use crate::can::procedure::Procedure;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::builtins;
-use crate::constrain::expr::exists;
-use crate::constrain::expr::{Info, Rigids};
+use crate::constrain::expr::{exists, Env, Info};
 use crate::ident::Ident;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
@@ -23,7 +21,7 @@ use crate::types::Reason;
 use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::Bool;
-use crate::uniqueness::sharing::VarUsage;
+use crate::uniqueness::sharing::{ReferenceCount, VarUsage};
 
 pub use crate::can::expr::Expr::*;
 
@@ -31,23 +29,21 @@ pub mod boolean_algebra;
 mod constrain;
 pub mod sharing;
 
-pub struct Env {
-    pub bound_names: ImMap<Symbol, Variable>,
-    pub procedures: ImMap<Symbol, Procedure>,
-}
-
 pub fn constrain_declaration(
+    module_name: ModuleName,
     var_store: &VarStore,
     region: Region,
     loc_expr: Located<Expr>,
     _declared_idents: &ImMap<Ident, (Symbol, Region)>,
     expected: Expected<Type>,
 ) -> Constraint {
-    let rigids = ImMap::default();
     let mut var_usage = VarUsage::default();
 
     constrain_expr(
-        &rigids,
+        &crate::constrain::expr::Env {
+            rigids: ImMap::default(),
+            module_name,
+        },
         var_store,
         &mut var_usage,
         region,
@@ -246,7 +242,7 @@ fn constrain_pattern(
 }
 
 pub fn constrain_expr(
-    rigids: &Rigids,
+    env: &Env,
     var_store: &VarStore,
     var_usage: &mut VarUsage,
     region: Region,
@@ -328,7 +324,7 @@ pub fn constrain_expr(
                 let field_expected = Expected::NoExpectation(field_type.clone());
                 let loc_expr = &*field.loc_expr;
                 let field_con = constrain_expr(
-                    rigids,
+                    env,
                     var_store,
                     var_usage,
                     loc_expr.region,
@@ -374,7 +370,7 @@ pub fn constrain_expr(
 
             for (var, loc_expr) in arguments {
                 let arg_con = constrain_expr(
-                    rigids,
+                    env,
                     var_store,
                     var_usage,
                     loc_expr.region,
@@ -428,7 +424,7 @@ pub fn constrain_expr(
                     let elem_expected =
                         Expected::ForReason(Reason::ElemInList, entry_type.clone(), region);
                     let constraint = constrain_expr(
-                        rigids,
+                        env,
                         var_store,
                         var_usage,
                         loc_elem.region,
@@ -447,43 +443,25 @@ pub fn constrain_expr(
             }
         }
         Var {
-            symbol_for_lookup, ..
+            symbol_for_lookup,
+            module,
+            ..
         } => {
             var_usage.register(symbol_for_lookup);
             let usage = var_usage.get_usage(symbol_for_lookup);
 
-            match usage {
-                Some(sharing::ReferenceCount::Shared) => {
-                    // the variable is used/consumed more than once, so it must be Shared
-                    let val_var = var_store.fresh();
-                    let uniq_var = var_store.fresh();
-
-                    let val_type = Variable(val_var);
-                    let uniq_type = Bool::Variable(uniq_var);
-
-                    let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
-
-                    exists(
-                        vec![val_var, uniq_var],
-                        And(vec![
-                            Lookup(symbol_for_lookup.clone(), expected.clone(), region),
-                            Eq(attr_type, expected, region),
-                            Eq(
-                                Type::Boolean(uniq_type),
-                                Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
-                                region,
-                            ),
-                        ]),
-                    )
-                }
-                Some(sharing::ReferenceCount::Unique) => {
-                    // no additional constraints, keep uniqueness unbound
-                    Lookup(symbol_for_lookup.clone(), expected, region)
-                }
-                None => panic!("symbol not analyzed"),
-            }
+            constrain_var(
+                var_store,
+                module.clone(),
+                symbol_for_lookup.clone(),
+                usage,
+                region,
+                expected,
+            )
         }
-        Closure(fn_var, _symbol, _recursion, args, boxed) => {
+        Closure(fn_var, _symbol, recursion, args, boxed) => {
+            use crate::can::expr::Recursive;
+
             let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
                 headers: SendMap::default(),
@@ -509,16 +487,23 @@ pub fn constrain_expr(
                 vars.push(*pattern_var);
             }
 
-            let fn_uniq_var = var_store.fresh();
-            vars.push(fn_uniq_var);
+            let fn_uniq_type;
+            if let Recursive::NotRecursive = recursion {
+                let fn_uniq_var = var_store.fresh();
+                vars.push(fn_uniq_var);
+                fn_uniq_type = Bool::Variable(fn_uniq_var);
+            } else {
+                // recursive definitions MUST be Shared
+                fn_uniq_type = Bool::Zero
+            }
 
             let fn_type = constrain::attr_type(
-                Bool::Variable(fn_uniq_var),
+                fn_uniq_type,
                 Type::Function(pattern_types, Box::new(ret_type.clone())),
             );
             let body_type = Expected::NoExpectation(ret_type);
             let ret_constraint = constrain_expr(
-                rigids,
+                env,
                 var_store,
                 var_usage,
                 loc_body_expr.region,
@@ -572,7 +557,7 @@ pub fn constrain_expr(
 
             // Canonicalize the function expression and its arguments
             let fn_con = constrain_expr(
-                rigids,
+                env,
                 var_store,
                 var_usage,
                 fn_region,
@@ -598,7 +583,7 @@ pub fn constrain_expr(
 
                 let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
                 let arg_con = constrain_expr(
-                    rigids,
+                    env,
                     var_store,
                     var_usage,
                     loc_arg.region,
@@ -636,7 +621,7 @@ pub fn constrain_expr(
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
-                rigids,
+                env,
                 var_store,
                 var_usage,
                 loc_ret.region,
@@ -646,7 +631,7 @@ pub fn constrain_expr(
             exists(
                 vec![*var],
                 And(vec![
-                    constrain_recursive_defs(rigids, var_store, var_usage, defs, body_con),
+                    constrain_recursive_defs(env, var_store, var_usage, defs, body_con),
                     // Record the type of tne entire def-expression in the variable.
                     // Code gen will need that later!
                     Eq(Type::Variable(*var), expected, loc_ret.region),
@@ -657,7 +642,7 @@ pub fn constrain_expr(
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
-                rigids,
+                env,
                 var_store,
                 var_usage,
                 loc_ret.region,
@@ -668,7 +653,7 @@ pub fn constrain_expr(
             exists(
                 vec![*var],
                 And(vec![
-                    constrain_def(rigids, var_store, var_usage, def, body_con),
+                    constrain_def(env, var_store, var_usage, def, body_con),
                     // Record the type of tne entire def-expression in the variable.
                     // Code gen will need that later!
                     Eq(Type::Variable(*var), expected, loc_ret.region),
@@ -685,7 +670,7 @@ pub fn constrain_expr(
             let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
             let expr_con = constrain_expr(
-                rigids,
+                env,
                 var_store,
                 var_usage,
                 region,
@@ -709,7 +694,7 @@ pub fn constrain_expr(
                         let branch_con = constrain_when_branch(
                             var_store,
                             &mut branch_var_usage,
-                            rigids,
+                            env,
                             region,
                             &loc_when_pattern.pattern,
                             loc_expr,
@@ -758,7 +743,7 @@ pub fn constrain_expr(
                         let branch_con = constrain_when_branch(
                             var_store,
                             &mut branch_var_usage,
-                            rigids,
+                            env,
                             region,
                             &loc_when_pattern.pattern,
                             loc_expr,
@@ -810,13 +795,16 @@ pub fn constrain_expr(
             ident,
             symbol,
             updates,
+            module,
         } => {
+            var_usage.register(symbol);
+
             let mut fields: SendMap<Lowercase, Type> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
             let mut cons = Vec::with_capacity(updates.len() + 3);
             for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
                 let (var, tipe, con) = constrain_field_update(
-                    rigids,
+                    env,
                     var_store,
                     var_usage,
                     var,
@@ -850,6 +838,7 @@ pub fn constrain_expr(
             vars.push(*ext_var);
 
             let con = Lookup(
+                module.clone(),
                 symbol.clone(),
                 Expected::ForReason(
                     Reason::RecordUpdateKeys(ident.clone(), fields),
@@ -872,27 +861,27 @@ pub fn constrain_expr(
             loc_expr,
             field,
         } => {
-            let ext_type = Type::Variable(*ext_var);
+            let mut field_types = SendMap::default();
 
             let field_uniq_var = var_store.fresh();
             let field_uniq_type = Bool::Variable(field_uniq_var);
-            let field_type =
-                constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
+            let field_type = constrain::attr_type(field_uniq_type, Type::Variable(*field_var));
 
-            let mut rec_field_types = SendMap::default();
-
-            rec_field_types.insert(field.clone(), field_type.clone());
+            field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type = Bool::Variable(record_uniq_var);
-            let record_type = constrain::attr_type(
-                record_uniq_type.clone(),
-                Type::Record(rec_field_types, Box::new(ext_type)),
+            let record_uniq_type = Bool::or(
+                Bool::Variable(record_uniq_var),
+                Bool::Variable(field_uniq_var),
             );
-            let record_expected = Expected::NoExpectation(record_type);
+            let record_type = constrain::attr_type(
+                record_uniq_type,
+                Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
+            );
 
-            let mut constraint = constrain_expr(
-                rigids,
+            let record_expected = Expected::NoExpectation(record_type);
+            let inner_constraint = constrain_expr(
+                env,
                 var_store,
                 var_usage,
                 loc_expr.region,
@@ -900,18 +889,10 @@ pub fn constrain_expr(
                 record_expected,
             );
 
-            let uniq_con = Eq(
-                Type::Boolean(field_uniq_type),
-                Expected::NoExpectation(Type::Boolean(record_uniq_type)),
-                region,
-            );
-
-            constraint = exists(
+            exists(
                 vec![*field_var, *ext_var, field_uniq_var, record_uniq_var],
-                And(vec![constraint, Eq(field_type, expected, region), uniq_con]),
-            );
-
-            constraint
+                And(vec![Eq(field_type, expected, region), inner_constraint]),
+            )
         }
 
         Accessor {
@@ -923,15 +904,17 @@ pub fn constrain_expr(
 
             let field_uniq_var = var_store.fresh();
             let field_uniq_type = Bool::Variable(field_uniq_var);
-            let field_type =
-                constrain::attr_type(field_uniq_type.clone(), Type::Variable(*field_var));
+            let field_type = constrain::attr_type(field_uniq_type, Type::Variable(*field_var));
 
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type = Bool::Variable(record_uniq_var);
+            let record_uniq_type = Bool::or(
+                Bool::Variable(field_uniq_var),
+                Bool::Variable(record_uniq_var),
+            );
             let record_type = constrain::attr_type(
-                record_uniq_type.clone(),
+                record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
             );
 
@@ -939,12 +922,6 @@ pub fn constrain_expr(
             let fn_type = constrain::attr_type(
                 Bool::Variable(fn_uniq_var),
                 Type::Function(vec![record_type], Box::new(field_type)),
-            );
-
-            let uniq_con = Eq(
-                Type::Boolean(field_uniq_type),
-                Expected::NoExpectation(Type::Boolean(record_uniq_type)),
-                region,
             );
 
             exists(
@@ -955,10 +932,50 @@ pub fn constrain_expr(
                     field_uniq_var,
                     record_uniq_var,
                 ],
-                And(vec![Eq(fn_type, expected, region), uniq_con]),
+                And(vec![Eq(fn_type, expected, region)]),
             )
         }
         RuntimeError(_) => True,
+    }
+}
+
+fn constrain_var(
+    var_store: &VarStore,
+    module: ModuleName,
+    symbol_for_lookup: Symbol,
+    usage: Option<&ReferenceCount>,
+    region: Region,
+    expected: Expected<Type>,
+) -> Constraint {
+    match usage {
+        Some(sharing::ReferenceCount::Shared) => {
+            // the variable is used/consumed more than once, so it must be Shared
+            let val_var = var_store.fresh();
+            let uniq_var = var_store.fresh();
+
+            let val_type = Variable(val_var);
+            let uniq_type = Bool::Variable(uniq_var);
+
+            let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
+
+            exists(
+                vec![val_var, uniq_var],
+                And(vec![
+                    Lookup(module, symbol_for_lookup, expected.clone(), region),
+                    Eq(attr_type, expected, region),
+                    Eq(
+                        Type::Boolean(uniq_type),
+                        Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
+                        region,
+                    ),
+                ]),
+            )
+        }
+        Some(sharing::ReferenceCount::Unique) => {
+            // no additional constraints, keep uniqueness unbound
+            Lookup(module, symbol_for_lookup, expected, region)
+        }
+        None => panic!("symbol not analyzed"),
     }
 }
 
@@ -968,7 +985,7 @@ pub fn constrain_expr(
 fn constrain_when_branch(
     var_store: &VarStore,
     var_usage: &mut VarUsage,
-    rigids: &Rigids,
+    env: &Env,
     region: Region,
     loc_pattern: &Located<Pattern>,
     loc_expr: &Located<Expr>,
@@ -976,7 +993,7 @@ fn constrain_when_branch(
     expr_expected: Expected<Type>,
 ) -> Constraint {
     let ret_constraint = constrain_expr(
-        rigids,
+        env,
         var_store,
         var_usage,
         region,
@@ -1186,7 +1203,7 @@ fn annotation_to_attr_type_many(var_store: &VarStore, anns: &[Type]) -> (Vec<Var
 }
 
 pub fn constrain_def(
-    rigids: &Rigids,
+    env: &Env,
     var_store: &VarStore,
     var_usage: &mut VarUsage,
     def: &Def,
@@ -1205,7 +1222,8 @@ pub fn constrain_def(
 
     let expr_con = match &def.annotation {
         Some((annotation, free_vars)) => {
-            let mut ftv: Rigids = rigids.clone();
+            let rigids = &env.rigids;
+            let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
             let (uniq_vars, annotation) = annotation_to_attr_type(var_store, annotation);
 
             pattern_state.vars.extend(uniq_vars);
@@ -1235,7 +1253,10 @@ pub fn constrain_def(
             ));
 
             constrain_expr(
-                &ftv,
+                &Env {
+                    rigids: ftv,
+                    module_name: env.module_name.clone(),
+                },
                 var_store,
                 var_usage,
                 def.loc_expr.region,
@@ -1244,7 +1265,7 @@ pub fn constrain_def(
             )
         }
         None => constrain_expr(
-            rigids,
+            env,
             var_store,
             var_usage,
             def.loc_expr.region,
@@ -1269,14 +1290,14 @@ pub fn constrain_def(
 }
 
 fn constrain_recursive_defs(
-    rigids: &Rigids,
+    env: &Env,
     var_store: &VarStore,
     var_usage: &mut VarUsage,
     defs: &[Def],
     body_con: Constraint,
 ) -> Constraint {
     rec_defs_help(
-        rigids,
+        env,
         var_store,
         var_usage,
         defs,
@@ -1287,7 +1308,7 @@ fn constrain_recursive_defs(
 }
 
 pub fn rec_defs_help(
-    rigids: &Rigids,
+    env: &Env,
     var_store: &VarStore,
     var_usage: &mut VarUsage,
     defs: &[Def],
@@ -1321,7 +1342,7 @@ pub fn rec_defs_help(
         match &def.annotation {
             None => {
                 let expr_con = constrain_expr(
-                    rigids,
+                    env,
                     var_store,
                     var_usage,
                     def.loc_expr.region,
@@ -1344,7 +1365,8 @@ pub fn rec_defs_help(
             }
 
             Some((annotation, seen_rigids)) => {
-                let mut ftv: Rigids = rigids.clone();
+                let rigids = &env.rigids;
+                let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
 
                 for (var, name) in seen_rigids {
                     // if the rigid is known already, nothing needs to happen
@@ -1364,7 +1386,10 @@ pub fn rec_defs_help(
                     annotation.clone(),
                 );
                 let expr_con = constrain_expr(
-                    &ftv,
+                    &Env {
+                        rigids: ftv,
+                        module_name: env.module_name.clone(),
+                    },
                     var_store,
                     var_usage,
                     def.loc_expr.region,
@@ -1424,7 +1449,7 @@ pub fn rec_defs_help(
 
 #[inline(always)]
 fn constrain_field_update(
-    rigids: &Rigids,
+    env: &Env,
     var_store: &VarStore,
     var_usage: &mut VarUsage,
     var: Variable,
@@ -1436,7 +1461,7 @@ fn constrain_field_update(
     let reason = Reason::RecordUpdateValue(field);
     let expected = Expected::ForReason(reason, field_type.clone(), region);
     let con = constrain_expr(
-        rigids,
+        env,
         var_store,
         var_usage,
         loc_expr.region,

@@ -1,4 +1,4 @@
-use crate::fmt::spaces::fmt_spaces;
+use crate::fmt::spaces::{fmt_comments_only, fmt_spaces};
 use crate::parse::ast::{Base, Pattern};
 use bumpalo::collections::String;
 
@@ -7,6 +7,7 @@ pub fn fmt_pattern<'a>(
     pattern: &'a Pattern<'a>,
     indent: u16,
     apply_needs_parens: bool,
+    only_comments: bool,
 ) {
     use self::Pattern::*;
 
@@ -20,11 +21,11 @@ pub fn fmt_pattern<'a>(
                 buf.push('(');
             }
 
-            fmt_pattern(buf, &loc_pattern.value, indent, true);
+            fmt_pattern(buf, &loc_pattern.value, indent, true, only_comments);
 
             for loc_arg in loc_arg_patterns.iter() {
                 buf.push(' ');
-                fmt_pattern(buf, &loc_arg.value, indent, true);
+                fmt_pattern(buf, &loc_arg.value, indent, true, only_comments);
             }
 
             if apply_needs_parens {
@@ -43,7 +44,7 @@ pub fn fmt_pattern<'a>(
                     buf.push_str(", ");
                 }
 
-                fmt_pattern(buf, &loc_pattern.value, indent, true);
+                fmt_pattern(buf, &loc_pattern.value, indent, true, only_comments);
             }
 
             buf.push_str(" }");
@@ -52,7 +53,7 @@ pub fn fmt_pattern<'a>(
         RecordField(name, loc_pattern) => {
             buf.push_str(name);
             buf.push_str(": ");
-            fmt_pattern(buf, &loc_pattern.value, indent, true);
+            fmt_pattern(buf, &loc_pattern.value, indent, true, only_comments);
         }
 
         IntLiteral(string) => buf.push_str(string),
@@ -86,16 +87,24 @@ pub fn fmt_pattern<'a>(
 
         // Space
         SpaceBefore(sub_pattern, spaces) => {
-            fmt_spaces(buf, spaces.iter(), indent);
-            fmt_pattern(buf, sub_pattern, indent, apply_needs_parens);
+            if only_comments {
+                fmt_comments_only(buf, spaces.iter(), indent)
+            } else {
+                fmt_spaces(buf, spaces.iter(), indent);
+            }
+            fmt_pattern(buf, sub_pattern, indent, apply_needs_parens, only_comments);
         }
         SpaceAfter(sub_pattern, spaces) => {
-            fmt_pattern(buf, sub_pattern, indent, apply_needs_parens);
-            fmt_spaces(buf, spaces.iter(), indent);
+            fmt_pattern(buf, sub_pattern, indent, apply_needs_parens, only_comments);
+            if only_comments {
+                fmt_comments_only(buf, spaces.iter(), indent)
+            } else {
+                fmt_spaces(buf, spaces.iter(), indent);
+            }
         }
 
         Nested(sub_pattern) => {
-            fmt_pattern(buf, sub_pattern, indent, apply_needs_parens);
+            fmt_pattern(buf, sub_pattern, indent, apply_needs_parens, only_comments);
         }
 
         // Malformed
