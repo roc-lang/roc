@@ -157,8 +157,18 @@ pub enum Expr<'a> {
     // Conditionals
     If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
     When(
+        /// The condition
         &'a Loc<Expr<'a>>,
-        Vec<'a, &'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)>,
+        /// Each case, where `<Pattern> -> <Expr>`
+        /// Its a Vec<Pattern> because we can do use `|` to
+        /// match multiple patterns `A | B`
+        Vec<
+            'a,
+            &'a (
+                Vec<'a, (Loc<Pattern<'a>>, Option<Loc<Expr<'a>>>)>,
+                Loc<Expr<'a>>,
+            ),
+        >,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.

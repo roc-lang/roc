@@ -146,18 +146,18 @@ pub fn fmt_expr<'a>(
             let mut it = branches.iter().peekable();
             while let Some((patterns, expr)) = it.next() {
                 add_spaces(buf, indent + INDENT);
-                let (first, rest) = patterns.split_first().unwrap();
+                let ((first_pattern, _first_guard), rest) = patterns.split_first().unwrap();
 
-                match first.value {
+                match first_pattern.value {
                     Pattern::SpaceBefore(nested, spaces) => {
                         fmt_comments_only(buf, spaces.iter(), indent + INDENT);
                         fmt_pattern(buf, nested, indent + INDENT, false);
                     }
                     _ => {
-                        fmt_pattern(buf, &first.value, indent + INDENT, false);
+                        fmt_pattern(buf, &first_pattern.value, indent + INDENT, false);
                     }
                 };
-                for pattern in rest {
+                for (pattern, _guard) in rest {
                     buf.push_str(" | ");
                     match pattern.value {
                         Pattern::SpaceBefore(nested, spaces) => {

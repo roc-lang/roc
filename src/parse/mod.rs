@@ -856,7 +856,7 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 pub fn when_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     then(
         and!(
-            case_with_indent(),
+            when_with_indent(),
             attempt!(
                 Attempting::WhenCondition,
                 skip_second!(
@@ -877,26 +877,55 @@ pub fn when_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             let min_indent = case_indent;
 
             let (branches, state) =
-                attempt!(Attempting::WhenBranch, case_branches(min_indent)).parse(arena, state)?;
+                attempt!(Attempting::WhenBranch, when_branches(min_indent)).parse(arena, state)?;
 
             Ok((Expr::When(arena.alloc(loc_condition), branches), state))
         },
     )
 }
 
-pub fn case_branches<'a>(
+pub fn when_branches<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)>> {
+) -> impl Parser<
+    'a,
+    Vec<
+        'a,
+        &'a (
+            Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
+            Located<Expr<'a>>,
+        ),
+    >,
+> {
     move |arena, state| {
-        let mut branches: Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)> =
-            Vec::with_capacity_in(2, arena);
+        let mut branches: Vec<
+            'a,
+            &'a (
+                Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
+                Located<Expr<'a>>,
+            ),
+        > = Vec::with_capacity_in(2, arena);
 
         // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
         // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
         let (mut loc_first_pattern, state) = sep_by1(
+            //            map!(and!(space0(min_indent), char('|')), |_| ()),
+            //            space0_before(
+            //                skip_first!(
+            //                        string("if"),
+            //                        space0_before(
+            //                            loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+            //                            indented_more,
+            //                        )
+            //                    ),
+            //                min_indent
+            //            ),
+            //        )
             map!(and!(space0(min_indent), char('|')), |_| ()),
-            space0_before(loc_pattern(min_indent), min_indent),
+            map!(
+                space0_before(loc_pattern(min_indent), min_indent),
+                |pattern| (pattern, None)
+            ),
         )
         .parse(arena, state)?;
         let original_indent = state.indent_col;
@@ -905,10 +934,10 @@ pub fn case_branches<'a>(
 
         // Record the spaces before the first "->", if any.
         if !spaces_before_arrow.is_empty() {
-            let last = loc_first_pattern.pop().unwrap();
+            let (last, guard) = loc_first_pattern.pop().unwrap();
             let region = last.region;
             let value = Pattern::SpaceAfter(arena.alloc(last.value), spaces_before_arrow);
-            loc_first_pattern.push(Located { region, value });
+            loc_first_pattern.push((Located { region, value }, guard));
         };
 
         // Parse the first "->" and the expression after it.
@@ -929,11 +958,14 @@ pub fn case_branches<'a>(
             then(
                 sep_by1(
                     char('|'),
-                    space0_around(loc_pattern(min_indent), min_indent),
+                    map!(
+                        space0_around(loc_pattern(min_indent), min_indent),
+                        |pattern| (pattern, None)
+                    ),
                 ),
-                move |_arena, state, loc_pattern| {
+                move |_arena, state, loc_patterns| {
                     if state.indent_col == original_indent {
-                        Ok((loc_pattern, state))
+                        Ok((loc_patterns, state))
                     } else {
                         panic!(
                             "TODO additional branch didn't have same indentation as first branch"
@@ -1239,7 +1271,7 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
     }
 }
 
-pub fn case_with_indent<'a>() -> impl Parser<'a, u16> {
+pub fn when_with_indent<'a>() -> impl Parser<'a, u16> {
     move |arena, state: State<'a>| {
         string(keyword::WHEN)
             .parse(arena, state)

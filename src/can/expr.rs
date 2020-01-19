@@ -54,7 +54,7 @@ pub enum Expr {
         cond_var: Variable,
         expr_var: Variable,
         loc_cond: Box<Located<Expr>>,
-        branches: Vec<(Located<Pattern>, Located<Expr>)>,
+        branches: Vec<((Located<Pattern>, Option<Located<Expr>>), Located<Expr>)>,
     },
     If {
         cond_var: Variable,
@@ -483,17 +483,19 @@ pub fn canonicalize_expr(
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
-            for (loc_pattern, loc_expr) in branches {
+            for (loc_patterns_and_guards, loc_expr) in branches {
                 let mut shadowable_idents = scope.idents.clone();
 
-                remove_idents(&loc_pattern.first().unwrap().value, &mut shadowable_idents);
+                let (loc_first_pattern, _) = &loc_patterns_and_guards.first().unwrap();
+
+                remove_idents(&loc_first_pattern.value, &mut shadowable_idents);
 
                 let (can_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
                     env,
                     var_store,
                     scope,
                     region,
-                    loc_pattern.first().unwrap(),
+                    loc_patterns_and_guards.first().unwrap(),
                     loc_expr,
                     &mut output,
                 );
@@ -724,14 +726,20 @@ fn canonicalize_when_branch<'a>(
     var_store: &VarStore,
     scope: &Scope,
     region: Region,
-    loc_pattern: &Located<ast::Pattern<'a>>,
+    loc_pattern_and_guard: &(Located<ast::Pattern<'a>>, Option<Located<ast::Expr<'a>>>),
     loc_expr: &Located<ast::Expr<'a>>,
     output: &mut Output,
-) -> (Located<Pattern>, Located<Expr>, References) {
+) -> (
+    (Located<Pattern>, Option<Located<Expr>>),
+    Located<Expr>,
+    References,
+) {
     // Each case branch gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the
     // rest of this block.
     let mut scope = scope.clone();
+
+    let (loc_pattern, loc_guard) = loc_pattern_and_guard;
 
     // Exclude the current ident from shadowable_idents; you can't shadow yourself!
     // (However, still include it in scope, because you *can* recursively refer to yourself.)
@@ -778,7 +786,21 @@ fn canonicalize_when_branch<'a>(
         &mut shadowable_idents,
     );
 
-    (loc_can_pattern, can_expr, branch_output.references)
+    let loc_can_guard = match &loc_guard {
+        Some(guard) => {
+            let (can_guard, _) =
+                canonicalize_expr(env, var_store, &mut scope, region, &guard.value);
+            Some(can_guard)
+        }
+
+        None => None,
+    };
+
+    (
+        (loc_can_pattern, loc_can_guard),
+        can_expr,
+        branch_output.references,
+    )
 }
 
 pub fn union_pairs<'a, K, V, I>(mut map: ImMap<K, V>, pairs: I) -> ImMap<K, V>

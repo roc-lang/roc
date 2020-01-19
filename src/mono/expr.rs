@@ -306,7 +306,13 @@ fn from_can_when<'a>(
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<can::expr::Expr>,
-    branches: std::vec::Vec<(Located<can::pattern::Pattern>, Located<can::expr::Expr>)>,
+    branches: std::vec::Vec<(
+        (
+            Located<can::pattern::Pattern>,
+            Option<Located<can::expr::Expr>>,
+        ),
+        Located<can::expr::Expr>,
+    )>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
     use crate::can::pattern::Pattern::*;
@@ -322,7 +328,7 @@ fn from_can_when<'a>(
             // As such, we can compile it direcly to a Store.
             let arena = env.arena;
             let mut stored = Vec::with_capacity_in(1, arena);
-            let (loc_pattern, loc_branch) = branches.into_iter().next().unwrap();
+            let ((loc_pattern, _loc_guard), loc_branch) = branches.into_iter().next().unwrap();
 
             store_pattern(
                 env,
@@ -341,8 +347,8 @@ fn from_can_when<'a>(
             // A when-expression with exactly 2 branches compiles to a Cond.
             let arena = env.arena;
             let mut iter = branches.into_iter();
-            let (loc_pat1, loc_then) = iter.next().unwrap();
-            let (loc_pat2, loc_else) = iter.next().unwrap();
+            let ((loc_pat1, _loc_guard1), loc_then) = iter.next().unwrap();
+            let ((loc_pat2, _loc_guard2), loc_else) = iter.next().unwrap();
 
             match (&loc_pat1.value, &loc_pat2.value) {
                 (IntLiteral(int), IntLiteral(_)) | (IntLiteral(int), Underscore) => {
@@ -429,7 +435,7 @@ fn from_can_when<'a>(
                 let mut jumpable_branches = Vec::with_capacity_in(branches.len(), arena);
                 let mut opt_default_branch = None;
 
-                for (loc_pat, loc_expr) in branches {
+                for ((loc_pat, _loc_guard), loc_expr) in branches {
                     let mono_expr = from_can(env, loc_expr.value, procs, None);
 
                     match &loc_pat.value {
