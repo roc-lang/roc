@@ -702,7 +702,7 @@ pub fn constrain_expr(
                 Expected::FromAnnotation(name, arity, _, typ) => {
                     constraints.push(Eq(Type::Variable(*expr_var), expected.clone(), region));
 
-                    for (index, ((loc_pattern, _loc_guard), loc_expr)) in
+                    for (index, (loc_when_pattern, loc_expr)) in
                         branches.iter().enumerate()
                     {
                         let mut branch_var_usage = old_var_usage.clone();
@@ -711,7 +711,7 @@ pub fn constrain_expr(
                             &mut branch_var_usage,
                             rigids,
                             region,
-                            loc_pattern,
+                            &loc_when_pattern.pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -733,7 +733,7 @@ pub fn constrain_expr(
                         //      Bar x -> x
                         //
                         // In this case the `x` in the second branch is used uniquely
-                        for symbol in pattern::symbols_from_pattern(&loc_pattern.value) {
+                        for symbol in pattern::symbols_from_pattern(&loc_when_pattern.pattern.value) {
                             branch_var_usage.unregister(&symbol);
                         }
 
@@ -751,7 +751,7 @@ pub fn constrain_expr(
                     let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, ((loc_pattern, _loc_guard), loc_expr)) in
+                    for (index, (loc_when_pattern, loc_expr)) in
                         branches.iter().enumerate()
                     {
                         let mut branch_var_usage = old_var_usage.clone();
@@ -760,7 +760,7 @@ pub fn constrain_expr(
                             &mut branch_var_usage,
                             rigids,
                             region,
-                            loc_pattern,
+                            &loc_when_pattern.pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -781,7 +781,7 @@ pub fn constrain_expr(
                         //      Bar x -> x
                         //
                         // In this case the `x` in the second branch is used uniquely
-                        for symbol in pattern::symbols_from_pattern(&loc_pattern.value) {
+                        for symbol in pattern::symbols_from_pattern(&loc_when_pattern.pattern.value) {
                             branch_var_usage.unregister(&symbol);
                         }
 

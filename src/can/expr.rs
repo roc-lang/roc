@@ -33,6 +33,12 @@ pub struct Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct WhenPattern {
+    pub pattern: Located<Pattern>,
+    pub guard: Option<Located<Expr>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
     Int(Variable, i64),
@@ -54,7 +60,7 @@ pub enum Expr {
         cond_var: Variable,
         expr_var: Variable,
         loc_cond: Box<Located<Expr>>,
-        branches: Vec<((Located<Pattern>, Option<Located<Expr>>), Located<Expr>)>,
+        branches: Vec<(WhenPattern, Located<Expr>)>,
     },
     If {
         cond_var: Variable,
@@ -490,7 +496,7 @@ pub fn canonicalize_expr(
 
                 remove_idents(&loc_first_pattern.value, &mut shadowable_idents);
 
-                let (can_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
+                let (can_when_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
                     env,
                     var_store,
                     scope,
@@ -502,7 +508,7 @@ pub fn canonicalize_expr(
 
                 output.references = output.references.union(branch_references);
 
-                can_branches.push((can_pattern, loc_can_expr));
+                can_branches.push((can_when_pattern, loc_can_expr));
             }
 
             // A "when" with no branches is a runtime error, but it will mess things up
@@ -730,7 +736,7 @@ fn canonicalize_when_branch<'a>(
     loc_expr: &Located<ast::Expr<'a>>,
     output: &mut Output,
 ) -> (
-    (Located<Pattern>, Option<Located<Expr>>),
+    WhenPattern,
     Located<Expr>,
     References,
 ) {
@@ -797,7 +803,7 @@ fn canonicalize_when_branch<'a>(
     };
 
     (
-        (loc_can_pattern, loc_can_guard),
+        WhenPattern { pattern: loc_can_pattern, guard: loc_can_guard },
         can_expr,
         branch_output.references,
     )

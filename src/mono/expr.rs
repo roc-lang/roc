@@ -307,10 +307,7 @@ fn from_can_when<'a>(
     expr_var: Variable,
     loc_cond: Located<can::expr::Expr>,
     branches: std::vec::Vec<(
-        (
-            Located<can::pattern::Pattern>,
-            Option<Located<can::expr::Expr>>,
-        ),
+        can::expr::WhenPattern,
         Located<can::expr::Expr>,
     )>,
     procs: &mut Procs<'a>,
@@ -328,11 +325,11 @@ fn from_can_when<'a>(
             // As such, we can compile it direcly to a Store.
             let arena = env.arena;
             let mut stored = Vec::with_capacity_in(1, arena);
-            let ((loc_pattern, _loc_guard), loc_branch) = branches.into_iter().next().unwrap();
+            let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
 
             store_pattern(
                 env,
-                loc_pattern.value,
+                loc_when_pattern.pattern.value,
                 loc_cond.value,
                 cond_var,
                 procs,
@@ -347,10 +344,10 @@ fn from_can_when<'a>(
             // A when-expression with exactly 2 branches compiles to a Cond.
             let arena = env.arena;
             let mut iter = branches.into_iter();
-            let ((loc_pat1, _loc_guard1), loc_then) = iter.next().unwrap();
-            let ((loc_pat2, _loc_guard2), loc_else) = iter.next().unwrap();
+            let (loc_when_pat1, loc_then) = iter.next().unwrap();
+            let (loc_when_pat2, loc_else) = iter.next().unwrap();
 
-            match (&loc_pat1.value, &loc_pat2.value) {
+            match (&loc_when_pat1.pattern.value, &loc_when_pat2.pattern.value) {
                 (IntLiteral(int), IntLiteral(_)) | (IntLiteral(int), Underscore) => {
                     let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
                     let cond_rhs = arena.alloc(Expr::Int(*int));
@@ -435,10 +432,10 @@ fn from_can_when<'a>(
                 let mut jumpable_branches = Vec::with_capacity_in(branches.len(), arena);
                 let mut opt_default_branch = None;
 
-                for ((loc_pat, _loc_guard), loc_expr) in branches {
+                for (loc_when_pat, loc_expr) in branches {
                     let mono_expr = from_can(env, loc_expr.value, procs, None);
 
-                    match &loc_pat.value {
+                    match &loc_when_pat.pattern.value {
                         IntLiteral(int) => {
                             // Switch only compares the condition to the
                             // alternatives based on their bit patterns,
@@ -478,7 +475,7 @@ fn from_can_when<'a>(
                         | FloatLiteral(_) => {
                             // The type checker should have converted these mismatches into RuntimeErrors already!
                             if cfg!(debug_assetions) {
-                                panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", loc_pat);
+                                panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", loc_when_pat);
                             } else {
                                 unreachable!();
                             }

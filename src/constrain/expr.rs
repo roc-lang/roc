@@ -407,13 +407,13 @@ pub fn constrain_expr(
                     let ast_con = Eq(Type::Variable(*expr_var), expected.clone(), region);
                     constraints.push(ast_con);
 
-                    for (index, ((loc_pattern, _loc_guard), loc_expr)) in
+                    for (index, (loc_when_pattern, loc_expr)) in
                         branches.iter().enumerate()
                     {
                         let branch_con = constrain_when_branch(
                             rigids,
                             region,
-                            loc_pattern,
+                            &loc_when_pattern.pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -436,13 +436,13 @@ pub fn constrain_expr(
                     let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, ((loc_pattern, _loc_guard), loc_expr)) in
+                    for (index, (loc_when_pattern, loc_expr)) in
                         branches.iter().enumerate()
                     {
                         let branch_con = constrain_when_branch(
                             rigids,
                             region,
-                            loc_pattern,
+                            &loc_when_pattern.pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
