@@ -350,47 +350,6 @@ fn parse_concrete_type<'a>(
     Ok((answer, state))
 }
 
-fn parse_type_variable_str<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, &'a str> {
-    let mut chars = state.input.chars();
-    let mut buf = String::new_in(arena);
-
-    // Type variables must start with a lowercase letter.
-    match chars.next() {
-        Some(ch) => {
-            if ch.is_alphabetic() && ch.is_lowercase() {
-                buf.push(ch);
-            } else {
-                return Err(unexpected(ch, 0, state, Attempting::TypeVariable));
-            }
-        }
-        None => {
-            return Err(unexpected_eof(0, Attempting::TypeVariable, state));
-        }
-    };
-
-    let mut chars_parsed = 1;
-
-    for ch in chars {
-        // After the first character, only these are allowed:
-        //
-        // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-        if ch.is_alphabetic() || ch.is_ascii_digit() {
-            buf.push(ch);
-        } else {
-            // This must be the end of the type. We're done!
-            break;
-        }
-
-        chars_parsed += 1;
-    }
-
-    let state = state.advance_without_indenting(chars_parsed)?;
-    let answer = buf.into_bump_str();
-
-    Ok((answer, state))
-}
-
 fn parse_type_variable<'a>(
     arena: &'a Bump,
     state: State<'a>,
