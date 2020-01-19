@@ -33,7 +33,7 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
     TagUnion(Vec<(Symbol, Vec<Type>)>, Box<Type>),
-    Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
+    Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
         module_name: ModuleName,
@@ -293,7 +293,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
         }
         Alias(_, _, args, actual) => {
             for (_, x) in args {
-                variables_help(x, accum);
+                accum.insert(*x);
             }
             variables_help(actual, accum);
         }

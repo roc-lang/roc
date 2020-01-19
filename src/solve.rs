@@ -520,8 +520,8 @@ fn type_to_variable(
             let mut arg_vars = Vec::with_capacity(args.len());
             let mut new_aliases = ImMap::default();
 
-            for (arg, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, aliases, arg_type);
+            for (arg, arg_var) in args {
+                let arg_var = *arg_var;
 
                 arg_vars.push((arg.clone(), arg_var));
                 new_aliases.insert(arg.clone(), arg_var);
