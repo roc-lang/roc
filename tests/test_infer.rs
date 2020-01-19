@@ -1389,22 +1389,76 @@ mod test_infer {
     }
 
     #[test]
-    #[ignore]
     fn use_as_in_signature() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo : Str.Str as Foo -> Foo
+                foo : Str.Str as Foo -> Test.Foo
                 foo = \x -> "foo"
 
                 foo
                 "#
             ),
-            "Foo -> Foo",
+            "Test.Foo -> Test.Foo",
         );
     }
 
+    #[test]
+    fn linked_list_empty() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    empty : [ Cons a (List a), Nil ] as List a
+                    empty = Nil
+
+                    empty
+                       "#
+            ),
+            "Test.List d",
+        );
+    }
+
+    #[test]
+    fn linked_list_singleton() {
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
+                    singleton : a -> [ Cons a (Test.List a), Nil ] as List a
+                    singleton = \x -> Cons x Nil
+
+                    singleton
+                       "#
+                ),
+                "a -> Test.List a",
+            );
+        });
+    }
+
     // currently fails, cyclic type
+    #[test]
+    #[ignore]
+    fn peano_map() {
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
+                    map : [ S Test.Peano, Z ] as Peano -> Test.Peano
+                    map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S v -> S (map v)
+
+                    map
+                       "#
+                ),
+                "Test.Peano",
+            );
+        });
+    }
+
+    // currently fails, cyclic type
+    // ending in `List b` will currently give a rigid unification error
     #[test]
     #[ignore]
     fn linked_list_map() {
@@ -1412,7 +1466,7 @@ mod test_infer {
             infer_eq_without_problem(
                 indoc!(
                     r#"
-                    map : (a -> b), ([ Cons a r, Nil ] as r) -> ([ Cons a r, Nil ] as r)
+                    map : (a -> a), [ Cons a (Test.List a), Nil ] as List a -> Test.List a
                     map = \f, list ->
                         when list is
                             Nil -> Nil
