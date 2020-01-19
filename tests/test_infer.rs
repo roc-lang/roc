@@ -50,6 +50,7 @@ mod test_infer {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
             println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
+            dbg!(&problems);
             assert_eq!(0, 1);
         }
         assert_eq!(actual, expected.to_string());
@@ -1353,31 +1354,6 @@ mod test_infer {
         );
     }
 
-    // currently fails, cyclic type
-    #[test]
-    fn linked_list_map() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
-                    map : (a -> b), ([ Cons a r, Nil ] as r) -> ([ Cons a r, Nil ] as r)
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons x xs ->
-                                a = f x
-                                b = map f xs
-
-                                Cons a b
-
-                    map
-                       "#
-                ),
-                "Attr.Attr * Int",
-            );
-        });
-    }
-
     #[test]
     fn record_from_load() {
         infer_eq_without_problem(
@@ -1412,27 +1388,45 @@ mod test_infer {
         );
     }
 
-    // // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
-    // #[test]
-    // fn linked_list_map() {
-    //     with_larger_debug_stack(|| {
-    //         infer_eq_without_problem(
-    //             indoc!(
-    //                 r#"
-    //                 map = \f, list ->
-    //                     when list is
-    //                         Nil -> Nil
-    //                         Cons x xs ->
-    //                             a = f x
-    //                             b = map f xs
-    //
-    //                             Cons a b
-    //
-    //                 map
-    //                    "#
-    //             ),
-    //             "Attr.Attr * Int",
-    //         );
-    //     });
-    // }
+    #[test]
+    #[ignore]
+    fn use_as_in_signature() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo : Str.Str as Foo -> Foo
+                foo = \x -> "foo"
+
+                foo
+                "#
+            ),
+            "Foo -> Foo",
+        );
+    }
+
+    // currently fails, cyclic type
+    #[test]
+    #[ignore]
+    fn linked_list_map() {
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
+                    map : (a -> b), ([ Cons a r, Nil ] as r) -> ([ Cons a r, Nil ] as r)
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons x xs ->
+                                a = f x
+                                b = map f xs
+
+                                Cons a b
+
+                    map
+                       "#
+                ),
+                "Attr.Attr * Int",
+            );
+        });
+    }
 }
