@@ -17,6 +17,7 @@ use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ident::Ident;
 use crate::operator::CalledVia;
+use crate::parse;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
@@ -24,7 +25,6 @@ use im_rc::Vector;
 use std::fmt::Debug;
 use std::i64;
 use std::ops::Neg;
-use crate::parse;
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
@@ -498,7 +498,7 @@ pub fn canonicalize_expr(
             for (loc_patterns_and_guards, loc_expr) in branches {
                 let mut shadowable_idents = scope.idents.clone();
 
-                let loc_first_pattern= &loc_patterns_and_guards.first().unwrap();
+                let loc_first_pattern = &loc_patterns_and_guards.first().unwrap();
 
                 remove_idents(&loc_first_pattern.pattern.value, &mut shadowable_idents);
 

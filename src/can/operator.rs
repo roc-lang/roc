@@ -3,7 +3,7 @@ use crate::operator::{BinOp, CalledVia};
 use crate::parse::ast::Expr::{self, *};
 use crate::parse::ast::{AssignedField, Def, Pattern};
 use crate::region::{Located, Region};
-use crate::{types, parse};
+use crate::{parse, types};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 

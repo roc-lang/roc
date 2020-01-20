@@ -180,13 +180,7 @@ pub enum Expr<'a> {
         /// <Pattern 1> | < Pattern 2> if <Guard> -> <Expr>
         /// Vec, because there may be many patterns, and Option<Expr>
         /// because each pattern may have a guard (".. if ..").
-        Vec<
-            'a,
-            &'a (
-                Vec<'a, WhenPattern<'a>>,
-                Loc<Expr<'a>>,
-            ),
-        >,
+        Vec<'a, &'a (Vec<'a, WhenPattern<'a>>, Loc<Expr<'a>>)>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.

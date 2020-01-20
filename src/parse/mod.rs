@@ -901,23 +901,12 @@ mod when {
     /// Parsing branches of when conditional.
     fn branches<'a>(
         min_indent: u16,
-    ) -> impl Parser<
-        'a,
-        Vec<
-            'a,
-            &'a (
-                Vec<'a, parse::ast::WhenPattern<'a>>,
-                Located<Expr<'a>>,
-            ),
-        >,
-    > {
+    ) -> impl Parser<'a, Vec<'a, &'a (Vec<'a, parse::ast::WhenPattern<'a>>, Located<Expr<'a>>)>>
+    {
         move |arena, state| {
             let mut branches: Vec<
                 'a,
-                &'a (
-                    Vec<'a, parse::ast::WhenPattern<'a>>,
-                    Located<Expr<'a>>,
-                ),
+                &'a (Vec<'a, parse::ast::WhenPattern<'a>>, Located<Expr<'a>>),
             > = Vec::with_capacity_in(2, arena);
 
             // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
@@ -978,7 +967,10 @@ mod when {
             char('|'),
             map!(
                 space0_around(loc_pattern(min_indent), min_indent),
-                |pattern| parse::ast::WhenPattern { pattern: pattern, guard: None }
+                |pattern| parse::ast::WhenPattern {
+                    pattern: pattern,
+                    guard: None
+                }
             ),
         )
     }
