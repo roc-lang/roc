@@ -495,10 +495,10 @@ pub fn canonicalize_expr(
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
-            for (loc_patterns_and_guards, loc_expr) in branches {
+            for (loc_branch, loc_expr) in branches {
                 let mut shadowable_idents = scope.idents.clone();
 
-                let loc_first_pattern = &loc_patterns_and_guards.first().unwrap();
+                let loc_first_pattern = &loc_branch.first().unwrap();
 
                 remove_idents(&loc_first_pattern.pattern.value, &mut shadowable_idents);
 
@@ -507,7 +507,7 @@ pub fn canonicalize_expr(
                     var_store,
                     scope,
                     region,
-                    loc_patterns_and_guards.first().unwrap(),
+                    loc_branch.first().unwrap(),
                     loc_expr,
                     &mut output,
                 );
