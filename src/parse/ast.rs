@@ -177,9 +177,10 @@ pub enum Expr<'a> {
         /// The condition
         &'a Loc<Expr<'a>>,
         /// A | B if bool -> expression
-        /// <Pattern 1> | < Pattern 2> if <Guard> -> <Expr>
-        /// Vec, because there may be many patterns, and Option<Expr>
-        /// because each pattern may have a guard (".. if ..").
+        /// <Pattern 1> | <Pattern 2> if <Guard> -> <Expr>
+        /// Vec, because there may be many patterns, and the guard
+        /// is Option<Expr> because each pattern may have a guard
+        /// (".. if ..").
         Vec<'a, &'a (Vec<'a, WhenPattern<'a>>, Loc<Expr<'a>>)>,
     ),
 
