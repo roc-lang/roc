@@ -3,7 +3,7 @@ use crate::operator::{BinOp, CalledVia};
 use crate::parse::ast::Expr::{self, *};
 use crate::parse::ast::{AssignedField, Def, Pattern};
 use crate::region::{Located, Region};
-use crate::types;
+use crate::{types, parse};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 
@@ -170,8 +170,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 let desugared = desugar_expr(arena, &loc_branch_expr);
 
                 let mut alternatives = Vec::with_capacity_in(loc_patterns.len(), arena);
-                for (loc_pattern, loc_guard) in loc_patterns {
-                    let alternative_loc_guard = match &loc_guard {
+                for loc_pattern in loc_patterns {
+                    let alternative_loc_guard = match &loc_pattern.guard {
                         None => None,
                         Some(guard) => Some(Located {
                             region: guard.region,
@@ -179,13 +179,13 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                         }),
                     };
 
-                    alternatives.push((
-                        Located {
-                            region: loc_pattern.region,
-                            value: Pattern::Nested(&loc_pattern.value),
+                    alternatives.push(parse::ast::WhenPattern {
+                        pattern: Located {
+                            region: loc_pattern.pattern.region,
+                            value: Pattern::Nested(&loc_pattern.pattern.value),
                         },
-                        alternative_loc_guard,
-                    ))
+                        guard: alternative_loc_guard,
+                    })
                 }
 
                 desugared_branches.push(&*arena.alloc((
@@ -267,10 +267,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let pattern_region = condition.region;
 
             branches.push(&*arena.alloc((
-                bumpalo::vec![in arena; (Located {
+                bumpalo::vec![in arena; parse::ast::WhenPattern { pattern: Located {
                     value: Pattern::GlobalTag("False"),
                     region: pattern_region,
-                }, None)],
+                }, guard: None}],
                 Located {
                     value: Nested(&else_branch.value),
                     region: else_branch.region,
@@ -278,10 +278,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             )));
 
             branches.push(&*arena.alloc((
-                bumpalo::vec![in arena; (Located {
+                bumpalo::vec![in arena; parse::ast::WhenPattern { pattern: Located {
                     value: Pattern::Underscore,
                     region: pattern_region,
-                }, None)],
+                }, guard: None}],
                 Located {
                     value: Nested(&then_branch.value),
                     region: then_branch.region,

@@ -855,6 +855,7 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 
 mod when {
     use super::*;
+    use crate::parse;
 
     /// Parser for when expressions.
     pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
@@ -905,7 +906,7 @@ mod when {
         Vec<
             'a,
             &'a (
-                Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
+                Vec<'a, parse::ast::WhenPattern<'a>>,
                 Located<Expr<'a>>,
             ),
         >,
@@ -914,7 +915,7 @@ mod when {
             let mut branches: Vec<
                 'a,
                 &'a (
-                    Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
+                    Vec<'a, parse::ast::WhenPattern<'a>>,
                     Located<Expr<'a>>,
                 ),
             > = Vec::with_capacity_in(2, arena);
@@ -924,8 +925,8 @@ mod when {
 
             let (loc_first_patterns, state) =
                 branch_alternatives(min_indent).parse(arena, state)?;
-            let (loc_first_pattern, _first_guard) = loc_first_patterns.first().unwrap();
-            let original_indent = loc_first_pattern.region.start_col;
+            let loc_first_pattern = loc_first_patterns.first().unwrap();
+            let original_indent = loc_first_pattern.pattern.region.start_col;
             let indented_more = original_indent + 1;
 
             // Parse the first "->" and the expression after it.
@@ -972,26 +973,26 @@ mod when {
     /// Parsing alternative patterns in when branches.
     fn branch_alternatives<'a>(
         min_indent: u16,
-    ) -> impl Parser<'a, Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>> {
+    ) -> impl Parser<'a, Vec<'a, parse::ast::WhenPattern<'a>>> {
         sep_by1(
             char('|'),
             map!(
                 space0_around(loc_pattern(min_indent), min_indent),
-                |pattern| (pattern, None)
+                |pattern| parse::ast::WhenPattern { pattern: pattern, guard: None }
             ),
         )
     }
 
     /// Check if alternatives of a when branch are indented correctly.
     fn alternatives_indented_correctly<'a>(
-        loc_patterns: &'a Vec<'a, (Located<Pattern<'a>>, Option<Located<Expr<'a>>>)>,
+        loc_patterns: &'a Vec<'a, parse::ast::WhenPattern<'a>>,
         original_indent: u16,
     ) -> bool {
-        let ((first, _first_guard), rest) = loc_patterns.split_first().unwrap();
-        let first_indented_correctly = first.region.start_col == original_indent;
+        let (first, rest) = loc_patterns.split_first().unwrap();
+        let first_indented_correctly = first.pattern.region.start_col == original_indent;
         let rest_indented_correctly = rest
             .iter()
-            .all(|(pattern, _guard)| pattern.region.start_col >= original_indent);
+            .all(|when_pattern| when_pattern.pattern.region.start_col >= original_indent);
         first_indented_correctly && rest_indented_correctly
     }
 
