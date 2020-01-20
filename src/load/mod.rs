@@ -268,6 +268,7 @@ pub async fn load<'a>(
                     // This was a dependency. Write it down and keep processing messaages.
                     vars_by_symbol = vars_by_symbol.union(new_vars_by_symbol);
 
+                    debug_assert!(!subs_by_module.contains_key(&module_id));
                     subs_by_module.insert(module_id, ModuleSubs::Valid(subs));
 
                     // Notify all the listeners that this solved.
