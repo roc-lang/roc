@@ -48,16 +48,29 @@ interface Float
 ## See #Float.highest and #Float.lowest for the highest and
 ## lowest values that can be held in a #Float.
 ##
-## Note that although the IEEE-754 specification describes the values `Infinity`, `-Infinity`, `NaN`, and `-0.0`, Roc avoids these as follows:
+## Like #Int, it's possible for #Float operations to overflow and underflow
+## if they exceed the bounds of #Float.highest and #Float.lowest. When this happens:
 ##
-## * #Float.sqrt returns #(Err InvalidSqrt) when it would otherwise return `NaN`.
-## * Division operations return #(Err DivByZero) when they would otherwise return `Infinity` or `-Infinity`.
-## * Operations that overflow crash (just like integers do) instead of returning `Infinity` or `-Infinity`.
-## Under the hood, it is possible to have a zero #Float with a negative sign. However, this implementation detail intentionally conceealed. For equality purpose, `-0.0` is treated as equivalent to `0.0`, just like the spec prescribes. However, #Str.decimal always returns `0.0` when it would otherwise return `-0.0`, and both #Num.isPositive and #Num.isNegative return #False for all zero values. The only way to detect a zero with a negative sign is to convert it to #Bytes and inspect the bits directly.
-#Float : Num FloatingPoint
-
-## Returned in an #Err by functions like #Float.div and #Float.mod when their arguments would
-## result in division by zero. Division by zero is not allowed!
+## * In a development build, you'll get an assertion failure.
+## * In an optimized build, you'll get [`Infinity` or `-Infinity`](https://en.wikipedia.org/wiki/IEEE_754-1985#Positive_and_negative_infinity).
+##
+## Although some languages treat have first-class representations for
+## `-Infinity`, `Infinity`, and the special `NaN` ("not a number")
+## floating-point values described in the IEEE-754, Roc does not.
+## Instead, Roc treats all of these as errors. If any Float operation
+## in a development build encounters one of these values, it will
+## result in an assertion failure.
+##
+## Stll, it's possible that these values may accidentally arise in
+## release builds. If this happens, they will behave according to the usual
+## IEEE-754 rules: any operation involving `NaN` will output `NaN`,
+## any operation involving `Infinity` or `-Infinity` will output either
+## `Infinity`, `-Infinity`, or `NaN`, and `NaN` is defined to be not
+## equal to itself - meaning `(x == x)` returns `False` if `x` is `NaN`.
+##
+## These are very error-prone values, so if you see an assertion fail in
+## developent because of one of them, take it seriously - and try to fix
+## the code so that it can't come up in a release!
 #FloatingPoint := FloatingPoint
 
 ## Returned in an #Err by #Float.sqrt when given a negative number.
@@ -93,12 +106,19 @@ round = \num ->
 
 ## Other Calculations (arithmetic?)
 
-## Divide two #Float numbers. Return `Err DivByZero` if the
-## second number is zero, because division by zero is undefined in mathematics.
-##
-## (To divide an #Int and a #Float, first convert the #Int to a #Float using one of the functions in this module.)
+## Divide two #Float numbers.
 ##
 ## `a / b` is shorthand for `Float.div a b`.
+##
+## Division by zero is undefined in mathematics. As such, you should make
+## sure never to pass zero as the denomaintor to this function!
+##
+## If zero does get passed as the denominator...
+##
+## * In a development build, you'll get an assertion failure.
+## * In a release build, the function will return `Infinity`, `-Infinity`, or `NaN` depending on the arguments.
+##
+## To divide an #Int and a #Float, first convert the #Int to a #Float using one of the functions in this module.
 ##
 ## >>> 5.0 / 7.0
 ##
