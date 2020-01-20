@@ -795,24 +795,30 @@ fn canonicalize_when_branch<'a>(
         &mut shadowable_idents,
     );
 
-    let loc_can_guard = match &loc_pattern.guard {
+    match &loc_pattern.guard {
         Some(guard) => {
-            let (can_guard, _) =
+            let (can_guard, guard_out) =
                 canonicalize_expr(env, var_store, &mut scope, region, &guard.value);
-            Some(can_guard)
+
+            (
+                WhenPattern {
+                    pattern: loc_can_pattern,
+                    guard: Some(can_guard),
+                },
+                can_expr,
+                branch_output.references.union(guard_out.references),
+            )
         }
 
-        None => None,
-    };
-
-    (
-        WhenPattern {
-            pattern: loc_can_pattern,
-            guard: loc_can_guard,
-        },
-        can_expr,
-        branch_output.references,
-    )
+        None => (
+            WhenPattern {
+                pattern: loc_can_pattern,
+                guard: None,
+            },
+            can_expr,
+            branch_output.references,
+        ),
+    }
 }
 
 pub fn union_pairs<'a, K, V, I>(mut map: ImMap<K, V>, pairs: I) -> ImMap<K, V>
