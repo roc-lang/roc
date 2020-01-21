@@ -2,7 +2,13 @@ api Str provides Str, isEmpty, join
 
 ## Types
 
-Str := Str
+## A sequence of [UTF-8](https://en.wikipedia.org/wiki/UTF-8) text characters.
+##
+## One #Str can be up to 2 gigabytes in size. If you need to store larger
+## strings than that, you can split them into smaller chunks and operate
+## on those instead of on one large #Str. This often runs faster in practice,
+## even for strings much smaller than 2 gigabytes.
+Str : [ @Str ]
 
 ## Convert
 

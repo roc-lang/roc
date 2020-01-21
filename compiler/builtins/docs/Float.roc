@@ -48,7 +48,7 @@ interface Float
 ## See #Float.highest and #Float.lowest for the highest and
 ## lowest values that can be held in a #Float.
 ##
-## Like #Int, it's possible for #Float operations to overflow and underflow
+## Like #Int, it's possible for #Float operations to overflow.
 ## if they exceed the bounds of #Float.highest and #Float.lowest. When this happens:
 ##
 ## * In a development build, you'll get an assertion failure.

@@ -27,6 +27,11 @@ interface List
 ## > applies to lists that take up 8 machine words in memory or fewer, so
 ## > for example on a 64-bit system, a list of 8 #Int values will be
 ## > stored as a flat array instead of as an RRBT.
+##
+## One #List can store up to 2,147,483,648 elements (just over 2 billion). If you need to store more
+## elements than that, you can split them into smaller lists and operate
+## on those instead of on one large #List. This often runs faster in practice,
+## even for strings much smaller than 2 gigabytes.
 List elem : @List elem
 
 ## Initialize
@@ -191,6 +196,13 @@ walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> s
 
 ## Check
 
+## Returns the length of the list - the number of elements it contains.
+##
+## One #List can store up to 2,147,483,648 elements (just over 2 billion), which
+## is exactly equal to the highest valid #I32 value. This means the #U32 this function
+## returns can always be safely converted to an #I32 without losing any data.
+len : List * -> U32
+
 isEmpty : List * -> Bool
 
 contains : List elem, elem -> Bool
@@ -198,3 +210,4 @@ contains : List elem, elem -> Bool
 all : List elem, (elem -> Bool) -> Bool
 
 any : List elem, (elem -> Bool) -> Bool
+
