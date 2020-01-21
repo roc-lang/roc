@@ -111,6 +111,12 @@ impl<'a> MaybeQualified<'a, &'a [&'a str]> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WhenPattern<'a> {
+    pub pattern: Loc<Pattern<'a>>,
+    pub guard: Option<Loc<Expr<'a>>>,
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -168,8 +174,14 @@ pub enum Expr<'a> {
     // Conditionals
     If(&'a (Loc<Expr<'a>>, Loc<Expr<'a>>, Loc<Expr<'a>>)),
     When(
+        /// The condition
         &'a Loc<Expr<'a>>,
-        Vec<'a, &'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)>,
+        /// A | B if bool -> expression
+        /// <Pattern 1> | <Pattern 2> if <Guard> -> <Expr>
+        /// Vec, because there may be many patterns, and the guard
+        /// is Option<Expr> because each pattern may have a guard
+        /// (".. if ..").
+        Vec<'a, &'a (Vec<'a, WhenPattern<'a>>, Loc<Expr<'a>>)>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
