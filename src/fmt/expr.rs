@@ -680,7 +680,7 @@ pub fn fmt_record<'a>(
     }
 
     if is_multiline {
-        buf.push('\n');
+        newline(buf, indent)
     } else if !loc_fields.is_empty() {
         buf.push(' ');
     }
