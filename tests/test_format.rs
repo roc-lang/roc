@@ -880,6 +880,71 @@ mod test_format {
         );
     }
 
+    #[test]
+    fn multi_line_list_def() {
+        //        expr_formats_same(indoc!(
+        //            r#"
+        //            r =
+        //                [
+        //                    1,
+        //                    2
+        //                ]
+        //
+        //            r
+        //            "#
+        //            )
+        //        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                results = [
+                    Ok 4,
+                    Ok 5
+                    ]
+
+                allOks results
+                "#
+            ),
+            indoc!(
+                r#"
+                results =
+                    [
+                        Ok 4,
+                        Ok 5
+                    ]
+
+                allOks results
+                "#
+            ),
+        );
+
+        //        expr_formats_to(indoc!(
+        //                r#"
+        //                results =
+        //                    # Lets count past 6
+        //                    [
+        //                    Ok 6,
+        //                    Err CountError
+        //                    ]
+        //
+        //                allOks results
+        //                "#
+        //            ), indoc!(
+        //                r#"
+        //                results =
+        //                    # Lets count past 6
+        //                    [
+        //                        Ok 6,
+        //                        Err CountError
+        //                    ]
+        //
+        //                allOks results
+        //                "#
+        //            )
+        //        );
+    }
+
     // RECORD LITERALS
 
     #[test]
@@ -909,35 +974,45 @@ mod test_format {
         ));
     }
 
-    //    #[test]
-    //    fn multi_line_list_def() {
-    //        expr_formats_same(indoc!(
-    //            r#"
-    //            scores =
-    //                [
-    //                    5,
-    //                    10
-    //                ]
-    //
-    //            scores
-    //            "#
-    //        ));
-    //    }
-    //
-    //    #[test]
-    //    fn multi_line_record_def() {
-    //        expr_formats_same(indoc!(
-    //            r#"
-    //            pos =
-    //                {
-    //                    x: 5,
-    //                    x: 10
-    //                }
-    //
-    //            pos
-    //            "#
-    //        ));
-    //    }
+    #[test]
+    fn multi_line_record_def() {
+        //        expr_formats_same(indoc!(
+        //            r#"
+        //            pos =
+        //                {
+        //                    x: 4,
+        //                    y: 11,
+        //                    z: 16
+        //                }
+        //
+        //            pos
+        //            "#
+        //        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                pos = {
+                        x: 5,
+                        y: 10
+                    }
+
+                pos
+                "#
+            ),
+            indoc!(
+                r#"
+                pos =
+                    {
+                        x: 5,
+                        y: 10
+                    }
+
+                pos
+                "#
+            ),
+        );
+    }
 
     #[test]
     fn two_fields_center_newline() {
