@@ -345,12 +345,6 @@ fn load_filename(
         Ok(src) => {
             let var_store = VarStore::default();
             let arena = Bump::new();
-            // TODO instead of env.arena.alloc(src), we should create a new buffer
-            // in the arena as a Vec<'a, u8> and use tokio's AsyncRead::poll_poll_read_buf
-            // to read into a `&mut [u8]` like a Vec<'a, u8> instead of using read_to_string.
-            // This way, we avoid both heap-allocating the String
-            // (which read_to_string does) and also re-allocating it in the arena
-            // after read_to_string completes.
             let state = State::new(&src, Attempting::Module);
 
             // TODO figure out if there's a way to address this clippy error
