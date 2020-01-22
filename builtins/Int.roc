@@ -19,28 +19,45 @@ interface Int
 ##
 ## See #Int.highest and #Int.lowest for the highest and
 ## lowest values that can be held in an #Int.
+##
+## If any operation would result in an #Int that is either too big
+## or too small to fit in that range (e.g. running `Int.highest + 1`),
+## then the operation will *overflow* or *underflow*, respectively.
+## When this happens:
+##
+## * In a development build, you'll get an assertion failure.
+## * In a release build, you'll get [wrapping overflow](https://en.wikipedia.org/wiki/Integer_overflow#Saturated_arithmetic), which is almost always a mathematically incorrect outcome for the requested operation.
+##
+## As such, it's very important to design your code not to exceed these bounds!
+## If you need to do math outside these bounds, consider using
+## a different representation other than #Int. The reason #Int has these
+## bounds is for performance reasons.
 #Int : Num Integer
 
 ## Arithmetic
 
-## Divide two integers and call #Float.floor on the result.
+## Divide two integers and discard any fractional part of the result.
 ##
-## (Use #Float.div for non-flooring division.)
+## Division by zero is undefined in mathematics. As such, you should make
+## sure never to pass zero as the denomaintor to this function!
 ##
-## Return `Err DivByZero` if the second integer is zero, because division by zero is undefined in mathematics.
+## If zero does get passed as the denominator...
 ##
-## `a // b` is shorthand for `Int.divFloor a b`.
+## * In a development build, you'll get an assertion failure.
+## * In an optimized build, the function will return 0.
+##
+## `a // b` is shorthand for `Int.div a b`.
 ##
 ## >>> 5 // 7
 ##
-## >>> Int.divFloor 5 7
+## >>> Int.div 5 7
 ##
-## >>> -8 // -3
+## >>> 8 // -3
 ##
-## >>> Int.divFloor -8 -3
+## >>> Int.div 8 -3
 ##
 ## This is the same as the #// operator.
-#divFloor : Int, Int -> Result DivByZero Int
+# div : Int, Int -> Int
 
 ## Perform flooring modulo on two integers.
 ##

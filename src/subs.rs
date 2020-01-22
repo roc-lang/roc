@@ -445,7 +445,7 @@ impl Content {
         match &self {
             Content::Structure(FlatType::Apply {
                 module_name, name, ..
-            }) => module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM,
+            }) => module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM,
             _ => false,
         }
     }

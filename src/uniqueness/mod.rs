@@ -687,14 +687,14 @@ pub fn constrain_expr(
                 Expected::FromAnnotation(name, arity, _, typ) => {
                     constraints.push(Eq(Type::Variable(*expr_var), expected.clone(), region));
 
-                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, (loc_when_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = constrain_when_branch(
                             var_store,
                             &mut branch_var_usage,
                             env,
                             region,
-                            loc_pattern,
+                            &loc_when_pattern.pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -716,7 +716,8 @@ pub fn constrain_expr(
                         //      Bar x -> x
                         //
                         // In this case the `x` in the second branch is used uniquely
-                        for symbol in pattern::symbols_from_pattern(&loc_pattern.value) {
+                        for symbol in pattern::symbols_from_pattern(&loc_when_pattern.pattern.value)
+                        {
                             branch_var_usage.unregister(&symbol);
                         }
 
@@ -734,14 +735,14 @@ pub fn constrain_expr(
                     let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, (loc_when_pattern, loc_expr)) in branches.iter().enumerate() {
                         let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = constrain_when_branch(
                             var_store,
                             &mut branch_var_usage,
                             env,
                             region,
-                            loc_pattern,
+                            &loc_when_pattern.pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -762,7 +763,8 @@ pub fn constrain_expr(
                         //      Bar x -> x
                         //
                         // In this case the `x` in the second branch is used uniquely
-                        for symbol in pattern::symbols_from_pattern(&loc_pattern.value) {
+                        for symbol in pattern::symbols_from_pattern(&loc_when_pattern.pattern.value)
+                        {
                             branch_var_usage.unregister(&symbol);
                         }
 
@@ -1073,7 +1075,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             args,
         } => {
             let uniq_var = var_store.fresh();
-            if module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM {
+            if module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM {
                 let arg = args
                     .iter()
                     .next()
@@ -1082,7 +1084,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                 match arg {
                     Apply {
                         module_name, name, ..
-                    } if module_name.as_str() == types::MOD_INT
+                    } if module_name.as_str() == ModuleName::INT
                         && name.as_str() == types::TYPE_INTEGER =>
                     {
                         return (
@@ -1092,7 +1094,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                     }
                     Apply {
                         module_name, name, ..
-                    } if module_name.as_str() == types::MOD_FLOAT
+                    } if module_name.as_str() == ModuleName::FLOAT
                         && name.as_str() == types::TYPE_FLOATINGPOINT =>
                     {
                         return (

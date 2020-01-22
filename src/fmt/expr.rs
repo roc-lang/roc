@@ -146,14 +146,23 @@ pub fn fmt_expr<'a>(
             let mut it = branches.iter().peekable();
             while let Some((patterns, expr)) = it.next() {
                 add_spaces(buf, indent + INDENT);
-                let (first, rest) = patterns.split_first().unwrap();
+                let (first_pattern, rest) = patterns.split_first().unwrap();
                 let is_multiline = match rest.last() {
                     None => false,
-                    Some(last) => first.region.start_line != last.region.end_line,
+                    Some(last_pattern) => {
+                        first_pattern.pattern.region.start_line
+                            != last_pattern.pattern.region.end_line
+                    }
                 };
 
-                fmt_pattern(buf, &first.value, indent + INDENT, false, true);
-                for pattern in rest {
+                fmt_pattern(
+                    buf,
+                    &first_pattern.pattern.value,
+                    indent + INDENT,
+                    false,
+                    true,
+                );
+                for when_pattern in rest {
                     if is_multiline {
                         buf.push_str("\n");
                         add_spaces(buf, indent + INDENT);
@@ -161,7 +170,13 @@ pub fn fmt_expr<'a>(
                     } else {
                         buf.push_str(" | ");
                     }
-                    fmt_pattern(buf, &pattern.value, indent + INDENT, false, true);
+                    fmt_pattern(
+                        buf,
+                        &when_pattern.pattern.value,
+                        indent + INDENT,
+                        false,
+                        true,
+                    );
                 }
 
                 buf.push_str(" ->\n");
@@ -665,7 +680,7 @@ pub fn fmt_record<'a>(
     }
 
     if is_multiline {
-        buf.push('\n');
+        newline(buf, indent)
     } else if !loc_fields.is_empty() {
         buf.push(' ');
     }

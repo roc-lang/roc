@@ -3,6 +3,7 @@ use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{BasicType, FunctionType};
 use inkwell::AddressSpace;
 
+use crate::can::ident::ModuleName;
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs, Variable};
@@ -38,7 +39,7 @@ pub fn content_to_basic_type<'ctx>(
                 let module_name = module_name.as_str();
                 let name = name.as_str();
 
-                if module_name == types::MOD_NUM && name == types::TYPE_NUM {
+                if module_name == ModuleName::NUM && name == types::TYPE_NUM {
                     let arg = *args.iter().next().unwrap();
                     let arg_content = subs.get_without_compacting(arg).content;
 
@@ -82,13 +83,13 @@ fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTypeEnu
                 let module_name = module_name.as_str();
                 let name = name.as_str();
 
-                if module_name == types::MOD_FLOAT
+                if module_name == ModuleName::FLOAT
                     && name == types::TYPE_FLOATINGPOINT
                     && args.is_empty()
                 {
                     debug_assert!(args.is_empty());
                     Ok(BasicTypeEnum::FloatType(context.f64_type()))
-                } else if module_name == types::MOD_INT
+                } else if module_name == ModuleName::INT
                     && name == types::TYPE_INTEGER
                     && args.is_empty()
                 {
