@@ -17,7 +17,11 @@ lazy_static! {
     /// This is used in Debug builds only, to let us have a Debug instance
     /// which displays not only the Ident ID, but also the name string which
     /// corresponds to that ID.
-    pub static ref DEBUG_IDENT_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<IdentId, Box<str>>> =
+    pub static ref DEBUG_IDENT_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<u32, Box<str>>> =
+        // This stores a u32 key instead of a ModuleId key so that if there's
+        // a problem with ModuleId's Debug implementation, logging this for diagnostic
+        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
+        // this out.
         std::sync::Mutex::new(crate::collections::MutMap::default());
 }
 
@@ -56,12 +60,20 @@ impl fmt::Debug for IdentId {
 #[cfg(debug_assertions)]
 impl IdentId {
     pub fn name(&self) -> Box<str> {
+        let names =
         DEBUG_IDENT_ID_NAMES
             .lock()
-            .expect("Failed to acquire lock for Debug reading from DEBUG_IDENT_ID_NAMES, presumably because a thread panicked.")
-            .get(self)
-            .unwrap_or_else(|| panic!("Could not find a Debug name for Ident ID {:?}", self))
-            .clone()
+            .expect("Failed to acquire lock for Debug reading from DEBUG_IDENT_ID_NAMES, presumably because a thread panicked.");
+
+        match names.get(&self.value) {
+            Some(str_ref) => str_ref.clone(),
+            None => {
+                panic!(
+                    "Could not find a Debug name for ident ID {} in {:?}",
+                    self.value, names,
+                );
+            }
+        }
     }
 }
 
@@ -90,7 +102,7 @@ impl IdentIds {
 
                 self.by_name.insert(ident_name.clone(), ident_id);
 
-                if cfg!(debug_assetions) {
+                if cfg!(debug_assertions) {
                     Self::insert_debug_name(ident_id, &ident_name);
                 }
 
@@ -103,7 +115,7 @@ impl IdentIds {
     fn insert_debug_name(ident_id: IdentId, ident_name: &InlinableString) {
         let mut names = DEBUG_IDENT_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_IDENT_ID_NAMES, presumably because a thread panicked.");
 
-        names.insert(ident_id, ident_name.to_string().into());
+        names.insert(ident_id.value, ident_name.to_string().into());
     }
 
     #[cfg(not(debug_assertions))]

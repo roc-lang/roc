@@ -70,6 +70,12 @@ impl<'a> Into<InlinableString> for ModuleName {
     }
 }
 
+impl<'a> Into<Box<str>> for ModuleName {
+    fn into(self) -> Box<str> {
+        self.0.to_string().into()
+    }
+}
+
 impl Uppercase {
     pub fn as_str(&self) -> &str {
         &*self.0

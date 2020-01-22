@@ -471,7 +471,7 @@ fn from_can_when<'a>(
                         | RecordDestructure(_, _)
                         | FloatLiteral(_) => {
                             // The type checker should have converted these mismatches into RuntimeErrors already!
-                            if cfg!(debug_assetions) {
+                            if cfg!(debug_assertions) {
                                 panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", loc_when_pat);
                             } else {
                                 unreachable!();

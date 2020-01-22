@@ -10,7 +10,12 @@ lazy_static! {
     /// This is used in Debug builds only, to let us have a Debug instance
     /// which displays not only the Module ID, but also the Module Name which
     /// corresponds to that ID.
-    pub static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<ModuleId, Box<str>>> =
+    ///
+    pub static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<u32, Box<str>>> =
+        // This stores a u32 key instead of a ModuleId key so that if there's
+        // a problem with ModuleId's Debug implementation, logging this for diagnostic
+        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
+        // this out.
         std::sync::Mutex::new(crate::collections::MutMap::default());
 }
 
@@ -38,12 +43,20 @@ impl ModuleId {
     pub const NUM: ModuleId = ModuleId { value: 7 };
 
     pub fn name(&self) -> Box<str> {
+        let names =
         DEBUG_MODULE_ID_NAMES
             .lock()
-            .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.")
-            .get(self)
-            .unwrap_or_else(|| panic!("Could not find a Debug name for module ID {:?}", self))
-            .clone()
+            .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
+
+        match names.get(&self.value) {
+            Some(str_ref) => str_ref.clone(),
+            None => {
+                panic!(
+                    "Could not find a Debug name for module ID {} in {:?}",
+                    self.value, names,
+                );
+            }
+        }
     }
 }
 
@@ -55,7 +68,10 @@ impl fmt::Debug for ModuleId {
     /// it does not have available, due to having never stored it in the mutexed intern table.)
     #[cfg(debug_assertions)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "({:?}, {})", self.name(), self.value)
+        // Originally, this printed both name and numeric ID, but the numeric ID
+        // didn't seem to add anything useful. Feel free to temporarily re-add it
+        // if it's helpful in debugging!
+        write!(f, "{}", self.name())
     }
 
     /// In relese builds, all we have access to is the number, so only display that.
@@ -88,10 +104,14 @@ impl Default for ModuleIds {
             let name: ModuleName = name_str.into();
 
             // It's very important that these are inserted in the correct order!
-            debug_assert!(id.value as usize == by_id.len(), "When setting up default ModuleIds, module `{:?}` was inserted in the wrong order. It wants to have ID {:?} but was inserted at index {:?}", name_str, id, by_id.len());
+            debug_assert!(id.value as usize == by_id.len(), "When setting up default ModuleIds, module `{:?}` was inserted in the wrong order. It has a hardcoded ID of {:?} but was inserted at index {:?}", name_str, id.value, by_id.len());
 
             // Make sure we haven't already inserted an entry for this module name.
-            debug_assert!(!by_name.contains_key(&name), "Duplicate default module! We already have an ID for module `{:?}` (namely {:?}), but we tried to insert it again with ID {:?}", name, by_name.get(&name).unwrap(), id);
+            debug_assert!(!by_name.contains_key(&name), "Duplicate default module! We already have an ID for module `{:?}` (namely {:?}), but we tried to insert it again with ID {:?}", name, by_name.get(&name).unwrap(), id.value);
+
+            if cfg!(debug_assertions) {
+                Self::insert_debug_name(id, &name);
+            }
 
             by_name.insert(name.clone(), id);
             by_id.push(name);
@@ -136,7 +156,7 @@ impl ModuleIds {
 
                 self.by_name.insert(module_name.clone(), module_id);
 
-                if cfg!(debug_assetions) {
+                if cfg!(debug_assertions) {
                     Self::insert_debug_name(module_id, &module_name);
                 }
 
@@ -149,7 +169,7 @@ impl ModuleIds {
     fn insert_debug_name(module_id: ModuleId, module_name: &ModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        names.insert(module_id, module_name.as_str().into());
+        names.insert(module_id.value, module_name.as_str().into());
     }
 
     #[cfg(not(debug_assertions))]
