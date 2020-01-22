@@ -28,7 +28,6 @@ pub struct ModuleId {
 /// In Debug builds only, ModuleId has a name() method that lets
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
-#[cfg(debug_assertions)]
 impl ModuleId {
     // NOTE: Always add constants to the *end* of this list (with a unique integer),
     // and then also go to `impl Default for ModuleIds` and incorporate the new constant
@@ -42,6 +41,7 @@ impl ModuleId {
     pub const SET: ModuleId = ModuleId { value: 6 };
     pub const NUM: ModuleId = ModuleId { value: 7 };
 
+    #[cfg(debug_assertions)]
     pub fn name(self) -> Box<str> {
         let names =
         DEBUG_MODULE_ID_NAMES

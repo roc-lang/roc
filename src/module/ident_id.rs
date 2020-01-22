@@ -57,8 +57,8 @@ impl fmt::Debug for IdentId {
 /// In Debug builds only, IdentId has a name() method that lets
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
-#[cfg(debug_assertions)]
 impl IdentId {
+    #[cfg(debug_assertions)]
     pub fn name(self) -> Box<str> {
         let names =
         DEBUG_IDENT_ID_NAMES
