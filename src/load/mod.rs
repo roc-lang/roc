@@ -207,7 +207,7 @@ pub async fn load<'a>(
                 exposed_idents_by_module.insert(module_id, Arc::new((exposed_ids, ident_ids)));
 
                 // Notify all the listeners that headers are now available for this.
-                if let Some(listeners) = solve_listeners.remove(&module_id) {
+                if let Some(listeners) = header_listeners.remove(&module_id) {
                     for listener_id in listeners {
                         // This listener is longer waiting for this module,
                         // because this module's headers are now available!
