@@ -13,12 +13,28 @@ pub struct Lowercase(InlinableString);
 pub struct Uppercase(InlinableString);
 
 impl ModuleName {
+    pub const FLOAT: &'static str = "Float";
+    pub const BOOL: &'static str = "Bool";
+    pub const INT: &'static str = "Int";
+    pub const STR: &'static str = "Str";
+    pub const LIST: &'static str = "List";
+    pub const MAP: &'static str = "Map";
+    pub const SET: &'static str = "Set";
+    pub const NUM: &'static str = "Num";
+
     pub fn as_str(&self) -> &str {
         &*self.0
     }
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl AsRef<str> for ModuleName {
+    #[inline(always)]
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 

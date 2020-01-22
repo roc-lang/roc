@@ -1,3 +1,5 @@
+pub mod builtins;
+
 use crate::can::ident::{Lowercase, ModuleName, Uppercase};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;

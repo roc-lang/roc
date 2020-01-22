@@ -1,4 +1,4 @@
-use crate::module::ModuleName;
+use crate::module::header::ModuleName;
 use crate::parse;
 use crate::parse::ast::{
     AppHeader, Attempting, CommentOrNewline, Def, ExposesEntry, ImportsEntry, InterfaceHeader,
@@ -12,7 +12,7 @@ use crate::parse::parser::{
 use crate::region::Located;
 use bumpalo::collections::{String, Vec};
 
-pub fn module<'a>() -> impl Parser<'a, Module<'a>> {
+pub fn header<'a>() -> impl Parser<'a, Module<'a>> {
     one_of!(interface_module(), app_module())
 }
 

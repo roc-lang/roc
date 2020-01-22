@@ -1,4 +1,4 @@
-use crate::module::ModuleName;
+use crate::module::header::ModuleName;
 use crate::operator::CalledVia;
 use crate::operator::{BinOp, UnaryOp};
 use crate::parse::ident::Ident;
