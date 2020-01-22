@@ -1311,6 +1311,45 @@ mod test_parse {
     }
 
     #[test]
+    fn parse_as_ann() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let loc_x = Located::new(0, 0, 18, 19, TypeAnnotation::BoundVariable("x"));
+        let loc_y = Located::new(0, 0, 20, 21, TypeAnnotation::BoundVariable("y"));
+        let loc_a = Located::new(0, 0, 30, 31, TypeAnnotation::BoundVariable("a"));
+        let loc_b = Located::new(0, 0, 32, 33, TypeAnnotation::BoundVariable("b"));
+        let applied_ann_args = bumpalo::vec![in &arena; loc_x, loc_y];
+        let applied_ann =
+            TypeAnnotation::Apply(&["Foo", "Bar"], "Baz", applied_ann_args.into_bump_slice());
+        let loc_applied_ann = &*arena.alloc(Located::new(0, 0, 6, 21, applied_ann));
+        let applied_as_args = bumpalo::vec![in &arena; loc_a, loc_b];
+        let applied_as = TypeAnnotation::Apply(&[], "Blah", applied_as_args.into_bump_slice());
+        let loc_applied_as = &*arena.alloc(Located::new(0, 0, 25, 33, applied_as));
+        let as_ann = TypeAnnotation::As(loc_applied_ann, &[], loc_applied_as);
+        let signature = Def::Annotation(
+            Located::new(0, 0, 0, 3, Identifier("foo")),
+            Located::new(0, 0, 6, 33, as_ann),
+        );
+
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
+        let defs = bumpalo::vec![in &arena; loc_ann];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(2, 2, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                foo : Foo.Bar.Baz x y as Blah a b
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
     fn type_signature_function_def() {
         use TypeAnnotation;
         let arena = Bump::new();

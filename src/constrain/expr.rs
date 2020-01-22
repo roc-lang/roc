@@ -882,6 +882,8 @@ pub fn rec_defs_help(
                 }));
 
                 rigid_info.vars.extend(&new_rigids);
+                // because of how in Roc headers point to variables, we must include the pattern var here
+                rigid_info.vars.extend(pattern_state.vars);
                 rigid_info.constraints.push(Let(Box::new(LetConstraint {
                     rigid_vars: new_rigids,
                     flex_vars: Vec::new(),         // no flex vars introduced

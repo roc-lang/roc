@@ -240,6 +240,13 @@ pub enum TypeAnnotation<'a> {
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
 
+    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    As(
+        &'a Loc<TypeAnnotation<'a>>,
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<TypeAnnotation<'a>>,
+    ),
+
     Record {
         fields: &'a [Loc<AssignedField<'a, TypeAnnotation<'a>>>],
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.

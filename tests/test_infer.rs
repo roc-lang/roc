@@ -50,6 +50,7 @@ mod test_infer {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
             println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
+            dbg!(&problems);
             assert_eq!(0, 1);
         }
         assert_eq!(actual, expected.to_string());
@@ -1387,27 +1388,99 @@ mod test_infer {
         );
     }
 
-    // // currently fails, the rank of Cons's ext_var is 3, where 2 is the highest pool
-    // #[test]
-    // fn linked_list_map() {
-    //     with_larger_debug_stack(|| {
-    //         infer_eq_without_problem(
-    //             indoc!(
-    //                 r#"
-    //                 map = \f, list ->
-    //                     when list is
-    //                         Nil -> Nil
-    //                         Cons x xs ->
-    //                             a = f x
-    //                             b = map f xs
-    //
-    //                             Cons a b
-    //
-    //                 map
-    //                    "#
-    //             ),
-    //             "Attr.Attr * Int",
-    //         );
-    //     });
-    // }
+    #[test]
+    fn use_as_in_signature() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo : Str.Str as Foo -> Test.Foo
+                foo = \x -> "foo"
+
+                foo
+                "#
+            ),
+            "Test.Foo -> Test.Foo",
+        );
+    }
+
+    #[test]
+    fn linked_list_empty() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    empty : [ Cons a (List a), Nil ] as List a
+                    empty = Nil
+
+                    empty
+                       "#
+            ),
+            "Test.List a",
+        );
+    }
+
+    #[test]
+    fn linked_list_singleton() {
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
+                    singleton : a -> [ Cons a (Test.List a), Nil ] as List a
+                    singleton = \x -> Cons x Nil
+
+                    singleton
+                       "#
+                ),
+                "a -> Test.List a",
+            );
+        });
+    }
+
+    // currently fails, cyclic type
+    #[test]
+    #[ignore]
+    fn peano_map() {
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
+                    map : [ S Test.Peano, Z ] as Peano -> Test.Peano
+                    map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S v -> S (map v)
+
+                    map
+                       "#
+                ),
+                "Test.Peano",
+            );
+        });
+    }
+
+    // currently fails, cyclic type
+    // ending in `List b` will currently give a rigid unification error
+    #[test]
+    #[ignore]
+    fn linked_list_map() {
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
+                    map : (a -> a), [ Cons a (Test.List a), Nil ] as List a -> Test.List a
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons x xs ->
+                                a = f x
+                                b = map f xs
+
+                                Cons a b
+
+                    map
+                       "#
+                ),
+                "Attr.Attr * Int",
+            );
+        });
+    }
 }
