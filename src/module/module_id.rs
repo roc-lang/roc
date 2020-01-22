@@ -25,6 +25,9 @@ pub struct ModuleId {
 /// behind a mutex, so it is neither populated nor available in release builds.
 #[cfg(debug_assertions)]
 impl ModuleId {
+    // NOTE: Always add constants to the *end* of this list (with a unique integer),
+    // and then also go to `impl Default for ModuleIds` and incorporate the new constant
+    // into the *end* of its default module insertions. Insertion order matters for those!
     pub const STR: ModuleId = ModuleId { value: 0 };
     pub const BOOL: ModuleId = ModuleId { value: 1 };
     pub const INT: ModuleId = ModuleId { value: 2 };
@@ -62,31 +65,50 @@ impl fmt::Debug for ModuleId {
     }
 }
 
+/// Stores a mapping between ModuleId and ModuleName.
+///
+/// Each module name is stored twice, for faster lookups.
+/// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Debug)]
 pub struct ModuleIds {
     by_name: MutMap<ModuleName, ModuleId>,
-    by_id: MutMap<ModuleId, ModuleName>,
+    /// Each ModuleId is an index into this Vec
+    by_id: Vec<ModuleName>,
 }
 
 impl Default for ModuleIds {
     fn default() -> Self {
-        let capacity = NUM_BUILTIN_MODULES + 1; // You'll be compiling at least 1 module!
+        // +1 because the user will be compiling at least 1 non-builtin module!
+        let capacity = NUM_BUILTIN_MODULES + 1;
+
         let mut by_name = HashMap::with_capacity_and_hasher(capacity, default_hasher());
         let mut by_id = Vec::with_capacity(capacity);
-        let mut names = Vec::with_capacity(capacity);
 
-        let insert_both = |id, name_str: &'static str| {
+        let mut insert_both = |id: ModuleId, name_str: &'static str| {
             let name: ModuleName = name_str.into();
-            let index = names.len();
 
             // It's very important that these are inserted in the correct order!
-            debug_assert!(id == index as usize, "When setting up default ModuleIds, module `{:?}` was inserted in the wrong order. It wants to have ID {:?} but was inserted at index {:?}", name_str, _id, names.len());
+            debug_assert!(id.value as usize == by_id.len(), "When setting up default ModuleIds, module `{:?}` was inserted in the wrong order. It wants to have ID {:?} but was inserted at index {:?}", name_str, id, by_id.len());
 
-            by_name.insert(name, index);
-            by_id.insert(index, index);
-            names.push(name_str.into());
+            // Make sure we haven't already inserted an entry for this module name.
+            debug_assert!(!by_name.contains_key(&name), "Duplicate default module! We already have an ID for module `{:?}` (namely {:?}), but we tried to insert it again with ID {:?}", name, by_name.get(&name).unwrap(), id);
+
+            by_name.insert(name.clone(), id);
+            by_id.push(name);
         };
 
+        // These MUST be inserted in the correct order:
+        //
+        // * The first ModuleId pased in must be 0
+        // * Each subsequent ModuleId must be 1 greater than the previous one
+        //
+        // This is because these will be translated into indices into a Vec,
+        // and each time this gets called, the name gets pushed onto the Vec.
+        // So for these IDs to correspond to the correct names, they must be
+        // inserted in this order!
+        //
+        // Everywherere else this invariant is enforced by the API,
+        // but for these hardcoded modules we have to enforce it manually.
         insert_both(ModuleId::STR, ModuleName::STR);
         insert_both(ModuleId::BOOL, ModuleName::BOOL);
         insert_both(ModuleId::INT, ModuleName::INT);
@@ -102,14 +124,17 @@ impl Default for ModuleIds {
 
 impl ModuleIds {
     pub fn get_or_insert_id(&mut self, module_name: &ModuleName) -> ModuleId {
-        match self.store.get(module_name) {
-            Some(symbol) => ModuleId {
-                value: *symbol.id(),
-            },
+        match self.by_name.get(module_name) {
+            Some(id) => *id,
             None => {
+                let by_id = &mut self.by_id;
                 let module_id = ModuleId {
-                    value: *self.store.get_or_insert(module_name.clone()).unwrap().id(),
+                    value: by_id.len() as u32,
                 };
+
+                by_id.push(module_name.clone());
+
+                self.by_name.insert(module_name.clone(), module_id);
 
                 if cfg!(debug_assetions) {
                     Self::insert_debug_name(module_id, &module_name);
@@ -132,13 +157,11 @@ impl ModuleIds {
         // By design, this is a no-op in release builds!
     }
 
-    pub fn get_id(&self, module_name: &ModuleName) -> Option<ModuleId> {
-        self.store.get(module_name).map(|symbol| ModuleId {
-            value: *symbol.id(),
-        })
+    pub fn get_id(&self, module_name: &ModuleName) -> Option<&ModuleId> {
+        self.by_name.get(module_name)
     }
 
     pub fn get_name(&self, id: ModuleId) -> Option<&ModuleName> {
-        self.store.get_symbol(&id.value).map(Symbol::data)
+        self.by_id.get(id.value as usize)
     }
 }

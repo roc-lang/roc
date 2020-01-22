@@ -1,3 +1,4 @@
+use crate::can::ident::ModuleName;
 use crate::collections::SendMap;
 use crate::region::Region;
 use crate::subs::Variable;
@@ -56,7 +57,7 @@ fn num_literal(
 #[inline(always)]
 fn number_literal_type(module_name: &str, type_name: &str) -> Type {
     builtin_type(
-        types::MOD_NUM,
+        ModuleName::NUM,
         types::TYPE_NUM,
         vec![builtin_type(module_name, type_name, Vec::new())],
     )

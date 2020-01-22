@@ -1,5 +1,5 @@
-use crate::can;
 use crate::can::pattern::Pattern;
+use crate::can::{self, ident::ModuleName};
 use crate::collections::MutMap;
 use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
@@ -397,7 +397,7 @@ fn from_can_when<'a>(
                     module_name,
                     name,
                     args,
-                }) if module_name.as_str() == crate::types::MOD_NUM
+                }) if module_name.as_str() == ModuleName::NUM
                     && name.as_str() == crate::types::TYPE_NUM =>
                 {
                     debug_assert!(args.len() == 1);
@@ -407,7 +407,7 @@ fn from_can_when<'a>(
                     match subs.get_without_compacting(*arg).content {
                         Content::Structure(FlatType::Apply {
                             module_name, name, ..
-                        }) if module_name.as_str() == crate::types::MOD_INT => {
+                        }) if module_name.as_str() == ModuleName::INT => {
                             // This check shouldn't be necessary; the only
                             // type that fits the pattern of Num.Num Int._____
                             // is an Int!

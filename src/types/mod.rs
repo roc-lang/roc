@@ -12,17 +12,6 @@ use crate::subs::Variable;
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
 
-// The standard modules
-pub const MOD_FLOAT: &str = "Float";
-pub const MOD_BOOL: &str = "Bool";
-pub const MOD_INT: &str = "Int";
-pub const MOD_STR: &str = "Str";
-pub const MOD_LIST: &str = "List";
-pub const MOD_MAP: &str = "Map";
-pub const MOD_SET: &str = "Set";
-pub const MOD_NUM: &str = "Num";
-pub const MOD_DEFAULT: &str = "Default";
-
 pub const TYPE_NUM: &str = "Num";
 pub const TYPE_INTEGER: &str = "Integer";
 pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
@@ -198,7 +187,7 @@ impl fmt::Debug for Type {
 impl Type {
     pub fn num(args: Vec<Type>) -> Self {
         Type::Apply {
-            module_name: MOD_NUM.into(),
+            module_name: ModuleName::NUM.into(),
             name: TYPE_NUM.into(),
             args,
         }
@@ -206,7 +195,7 @@ impl Type {
 
     pub fn float() -> Self {
         let floating_point = Type::Apply {
-            module_name: MOD_FLOAT.into(),
+            module_name: ModuleName::FLOAT.into(),
             name: "FloatingPoint".into(),
             args: Vec::new(),
         };
@@ -216,7 +205,7 @@ impl Type {
 
     pub fn int() -> Self {
         let integer = Type::Apply {
-            module_name: MOD_INT.into(),
+            module_name: ModuleName::INT.into(),
             name: "Integer".into(),
             args: Vec::new(),
         };
@@ -226,7 +215,7 @@ impl Type {
 
     pub fn string() -> Self {
         Type::Apply {
-            module_name: MOD_STR.into(),
+            module_name: ModuleName::STR.into(),
             name: "Str".into(),
             args: Vec::new(),
         }
@@ -235,7 +224,7 @@ impl Type {
     /// This is needed to constrain `if` conditionals
     pub fn bool() -> Self {
         Type::Apply {
-            module_name: MOD_DEFAULT.into(),
+            module_name: ModuleName::BOOL.into(),
             name: "Bool".into(),
             args: Vec::new(),
         }

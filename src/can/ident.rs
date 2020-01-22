@@ -13,6 +13,8 @@ pub struct Lowercase(InlinableString);
 pub struct Uppercase(InlinableString);
 
 impl ModuleName {
+    // NOTE: After adding one of these, go to `impl ModuleId` and
+    // add a corresponding ModuleId to there!
     pub const FLOAT: &'static str = "Float";
     pub const BOOL: &'static str = "Bool";
     pub const INT: &'static str = "Int";

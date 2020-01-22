@@ -1,7 +1,16 @@
+use crate::collections::MutMap;
 use inlinable_string::InlinableString;
 use std::fmt;
-use symbol_map::indexing::{HashIndexing, Indexing};
-use symbol_map::Symbol;
+
+lazy_static! {
+    pub static ref STR_IDENTS: IdentIds = {
+        // TODO populate these similarly to how we do in `impl Default for ModuleIds`,
+        // including having hardcoded IdentId values for each identifier
+        // in each builtin module.
+
+        IdentIds::default()
+    };
+}
 
 #[cfg(debug_assertions)]
 lazy_static! {
@@ -56,21 +65,30 @@ impl IdentId {
     }
 }
 
+/// Stores a mapping between ModuleId and ModuleName.
+///
+/// Each module name is stored twice, for faster lookups.
+/// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Debug, Default)]
 pub struct IdentIds {
-    store: HashIndexing<InlinableString, u32>,
+    by_name: MutMap<InlinableString, IdentId>,
+    /// Each ModuleId is an index into this Vec
+    by_id: Vec<InlinableString>,
 }
 
 impl IdentIds {
     pub fn get_or_insert_id(&mut self, ident_name: &InlinableString) -> IdentId {
-        match self.store.get(ident_name) {
-            Some(symbol) => IdentId {
-                value: *symbol.id(),
-            },
+        match self.by_name.get(ident_name) {
+            Some(id) => *id,
             None => {
+                let by_id = &mut self.by_id;
                 let ident_id = IdentId {
-                    value: *self.store.get_or_insert(ident_name.clone()).unwrap().id(),
+                    value: by_id.len() as u32,
                 };
+
+                by_id.push(ident_name.clone());
+
+                self.by_name.insert(ident_name.clone(), ident_id);
 
                 if cfg!(debug_assetions) {
                     Self::insert_debug_name(ident_id, &ident_name);
@@ -93,13 +111,11 @@ impl IdentIds {
         // By design, this is a no-op in release builds!
     }
 
-    pub fn get_id(&self, ident_name: &InlinableString) -> Option<IdentId> {
-        self.store.get(ident_name).map(|symbol| IdentId {
-            value: *symbol.id(),
-        })
+    pub fn get_id(&self, ident_name: &InlinableString) -> Option<&IdentId> {
+        self.by_name.get(ident_name)
     }
 
-    pub fn get_ident(&self, id: IdentId) -> Option<&InlinableString> {
-        self.store.get_symbol(&id.value).map(Symbol::data)
+    pub fn get_name(&self, id: IdentId) -> Option<&InlinableString> {
+        self.by_id.get(id.value as usize)
     }
 }
