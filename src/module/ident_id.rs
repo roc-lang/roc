@@ -59,7 +59,7 @@ impl fmt::Debug for IdentId {
 /// behind a mutex, so it is neither populated nor available in release builds.
 #[cfg(debug_assertions)]
 impl IdentId {
-    pub fn name(&self) -> Box<str> {
+    pub fn name(self) -> Box<str> {
         let names =
         DEBUG_IDENT_ID_NAMES
             .lock()

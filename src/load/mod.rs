@@ -118,6 +118,7 @@ type MsgReceiver = mpsc::Receiver<Msg>;
 /// The loaded_modules argument specifies which modules have already been loaded.
 /// It typically contains *at least* the standard modules, but is empty when loading
 /// the standard modules themselves.
+#[allow(clippy::cognitive_complexity)]
 pub async fn load<'a>(
     src_dir: PathBuf,
     filename: PathBuf,

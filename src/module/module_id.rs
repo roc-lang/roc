@@ -42,7 +42,7 @@ impl ModuleId {
     pub const SET: ModuleId = ModuleId { value: 6 };
     pub const NUM: ModuleId = ModuleId { value: 7 };
 
-    pub fn name(&self) -> Box<str> {
+    pub fn name(self) -> Box<str> {
         let names =
         DEBUG_MODULE_ID_NAMES
             .lock()
