@@ -21,7 +21,6 @@ inlinable_string = "0.1.0"
 # but after several hours of trying unsuccessfully to fix it, `branch` is it.)
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "llvm8-0" }
 futures = "0.3"
-hashbrown = { version = "0.6", features = ["raw"] }
 lazy_static = "1.4"
 target-lexicon = "0.9" # NOTE: we must use the same version of target-lexicon as cranelift!
 cranelift           = "0.52" # All cranelift crates should have the same version!
