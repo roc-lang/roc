@@ -16,7 +16,7 @@ mod test_format {
     use roc::parse;
     use roc::parse::ast::{Attempting, Expr};
     use roc::parse::blankspace::space0_before;
-    use roc::parse::module::{module, module_defs};
+    use roc::parse::module::{self, module_defs};
     use roc::parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
@@ -55,7 +55,7 @@ mod test_format {
         let src = src.trim_end();
         let expected = expected.trim_end();
 
-        match module().parse(&arena, State::new(&src, Attempting::Module)) {
+        match module::header().parse(&arena, State::new(&src, Attempting::Module)) {
             Ok((actual, state)) => {
                 let mut buf = String::new_in(&arena);
 
@@ -1416,7 +1416,7 @@ mod test_format {
             5   |   6 | 7 ->
 
                     8
-            9   
+            9
             | 10 -> 11
 
             12 | 13 ->
@@ -1425,7 +1425,7 @@ mod test_format {
                 17
                 |  18 -> 19
             20 -> 21
-              
+
             "#
             ),
             indoc!(

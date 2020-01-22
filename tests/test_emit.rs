@@ -180,7 +180,7 @@ mod test_crane {
             let fpm = PassManager::create(&module);
 
             // Enable optimizations when running cargo test --release
-            if !cfg!(debug_assetions) {
+            if !cfg!(debug_assertions) {
                 fpm.add_instruction_combining_pass();
                 fpm.add_reassociate_pass();
                 fpm.add_basic_alias_analysis_pass();

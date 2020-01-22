@@ -1,4 +1,4 @@
-use crate::module::ModuleName;
+use crate::module::header::ModuleName;
 use inlinable_string::InlinableString;
 use std::fmt;
 

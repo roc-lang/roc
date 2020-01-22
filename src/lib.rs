@@ -18,7 +18,6 @@ pub mod ident;
 pub mod operator;
 pub mod parse;
 pub mod region;
-pub mod symbol_map;
 pub mod uniqueness;
 
 pub mod string;
@@ -41,5 +40,5 @@ pub mod unify;
 #[macro_use]
 extern crate log;
 
-// #[macro_use]
-// extern crate lazy_static;
+#[macro_use]
+extern crate lazy_static;

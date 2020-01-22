@@ -1,9 +1,10 @@
+use crate::can::ident::ModuleName;
 use crate::operator::BinOp::Pizza;
 use crate::operator::{BinOp, CalledVia};
+use crate::parse;
 use crate::parse::ast::Expr::{self, *};
 use crate::parse::ast::{AssignedField, Def, Pattern};
 use crate::region::{Located, Region};
-use crate::{parse, types};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 
@@ -204,11 +205,11 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let op = loc_op.value;
             let value = match op {
                 Negate => Var(
-                    bumpalo::vec![in arena; types::MOD_NUM].into_bump_slice(),
+                    bumpalo::vec![in arena; ModuleName::NUM].into_bump_slice(),
                     "negate",
                 ),
                 Not => Var(
-                    bumpalo::vec![in arena; types::MOD_BOOL].into_bump_slice(),
+                    bumpalo::vec![in arena; ModuleName::BOOL].into_bump_slice(),
                     "not",
                 ),
             };
@@ -338,67 +339,67 @@ fn binop_to_function(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
 
     match binop {
         Caret => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "pow",
         ),
         Star => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "mul",
         ),
         Slash => (
-            bumpalo::vec![ in arena; types::MOD_FLOAT ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::FLOAT ].into_bump_slice(),
             "div",
         ),
         DoubleSlash => (
-            bumpalo::vec![ in arena; types::MOD_INT ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::INT ].into_bump_slice(),
             "divFloor",
         ),
         Percent => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "rem",
         ),
         DoublePercent => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "mod",
         ),
         Plus => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "plus",
         ),
         Minus => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "sub",
         ),
         Equals => (
-            bumpalo::vec![ in arena; types::MOD_BOOL ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::BOOL ].into_bump_slice(),
             "isEq",
         ),
         NotEquals => (
-            bumpalo::vec![ in arena; types::MOD_BOOL ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::BOOL ].into_bump_slice(),
             "isNotEq",
         ),
         LessThan => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "isLt",
         ),
         GreaterThan => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "isGt",
         ),
         LessThanOrEq => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "isLte",
         ),
         GreaterThanOrEq => (
-            bumpalo::vec![ in arena; types::MOD_NUM ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
             "isGte",
         ),
         And => (
-            bumpalo::vec![ in arena; types::MOD_BOOL ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::BOOL ].into_bump_slice(),
             "and",
         ),
         Or => (
-            bumpalo::vec![ in arena; types::MOD_BOOL ].into_bump_slice(),
+            bumpalo::vec![ in arena; ModuleName::BOOL ].into_bump_slice(),
             "or",
         ),
         Pizza => panic!("Cannot desugar the |> operator"),

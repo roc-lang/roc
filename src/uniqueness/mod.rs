@@ -1075,7 +1075,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             args,
         } => {
             let uniq_var = var_store.fresh();
-            if module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM {
+            if module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM {
                 let arg = args
                     .iter()
                     .next()
@@ -1084,7 +1084,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                 match arg {
                     Apply {
                         module_name, name, ..
-                    } if module_name.as_str() == types::MOD_INT
+                    } if module_name.as_str() == ModuleName::INT
                         && name.as_str() == types::TYPE_INTEGER =>
                     {
                         return (
@@ -1094,7 +1094,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                     }
                     Apply {
                         module_name, name, ..
-                    } if module_name.as_str() == types::MOD_FLOAT
+                    } if module_name.as_str() == ModuleName::FLOAT
                         && name.as_str() == types::TYPE_FLOATINGPOINT =>
                     {
                         return (

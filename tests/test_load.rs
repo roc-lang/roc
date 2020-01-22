@@ -18,7 +18,7 @@ mod test_load {
     use roc::can::ident::ModuleName;
     use roc::collections::MutMap;
     use roc::load::{load, LoadedModule};
-    use roc::module::ModuleId;
+    use roc::module::module_id::ModuleId;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::solve::ModuleSubs;
     use std::collections::HashMap;
