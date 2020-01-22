@@ -568,7 +568,12 @@ fn send_interface_header<'a>(
             scope: scope_from_imports,
         }))
         .await
-        .unwrap_or_else(|_| panic!("Failed to send Header message for module ID: {:?}", module_id));
+        .unwrap_or_else(|_| {
+            panic!(
+                "Failed to send Header message for module ID: {:?}",
+                module_id
+            )
+        });
     });
 
     module_id
