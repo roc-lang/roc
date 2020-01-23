@@ -51,10 +51,6 @@ impl Symbol {
         })
     }
 
-    pub fn from_global_tag(tag_name: &str) -> Symbol {
-        Symbol(tag_name.into())
-    }
-
     pub fn from_private_tag(home: &str, tag_name: &str) -> Symbol {
         Symbol(format!("{}.{}", home, tag_name).into())
     }
