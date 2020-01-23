@@ -1,5 +1,4 @@
 use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
-use crate::can::symbol::Symbol;
 use crate::collections::{relative_complement, union, ImMap, MutMap};
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};

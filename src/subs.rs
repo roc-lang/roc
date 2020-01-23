@@ -1,5 +1,4 @@
 use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
-use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types;
