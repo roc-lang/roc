@@ -13,7 +13,7 @@ pub struct Lowercase(InlinableString);
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(InlinableString);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TagName {
     /// Global tags have no module, but tend to be short strings (since they're
     /// never qualified), so we store them as inlinable strings.

@@ -285,7 +285,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     sorted_fields.push((label.clone(), vars));
                 }
 
-                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+                sorted_fields.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
 
                 let mut any_written_yet = false;
 
