@@ -7,8 +7,7 @@ use crate::collections::{default_hasher, insert_all, ImMap, MutMap, MutSet, Send
 use crate::constrain::module::constrain_module;
 use crate::ident::Ident;
 use crate::module::header;
-use crate::module::ident_id::{IdentId, IdentIds};
-use crate::module::module_id::{ModuleId, ModuleIds};
+use crate::module::symbol::{IdentId, IdentIds, ModuleId, ModuleIds};
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
