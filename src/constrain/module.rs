@@ -1,6 +1,6 @@
 use crate::can::def::Declaration;
 use crate::can::ident::ModuleName;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::constrain::expr::constrain_decls;
 use crate::region::Region;
 use crate::subs::Variable;

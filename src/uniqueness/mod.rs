@@ -4,7 +4,7 @@ use crate::can::expr::Field;
 use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::builtins;
 use crate::constrain::expr::{exists, Env, Info};

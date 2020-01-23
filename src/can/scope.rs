@@ -1,5 +1,5 @@
 use crate::can::ident::ModuleName;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::ident::Ident;
 use crate::region::Region;

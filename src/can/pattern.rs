@@ -3,7 +3,7 @@ use crate::can::ident::{Lowercase, TagName};
 use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::ImMap;
 use crate::ident::Ident;
 use crate::parse::ast;

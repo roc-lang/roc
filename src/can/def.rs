@@ -14,7 +14,7 @@ use crate::can::problem::RuntimeError;
 use crate::can::problem::RuntimeError::*;
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::{ImSet, MutMap, MutSet, SendMap};
 use crate::graph::{strongly_connected_components, topological_sort_into_groups};
 use crate::ident::Ident;

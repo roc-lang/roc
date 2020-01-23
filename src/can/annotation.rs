@@ -1,6 +1,6 @@
 use crate::can::env::Env;
 use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::subs::{VarStore, Variable};

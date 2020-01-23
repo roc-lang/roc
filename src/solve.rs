@@ -1,5 +1,5 @@
 use crate::can::ident::{Lowercase, ModuleName};
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};

@@ -1,7 +1,7 @@
 use crate::can::ident::ModuleName;
 use crate::can::problem::Problem;
 use crate::can::procedure::References;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::MutMap;
 
 /// The canonicalization environment for a particular module.

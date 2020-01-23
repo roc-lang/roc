@@ -2,7 +2,7 @@ pub mod builtins;
 
 use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use crate::can::pattern::Pattern;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::{ImSet, MutSet, SendMap};
 use crate::ident::Ident;
 use crate::operator::{ArgSide, BinOp};

@@ -5,7 +5,7 @@ use crate::can::ident::ModuleName;
 use crate::can::operator::desugar_def;
 use crate::can::problem::RuntimeError;
 use crate::can::scope::Scope;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::SendMap;
 use crate::module::symbol::ModuleId;
 use crate::parse::ast;

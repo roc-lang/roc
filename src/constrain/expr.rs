@@ -4,7 +4,7 @@ use crate::can::expr::Expr::{self, *};
 use crate::can::expr::Field;
 use crate::can::ident::{Lowercase, ModuleName, TagName};
 use crate::can::pattern::Pattern;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::builtins::{
     empty_list_type, float_literal, int_literal, list_type, str_type,

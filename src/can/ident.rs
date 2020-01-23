@@ -1,4 +1,4 @@
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use inlinable_string::InlinableString;
 use std::fmt;
 

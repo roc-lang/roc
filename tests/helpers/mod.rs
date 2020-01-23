@@ -7,7 +7,7 @@ use roc::can::expr::{canonicalize_expr, Expr};
 use roc::can::operator;
 use roc::can::problem::Problem;
 use roc::can::scope::Scope;
-use roc::can::symbol::Symbol;
+use roc::module::symbol::Symbol;
 use roc::collections::{ImMap, ImSet, MutMap, SendSet};
 use roc::constrain::expr::constrain_expr;
 use roc::ident::Ident;

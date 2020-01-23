@@ -13,7 +13,7 @@ use crate::can::problem::RuntimeError;
 use crate::can::problem::RuntimeError::*;
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ident::Ident;
 use crate::operator::CalledVia;

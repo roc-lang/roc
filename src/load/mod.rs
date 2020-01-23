@@ -2,7 +2,7 @@ use crate::can::def::Declaration;
 use crate::can::ident::ModuleName;
 use crate::can::module::{canonicalize_module_defs, Module, ModuleOutput};
 use crate::can::scope::Scope;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::{default_hasher, insert_all, ImMap, MutMap, MutSet, SendMap};
 use crate::constrain::module::constrain_module;
 use crate::ident::Ident;

@@ -1,6 +1,6 @@
 use crate::can::expr::Expr;
 use crate::can::pattern::Pattern;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::ImSet;
 use crate::region::{Located, Region};
 use crate::subs::Variable;

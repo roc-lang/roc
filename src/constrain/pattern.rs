@@ -1,6 +1,6 @@
 use crate::can::pattern::Pattern::{self, *};
 use crate::can::pattern::RecordDestruct;
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::SendMap;
 use crate::region::{Located, Region};
 use crate::subs::Variable;

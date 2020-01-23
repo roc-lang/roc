@@ -1,4 +1,4 @@
-use crate::can::symbol::Symbol;
+use crate::module::symbol::Symbol;
 use crate::collections::ImMap;
 
 #[derive(Clone, Debug, PartialEq)]

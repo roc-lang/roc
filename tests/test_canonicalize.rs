@@ -18,7 +18,7 @@ mod test_canonicalize {
     use roc::can::problem::Problem;
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
-    use roc::can::symbol::Symbol;
+    use roc::module::symbol::Symbol;
     use roc::collections::{ImMap, ImSet, SendMap};
     use roc::ident::Ident;
     use roc::region::{Located, Region};
