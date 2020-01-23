@@ -1,5 +1,5 @@
 use crate::can::env::Env;
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, TagName};
 use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
@@ -17,7 +17,7 @@ use im_rc::Vector;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
-    AppliedTag(Variable, Symbol, Vec<(Variable, Located<Pattern>)>),
+    AppliedTag(Variable, TagName, Vec<(Variable, Located<Pattern>)>),
     IntLiteral(i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
@@ -84,13 +84,13 @@ pub fn canonicalize_pattern<'a>(
         }
         &GlobalTag(name) => {
             // Canonicalize the tag's name.
-            Pattern::AppliedTag(var_store.fresh(), Symbol::from_global_tag(name), vec![])
+            Pattern::AppliedTag(var_store.fresh(), TagName::Global((*name).into()), vec![])
         }
         &PrivateTag(name) => {
             // Canonicalize the tag's name.
             Pattern::AppliedTag(
                 var_store.fresh(),
-                Symbol::from_private_tag(env.home.as_str(), name),
+                TagName::Private(Symbol::from_private_tag(env.home.as_str(), name)),
                 vec![],
             )
         }
@@ -111,13 +111,15 @@ pub fn canonicalize_pattern<'a>(
                 ));
             }
 
-            let symbol = match tag.value {
-                GlobalTag(name) => Symbol::from_global_tag(name),
-                PrivateTag(name) => Symbol::from_private_tag(env.home.as_str(), name),
+            let tag_name = match tag.value {
+                GlobalTag(name) => TagName::Global(name.into()),
+                PrivateTag(name) => {
+                    TagName::Private(Symbol::from_private_tag(env.home.as_str(), name))
+                }
                 _ => unreachable!("Other patterns cannot be applied"),
             };
 
-            Pattern::AppliedTag(var_store.fresh(), symbol, can_patterns)
+            Pattern::AppliedTag(var_store.fresh(), tag_name, can_patterns)
         }
 
         &FloatLiteral(ref string) => match pattern_type {

@@ -1,4 +1,4 @@
-use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use crate::can::symbol::Symbol;
 use crate::collections::{relative_complement, union, ImMap, MutMap};
 use crate::subs::Content::{self, *};
@@ -24,7 +24,7 @@ pub struct RecordStructure {
 
 #[derive(Debug)]
 struct TagUnionStructure {
-    tags: MutMap<Symbol, Vec<Variable>>,
+    tags: MutMap<TagName, Vec<Variable>>,
     ext: Variable,
 }
 
@@ -346,8 +346,8 @@ fn unify_shared_tags(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_tags: MutMap<Symbol, (Vec<Variable>, Vec<Variable>)>,
-    other_tags: MutMap<Symbol, Vec<Variable>>,
+    shared_tags: MutMap<TagName, (Vec<Variable>, Vec<Variable>)>,
+    other_tags: MutMap<TagName, Vec<Variable>>,
     ext: Variable,
 ) -> Outcome {
     let mut matching_tags = MutMap::default();
@@ -580,7 +580,7 @@ pub fn gather_fields(
 
 fn gather_tags(
     subs: &mut Subs,
-    tags: MutMap<Symbol, Vec<Variable>>,
+    tags: MutMap<TagName, Vec<Variable>>,
     var: Variable,
 ) -> TagUnionStructure {
     use crate::subs::FlatType::*;
