@@ -49,6 +49,16 @@ impl fmt::Debug for Symbol {
     }
 }
 
+// TODO this is only here to prevent clippy from complaining about an unused
+// #[macro_use] on lazy_statc in --release builds, because as of January 2020,
+// we only use lazy_static in the debug configuration. If we ever start using
+// lazy_static in release builds, this do-nothing macro invocation will be safe to delete!
+//
+// There's probably also a way to get clippy to stop complaining about the unused
+// #[macro_use] but it didn't seem worth the effort since probably someday we'll
+// end up using it in release builds anyway. Right? ...Right?
+lazy_static! {}
+
 #[cfg(debug_assertions)]
 lazy_static! {
     /// This is used in Debug builds only, to let us have a Debug instance
