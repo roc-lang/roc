@@ -1,6 +1,6 @@
 use crate::can::def::{can_defs_with_return, Def};
 use crate::can::env::Env;
-use crate::can::ident::{Lowercase, ModuleName};
+use crate::can::ident::{Lowercase, ModuleName, TagName};
 use crate::can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
@@ -125,7 +125,7 @@ pub enum Expr {
     Tag {
         variant_var: Variable,
         ext_var: Variable,
-        name: Symbol,
+        name: TagName,
         arguments: Vec<(Variable, Located<Expr>)>,
     },
 
@@ -567,7 +567,7 @@ pub fn canonicalize_expr(
 
             (
                 Tag {
-                    name: Symbol::from_global_tag(tag),
+                    name: TagName::Global((*tag).into()),
                     arguments: vec![],
                     variant_var,
                     ext_var,
@@ -581,7 +581,7 @@ pub fn canonicalize_expr(
 
             (
                 Tag {
-                    name: Symbol::from_private_tag(env.home.as_str(), tag),
+                    name: TagName::Private(Symbol::from_private_tag(env.home.as_str(), tag)),
                     arguments: vec![],
                     variant_var,
                     ext_var,

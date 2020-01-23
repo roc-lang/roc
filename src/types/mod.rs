@@ -1,6 +1,6 @@
 pub mod builtins;
 
-use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImSet, MutSet, SendMap};
@@ -23,7 +23,7 @@ pub enum Type {
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
     Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
-    TagUnion(Vec<(Symbol, Vec<Type>)>, Box<Type>),
+    TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
@@ -463,7 +463,7 @@ pub enum PatternCategory {
     List,
     Set,
     Map,
-    Ctor(Symbol),
+    Ctor(TagName),
     Int,
     Str,
     Float,
@@ -501,7 +501,7 @@ pub enum ErrorType {
     FlexVar(Lowercase),
     RigidVar(Lowercase),
     Record(SendMap<RecordFieldLabel, ErrorType>, TypeExt),
-    TagUnion(SendMap<Symbol, Vec<ErrorType>>, TypeExt),
+    TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(
         ModuleName,

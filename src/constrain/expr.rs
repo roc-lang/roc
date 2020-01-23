@@ -2,7 +2,7 @@ use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::Field;
-use crate::can::ident::{Lowercase, ModuleName};
+use crate::can::ident::{Lowercase, ModuleName, TagName};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
@@ -311,7 +311,10 @@ pub fn constrain_expr(
         } => {
             // TODO use Bool alias here, so we don't allocate this type every time
             let bool_type = Type::TagUnion(
-                vec![("True".into(), vec![]), ("False".into(), vec![])],
+                vec![
+                    (TagName::Global("True".into()), vec![]),
+                    (TagName::Global("False".into()), vec![]),
+                ],
                 Box::new(Type::EmptyTagUnion),
             );
             let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);

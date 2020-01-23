@@ -14,11 +14,11 @@ mod helpers;
 #[cfg(test)]
 mod test_load {
     use crate::helpers::{builtins_dir, fixtures_dir};
+    use inlinable_string::InlinableString;
     use roc::can::def::Declaration::*;
-    use roc::can::ident::ModuleName;
     use roc::collections::MutMap;
     use roc::load::{load, LoadedModule};
-    use roc::module::module_id::ModuleId;
+    use roc::module::symbol::ModuleId;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::solve::ModuleSubs;
     use std::collections::HashMap;
@@ -64,7 +64,7 @@ mod test_load {
             .get_name(loaded_module.module_id)
             .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(expected_name, &ModuleName::from(module_name));
+        assert_eq!(expected_name, &InlinableString::from(module_name));
 
         loaded_module
     }
@@ -149,7 +149,7 @@ mod test_load {
                 .get_name(loaded_module.module_id)
                 .expect("Test ModuleID not found in module_ids");
 
-            assert_eq!(expected_name, &ModuleName::from("Primary"));
+            assert_eq!(expected_name, &InlinableString::from("Primary"));
             assert_eq!(def_count, 6);
         });
     }
@@ -176,20 +176,20 @@ mod test_load {
                 .get_name(loaded_module.module_id)
                 .expect("Test ModuleID not found in module_ids");
 
-            assert_eq!(expected_name, &ModuleName::from("Defaults"));
+            assert_eq!(expected_name, &InlinableString::from("Defaults"));
             assert_eq!(def_count, 0);
 
-            let mut all_loaded_modules: Vec<ModuleName> = subs_by_module
+            let mut all_loaded_modules: Vec<InlinableString> = subs_by_module
                 .keys()
                 .map(|module_id| module_ids.get_name(*module_id).unwrap().clone())
                 .collect();
 
+            let expected: Vec<InlinableString> =
+                vec!["Float".into(), "Int".into(), "Map".into(), "Set".into()];
+
             all_loaded_modules.sort();
 
-            assert_eq!(
-                all_loaded_modules,
-                vec!["Float".into(), "Int".into(), "Map".into(), "Set".into()]
-            );
+            assert_eq!(all_loaded_modules, expected);
         });
     }
 

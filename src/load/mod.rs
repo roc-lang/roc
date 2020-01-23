@@ -7,8 +7,7 @@ use crate::collections::{default_hasher, insert_all, ImMap, MutMap, MutSet, Send
 use crate::constrain::module::constrain_module;
 use crate::ident::Ident;
 use crate::module::header;
-use crate::module::ident_id::{IdentId, IdentIds};
-use crate::module::module_id::{ModuleId, ModuleIds};
+use crate::module::symbol::{IdentId, IdentIds, ModuleId, ModuleIds};
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
@@ -515,10 +514,10 @@ fn send_interface_header<'a>(
             // Lock just long enough to perform these operations.
             let mut unlocked = (*arc).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
 
-            module_id = unlocked.get_or_insert_id(&declared_name);
+            module_id = unlocked.get_or_insert_id(declared_name.as_inline_str());
 
             for dep in deps.iter() {
-                let id = unlocked.get_or_insert_id(dep);
+                let id = unlocked.get_or_insert_id(dep.into());
 
                 can_module_ids.insert(dep.clone(), id);
                 deps_by_id.push((id, dep.clone()));
@@ -529,10 +528,10 @@ fn send_interface_header<'a>(
             // If this is the original file the user loaded,
             // then we already have a mutable reference,
             // and won't need to pay locking costs.
-            module_id = mut_ref.get_or_insert_id(&declared_name);
+            module_id = mut_ref.get_or_insert_id(declared_name.as_inline_str());
 
             for dep in deps.iter() {
-                let id = mut_ref.get_or_insert_id(dep);
+                let id = mut_ref.get_or_insert_id(dep.into());
 
                 can_module_ids.insert(dep.clone(), id);
                 deps_by_id.push((id, dep.clone()));
@@ -598,14 +597,18 @@ fn solve_module(
         let unlocked = (*module_ids).lock().expect("Could not lock module_ids");
 
         for (module_id, v) in subs_by_module {
-            let module_name = unlocked.get_name(*module_id).unwrap_or_else(|| {
-                panic!(
-                    "Could not find module name for {:?} in {:?}",
-                    module_id, unlocked
-                )
-            });
+            let module_name: ModuleName = unlocked
+                .get_name(*module_id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Could not find module name for {:?} in {:?}",
+                        module_id, unlocked
+                    )
+                })
+                .clone()
+                .into();
 
-            converted.insert(module_name.clone(), v.clone());
+            converted.insert(module_name, v.clone());
         }
 
         converted

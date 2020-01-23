@@ -7,7 +7,7 @@ use crate::can::problem::RuntimeError;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
-use crate::module::module_id::ModuleId;
+use crate::module::symbol::ModuleId;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};

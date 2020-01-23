@@ -1,3 +1,4 @@
+use crate::can::symbol::Symbol;
 use inlinable_string::InlinableString;
 use std::fmt;
 
@@ -11,6 +12,31 @@ pub struct Lowercase(InlinableString);
 /// A capitalized identifier, such as a tag name or module name
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(InlinableString);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TagName {
+    /// Global tags have no module, but tend to be short strings (since they're
+    /// never qualified), so we store them as inlinable strings.
+    ///
+    /// This is allows canonicalization to happen in parallel without locks.
+    /// If global tags had a Symbol representation, then each module would have to
+    /// deal with contention on a global mutex around translating global tag strings
+    /// into integers. (Record field labels work the same way, for the same reason.)
+    Global(Uppercase),
+
+    /// Private tags are associated with a specific module, and as such use a
+    /// Symbol just like all other module-specific identifiers.
+    Private(Symbol),
+}
+
+impl TagName {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Global(uppercase) => uppercase.as_str(),
+            Self::Private(symbol) => symbol.as_str(),
+        }
+    }
+}
 
 impl ModuleName {
     // NOTE: After adding one of these, go to `impl ModuleId` and
@@ -26,6 +52,10 @@ impl ModuleName {
 
     pub fn as_str(&self) -> &str {
         &*self.0
+    }
+
+    pub fn as_inline_str(&self) -> &InlinableString {
+        &self.0
     }
 
     pub fn is_empty(&self) -> bool {
@@ -64,9 +94,15 @@ impl From<InlinableString> for ModuleName {
     }
 }
 
-impl<'a> Into<InlinableString> for ModuleName {
+impl Into<InlinableString> for ModuleName {
     fn into(self) -> InlinableString {
         self.0
+    }
+}
+
+impl<'a> Into<&'a InlinableString> for &'a ModuleName {
+    fn into(self) -> &'a InlinableString {
+        &self.0
     }
 }
 
