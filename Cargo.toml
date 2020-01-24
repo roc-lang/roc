@@ -13,6 +13,7 @@ wyhash = "0.3"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = "2.6"
 inlinable_string = "0.1.0"
+boolean_expression = "0.3.10"
 # NOTE: Breaking API changes get pushed directly to this Inkwell branch, so be
 # very careful when running `cargo update` to get a new revision into Cargo.lock.
 #

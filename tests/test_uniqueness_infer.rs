@@ -1197,18 +1197,17 @@ mod test_infer_uniq {
         );
     }
 
-    // TODO fails because of bug in boolean simplifier
-    //    #[test]
-    //    fn sharing_analysis_record_update_use_twice_access() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                \r -> { r & x: r.x, y: r.y }
-    //                "#
-    //            ),
-    //        "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)" ,
-    //        );
-    //    }
+    #[test]
+    fn sharing_analysis_record_update_use_twice_access() {
+        infer_eq(
+                indoc!(
+                    r#"
+                    \r -> { r & x: r.x, y: r.y }
+                    "#
+                ),
+            "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)" ,
+            );
+    }
 
     #[test]
     fn sharing_analysis_record_update_duplicate_field() {

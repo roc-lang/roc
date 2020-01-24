@@ -10,6 +10,29 @@
 // > Boolean Equations" by Frank Markham Brown.
 use crate::collections::{ImMap, ImSet};
 use crate::subs::Variable;
+use boolean_expression::Expr;
+
+fn bool_to_expr(b: Bool) -> Expr<Variable> {
+    match b {
+        Zero => Expr::Const(false),
+        One => Expr::Const(true),
+        And(a, b) => Expr::And(Box::new(bool_to_expr(*a)), Box::new(bool_to_expr(*b))),
+        Or(a, b) => Expr::Or(Box::new(bool_to_expr(*a)), Box::new(bool_to_expr(*b))),
+        Not(a) => Expr::Not(Box::new(bool_to_expr(*a))),
+        Variable(v) => Expr::Terminal(v),
+    }
+}
+
+fn expr_to_bool(e: Expr<Variable>) -> Bool {
+    match e {
+        Expr::Const(false) => Zero,
+        Expr::Const(true) => One,
+        Expr::And(a, b) => And(Box::new(expr_to_bool(*a)), Box::new(expr_to_bool(*b))),
+        Expr::Or(a, b) => Or(Box::new(expr_to_bool(*a)), Box::new(expr_to_bool(*b))),
+        Expr::Not(a) => Not(Box::new(expr_to_bool(*a))),
+        Expr::Terminal(v) => Variable(v),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Bool {
@@ -154,11 +177,18 @@ impl Bool {
 }
 
 pub fn simplify(term: Bool) -> Bool {
+    /*
     let normalized = normalize_term(term);
     let a = term_to_sop(normalized);
     let b = normalize_sop(a);
     let after_bcf = bcf(b);
     sop_to_term_vector(simplify_sop_vector(after_bcf))
+    */
+
+    let expr = bool_to_expr(term);
+    let simplified = expr.simplify_via_bdd();
+
+    expr_to_bool(simplified)
 }
 
 #[inline(always)]

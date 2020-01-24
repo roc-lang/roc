@@ -685,7 +685,7 @@ pub fn constrain_expr(
                             var_usage,
                             env,
                             region,
-                            &loc_when_pattern.pattern,
+                            &loc_pattern.pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -718,7 +718,7 @@ pub fn constrain_expr(
                             var_usage,
                             env,
                             region,
-                            &loc_when_pattern.pattern,
+                            &loc_pattern.pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
