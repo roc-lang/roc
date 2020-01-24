@@ -1,5 +1,6 @@
-use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{relative_complement, union, ImMap, MutMap};
+use crate::module::symbol::Symbol;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use crate::types::RecordFieldLabel;
@@ -75,9 +76,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
-        Alias(home, name, args, real_var) => {
-            unify_alias(subs, pool, &ctx, home, name, args, *real_var)
-        }
+        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, args, *real_var),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
@@ -90,8 +89,7 @@ fn unify_alias(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    home: &ModuleName,
-    name: &Uppercase,
+    symbol: Symbol,
     args: &[(Lowercase, Variable)],
     real_var: Variable,
 ) -> Outcome {
@@ -100,15 +98,11 @@ fn unify_alias(
     match other_content {
         FlexVar(_) => {
             // Alias wins
-            merge(
-                subs,
-                &ctx,
-                Alias(home.clone(), name.clone(), args.to_owned(), real_var),
-            )
+            merge(subs, &ctx, Alias(symbol, args.to_owned(), real_var))
         }
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
-        Alias(other_home, other_name, other_args, other_real_var) => {
-            if name == other_name && home == other_home {
+        Alias(other_symbol, other_args, other_real_var) => {
+            if symbol == *other_symbol {
                 if args.len() == other_args.len() {
                     for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
                         unify_pool(subs, pool, *l_var, *r_var);
@@ -148,7 +142,7 @@ fn unify_structure(
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
+        Alias(_, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
         Error => merge(subs, ctx, Error),
     }
 }
@@ -454,30 +448,11 @@ fn unify_flat_type(
             }
         }
 
-        (
-            Apply {
-                module_name: l_module_name,
-                name: l_type_name,
-                args: l_args,
-            },
-            Apply {
-                module_name: r_module_name,
-                name: r_type_name,
-                args: r_args,
-            },
-        ) if l_module_name == r_module_name && l_type_name == r_type_name => {
+        (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
             let problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
 
             if problems.is_empty() {
-                merge(
-                    subs,
-                    ctx,
-                    Structure(Apply {
-                        module_name: (*r_module_name).clone(),
-                        name: (*r_type_name).clone(),
-                        args: (*r_args).clone(),
-                    }),
-                )
+                merge(subs, ctx, Structure(Apply(*r_symbol, (*r_args).clone())))
             } else {
                 problems
             }
@@ -525,7 +500,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
             // rigid names are the same.
             mismatch()
         }
-        Alias(_, _, _, _) => {
+        Alias(_, _, _) => {
             panic!("TODO unify_rigid Alias");
         }
         Error => {
@@ -547,7 +522,7 @@ fn unify_flex(
             // If both are flex, and only left has a name, keep the name around.
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
-        FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _, _) => {
+        FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _) => {
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
             merge(subs, ctx, other.clone())
@@ -568,7 +543,7 @@ pub fn gather_fields(
             gather_fields(subs, union(fields, &sub_fields), sub_ext)
         }
 
-        Alias(_, _, _, var) => {
+        Alias(_, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
             gather_fields(subs, fields, var)
         }
@@ -589,7 +564,7 @@ fn gather_tags(
             gather_tags(subs, union(tags, &sub_tags), sub_ext)
         }
 
-        Alias(_, _, _, var) => {
+        Alias(_, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
             gather_tags(subs, tags, var)
         }

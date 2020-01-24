@@ -45,7 +45,7 @@ Each Roc platform gets its own separate package repository, with packages built 
 
 ## Project Goals
 
-Roc is in the extremely early stages of development. It barely does anything yet. With any luck, it will support doing something useful in 2020.
+Roc is in the extremely early stages of development. It barely does anything yet. With any luck, it will support doing something useful by the end of 2020.
 
 Besides the above language design, a separate goal is for Roc to ship with an ambitiously boundary-pushing graphical editor. Not like "an IDE," but rather something that makes people say "I have never seen anything remotely like this outside of Bret Victor demos."
 

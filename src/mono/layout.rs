@@ -1,6 +1,5 @@
-use crate::can::ident::ModuleName;
+use crate::module::symbol::{IdentId, ModuleId};
 use crate::subs::{Content, FlatType, Subs, Variable};
-use crate::types;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use cranelift_codegen::isa::TargetFrontendConfig;
@@ -42,7 +41,7 @@ impl<'a> Layout<'a> {
                 panic!("Layout::from_content encountered an unresolved {:?}", var);
             }
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs),
-            Alias(_, _, _, _) => {
+            Alias(_, _, _) => {
                 panic!("TODO recursively resolve type aliases in Layout::from_content");
             }
             Error => Err(()),
@@ -102,13 +101,11 @@ fn layout_from_flat_type<'a>(
     use crate::subs::FlatType::*;
 
     match flat_type {
-        Apply {
-            module_name,
-            name,
-            args,
-        } => {
-            // TODO use SIMD string comparisons to speed these up
-            if module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM {
+        Apply(symbol, args) => {
+            let module_id = symbol.module_id();
+            let ident_id = symbol.ident_id();
+
+            if module_id == ModuleId::NUM && ident_id == IdentId::NUM_NUM {
                 // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                 debug_assert!(args.len() == 1);
 
@@ -117,14 +114,7 @@ fn layout_from_flat_type<'a>(
 
                 layout_from_num_content(content)
             } else {
-                panic!(
-                    "TODO layout_from_flat_type for {:?}",
-                    Apply {
-                        module_name,
-                        name,
-                        args,
-                    }
-                );
+                panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
             }
         }
         Func(args, ret_var) => {
@@ -169,33 +159,25 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
         var @ FlexVar(_) | var @ RigidVar(_) => {
             panic!("Layout::from_content encountered an unresolved {:?}", var);
         }
-        Structure(Apply {
-            module_name,
-            name,
-            args,
-        }) => {
-            // TODO use SIMD string comparisons to speed these up
-            if module_name.as_str() == ModuleName::INT && name.as_str() == types::TYPE_INTEGER {
+        Structure(Apply(symbol, args)) => {
+            let module_id = symbol.module_id();
+            let ident_id = symbol.ident_id();
+
+            if module_id == ModuleId::INT && ident_id == IdentId::INT_INTEGER {
                 Ok(Layout::Builtin(Builtin::Int64))
-            } else if module_name.as_str() == ModuleName::FLOAT
-                && name.as_str() == types::TYPE_FLOATINGPOINT
-            {
+            } else if module_id == ModuleId::FLOAT && ident_id == IdentId::FLOAT_FLOATINGPOINT {
                 Ok(Layout::Builtin(Builtin::Float64))
             } else {
                 panic!(
                     "Invalid Num.Num type application: {:?}",
-                    Apply {
-                        module_name,
-                        name,
-                        args
-                    }
+                    Apply(symbol, args)
                 );
             }
         }
         Structure(_) => {
             panic!("Invalid Num.Num type application: {:?}", content);
         }
-        Alias(_, _, _, _) => {
+        Alias(_, _, _) => {
             panic!("TODO recursively resolve type aliases in num_from_content");
         }
         Error => Err(()),

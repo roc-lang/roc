@@ -1,11 +1,9 @@
 use crate::can::env::Env;
-use crate::can::ident::{Lowercase, TagName};
+use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
-use crate::can::problem::Problem;
+use crate::can::problem::{Problem, RuntimeError};
 use crate::can::scope::Scope;
-use crate::module::symbol::Symbol;
-use crate::collections::ImMap;
-use crate::ident::Ident;
+use crate::module::symbol::{IdentIds, Symbol};
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::VarStore;
@@ -58,7 +56,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PatternType {
     TopLevelDef,
-    Assignment,
+    DefExpr,
     FunctionArg,
     WhenBranch,
 }
@@ -70,31 +68,32 @@ pub fn canonicalize_pattern<'a>(
     pattern_type: PatternType,
     pattern: &'a ast::Pattern<'a>,
     region: Region,
-    shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
 ) -> Located<Pattern> {
-    use self::PatternType::*;
     use crate::parse::ast::Pattern::*;
+    use PatternType::*;
 
-    let can_pattern = match &pattern {
-        &Identifier(ref name) => {
-            match canonicalize_pattern_identifier(name, env, scope, region, shadowable_idents) {
+    let can_pattern = match pattern {
+        Identifier(name) => {
+            match canonicalize_pattern_identifier((*name).into(), env, scope, region) {
                 Ok(symbol) => Pattern::Identifier(symbol),
                 Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
             }
         }
-        &GlobalTag(name) => {
+        GlobalTag(name) => {
             // Canonicalize the tag's name.
             Pattern::AppliedTag(var_store.fresh(), TagName::Global((*name).into()), vec![])
         }
-        &PrivateTag(name) => {
+        PrivateTag(name) => {
+            let ident_id = env.ident_ids.private_tag(&(*name).into());
+
             // Canonicalize the tag's name.
             Pattern::AppliedTag(
                 var_store.fresh(),
-                TagName::Private(Symbol::from_private_tag(env.home.as_str(), name)),
+                TagName::Private(Symbol::new(env.home, ident_id)),
                 vec![],
             )
         }
-        &Apply(tag, patterns) => {
+        Apply(tag, patterns) => {
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
                 can_patterns.push((
@@ -106,7 +105,6 @@ pub fn canonicalize_pattern<'a>(
                         pattern_type,
                         &loc_pattern.value,
                         loc_pattern.region,
-                        shadowable_idents,
                     ),
                 ));
             }
@@ -114,7 +112,9 @@ pub fn canonicalize_pattern<'a>(
             let tag_name = match tag.value {
                 GlobalTag(name) => TagName::Global(name.into()),
                 PrivateTag(name) => {
-                    TagName::Private(Symbol::from_private_tag(env.home.as_str(), name))
+                    let ident_id = env.ident_ids.private_tag(&name.into());
+
+                    TagName::Private(Symbol::new(env.home, ident_id))
                 }
                 _ => unreachable!("Other patterns cannot be applied"),
             };
@@ -122,36 +122,36 @@ pub fn canonicalize_pattern<'a>(
             Pattern::AppliedTag(var_store.fresh(), tag_name, can_patterns)
         }
 
-        &FloatLiteral(ref string) => match pattern_type {
+        FloatLiteral(ref string) => match pattern_type {
             WhenBranch => {
                 let float = finish_parsing_float(string)
                     .unwrap_or_else(|_| panic!("TODO handle malformed float pattern"));
 
                 Pattern::FloatLiteral(float)
             }
-            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+            ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
             }
         },
 
-        &Underscore => match pattern_type {
+        Underscore => match pattern_type {
             WhenBranch | FunctionArg => Pattern::Underscore,
-            ptype @ Assignment | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
+            ptype @ DefExpr | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
         },
 
-        &IntLiteral(string) => match pattern_type {
+        IntLiteral(string) => match pattern_type {
             WhenBranch => {
                 let int = finish_parsing_int(string)
                     .unwrap_or_else(|_| panic!("TODO handle malformed int pattern"));
 
                 Pattern::IntLiteral(int)
             }
-            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+            ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
             }
         },
 
-        &NonBase10Literal {
+        NonBase10Literal {
             string,
             base,
             is_negative,
@@ -166,33 +166,25 @@ pub fn canonicalize_pattern<'a>(
                     Pattern::IntLiteral(int)
                 }
             }
-            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+            ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
             }
         },
 
-        &StrLiteral(_string) => match pattern_type {
+        StrLiteral(_string) => match pattern_type {
             WhenBranch => {
                 panic!("TODO check whether string pattern is malformed.");
                 // Pattern::StrLiteral((*string).into())
             }
-            ptype @ Assignment | ptype @ TopLevelDef | ptype @ FunctionArg => {
+            ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
             }
         },
 
-        &SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
-            return canonicalize_pattern(
-                env,
-                var_store,
-                scope,
-                pattern_type,
-                sub_pattern,
-                region,
-                shadowable_idents,
-            )
+        SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
+            return canonicalize_pattern(env, var_store, scope, pattern_type, sub_pattern, region)
         }
-        &RecordDestructure(patterns) => {
+        RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
             let mut fields = Vec::with_capacity(patterns.len());
 
@@ -200,11 +192,7 @@ pub fn canonicalize_pattern<'a>(
                 match loc_pattern.value {
                     Identifier(label) => {
                         let symbol = match canonicalize_pattern_identifier(
-                            &label,
-                            env,
-                            scope,
-                            region,
-                            shadowable_idents,
+                            &label, env, scope, region,
                         ) {
                             Ok(symbol) => symbol,
                             Err(loc_shadowed_ident) => {
@@ -214,7 +202,7 @@ pub fn canonicalize_pattern<'a>(
                                     region,
                                     value: Pattern::Shadowed(loc_shadowed_ident),
                                 };
-                                panic!("TODO gather all the shadowing errors, not just the first one, and report them in Problems.");
+                                panic!("TODO gather all the shadowing errors in this Def, not just the first one, and report them in Problems.");
                             }
                         };
 
@@ -227,11 +215,7 @@ pub fn canonicalize_pattern<'a>(
                     }
                     RecordField(label, loc_guard) => {
                         let symbol = match canonicalize_pattern_identifier(
-                            &label,
-                            env,
-                            scope,
-                            region,
-                            shadowable_idents,
+                            &label, env, scope, region,
                         ) {
                             Ok(symbol) => symbol,
                             Err(loc_shadowed_ident) => {
@@ -241,7 +225,7 @@ pub fn canonicalize_pattern<'a>(
                                     region,
                                     value: Pattern::Shadowed(loc_shadowed_ident),
                                 };
-                                panic!("TODO gather all the shadowing errors, not just the first one, and report them in Problems.");
+                                panic!("TODO gather all the shadowing errors in this Def, not just the first one, and report them in Problems.");
                             }
                         };
 
@@ -252,7 +236,6 @@ pub fn canonicalize_pattern<'a>(
                             pattern_type,
                             &loc_guard.value,
                             loc_guard.region,
-                            shadowable_idents,
                         );
 
                         fields.push(RecordDestruct {
@@ -268,8 +251,8 @@ pub fn canonicalize_pattern<'a>(
 
             Pattern::RecordDestructure(ext_var, fields)
         }
-        &RecordField(_name, _loc_pattern) => {
-            unreachable!("should be handled in RecordDestructure");
+        RecordField(_name, _loc_pattern) => {
+            unreachable!("should have been handled in RecordDestructure");
         }
 
         _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
@@ -281,77 +264,28 @@ pub fn canonicalize_pattern<'a>(
     }
 }
 
-pub fn canonicalize_pattern_identifier<'a>(
-    name: &'a &str,
-    env: &'a mut Env,
+pub fn canonicalize_pattern_identifier(
+    name: &str,
+    env: &mut Env,
     scope: &mut Scope,
     region: Region,
-    shadowable_idents: &'a mut ImMap<Ident, (Symbol, Region)>,
 ) -> Result<Symbol, Located<Ident>> {
-    let lowercase_ident = Ident::Unqualified((*name).into());
+    let ident: Ident = (*name).into();
 
-    // We use shadowable_idents for this, and not scope, because for assignments
-    // they are different. When canonicalizing a particular assignment, that new
-    // ident is in scope (for recursion) but not shadowable.
-    //
-    // For example, when canonicalizing (fibonacci = ...), `fibonacci` should be in scope
-    // so that it can refer to itself without getting a naming problem, but it should not
-    // be in the collection of shadowable idents because you can't shadow yourself!
-    match shadowable_idents.get(&lowercase_ident) {
-        Some((_, region)) => {
+    // Detect and report shadowing
+    match scope.introduce(ident, &mut env.ident_ids, region) {
+        Ok(symbol) => Ok(symbol),
+        Err(problem) => {
             let loc_shadowed_ident = Located {
-                region: *region,
-                value: lowercase_ident,
+                region,
+                value: ident,
             };
 
             // This is already in scope, meaning it's about to be shadowed.
             // Shadowing is not allowed!
-            env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
+            env.problem(problem);
 
-            // Change this Pattern to a Shadowed variant, so that
-            // codegen knows to generate a runtime exception here.
             Err(loc_shadowed_ident)
-        }
-        None => {
-            // Make sure we aren't shadowing something in the home module's scope.
-            let qualified_ident =
-                Ident::Qualified(env.home.as_str().into(), lowercase_ident.name());
-
-            match scope.idents.get(&qualified_ident) {
-                Some((_, region)) => {
-                    let loc_shadowed_ident = Located {
-                        region: *region,
-                        value: qualified_ident,
-                    };
-
-                    // This is already in scope, meaning it's about to be shadowed.
-                    // Shadowing is not allowed!
-                    env.problem(Problem::Shadowing(loc_shadowed_ident.clone()));
-
-                    // Change this Pattern to a Shadowed variant, so that
-                    // codegen knows to generate a runtime exception here.
-                    Err(loc_shadowed_ident)
-                }
-                None => {
-                    let new_ident = qualified_ident.clone();
-                    let new_name = qualified_ident.name();
-                    let symbol = scope.symbol(&new_name);
-
-                    // This is a fresh identifier that wasn't already in scope.
-                    // Add it to scope!
-                    let symbol_and_region = (symbol.clone(), region);
-
-                    // Add this to both scope.idents *and* shadowable_idents.
-                    // The latter is relevant when recursively canonicalizing
-                    // tag application patterns, which can bring multiple
-                    // new idents into scope. For example, it's important that
-                    // we catch (Blah foo foo) -> … as being an example of shadowing.
-                    shadowable_idents.insert(new_ident.clone(), symbol_and_region.clone());
-                    scope.idents.insert(new_ident, symbol_and_region);
-
-                    Ok(symbol)
-                }
-            }
         }
     }
 }
@@ -364,48 +298,11 @@ fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region)
     Pattern::UnsupportedPattern(region)
 }
 
-pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, Region)>) {
-    use crate::parse::ast::Pattern::*;
-
-    match &pattern {
-        Identifier(name) => {
-            idents.remove(&(Ident::Unqualified((*name).into())));
-        }
-        QualifiedIdentifier(_name) => {
-            panic!("TODO implement QualifiedIdentifier pattern in remove_idents.");
-        }
-        Apply(_, patterns) => {
-            for loc_pattern in *patterns {
-                remove_idents(&loc_pattern.value, idents);
-            }
-        }
-        RecordDestructure(patterns) => {
-            for loc_pattern in patterns {
-                remove_idents(&loc_pattern.value, idents);
-            }
-        }
-        RecordField(_, loc_pattern) => {
-            remove_idents(&loc_pattern.value, idents);
-        }
-        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
-            // Ignore the newline/comment info; it doesn't matter in canonicalization.
-            remove_idents(pattern, idents)
-        }
-        GlobalTag(_)
-        | PrivateTag(_)
-        | IntLiteral(_)
-        | NonBase10Literal { .. }
-        | FloatLiteral(_)
-        | StrLiteral(_)
-        | BlockStrLiteral(_)
-        | Malformed(_)
-        | Underscore => {}
-    }
-}
-
-pub fn idents_from_patterns<'a, I>(
+pub fn add_idents_to_scope<'a, I>(
+    ident_ids: &mut IdentIds,
     loc_patterns: I,
-    scope: &Scope,
+    scope: &mut Scope,
+    problems: &mut Vec<Problem>,
 ) -> Vector<(Ident, (Symbol, Region))>
 where
     I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
@@ -413,50 +310,94 @@ where
     let mut answer = Vector::new();
 
     for loc_pattern in loc_patterns {
-        add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, &mut answer);
+        add_idents_from_pattern(
+            ident_ids,
+            &loc_pattern.region,
+            &loc_pattern.value,
+            scope,
+            problems,
+            &mut answer,
+        );
     }
 
     answer
 }
 
-/// helper function for idents_from_patterns
+/// helper function for add_idents_to_scope
 fn add_idents_from_pattern<'a>(
+    ident_ids: &mut IdentIds,
     region: &'a Region,
     pattern: &'a ast::Pattern<'a>,
     scope: &'a Scope,
+    problems: &mut Vec<Problem>,
     answer: &'a mut Vector<(Ident, (Symbol, Region))>,
 ) {
     use crate::parse::ast::Pattern::*;
 
     match pattern {
-        Identifier(name) => {
-            let symbol = scope.symbol(&name);
+        Identifier(ident) => match scope.introduce((*ident).into(), ident_ids, *region) {
+            Ok(symbol) => {
+                answer.push_back(((*ident).into(), (symbol, *region)));
+            }
+            Err(problem) => {
+                problems.push(problem);
+            }
+        },
+        QualifiedIdentifier { module_name, ident } => {
+            let qualified = format!("{}.{}", module_name, ident).into();
 
-            answer.push_back((Ident::Unqualified((*name).into()), (symbol, *region)));
-        }
-        QualifiedIdentifier(_name) => {
-            panic!("TODO implement QualifiedIdentifier pattern.");
+            problems.push(Problem::RuntimeError(RuntimeError::QualifiedPatternIdent(
+                qualified,
+            )));
         }
         Apply(_tag, patterns) => {
             for loc_pattern in *patterns {
-                add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
+                add_idents_from_pattern(
+                    ident_ids,
+                    &loc_pattern.region,
+                    &loc_pattern.value,
+                    scope,
+                    problems,
+                    answer,
+                );
             }
         }
 
         RecordDestructure(patterns) => {
             for loc_pattern in patterns {
-                add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
+                add_idents_from_pattern(
+                    ident_ids,
+                    &loc_pattern.region,
+                    &loc_pattern.value,
+                    scope,
+                    problems,
+                    answer,
+                );
             }
         }
-        RecordField(name, loc_pattern) => {
-            let symbol = scope.symbol(&name);
+        RecordField(ident, loc_pattern) => {
+            let symbol = match scope.introduce((*ident).into(), &mut ident_ids, loc_pattern.region)
+            {
+                Ok(symbol) => {
+                    answer.push_back(((*ident).into(), (symbol, *region)));
+                }
+                Err(problem) => {
+                    problems.push(problem);
+                }
+            };
 
-            answer.push_back((Ident::Unqualified((*name).into()), (symbol, *region)));
-            add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
+            add_idents_from_pattern(
+                ident_ids,
+                &loc_pattern.region,
+                &loc_pattern.value,
+                scope,
+                problems,
+                answer,
+            );
         }
         SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
             // Ignore the newline/comment info; it doesn't matter in canonicalization.
-            add_idents_from_pattern(region, pattern, scope, answer)
+            add_idents_from_pattern(ident_ids, region, pattern, scope, problems, answer)
         }
         GlobalTag(_)
         | PrivateTag(_)

@@ -1,11 +1,10 @@
-use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
-use crate::types;
+use crate::module::symbol::{IdentId, ModuleId, Symbol};
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -52,9 +51,46 @@ impl fmt::Debug for Subs {
     }
 }
 
+/// This is used to issue unique Variable values for type checking. A Variable
+/// is unique within a particular module, but is not globally unique across modules.
+///
+/// VarStore used to issue globally unique Variables that worked across modules,
+/// which meant it needed an Atomic integer that could be safely accessed when
+/// compiling multiple modules in parallel. Now that it is used in a single-threaded
+/// way instead, for a single module, this Atomic is no longer necessary.
+///
+/// However, VarStore still has a potential long-term use which should be explored
+/// and measured: canonicalizing a single module's declarations in parallel.
+/// One example of how this could work: have two VarStores for the same module,
+/// one of which starts at 0 and increments, and the other which starts at
+/// u32::MAX and decrements. They could each be used to canonicalize alternating
+/// defs in parallel, and at the end, it would only take one conditional to
+/// verify that they had not "crossed" and invaded each others' namespaces.
+///
+/// This could be taken a step further, by using four VarStores - one incrementing
+/// from 0, one decrementing from u32::MAX, one starting at u16::MAX and decrementing,
+/// and another starting at (u16::MAX + 1) and incrementing. In this way, the
+/// u32 "variable space" would be divided into fourths, allowing for canonicalization
+/// in 4 threads running in parallel.
+///
+/// At some point, you may carve up the u32 into such small pieces that individual
+/// threads run out of allocation space. When this happens, they could block
+/// waiting to be reassigned a non-exhausted VarStore (e.g. when one of the other ones
+/// finishes, the blocked thread can be notified "ok you were previously incrementing
+/// from 0, but now you're decrementing from X, picking up where another VarStore
+/// left off), and the exhausted VarStore can be taken out of the rotation.
+///
+/// It's unclear whether the performance gains of all this would be worth the
+/// effort. (It's separately unclear whether the "increment and decrement"
+/// distinction would be useful, or if it's actually faster to have everything
+/// increment all the time so as to avoid loading the "do I increment or decrement?"
+/// info from memory.)
+///
+/// In the meantime, now you know why VarStore is still here, even though
+/// it's being used in a single-threaded way. There is more yet to explore here!
 #[derive(Debug)]
 pub struct VarStore {
-    next: AtomicUsize,
+    next: u32,
 }
 
 impl Default for VarStore {
@@ -68,9 +104,7 @@ impl VarStore {
     pub fn new(next_var: Variable) -> Self {
         debug_assert!(next_var.0 >= Variable::FIRST_USER_SPACE_VAR.0);
 
-        VarStore {
-            next: AtomicUsize::new(next_var.0),
-        }
+        VarStore { next: next_var.0 }
     }
 
     pub fn fresh(&self) -> Variable {
@@ -79,18 +113,22 @@ impl VarStore {
         // Since the counter starts at 0, this will return 0 on first invocation,
         // and var_store.into() will return the number of Variables distributed
         // (in this case, 1).
-        Variable(AtomicUsize::fetch_add(&self.next, 1, Ordering::Relaxed))
+        let var = Variable(self.next);
+
+        self.next += 1;
+
+        var
     }
 }
 
 impl Into<Variable> for VarStore {
     fn into(self) -> Variable {
-        Variable(self.next.into_inner())
+        Variable(self.next)
     }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct OptVariable(usize);
+pub struct OptVariable(u32);
 
 impl OptVariable {
     pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
@@ -136,18 +174,21 @@ impl Into<Option<Variable>> for OptVariable {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Variable(usize);
+pub struct Variable(u32);
 
 impl Variable {
     // Reserved for indicating the absence of a variable.
     // This lets us avoid using Option<Variable> for the Descriptor's
     // copy field, which is a relevant space savings because we make
     // a *ton* of Descriptors.
+    //
+    // Also relevant: because this has the value 0, Descriptors can 0-initialize
+    // to it in bulk - which is relevant, because Descriptors get initialized in bulk.
     const NULL: Variable = Variable(0);
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(1);
 
-    pub fn unsafe_debug_variable(v: usize) -> Self {
+    pub unsafe fn unsafe_debug_variable(v: u32) -> Self {
         Variable(v)
     }
 }
@@ -167,11 +208,11 @@ impl fmt::Debug for Variable {
 impl UnifyKey for Variable {
     type Value = Descriptor;
 
-    fn index(&self) -> usize {
+    fn index(&self) -> u32 {
         self.0
     }
 
-    fn from_index(index: usize) -> Self {
+    fn from_index(index: u32) -> Self {
         Variable(index)
     }
 
@@ -434,7 +475,7 @@ pub enum Content {
     /// name given in a user-written annotation
     RigidVar(Lowercase),
     Structure(FlatType),
-    Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Variable),
+    Alias(Symbol, Vec<(Lowercase, Variable)>, Variable),
     Error,
 }
 
@@ -442,9 +483,9 @@ impl Content {
     #[inline(always)]
     pub fn is_number(&self) -> bool {
         match &self {
-            Content::Structure(FlatType::Apply {
-                module_name, name, ..
-            }) => module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM,
+            Content::Structure(FlatType::Apply(symbol, _)) => {
+                symbol.module_id() == ModuleId::NUM && symbol.ident_id() == IdentId::NUM_NUM
+            }
             _ => false,
         }
     }
@@ -452,11 +493,7 @@ impl Content {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
-    Apply {
-        module_name: ModuleName,
-        name: Uppercase,
-        args: Vec<Variable>,
-    },
+    Apply(Symbol, Vec<Variable>),
     Func(Vec<Variable>, Variable),
     Record(MutMap<RecordFieldLabel, Variable>, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
@@ -490,7 +527,7 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                 new_seen.insert(var);
 
                 match flat_type {
-                    Apply { args, .. } => args.into_iter().any(|var| occurs(subs, &new_seen, var)),
+                    Apply(_, args) => args.into_iter().any(|var| occurs(subs, &new_seen, var)),
                     Func(arg_vars, ret_var) => {
                         occurs(subs, &new_seen, ret_var)
                             || arg_vars.into_iter().any(|var| occurs(subs, &new_seen, var))
@@ -514,7 +551,7 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => false,
                 }
             }
-            Alias(_, _, args, _) => {
+            Alias(_, args, _) => {
                 let mut new_seen = seen.clone();
 
                 new_seen.insert(var);
@@ -547,11 +584,11 @@ fn get_var_names(
 
             RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
 
-            Alias(_, _, args, _) => args.into_iter().fold(taken_names, |answer, (_, arg_var)| {
+            Alias(_, args, _) => args.into_iter().fold(taken_names, |answer, (_, arg_var)| {
                 get_var_names(subs, arg_var, answer)
             }),
             Structure(flat_type) => match flat_type {
-                FlatType::Apply { args, .. } => {
+                FlatType::Apply(_, args) => {
                     args.into_iter().fold(taken_names, |answer, arg_var| {
                         get_var_names(subs, arg_var, answer)
                     })
@@ -694,14 +731,14 @@ fn content_to_err_type(
 
         RigidVar(name) => ErrorType::RigidVar(name),
 
-        Alias(module_name, name, args, aliased_to) => {
+        Alias(symbol, args, aliased_to) => {
             let err_args = args
                 .into_iter()
                 .map(|(name, var)| (name, var_to_err_type(subs, state, var)))
                 .collect();
             let err_type = var_to_err_type(subs, state, aliased_to);
 
-            ErrorType::Alias(module_name, name, err_args, Box::new(err_type))
+            ErrorType::Alias(symbol, err_args, Box::new(err_type))
         }
 
         Error => ErrorType::Error,
@@ -712,17 +749,13 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
     use self::FlatType::*;
 
     match flat_type {
-        Apply {
-            module_name,
-            name,
-            args,
-        } => {
+        Apply(symbol, args) => {
             let arg_types = args
                 .into_iter()
                 .map(|var| var_to_err_type(subs, state, var))
                 .collect();
 
-            ErrorType::Type(module_name, name, arg_types)
+            ErrorType::Type(symbol, arg_types)
         }
 
         Func(arg_vars, ret_var) => {
@@ -816,7 +849,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
         FlexVar(_) | RigidVar(_) | Error => (),
 
         Structure(flat_type) => match flat_type {
-            Apply { args, .. } => {
+            Apply(_, args) => {
                 for &var in args {
                     subs.restore(var);
                 }
@@ -854,7 +887,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             }
             Erroneous(_) => (),
         },
-        Alias(_, _, args, var) => {
+        Alias(_, args, var) => {
             for (_, arg_var) in args {
                 subs.restore(*arg_var);
             }

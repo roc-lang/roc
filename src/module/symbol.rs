@@ -2,10 +2,11 @@ use crate::can::ident::ModuleName;
 use crate::collections::{default_hasher, MutMap};
 use inlinable_string::InlinableString;
 use std::collections::HashMap;
-use std::fmt;
+use std::{fmt, u32};
 
 pub const NUM_BUILTIN_MODULES: usize = 12;
 
+// TODO: benchmark this as { ident_id: u32, module_id: u32 } and see if perf stays the same
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Symbol(u64);
 
@@ -13,26 +14,90 @@ pub struct Symbol(u64);
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
 impl Symbol {
+    // Attr
+    pub const ATTR_ATTR: Symbol = Symbol::new(ModuleId::ATTR, IdentId::ATTR_ATTR);
+
+    // Str
+    pub const STR_STR: Symbol = Symbol::new(ModuleId::STR, IdentId::STR_STR);
+
     // Num
     pub const NUM_ABS: Symbol = Symbol::new(ModuleId::NUM, IdentId::NUM_ABS);
     pub const NUM_NUM: Symbol = Symbol::new(ModuleId::NUM, IdentId::NUM_NUM);
-    pub const NUM_INT: Symbol = Symbol::new(ModuleId::NUM, IdentId::NUM_INT);
-    pub const NUM_INTEGER: Symbol = Symbol::new(ModuleId::NUM, IdentId::NUM_INTEGER);
-    pub const NUM_FLOAT: Symbol = Symbol::new(ModuleId::NUM, IdentId::NUM_FLOAT);
-    pub const NUM_FLOATINGPOINT: Symbol = Symbol::new(ModuleId::NUM, IdentId::NUM_FLOATINGPOINT);
+    pub const NUM_INT: Symbol = Symbol::new(ModuleId::NUM, IdentId::INT_INT);
+    pub const INT_INTEGER: Symbol = Symbol::new(ModuleId::NUM, IdentId::INT_INTEGER);
+    pub const NUM_FLOAT: Symbol = Symbol::new(ModuleId::NUM, IdentId::FLOAT_FLOAT);
+    pub const FLOAT_FLOATINGPOINT: Symbol =
+        Symbol::new(ModuleId::NUM, IdentId::FLOAT_FLOATINGPOINT);
 
     // Bool
     pub const BOOL_NOT: Symbol = Symbol::new(ModuleId::BOOL, IdentId::BOOL_NOT);
     pub const BOOL_BOOL: Symbol = Symbol::new(ModuleId::BOOL, IdentId::BOOL_BOOL);
 
+    // List
+    pub const LIST_LIST: Symbol = Symbol::new(ModuleId::LIST, IdentId::LIST_LIST);
+
     pub const fn new(module_id: ModuleId, ident_id: IdentId) -> Symbol {
         // The bit layout of the u64 inside a Symbol is:
         //
         // |------ 32 bits -----|------ 32 bits -----|
-        // |      module_id     |       ident_id     |
-        let bits = ((module_id.0 as u64) << 32) | (ident_id.0 as u64);
+        // |      ident_id      |      module_id     |
+        // |--------------------|--------------------|
+        //
+        // module_id comes second because we need to query it more often,
+        // and this way we can get it by truncating the u64 to u32,
+        // whereas accessing the first slot requires a bit shift first.
+        let bits = ((ident_id.0 as u64) << 32) | (module_id.0 as u64);
 
         Symbol(bits)
+    }
+
+    pub fn module_id(&self) -> ModuleId {
+        ModuleId(self.0 as u32)
+    }
+
+    pub fn ident_id(&self) -> IdentId {
+        IdentId((self.0 >> 32) as u32)
+    }
+
+    pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
+        interns
+            .module_ids
+            .get_name(self.module_id())
+            .unwrap_or_else(|| panic!("Could not find IdentIds for {:?}", self.module_id()))
+    }
+
+    pub fn ident_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
+        let ident_ids = interns
+            .all_ident_ids
+            .get(&self.module_id())
+            .unwrap_or_else(|| panic!("Could not find IdentIds for {:?}", self.module_id()));
+
+        ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
+            panic!(
+                "Could not find IdentIds for {:?} in module {:?}",
+                self.ident_id(),
+                self.module_id()
+            )
+        })
+    }
+
+    pub fn fully_qualified<'a>(&self, interns: &'a Interns, home: ModuleId) -> InlinableString {
+        let module_id = self.module_id();
+
+        if module_id == home {
+            self.ident_string(interns).clone()
+        } else {
+            format!(
+                "{}.{}",
+                self.module_string(interns),
+                self.ident_string(interns)
+            )
+            .into()
+        }
+    }
+
+    pub fn emit(self) -> InlinableString {
+        format!("${}", self.0).into()
     }
 }
 
@@ -73,6 +138,11 @@ lazy_static! {
         std::sync::Mutex::new(crate::collections::MutMap::default());
 }
 
+pub struct Interns {
+    pub module_ids: ModuleIds,
+    pub all_ident_ids: MutMap<ModuleId, IdentIds>,
+}
+
 /// A globally unique ID that gets assigned to each module as it is loaded.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleId(u32);
@@ -92,6 +162,7 @@ impl ModuleId {
     pub const MAP: ModuleId = ModuleId(5);
     pub const SET: ModuleId = ModuleId(6);
     pub const NUM: ModuleId = ModuleId(7);
+    pub const ATTR: ModuleId = ModuleId(u32::MAX);
 
     #[cfg(debug_assertions)]
     pub fn name(self) -> Box<str> {
@@ -109,6 +180,13 @@ impl ModuleId {
                 );
             }
         }
+    }
+
+    pub fn to_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
+        interns
+            .module_ids
+            .get_name(*self)
+            .unwrap_or_else(|| panic!("Could not find ModuleIds for {:?}", self))
     }
 }
 
@@ -137,7 +215,7 @@ impl fmt::Debug for ModuleId {
 ///
 /// Each module name is stored twice, for faster lookups.
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleIds {
     by_name: MutMap<InlinableString, ModuleId>,
     /// Each ModuleId is an index into this Vec
@@ -195,7 +273,7 @@ impl Default for ModuleIds {
 }
 
 impl ModuleIds {
-    pub fn get_or_insert_id(&mut self, module_name: &InlinableString) -> ModuleId {
+    pub fn get_or_insert(&mut self, module_name: &InlinableString) -> ModuleId {
         match self.by_name.get(module_name) {
             Some(id) => *id,
             None => {
@@ -280,17 +358,30 @@ impl fmt::Debug for IdentId {
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
 impl IdentId {
+    // Attr
+    pub const ATTR_ATTR: IdentId = IdentId(0);
+
     // Num
     pub const NUM_ABS: IdentId = IdentId(0);
     pub const NUM_NUM: IdentId = IdentId(1);
-    pub const NUM_INT: IdentId = IdentId(2);
-    pub const NUM_INTEGER: IdentId = IdentId(3);
-    pub const NUM_FLOAT: IdentId = IdentId(4);
-    pub const NUM_FLOATINGPOINT: IdentId = IdentId(5);
+
+    // Int
+    pub const INT_INT: IdentId = IdentId(2);
+    pub const INT_INTEGER: IdentId = IdentId(3);
+
+    // Float
+    pub const FLOAT_FLOAT: IdentId = IdentId(4);
+    pub const FLOAT_FLOATINGPOINT: IdentId = IdentId(5);
 
     // Bool
     pub const BOOL_BOOL: IdentId = IdentId(0);
     pub const BOOL_NOT: IdentId = IdentId(1);
+
+    // Str
+    pub const STR_STR: IdentId = IdentId(0);
+
+    // List
+    pub const LIST_LIST: IdentId = IdentId(0);
 
     #[cfg(debug_assertions)]
     pub fn name(self) -> Box<str> {
@@ -315,32 +406,82 @@ impl IdentId {
 ///
 /// Each module name is stored twice, for faster lookups.
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct IdentIds {
-    by_name: MutMap<InlinableString, IdentId>,
-    /// Each ModuleId is an index into this Vec
+    /// Only private tag names can be looked up by name.
+    private_tag_names: MutMap<InlinableString, IdentId>,
+
+    /// Each IdentId is an index into this Vec
     by_id: Vec<InlinableString>,
+
+    next_generated_name: u32,
 }
 
 impl IdentIds {
-    pub fn get_or_insert_id(&mut self, ident_name: &InlinableString) -> IdentId {
-        match self.by_name.get(ident_name) {
+    pub fn idents(&self) -> impl Iterator<Item = (IdentId, &InlinableString)> {
+        self.by_id
+            .iter()
+            .enumerate()
+            .map(|(index, ident)| (IdentId(index as u32), ident))
+    }
+
+    pub fn add(&mut self, ident_name: InlinableString) -> IdentId {
+        let by_id = &mut self.by_id;
+        let ident_id = IdentId(by_id.len() as u32);
+
+        by_id.push(ident_name);
+
+        if cfg!(debug_assertions) {
+            Self::insert_debug_name(ident_id, &ident_name);
+        }
+
+        ident_id
+    }
+
+    /// This is the same as ModuleId::get_or_insert, but with a different name
+    /// because for idents this should only ever be used for private tags!
+    ///
+    /// All other module-scoped idents should only ever be added once, because
+    /// otherwise they will either be shadowing or reusing the Ident from
+    /// something in a sibling scope - both of which can cause bugs.
+    ///
+    /// Thus, only ever call this for private tags!
+    pub fn private_tag(&mut self, private_tag_name: &InlinableString) -> IdentId {
+        match self.private_tag_names.get(private_tag_name) {
             Some(id) => *id,
             None => {
                 let by_id = &mut self.by_id;
                 let ident_id = IdentId(by_id.len() as u32);
 
-                by_id.push(ident_name.clone());
+                by_id.push(private_tag_name.clone());
 
-                self.by_name.insert(ident_name.clone(), ident_id);
+                self.private_tag_names
+                    .insert(private_tag_name.clone(), ident_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(ident_id, &ident_name);
+                    Self::insert_debug_name(ident_id, &private_tag_name);
                 }
 
                 ident_id
             }
         }
+    }
+
+    /// Generates a unique, new name that's just a strigified integer
+    /// (e.g. "1" or "5"), using an internal counter. Since valid Roc variable
+    /// names cannot begin with a number, this has no chance of colliding
+    /// with actual user-defined variables.
+    ///
+    /// This is used, for example, during canonicalization of an Expr::Closure
+    /// to generate a unique symbol to refer to that closure.
+    pub fn gen_unique(&mut self) -> IdentId {
+        // TODO convert this directly from u32 into InlinableString,
+        // without allocating an extra string along the way like this.
+        let ident = self.next_generated_name.to_string().into();
+
+        self.next_generated_name += 1;
+
+        self.add(ident)
     }
 
     #[cfg(debug_assertions)]
@@ -356,7 +497,7 @@ impl IdentIds {
     }
 
     pub fn get_id(&self, ident_name: &InlinableString) -> Option<&IdentId> {
-        self.by_name.get(ident_name)
+        self.private_tag_names.get(ident_name)
     }
 
     pub fn get_name(&self, id: IdentId) -> Option<&InlinableString> {

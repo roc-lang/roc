@@ -7,10 +7,10 @@ use roc::can::expr::{canonicalize_expr, Expr};
 use roc::can::operator;
 use roc::can::problem::Problem;
 use roc::can::scope::Scope;
-use roc::module::symbol::Symbol;
 use roc::collections::{ImMap, ImSet, MutMap, SendSet};
 use roc::constrain::expr::constrain_expr;
 use roc::ident::Ident;
+use roc::module::symbol::Symbol;
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
@@ -80,7 +80,7 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 #[allow(dead_code)]
 pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, VarStore, Variable, Constraint) {
     let (loc_expr, output, problems, var_store, var, constraint) =
-        can_expr_with(&Bump::new(), "blah", expr_str, &ImMap::default());
+        can_expr_with(&Bump::new(), "blah", expr_str);
 
     (loc_expr.value, output, problems, var_store, var, constraint)
 }
@@ -98,7 +98,7 @@ pub fn uniq_expr_with(
 ) -> (Output, Vec<Problem>, Subs, Variable, Constraint) {
     let home = "Test";
     let (loc_expr, output, problems, var_store1, variable, _) =
-        can_expr_with(arena, home, expr_str, &ImMap::default());
+        can_expr_with(arena, home, expr_str);
 
     // double check
     let var_store2 = VarStore::new(var_store1.fresh());
@@ -142,7 +142,8 @@ pub fn can_expr_with(
     let var_store = VarStore::default();
     let variable = var_store.fresh();
     let expected = Expected::NoExpectation(Type::Variable(variable));
-    let home = "Test";
+    let module_ids = ModuleIds::default();
+    let home = ModuleIds::get_or_insert("Test");
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -155,8 +156,7 @@ pub fn can_expr_with(
 
     // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
     // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
-    let scope_prefix = format!("{}.{}$", home, name).into();
-    let mut scope = Scope::new(home.clone().into(), scope_prefix, declared_idents.clone());
+    let mut scope = Scope::new(home);
     let mut env = Env::new(home.into());
     let (loc_expr, output) = canonicalize_expr(
         &mut env,

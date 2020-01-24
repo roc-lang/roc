@@ -1,6 +1,7 @@
+use crate::can;
 use crate::can::pattern::Pattern;
-use crate::can::{self, ident::ModuleName};
 use crate::collections::MutMap;
+use crate::module::symbol::{IdentId, ModuleId};
 use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
 use crate::subs::{Content, FlatType, Subs, Variable};
@@ -122,9 +123,7 @@ fn from_can<'a>(
         Int(_, val) => Expr::Int(val),
         Float(_, val) => Expr::Float(val),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
-        Var {
-            resolved_symbol, ..
-        } => Expr::Load(resolved_symbol.into()),
+        Var(symbol) => Expr::Load(symbol.emit()),
         LetNonRec(def, ret_expr, _) => {
             let arena = env.arena;
             let loc_pattern = def.loc_pattern;
@@ -144,11 +143,11 @@ fn from_can<'a>(
             //
             //     identity 5
             //
-            if let Identifier(name) = &loc_pattern.value {
+            if let Identifier(symbol) = &loc_pattern.value {
                 if let Closure(_, _, _, _, _) = &loc_expr.value {
                     // Extract Procs, but discard the resulting Expr::Load.
                     // That Load looks up the pointer, which we won't use here!
-                    from_can(env, loc_expr.value, procs, Some(name.clone().into()));
+                    from_can(env, loc_expr.value, procs, Some(symbol.emit()));
 
                     // Discard this LetNonRec by replacing it with its ret_expr.
                     return from_can(env, ret_expr.value, procs, None);
@@ -239,7 +238,7 @@ fn add_closure<'a>(
         };
 
         let arg_name: InlinableString = match &loc_arg.value {
-            Pattern::Identifier(name) => name.as_str().into(),
+            Pattern::Identifier(symbol) => symbol.emit(),
             _ => {
                 panic!("TODO determine arg_name for pattern {:?}", loc_arg.value);
             }
@@ -284,7 +283,9 @@ fn store_pattern<'a>(
     //     identity 5
     //
     match can_pat {
-        Identifier(name) => stored.push((name.into(), var, from_can(env, can_expr, procs, None))),
+        Identifier(symbol) => {
+            stored.push((symbol.emit(), var, from_can(env, can_expr, procs, None)))
+        }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
             stored.push(("_".into(), var, from_can(env, can_expr, procs, None)))
@@ -393,25 +394,22 @@ fn from_can_when<'a>(
             // TODO we can also Switch on record fields if we're pattern matching
             // on a record field that's also Switchable.
             let is_switchable = match &content {
-                Content::Structure(FlatType::Apply {
-                    module_name,
-                    name,
-                    args,
-                }) if module_name.as_str() == ModuleName::NUM
-                    && name.as_str() == crate::types::TYPE_NUM =>
+                Content::Structure(FlatType::Apply(symbol, args))
+                    if symbol.module_id() == ModuleId::NUM
+                        && symbol.ident_id() == IdentId::NUM_NUM =>
                 {
                     debug_assert!(args.len() == 1);
 
                     let arg = args.iter().next().unwrap();
 
                     match subs.get_without_compacting(*arg).content {
-                        Content::Structure(FlatType::Apply {
-                            module_name, name, ..
-                        }) if module_name.as_str() == ModuleName::INT => {
-                            // This check shouldn't be necessary; the only
-                            // type that fits the pattern of Num.Num Int._____
+                        Content::Structure(FlatType::Apply(symbol, _))
+                            if symbol.module_id() == ModuleId::INT =>
+                        {
+                            // This check should never fail; the only type
+                            // that fits the pattern of Num.Num Int._____
                             // is an Int!
-                            debug_assert!(name.as_str() == crate::types::TYPE_INTEGER);
+                            debug_assert!(symbol.ident_id() == IdentId::INT_INTEGER);
 
                             true
                         }

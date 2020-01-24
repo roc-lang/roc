@@ -1,6 +1,16 @@
-use crate::module::symbol::Symbol;
+use crate::module::symbol::{Interns, ModuleId, Symbol};
 use inlinable_string::InlinableString;
 use std::fmt;
+
+/// This could be uppercase or lowercase, qualified or unqualified.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Ident(InlinableString);
+
+impl Ident {
+    pub fn as_inline_str(&self) -> &InlinableString {
+        &self.0
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleName(InlinableString);
@@ -30,10 +40,10 @@ pub enum TagName {
 }
 
 impl TagName {
-    pub fn as_str(&self) -> &str {
+    pub fn to_string(self, interns: &Interns, home: ModuleId) -> InlinableString {
         match self {
-            Self::Global(uppercase) => uppercase.as_str(),
-            Self::Private(symbol) => symbol.as_str(),
+            TagName::Global(uppercase) => uppercase.as_inline_str().clone(),
+            TagName::Private(symbol) => symbol.fully_qualified(interns, home),
         }
     }
 }
@@ -116,6 +126,10 @@ impl Uppercase {
     pub fn as_str(&self) -> &str {
         &*self.0
     }
+
+    pub fn as_inline_str(&self) -> &InlinableString {
+        &self.0
+    }
 }
 
 impl<'a> From<&'a str> for Uppercase {
@@ -145,6 +159,61 @@ impl<'a> From<&'a str> for Lowercase {
 impl<'a> From<String> for Lowercase {
     fn from(string: String) -> Self {
         Self(string.into())
+    }
+}
+
+impl Into<InlinableString> for Lowercase {
+    fn into(self) -> InlinableString {
+        self.0
+    }
+}
+
+impl AsRef<str> for Ident {
+    #[inline(always)]
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl<'a> From<&'a str> for Ident {
+    fn from(string: &'a str) -> Self {
+        Self(string.into())
+    }
+}
+
+impl From<Box<str>> for Ident {
+    fn from(string: Box<str>) -> Self {
+        Self((string.as_ref()).into())
+    }
+}
+
+impl From<String> for Ident {
+    fn from(string: String) -> Self {
+        Self(string.into())
+    }
+}
+
+impl From<InlinableString> for Ident {
+    fn from(string: InlinableString) -> Self {
+        Self(string)
+    }
+}
+
+impl Into<InlinableString> for Ident {
+    fn into(self) -> InlinableString {
+        self.0
+    }
+}
+
+impl<'a> Into<&'a InlinableString> for &'a Ident {
+    fn into(self) -> &'a InlinableString {
+        &self.0
+    }
+}
+
+impl<'a> Into<Box<str>> for Ident {
+    fn into(self) -> Box<str> {
+        self.0.to_string().into()
     }
 }
 

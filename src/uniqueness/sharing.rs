@@ -1,5 +1,5 @@
-use crate::module::symbol::Symbol;
 use crate::collections::ImMap;
+use crate::module::symbol::Symbol;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReferenceCount {

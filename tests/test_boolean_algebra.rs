@@ -19,7 +19,7 @@ mod test_boolean_algebra {
 
     // HELPERS
     fn to_var(v: usize) -> subs::Variable {
-        subs::Variable::unsafe_debug_variable(v)
+        unsafe { subs::Variable::unsafe_debug_variable(v) }
     }
 
     fn simplify_eq(a: Bool, b: Bool) {

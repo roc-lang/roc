@@ -14,7 +14,6 @@
 pub mod can;
 pub mod collections;
 pub mod graph;
-pub mod ident;
 pub mod operator;
 pub mod parse;
 pub mod region;

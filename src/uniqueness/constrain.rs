@@ -1,10 +1,11 @@
+use crate::module::symbol::Symbol;
 use crate::types::Type;
 use crate::uniqueness::boolean_algebra::Bool;
 
 type Uniqueness = Bool;
 
 pub fn attr_type(uniq: Uniqueness, typ: Type) -> Type {
-    crate::constrain::builtins::builtin_type("Attr", "Attr", vec![Type::Boolean(uniq), typ])
+    crate::constrain::builtins::builtin_type(Symbol::ATTR_ATTR, vec![Type::Boolean(uniq), typ])
 }
 
 pub fn shared_type() -> Uniqueness {

@@ -2,7 +2,7 @@ use cranelift::prelude::AbiParam;
 use cranelift_codegen::ir::{types, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
 
-use crate::can::ident::ModuleName;
+use crate::module::symbol::{IdentId, ModuleId};
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs, Variable};
@@ -17,23 +17,19 @@ pub fn type_from_var(var: Variable, subs: &Subs, cfg: TargetFrontendConfig) -> T
 pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConfig) -> Type {
     match content {
         Content::Structure(flat_type) => match flat_type {
-            Apply {
-                module_name,
-                name,
-                args,
-            } => {
-                let module_name = module_name.as_str();
-                let name = name.as_str();
+            Apply(symbol, args) => {
+                let module_id = symbol.module_id();
+                let ident_id = symbol.ident_id();
 
-                if module_name == ModuleName::NUM && name == crate::types::TYPE_NUM {
+                if module_id == ModuleId::NUM && ident_id == IdentId::NUM_NUM {
                     let arg = *args.iter().next().unwrap();
                     let arg_content = subs.get_without_compacting(arg).content;
 
                     num_to_crane_type(arg_content)
                 } else {
                     panic!(
-                        "TODO handle type_from_content for FlatType::Apply of {}.{} with args {:?}",
-                        module_name, name, args
+                        "TODO handle content_to_basic_type for FlatType::Apply of {:?} with args {:?}",
+                        symbol, args
                     );
                 }
             }
@@ -47,30 +43,26 @@ pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConf
 fn num_to_crane_type(content: Content) -> Type {
     match content {
         Content::Structure(flat_type) => match flat_type {
-            Apply {
-                module_name,
-                name,
-                args,
-            } => {
-                let module_name = module_name.as_str();
-                let name = name.as_str();
+            Apply(symbol, args) => {
+                let module_id = symbol.module_id();
+                let ident_id = symbol.ident_id();
 
-                if module_name == ModuleName::FLOAT
-                    && name == crate::types::TYPE_FLOATINGPOINT
+                if module_id == ModuleId::FLOAT
+                    && ident_id == IdentId::FLOAT_FLOATINGPOINT
                     && args.is_empty()
                 {
                     debug_assert!(args.is_empty());
                     types::F64
-                } else if module_name == ModuleName::INT
-                    && name == crate::types::TYPE_INTEGER
+                } else if module_id == ModuleId::INT
+                    && ident_id == IdentId::INT_INTEGER
                     && args.is_empty()
                 {
                     debug_assert!(args.is_empty());
                     types::I64
                 } else {
                     panic!(
-                        "Unrecognized numeric type: {}.{} with args {:?}",
-                        module_name, name, args
+                        "Unrecognized numeric type: {:?} with args {:?}",
+                        symbol, args
                     )
                 }
             }

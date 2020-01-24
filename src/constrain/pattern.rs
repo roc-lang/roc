@@ -1,7 +1,7 @@
 use crate::can::pattern::Pattern::{self, *};
 use crate::can::pattern::RecordDestruct;
-use crate::module::symbol::Symbol;
 use crate::collections::SendMap;
+use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
 use crate::subs::Variable;
 use crate::types::{Constraint, Expected, PExpected, PatternCategory, RecordFieldLabel, Type};

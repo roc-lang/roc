@@ -39,8 +39,8 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Body(loc_pattern, loc_expr) | Nested(Body(loc_pattern, loc_expr)) => {
             Body(loc_pattern, desugar_expr(arena, loc_expr))
         }
-        TypedDef(loc_pattern, loc_annotation, loc_expr)
-        | Nested(TypedDef(loc_pattern, loc_annotation, loc_expr)) => TypedDef(
+        TypedBody(loc_pattern, loc_annotation, loc_expr)
+        | Nested(TypedBody(loc_pattern, loc_annotation, loc_expr)) => TypedBody(
             loc_pattern,
             loc_annotation.clone(),
             desugar_expr(arena, loc_expr),
@@ -71,8 +71,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         | Nested(BlockStr(_))
         | AccessorFunction(_)
         | Nested(AccessorFunction(_))
-        | Var(_, _)
-        | Nested(Var(_, _))
+        | Var { .. }
+        | Nested(Var { .. })
         | MalformedIdent(_)
         | Nested(MalformedIdent(_))
         | MalformedClosure
@@ -203,15 +203,18 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             let region = loc_op.region;
             let op = loc_op.value;
+            // TODO desugar this in canonicalization instead, so we can work
+            // in terms of integers exclusively and not need to create strings
+            // which canonicalization then needs to look up, check if they're exposed, etc
             let value = match op {
-                Negate => Var(
-                    bumpalo::vec![in arena; ModuleName::NUM].into_bump_slice(),
-                    "negate",
-                ),
-                Not => Var(
-                    bumpalo::vec![in arena; ModuleName::BOOL].into_bump_slice(),
-                    "not",
-                ),
+                Negate => Var {
+                    module_name: ModuleName::NUM,
+                    ident: "negate",
+                },
+                Not => Var {
+                    module_name: ModuleName::BOOL,
+                    ident: "not",
+                },
             };
             let loc_fn_var = arena.alloc(Located { region, value });
             let desugared_args = bumpalo::vec![in arena; desugar_expr(arena, loc_arg)];
@@ -313,7 +316,10 @@ fn desugar_field<'a>(
         LabelOnly(loc_str) => {
             // Desugar { x } into { x: x }
             let loc_expr = Located {
-                value: Var(&[], loc_str.value),
+                value: Var {
+                    module_name: "",
+                    ident: loc_str.value,
+                },
                 region: loc_str.region,
             };
 
@@ -333,76 +339,29 @@ fn desugar_field<'a>(
     }
 }
 
+// TODO move this desugaring to canonicalization, to avoid dealing with strings as much
 #[inline(always)]
-fn binop_to_function(binop: BinOp, arena: &Bump) -> (&[&str], &str) {
+fn binop_to_function(binop: BinOp, arena: &Bump) -> (&str, &str) {
     use self::BinOp::*;
 
     match binop {
-        Caret => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "pow",
-        ),
-        Star => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "mul",
-        ),
-        Slash => (
-            bumpalo::vec![ in arena; ModuleName::FLOAT ].into_bump_slice(),
-            "div",
-        ),
-        DoubleSlash => (
-            bumpalo::vec![ in arena; ModuleName::INT ].into_bump_slice(),
-            "divFloor",
-        ),
-        Percent => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "rem",
-        ),
-        DoublePercent => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "mod",
-        ),
-        Plus => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "plus",
-        ),
-        Minus => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "sub",
-        ),
-        Equals => (
-            bumpalo::vec![ in arena; ModuleName::BOOL ].into_bump_slice(),
-            "isEq",
-        ),
-        NotEquals => (
-            bumpalo::vec![ in arena; ModuleName::BOOL ].into_bump_slice(),
-            "isNotEq",
-        ),
-        LessThan => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "isLt",
-        ),
-        GreaterThan => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "isGt",
-        ),
-        LessThanOrEq => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "isLte",
-        ),
-        GreaterThanOrEq => (
-            bumpalo::vec![ in arena; ModuleName::NUM ].into_bump_slice(),
-            "isGte",
-        ),
-        And => (
-            bumpalo::vec![ in arena; ModuleName::BOOL ].into_bump_slice(),
-            "and",
-        ),
-        Or => (
-            bumpalo::vec![ in arena; ModuleName::BOOL ].into_bump_slice(),
-            "or",
-        ),
-        Pizza => panic!("Cannot desugar the |> operator"),
+        Caret => (ModuleName::NUM, "pow"),
+        Star => (ModuleName::NUM, "mul"),
+        Slash => (ModuleName::FLOAT, "div"),
+        DoubleSlash => (ModuleName::INT, "divFloor"),
+        Percent => (ModuleName::NUM, "rem"),
+        DoublePercent => (ModuleName::NUM, "mod"),
+        Plus => (ModuleName::NUM, "plus"),
+        Minus => (ModuleName::NUM, "sub"),
+        Equals => (ModuleName::BOOL, "isEq"),
+        NotEquals => (ModuleName::BOOL, "isNotEq"),
+        LessThan => (ModuleName::NUM, "isLt"),
+        GreaterThan => (ModuleName::NUM, "isGt"),
+        LessThanOrEq => (ModuleName::NUM, "isLte"),
+        GreaterThanOrEq => (ModuleName::NUM, "isGte"),
+        And => (ModuleName::BOOL, "and"),
+        Or => (ModuleName::BOOL, "or"),
+        Pizza => unreachable!("Cannot desugar the |> operator"),
     }
 }
 
@@ -566,14 +525,14 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
             binop => {
                 // This is a normal binary operator like (+), so desugar it
                 // into the appropriate function call.
-                let (module_parts, name) = binop_to_function(binop, arena);
+                let (module_name, ident) = binop_to_function(binop, arena);
                 let mut args = Vec::with_capacity_in(2, arena);
 
                 args.push(left);
                 args.push(right);
 
                 let loc_expr = arena.alloc(Located {
-                    value: Expr::Var(module_parts, name),
+                    value: Expr::Var { module_name, ident },
                     region: loc_op.region,
                 });
 

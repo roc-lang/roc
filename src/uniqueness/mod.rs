@@ -1,14 +1,13 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
-use crate::can::ident::{Lowercase, ModuleName};
+use crate::can::ident::{Ident, Lowercase, ModuleName};
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
-use crate::module::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::builtins;
 use crate::constrain::expr::{exists, Env, Info};
-use crate::ident::Ident;
+use crate::module::symbol::{IdentId, ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use crate::types::AnnotationSource::TypedWhenBranch;
@@ -442,22 +441,11 @@ pub fn constrain_expr(
                 exists(vec![*entry_var, uniq_var], And(constraints))
             }
         }
-        Var {
-            symbol_for_lookup,
-            module,
-            ..
-        } => {
-            var_usage.register(symbol_for_lookup);
-            let usage = var_usage.get_usage(symbol_for_lookup);
+        Var(symbol) => {
+            var_usage.register(symbol);
+            let usage = var_usage.get_usage(symbol);
 
-            constrain_var(
-                var_store,
-                module.clone(),
-                symbol_for_lookup.clone(),
-                usage,
-                region,
-                expected,
-            )
+            constrain_var(var_store, *symbol, usage, region, expected)
         }
         Closure(fn_var, _symbol, recursion, args, boxed) => {
             use crate::can::expr::Recursive;
@@ -790,10 +778,8 @@ pub fn constrain_expr(
         Update {
             record_var,
             ext_var,
-            ident,
             symbol,
             updates,
-            module,
         } => {
             var_usage.register(symbol);
 
@@ -836,10 +822,9 @@ pub fn constrain_expr(
             vars.push(*ext_var);
 
             let con = Lookup(
-                module.clone(),
-                symbol.clone(),
+                *symbol,
                 Expected::ForReason(
-                    Reason::RecordUpdateKeys(ident.clone(), fields),
+                    Reason::RecordUpdateKeys(*symbol, fields),
                     record_type,
                     region,
                 ),
@@ -939,7 +924,6 @@ pub fn constrain_expr(
 
 fn constrain_var(
     var_store: &VarStore,
-    module: ModuleName,
     symbol_for_lookup: Symbol,
     usage: Option<&ReferenceCount>,
     region: Region,
@@ -959,7 +943,7 @@ fn constrain_var(
             exists(
                 vec![val_var, uniq_var],
                 And(vec![
-                    Lookup(module, symbol_for_lookup, expected.clone(), region),
+                    Lookup(symbol_for_lookup, expected.clone(), region),
                     Eq(attr_type, expected, region),
                     Eq(
                         Type::Boolean(uniq_type),
@@ -971,7 +955,7 @@ fn constrain_var(
         }
         Some(sharing::ReferenceCount::Unique) => {
             // no additional constraints, keep uniqueness unbound
-            Lookup(module, symbol_for_lookup, expected, region)
+            Lookup(symbol_for_lookup, expected, region)
         }
         None => panic!("symbol not analyzed"),
     }
@@ -1039,7 +1023,6 @@ fn constrain_def_pattern(
 
 /// Turn e.g. `Int` into `Attr.Attr * Int`
 fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, Type) {
-    use crate::types;
     use crate::types::Type::*;
 
     match ann {
@@ -1069,33 +1052,29 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             )
         }
 
-        Apply {
-            module_name,
-            name,
-            args,
-        } => {
+        Apply(symbol, args) => {
             let uniq_var = var_store.fresh();
-            if module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM {
+            let module_id = symbol.module_id();
+            let ident_id = symbol.ident_id();
+
+            if module_id == ModuleId::NUM && ident_id == IdentId::NUM_NUM {
                 let arg = args
                     .iter()
                     .next()
                     .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
 
                 match arg {
-                    Apply {
-                        module_name, name, ..
-                    } if module_name.as_str() == ModuleName::INT
-                        && name.as_str() == types::TYPE_INTEGER =>
+                    Apply(symbol, _)
+                        if module_id == ModuleId::INT && ident_id == IdentId::INT_INTEGER =>
                     {
                         return (
                             vec![uniq_var],
                             constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
                         )
                     }
-                    Apply {
-                        module_name, name, ..
-                    } if module_name.as_str() == ModuleName::FLOAT
-                        && name.as_str() == types::TYPE_FLOATINGPOINT =>
+                    Apply(symbol, _)
+                        if module_id == ModuleId::FLOAT
+                            && ident_id == IdentId::FLOAT_FLOATINGPOINT =>
                     {
                         return (
                             vec![uniq_var],
@@ -1111,14 +1090,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
 
             (
                 arg_vars,
-                constrain::attr_type(
-                    Bool::Variable(uniq_var),
-                    Type::Apply {
-                        module_name: module_name.clone(),
-                        name: name.clone(),
-                        args: args_lifted,
-                    },
-                ),
+                constrain::attr_type(Bool::Variable(uniq_var), Type::Apply(*symbol, args_lifted)),
             )
         }
 
@@ -1166,7 +1138,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             )
         }
 
-        Alias(module_name, uppercase, fields, actual) => {
+        Alias(symbol, fields, actual) => {
             let uniq_var = var_store.fresh();
 
             let (mut actual_vars, lifted_actual) = annotation_to_attr_type(var_store, actual);
@@ -1177,12 +1149,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                 actual_vars,
                 constrain::attr_type(
                     Bool::Variable(uniq_var),
-                    Type::Alias(
-                        module_name.clone(),
-                        uppercase.clone(),
-                        fields.clone(),
-                        Box::new(lifted_actual),
-                    ),
+                    Type::Alias(*symbol, fields.clone(), Box::new(lifted_actual)),
                 ),
             )
         }

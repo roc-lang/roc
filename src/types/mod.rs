@@ -1,15 +1,15 @@
 pub mod builtins;
 
-use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
+use crate::can::ident::{Lowercase, TagName};
 use crate::can::pattern::Pattern;
-use crate::module::symbol::Symbol;
 use crate::collections::{ImSet, MutSet, SendMap};
-use crate::ident::Ident;
+use crate::module::symbol::Symbol;
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
 use crate::region::Region;
 use crate::subs::Variable;
 use crate::uniqueness::boolean_algebra;
+use inlinable_string::InlinableString;
 use std::fmt;
 
 pub const TYPE_NUM: &str = "Num";
@@ -24,13 +24,9 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
-    Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Box<Type>),
+    Alias(Symbol, Vec<(Lowercase, Variable)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
-    Apply {
-        module_name: ModuleName,
-        name: Uppercase,
-        args: Vec<Type>,
-    },
+    Apply(Symbol, Vec<Type>),
     /// Boolean type used in uniqueness inference
     Boolean(boolean_algebra::Bool),
     Variable(Variable),
@@ -66,20 +62,8 @@ impl fmt::Debug for Type {
             }
             Type::Variable(var) => write!(f, "<{:?}>", var),
 
-            Type::Apply {
-                module_name,
-                name,
-                args,
-            } => {
-                let module_name = module_name.as_str();
-
-                write!(f, "(")?;
-
-                if !module_name.is_empty() {
-                    write!(f, "{}.", module_name)?;
-                }
-
-                write!(f, "{}", name)?;
+            Type::Apply(symbol, args) => {
+                write!(f, "({:?}", symbol)?;
 
                 for arg in args {
                     write!(f, " {:?}", arg)?;
@@ -94,8 +78,8 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(module_name, name, args, _actual) => {
-                write!(f, "Alias {}.{}", module_name.as_str(), name,)?;
+            Type::Alias(symbol, args, _actual) => {
+                write!(f, "Alias {:?}", symbol)?;
 
                 for (_, arg) in args {
                     write!(f, " {:?}", arg)?;
@@ -160,7 +144,7 @@ impl fmt::Debug for Type {
                         any_written_yet = true;
                     }
 
-                    write!(f, "{}", label.as_str())?;
+                    write!(f, "{:?}", label)?;
 
                     for argument in arguments {
                         write!(f, " {:?}", argument)?;
@@ -195,48 +179,28 @@ impl fmt::Debug for Type {
 
 impl Type {
     pub fn num(args: Vec<Type>) -> Self {
-        Type::Apply {
-            module_name: ModuleName::NUM.into(),
-            name: TYPE_NUM.into(),
-            args,
-        }
+        Type::Apply(Symbol::NUM_NUM, args)
     }
 
     pub fn float() -> Self {
-        let floating_point = Type::Apply {
-            module_name: ModuleName::FLOAT.into(),
-            name: "FloatingPoint".into(),
-            args: Vec::new(),
-        };
+        let floating_point = Type::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new());
 
         Type::num(vec![floating_point])
     }
 
     pub fn int() -> Self {
-        let integer = Type::Apply {
-            module_name: ModuleName::INT.into(),
-            name: "Integer".into(),
-            args: Vec::new(),
-        };
+        let integer = Type::Apply(Symbol::INT_INTEGER, Vec::new());
 
         Type::num(vec![integer])
     }
 
     pub fn string() -> Self {
-        Type::Apply {
-            module_name: ModuleName::STR.into(),
-            name: "Str".into(),
-            args: Vec::new(),
-        }
+        Type::Apply(Symbol::STR_STR, Vec::new())
     }
 
     /// This is needed to constrain `if` conditionals
     pub fn bool() -> Self {
-        Type::Apply {
-            module_name: ModuleName::BOOL.into(),
-            name: "Bool".into(),
-            args: Vec::new(),
-        }
+        Type::Apply(Symbol::BOOL_BOOL, Vec::new())
     }
 
     pub fn arity(&self) -> usize {
@@ -255,52 +219,45 @@ impl Type {
     }
 
     // swap Apply with Alias if their module and tag match
-    pub fn substitute_alias(
-        &mut self,
-        rep_module_name: &ModuleName,
-        rep_name: &Uppercase,
-        actual: &Type,
-    ) {
+    pub fn substitute_alias(&mut self, rep_symbol: Symbol, actual: &Type) {
         use Type::*;
 
         match self {
             Function(args, ret) => {
                 for arg in args {
-                    arg.substitute_alias(rep_module_name, rep_name, actual);
+                    arg.substitute_alias(rep_symbol, actual);
                 }
-                ret.substitute_alias(rep_module_name, rep_name, actual);
+                ret.substitute_alias(rep_symbol, actual);
             }
             TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
-                        x.substitute_alias(rep_module_name, rep_name, actual);
+                        x.substitute_alias(rep_symbol, actual);
                     }
                 }
-                ext.substitute_alias(rep_module_name, rep_name, actual);
+                ext.substitute_alias(rep_symbol, actual);
             }
             Record(fields, ext) => {
                 for x in fields.iter_mut() {
-                    x.substitute_alias(rep_module_name, rep_name, actual);
+                    x.substitute_alias(rep_symbol, actual);
                 }
-                ext.substitute_alias(rep_module_name, rep_name, actual);
+                ext.substitute_alias(rep_symbol, actual);
             }
-            Alias(_, _, _, actual_type) => {
-                actual_type.substitute_alias(rep_module_name, rep_name, actual);
+            Alias(_, _, actual_type) => {
+                actual_type.substitute_alias(rep_symbol, actual);
             }
-            Apply {
-                module_name, name, ..
-            } if module_name == rep_module_name && name == rep_name => {
+            Apply(symbol, _) if *symbol == rep_symbol => {
                 *self = actual.clone();
 
-                if let Apply { args, .. } = self {
+                if let Apply(_, args) = self {
                     for arg in args {
-                        arg.substitute_alias(rep_module_name, rep_name, actual);
+                        arg.substitute_alias(rep_symbol, actual);
                     }
                 }
             }
-            Apply { args, .. } => {
+            Apply(_, args) => {
                 for arg in args {
-                    arg.substitute_alias(rep_module_name, rep_name, actual);
+                    arg.substitute_alias(rep_symbol, actual);
                 }
             }
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
@@ -343,7 +300,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(ext, accum);
         }
-        Alias(_, _, args, actual) => {
+        Alias(_, args, actual) => {
             for (_, x) in args {
                 accum.insert(*x);
             }
@@ -354,7 +311,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             // the `inner` type should contain the bound variable
             debug_assert!(accum.contains(variable));
         }
-        Apply { args, .. } => {
+        Apply(_, args) => {
             for x in args {
                 variables_help(x, accum);
             }
@@ -442,13 +399,13 @@ pub enum Reason {
     IfBranch { index: usize },
     ElemInList,
     RecordUpdateValue(Lowercase),
-    RecordUpdateKeys(Ident, SendMap<Lowercase, Type>),
+    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
-    Lookup(ModuleName, Symbol, Expected<Type>, Region),
+    Lookup(Symbol, Expected<Type>, Region),
     Pattern(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
     SaveTheEnvironment,
@@ -483,6 +440,7 @@ pub enum Problem {
     CanonicalizationProblem,
     Mismatch(Mismatch, ErrorType, ErrorType),
     CircularType(Symbol, ErrorType, Region),
+    UnrecognizedIdent(InlinableString),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -497,18 +455,13 @@ pub enum Mismatch {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ErrorType {
     Infinite,
-    Type(ModuleName, Uppercase, Vec<ErrorType>),
+    Type(Symbol, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
     Record(SendMap<RecordFieldLabel, ErrorType>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
-    Alias(
-        ModuleName,
-        Uppercase,
-        Vec<(Lowercase, ErrorType)>,
-        Box<ErrorType>,
-    ),
+    Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
     Boolean(boolean_algebra::Bool),
     Error,
 }
@@ -516,7 +469,7 @@ pub enum ErrorType {
 impl ErrorType {
     pub fn unwrap_alias(self) -> ErrorType {
         match self {
-            ErrorType::Alias(_, _, _, real) => real.unwrap_alias(),
+            ErrorType::Alias(_, _, real) => real.unwrap_alias(),
             real => real,
         }
     }

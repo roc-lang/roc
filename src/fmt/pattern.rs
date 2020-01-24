@@ -109,13 +109,13 @@ pub fn fmt_pattern<'a>(
 
         // Malformed
         Malformed(string) => buf.push_str(string),
-        QualifiedIdentifier(maybe_qualified) => {
-            for part in maybe_qualified.module_parts.iter() {
-                buf.push_str(part);
+        QualifiedIdentifier { module_name, ident } => {
+            if !module_name.is_empty() {
+                buf.push_str(module_name);
                 buf.push('.');
             }
 
-            buf.push_str(maybe_qualified.value);
+            buf.push_str(ident);
         }
     }
 }

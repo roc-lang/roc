@@ -1,7 +1,7 @@
 use crate::can::expr::Expr;
 use crate::can::pattern::Pattern;
-use crate::module::symbol::Symbol;
 use crate::collections::ImSet;
+use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
 use crate::subs::Variable;
 
@@ -40,33 +40,30 @@ impl Procedure {
 }
 
 /// These are all ordered sets because they end up getting traversed in a graph search
-/// to determine how assignments shuold be ordered. We want builds to be reproducible,
+/// to determine how defs shuold be ordered. We want builds to be reproducible,
 /// so it's important that building the same code gives the same order every time!
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct References {
-    pub locals: ImSet<Symbol>,
-    pub globals: ImSet<Symbol>,
+    pub lookups: ImSet<Symbol>,
     pub calls: ImSet<Symbol>,
 }
 
 impl References {
     pub fn new() -> References {
         References {
-            locals: ImSet::default(),
-            globals: ImSet::default(),
+            lookups: ImSet::default(),
             calls: ImSet::default(),
         }
     }
 
     pub fn union(mut self, other: References) -> Self {
-        self.locals = self.locals.union(other.locals);
-        self.globals = self.globals.union(other.globals);
+        self.lookups = self.lookups.union(other.lookups);
         self.calls = self.calls.union(other.calls);
 
         self
     }
 
-    pub fn has_local(&self, symbol: &Symbol) -> bool {
-        self.locals.contains(symbol)
+    pub fn has_lookup(&self, symbol: &Symbol) -> bool {
+        self.lookups.contains(symbol)
     }
 }

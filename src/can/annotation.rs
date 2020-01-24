@@ -1,17 +1,18 @@
 use crate::can::env::Env;
-use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
-use crate::module::symbol::Symbol;
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, SendMap};
+use crate::module::symbol::Symbol;
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::subs::{VarStore, Variable};
-use crate::types::RecordFieldLabel;
-use crate::types::{Problem, Type};
+use crate::types::{Problem, RecordFieldLabel, Type};
+
+pub type Annotation = (Type, SendMap<Variable, Lowercase>);
 
 pub fn canonicalize_annotation(
-    env: &Env,
+    env: &mut Env,
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
-) -> (SendMap<Variable, Lowercase>, crate::types::Type) {
+) -> Annotation {
     // NOTE on rigids
     //
     // Rigids must be unique within a type annoation.
@@ -24,11 +25,10 @@ pub fn canonicalize_annotation(
     // `ftv : SendMap<Variable, Lowercase>`.
     let mut rigids = ImMap::default();
     let mut local_aliases = Vec::new();
-    let mut result =
-        can_annotation_help(env, annotation, var_store, &mut rigids, &mut local_aliases);
+    let mut typ = can_annotation_help(env, annotation, var_store, &mut rigids, &mut local_aliases);
 
-    for (module_name, name, tipe) in local_aliases {
-        result.substitute_alias(&module_name, &name, &tipe);
+    for (symbol, tipe) in local_aliases {
+        typ.substitute_alias(symbol, &tipe);
     }
 
     let mut ftv = SendMap::default();
@@ -37,15 +37,15 @@ pub fn canonicalize_annotation(
         ftv.insert(v, k);
     }
 
-    (ftv, result)
+    (typ, ftv)
 }
 
 fn can_annotation_help(
-    env: &Env,
+    env: &mut Env,
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    local_aliases: &mut Vec<(ModuleName, Uppercase, crate::types::Type)>,
+    local_aliases: &mut Vec<(Symbol, crate::types::Type)>,
 ) -> crate::types::Type {
     use crate::parse::ast::TypeAnnotation::*;
 
@@ -67,23 +67,43 @@ fn can_annotation_help(
                 can_annotation_help(env, &return_type.value, var_store, rigids, local_aliases);
             Type::Function(args, Box::new(ret))
         }
-        Apply(module_name, name, type_arguments) => {
-            let mut args = Vec::new();
+        Apply(module_name, ident, type_arguments) => {
+            let module_id = if module_name.is_empty() {
+                env.home
+            } else {
+                *env.module_ids
+                    .get_id(&(*module_name).into())
+                    .unwrap_or_else(|| {
+                        panic!(
+                        "TODO gracefully handle module_name of {:?} not being in env.module_ids",
+                        module_name
+                    )
+                    })
+            };
 
-            for arg in *type_arguments {
-                args.push(can_annotation_help(
-                    env,
-                    &arg.value,
-                    var_store,
-                    rigids,
-                    local_aliases,
-                ));
-            }
+            match env.qualified_lookup(module_name, ident) {
+                Ok(symbol) => {
+                    let mut args = Vec::new();
 
-            Type::Apply {
-                module_name: module_name.join(".").into(),
-                name: (*name).into(),
-                args,
+                    for arg in *type_arguments {
+                        args.push(can_annotation_help(
+                            env,
+                            &arg.value,
+                            var_store,
+                            rigids,
+                            local_aliases,
+                        ));
+                    }
+
+                    Type::Apply(symbol, args)
+                }
+                Err(problem) => {
+                    // Either the module wasn't imported, or
+                    // it was imported but it doesn't expose this ident.
+                    env.problem(crate::can::problem::Problem::RuntimeError(problem));
+
+                    Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()))
+                }
             }
         }
         BoundVariable(v) => {
@@ -98,37 +118,66 @@ fn can_annotation_help(
             }
         }
         As(loc_inner, _spaces, loc_as) => match loc_as.value {
-            TypeAnnotation::Apply(module_name, name, loc_vars) if module_name.is_empty() => {
-                let inner_type =
-                    can_annotation_help(env, &loc_inner.value, var_store, rigids, local_aliases);
-                let name = Uppercase::from(name);
-                let mut vars = Vec::with_capacity(loc_vars.len());
+            TypeAnnotation::Apply(module_name, ident, loc_vars) if module_name.is_empty() => {
+                let module_id = if module_name.is_empty() {
+                    env.home
+                } else {
+                    *env.module_ids
+                        .get_id(&(*module_name).into())
+                        .unwrap_or_else(|| {
+                            panic!(
+                        "TODO gracefully handle module_name of {:?} not being in env.module_ids",
+                        module_name
+                    )
+                        })
+                };
 
-                for loc_var in loc_vars {
-                    match loc_var.value {
-                        BoundVariable(ident) => {
-                            let var_name = Lowercase::from(ident);
-                            if let Some(var) = rigids.get(&var_name) {
-                                vars.push((var_name, *var));
-                            } else {
-                                let var = var_store.fresh();
-                                rigids.insert(var_name.clone(), var);
-                                vars.push((var_name, var));
+                match env.qualified_lookup(module_name, ident) {
+                    Ok(symbol) => {
+                        let inner_type = can_annotation_help(
+                            env,
+                            &loc_inner.value,
+                            var_store,
+                            rigids,
+                            local_aliases,
+                        );
+                        let mut vars = Vec::with_capacity(loc_vars.len());
+
+                        for loc_var in loc_vars {
+                            match loc_var.value {
+                                BoundVariable(ident) => {
+                                    let var_name = Lowercase::from(ident);
+
+                                    if let Some(var) = rigids.get(&var_name) {
+                                        vars.push((var_name, *var));
+                                    } else {
+                                        let var = var_store.fresh();
+                                        rigids.insert(var_name.clone(), var);
+                                        vars.push((var_name, var));
+                                    }
+                                }
+                                _ => {
+                                    // If anything other than a lowercase identifier
+                                    // appears here, the whole annotation is invalid.
+                                    return Type::Erroneous(Problem::CanonicalizationProblem);
+                                }
                             }
                         }
-                        _ => {
-                            // If anything other than a lowercase identifier
-                            // appears here, the whole annotation is invalid.
-                            return Type::Erroneous(Problem::CanonicalizationProblem);
-                        }
+
+                        let alias = Type::Alias(symbol, vars, Box::new(inner_type));
+
+                        local_aliases.push((symbol, alias.clone()));
+
+                        alias
+                    }
+                    Err(problem) => {
+                        // Either the module wasn't imported, or
+                        // it was imported but it doesn't expose this ident.
+                        env.problem(crate::can::problem::Problem::RuntimeError(problem));
+
+                        Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()))
                     }
                 }
-
-                let alias = Type::Alias(env.home.clone(), name.clone(), vars, Box::new(inner_type));
-
-                local_aliases.push((env.home.clone(), name, alias.clone()));
-
-                alias
             }
             _ => {
                 // This is a syntactically invalid type alias.
@@ -193,12 +242,11 @@ fn can_annotation_help(
 }
 
 fn can_assigned_field<'a>(
-    env: &Env,
+    env: &mut Env,
     field: &AssignedField<'a, TypeAnnotation<'a>>,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-
-    local_aliases: &mut Vec<(ModuleName, Uppercase, crate::types::Type)>,
+    local_aliases: &mut Vec<(Symbol, Type)>,
     field_types: &mut SendMap<RecordFieldLabel, Type>,
 ) {
     use crate::parse::ast::AssignedField::*;
@@ -232,11 +280,11 @@ fn can_assigned_field<'a>(
 }
 
 fn can_tag<'a>(
-    env: &Env,
+    env: &mut Env,
     tag: &Tag<'a>,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    local_aliases: &mut Vec<(ModuleName, Uppercase, crate::types::Type)>,
+    local_aliases: &mut Vec<(Symbol, Type)>,
     tag_types: &mut Vec<(TagName, Vec<Type>)>,
 ) {
     match tag {
@@ -251,7 +299,8 @@ fn can_tag<'a>(
             tag_types.push((TagName::Global(name), arg_types));
         }
         Tag::Private { name, args } => {
-            let symbol = Symbol::from_private_tag(env.home.as_str(), name.value);
+            let ident_id = env.ident_ids.private_tag(&name.value.into());
+            let symbol = Symbol::new(env.home, ident_id);
 
             let arg_types = args
                 .iter()

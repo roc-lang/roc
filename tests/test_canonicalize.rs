@@ -18,9 +18,9 @@ mod test_canonicalize {
     use roc::can::problem::Problem;
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
-    use roc::module::symbol::Symbol;
     use roc::collections::{ImMap, ImSet, SendMap};
     use roc::ident::Ident;
+    use roc::module::symbol::Symbol;
     use roc::region::{Located, Region};
     use std::{f64, i64};
 
@@ -60,14 +60,14 @@ mod test_canonicalize {
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+        let (actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input);
 
         assert_eq!(actual.value, expected);
     }
 
     fn assert_can_float(input: &str, expected: f64) {
         let arena = Bump::new();
-        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input);
 
         match loc_actual.value {
             Expr::Float(_, actual) => {
@@ -80,7 +80,7 @@ mod test_canonicalize {
     }
     fn assert_can_int(input: &str, expected: i64) {
         let arena = Bump::new();
-        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input);
 
         match loc_actual.value {
             Expr::Int(_, actual) => {
@@ -214,7 +214,7 @@ mod test_canonicalize {
         "#
         );
         let (_actual, output, problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+            can_expr_with(&arena, "Blah", src);
 
         assert_eq!(problems, vec![]);
 
@@ -244,7 +244,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (_actual, output, problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+            can_expr_with(&arena, "Blah", src);
 
         assert_eq!(problems, vec![]);
 
@@ -309,7 +309,7 @@ mod test_canonicalize {
                  when x is
                      0 -> 0
                      _ -> g (x - 1)
-             
+
             p = \x ->
                  when x is
                      0 -> 0
@@ -324,7 +324,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+                can_expr_with(&arena, "Blah", src);
 
             let detected0 = get_closure(&actual.value, 0);
             let detected1 = get_closure(&actual.value, 1);
@@ -351,7 +351,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+                can_expr_with(&arena, "Blah", src);
 
             let detected = get_closure(&actual.value, 0);
             assert_eq!(detected, Recursive::TailRecursive);
@@ -369,7 +369,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+            can_expr_with(&arena, "Blah", src);
 
         let detected = get_closure(&actual.value, 0);
         assert_eq!(detected, Recursive::TailRecursive);
@@ -388,7 +388,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+            can_expr_with(&arena, "Blah", src);
 
         let detected = get_closure(&actual.value, 0);
         assert_eq!(detected, Recursive::Recursive);
@@ -414,7 +414,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+                can_expr_with(&arena, "Blah", src);
 
             let detected = get_closure(&actual.value, 0);
             assert_eq!(detected, Recursive::Recursive);
@@ -436,7 +436,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+                can_expr_with(&arena, "Blah", src);
 
             let is_circular_def =
                 if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
@@ -461,7 +461,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+                can_expr_with(&arena, "Blah", src);
 
             let is_circular_def =
                 if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
@@ -494,7 +494,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+                can_expr_with(&arena, "Blah", src);
 
             let is_circular_def =
                 if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
@@ -592,14 +592,14 @@ mod test_canonicalize {
 
     //    assert_eq!(
     //        problems,
-    //        vec![Problem::UnrecognizedConstant(loc(Ident::Unqualified(
+    //        vec![Problem::UnrecognizedLookup(loc(Ident::Unqualified(
     //            "x".to_string()
     //        )))]
     //    );
 
     //    assert_eq!(
     //        expr,
-    //        UnrecognizedConstant(loc(Ident::Unqualified("x".to_string())))
+    //        UnrecognizedLookup(loc(Ident::Unqualified("x".to_string())))
     //    );
 
     //    assert_eq!(
@@ -627,7 +627,7 @@ mod test_canonicalize {
 
     //    assert_eq!(
     //        problems,
-    //        vec![Problem::UnrecognizedConstant(loc(Ident::Unqualified(
+    //        vec![Problem::UnrecognizedLookup(loc(Ident::Unqualified(
     //            "z".to_string()
     //        )))]
     //    );
