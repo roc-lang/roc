@@ -1,22 +1,53 @@
+use crate::can::expr::Expr;
 use crate::can::ident::Lowercase;
 use crate::can::symbol::Symbol;
 use crate::collections::ImMap;
-use std::cmp::Ordering;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum ReferenceCount {
-    Shared,
-    Unique,
     Seen,
+    Unique,
+    Access(FieldAccess),
+    Update(FieldAccess),
+    Shared,
 }
 
 impl ReferenceCount {
     pub fn add(a: &ReferenceCount, b: &ReferenceCount) -> Self {
+        use ReferenceCount::*;
         match (a, b) {
-            (Self::Seen, Self::Seen) => Self::Seen,
-            (Self::Seen, Self::Unique) => Self::Unique,
-            (Self::Unique, Self::Seen) => Self::Unique,
-            _ => Self::Shared,
+            // Shared
+            (Shared, _) => Shared,
+            (_, Shared) => Shared,
+
+            // Update
+            (Update(_), Update(_)) => Shared,
+            (Update(_), Access(_)) => Shared,
+            (Access(fa1), Update(fa2)) => {
+                let mut fa = fa1.clone();
+                fa.sequential_merge(fa2);
+
+                Update(fa)
+            }
+            (_, Update(fa)) => Update(fa.clone()),
+            (Update(fa), _) => Update(fa.clone()),
+
+            // Access
+            (Access(fa1), Access(fa2)) => {
+                let mut fa = fa1.clone();
+                fa.sequential_merge(fa2);
+
+                Access(fa)
+            }
+            (_, Access(fa)) => Access(fa.clone()),
+            (Access(fa), _) => Access(fa.clone()),
+
+            // Unique
+            (Unique, Unique) => Shared,
+            (_, Unique) => Unique,
+            (Unique, _) => Unique,
+
+            (Seen, Seen) => Seen,
         }
     }
 
@@ -26,19 +57,6 @@ impl ReferenceCount {
             (other, Self::Seen) => other.clone(),
             (Self::Unique, Self::Unique) => Self::Unique,
             _ => Self::Shared,
-        }
-    }
-}
-
-impl PartialOrd for ReferenceCount {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        use ReferenceCount::*;
-
-        match (self, other) {
-            (Seen, Seen) => Some(Ordering::Equal),
-            (Seen, _) => Some(Ordering::Less),
-            (_, Seen) => Some(Ordering::Greater),
-            _ => None,
         }
     }
 }
@@ -95,7 +113,7 @@ impl VarUsage {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, PartialOrd)]
 pub struct FieldAccess {
     pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
 }
@@ -154,7 +172,7 @@ impl FieldAccess {
         }
     }
 
-    fn parallel_merge(&mut self, other: &Self) {
+    pub fn parallel_merge(&mut self, other: &Self) {
         for (field_name, (other_rc, other_nested)) in other.fields.clone() {
             if self.fields.contains_key(&field_name) {
                 if let Some((self_rc, self_nested)) = self.fields.get_mut(&field_name) {
@@ -166,7 +184,7 @@ impl FieldAccess {
             }
         }
     }
-    fn sequential_merge(&mut self, other: &Self) {
+    pub fn sequential_merge(&mut self, other: &Self) {
         for (field_name, (other_rc, mut other_nested)) in other.fields.clone() {
             if self.fields.contains_key(&field_name) {
                 if let Some((self_rc, self_nested)) = self.fields.get_mut(&field_name) {
@@ -194,11 +212,174 @@ impl FieldAccess {
 
     pub fn sequential(&mut self, access_chain: Vec<Lowercase>) {
         let other = Self::from_chain(access_chain);
-        dbg!(&self, &other);
         self.sequential_merge(&other);
     }
 
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty()
+    }
+}
+
+pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
+    use Expr::*;
+    use ReferenceCount::*;
+
+    match expr {
+        RuntimeError(_)
+        | Int(_, _)
+        | Float(_, _)
+        | Str(_)
+        | BlockStr(_)
+        | EmptyRecord
+        | Accessor { .. } => {}
+
+        Var {
+            symbol_for_lookup, ..
+        } => usage.register(symbol_for_lookup),
+
+        If {
+            loc_cond,
+            loc_then,
+            loc_else,
+            ..
+        } => {
+            annotate_usage(&loc_cond.value, usage);
+
+            let mut then_usage = VarUsage::default();
+            let mut else_usage = VarUsage::default();
+
+            annotate_usage(&loc_then.value, &mut then_usage);
+            annotate_usage(&loc_else.value, &mut else_usage);
+
+            then_usage.or(&else_usage);
+            usage.add(&then_usage);
+        }
+        When {
+            loc_cond, branches, ..
+        } => {
+            annotate_usage(&loc_cond.value, usage);
+
+            let mut branches_usage = VarUsage::default();
+            for (_, loc_branch) in branches {
+                let mut current_usage = VarUsage::default();
+
+                annotate_usage(&loc_branch.value, &mut current_usage);
+
+                branches_usage.or(&current_usage);
+            }
+
+            usage.add(&branches_usage);
+        }
+
+        List { loc_elems, .. } => {
+            for loc_elem in loc_elems {
+                annotate_usage(&loc_elem.value, usage);
+            }
+        }
+        LetNonRec(def, loc_expr, _) => {
+            annotate_usage(&def.loc_expr.value, usage);
+            annotate_usage(&loc_expr.value, usage);
+        }
+        LetRec(defs, loc_expr, _) => {
+            if defs.len() == 1 {
+                // just like a letrec, but mark defined symbol as Shared
+                let def = &defs[0];
+                for (symbol, _) in def.pattern_vars.clone() {
+                    usage.register_with(&symbol, &Shared);
+                }
+                annotate_usage(&def.loc_expr.value, usage);
+            } else {
+                let mut rec_usage = VarUsage::default();
+                // care is required. If f1 and f2 are mutually recursive, and f1 accesses a record
+                // whilst f2 updates that record, the record must be marked as Shared, disallowing
+                // a mutable update in f2
+                for def in defs {
+                    for (symbol, _) in def.pattern_vars.clone() {
+                        usage.register_with(&symbol, &Shared);
+                    }
+
+                    let mut current_usage = VarUsage::default();
+                    annotate_usage(&def.loc_expr.value, &mut current_usage);
+
+                    let mut a = rec_usage.clone();
+                    let b = rec_usage.clone();
+
+                    a.add(&current_usage);
+                    current_usage.add(&b);
+                    current_usage.or(&a);
+
+                    rec_usage.add(&current_usage);
+                }
+
+                usage.add(&rec_usage);
+            }
+
+            annotate_usage(&loc_expr.value, usage);
+        }
+        Call(fun, loc_args, _) => {
+            annotate_usage(&fun.1.value, usage);
+
+            for (_, arg) in loc_args {
+                annotate_usage(&arg.value, usage);
+            }
+        }
+        Closure(_, _, _, _, body) => {
+            annotate_usage(&body.0.value, usage);
+        }
+
+        Tag { arguments, .. } => {
+            for (_, loc_expr) in arguments {
+                annotate_usage(&loc_expr.value, usage);
+            }
+        }
+        Record(_, fields) => {
+            for (_, field) in fields {
+                annotate_usage(&field.loc_expr.value, usage);
+            }
+        }
+        Expr::Update {
+            symbol, updates, ..
+        } => {
+            for (_, field) in updates {
+                annotate_usage(&field.loc_expr.value, usage);
+            }
+
+            usage.register_with(symbol, &ReferenceCount::Update(FieldAccess::default()));
+        }
+        Expr::Access {
+            field, loc_expr, ..
+        } => {
+            let mut chain = Vec::new();
+            if let Some(symbol) = get_access_chain(&loc_expr.value, &mut chain) {
+                chain.push(field.clone());
+
+                let fa = FieldAccess::from_chain(chain);
+
+                usage.register_with(symbol, &ReferenceCount::Access(fa));
+            } else {
+                annotate_usage(&loc_expr.value, usage);
+            }
+        }
+    }
+}
+
+fn get_access_chain<'a>(expr: &'a Expr, chain: &mut Vec<Lowercase>) -> Option<&'a Symbol> {
+    use Expr::*;
+
+    match expr {
+        Expr::Access {
+            field, loc_expr, ..
+        } => {
+            let symbol = get_access_chain(&loc_expr.value, chain)?;
+
+            chain.push(field.clone());
+
+            Some(symbol)
+        }
+        Var {
+            symbol_for_lookup, ..
+        } => Some(symbol_for_lookup),
+
+        _ => None,
     }
 }

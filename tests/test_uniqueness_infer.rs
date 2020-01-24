@@ -12,12 +12,13 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer_uniq {
-    use crate::helpers::{assert_correct_variable_usage, uniq_expr};
+    use crate::helpers::{assert_correct_variable_usage, can_expr, uniq_expr};
     use roc::can::ident::Lowercase;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::uniqueness::sharing::FieldAccess;
     use roc::uniqueness::sharing::ReferenceCount::{self, *};
+    use roc::uniqueness::sharing::VarUsage;
 
     // HELPERS
 
@@ -1411,6 +1412,83 @@ mod test_infer_uniq {
                 "foo.bar" => Unique,
                 "foo.bar.baz" => Shared,
             ],
+        );
+    }
+    fn usage_eq(src: &str, expected: VarUsage) {
+        let (expr, _, _problems, _subs, _variable, _constraint) = can_expr(src);
+
+        use roc::uniqueness::sharing::{annotate_usage, VarUsage};
+        let mut usage = VarUsage::default();
+        annotate_usage(&expr, &mut usage);
+
+        dbg!(&usage);
+
+        assert_eq!(usage, expected)
+    }
+
+    #[test]
+    fn usage_factorial() {
+        usage_eq(
+            indoc!(
+                r#"
+                    factorial = \n ->
+                        when n is
+                            0 -> 1
+                            1 -> 1
+                            m -> factorial m
+
+                    factorial
+                   "#
+            ),
+            {
+                let mut usage = VarUsage::default();
+
+                usage.register_with(&"Test.blah$m".into(), &Unique);
+                usage.register_with(&"Test.blah$n".into(), &Unique);
+                usage.register_with(&"Test.blah$factorial".into(), &Shared);
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn usage_record_access() {
+        usage_eq(
+            indoc!(
+                r#"
+            rec = { foo : 42, bar : "baz" } 
+            rec.foo
+                   "#
+            ),
+            {
+                let mut usage = VarUsage::default();
+                let fa = FieldAccess::from_chain(vec!["foo".into()]);
+
+                usage.register_with(&"Test.blah$rec".into(), &ReferenceCount::Access(fa));
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn usage_record_update() {
+        usage_eq(
+            indoc!(
+                r#"
+            rec = { foo : 42, bar : "baz" } 
+            { rec & foo: rec.foo } 
+                   "#
+            ),
+            {
+                let mut usage = VarUsage::default();
+                let fa = FieldAccess::from_chain(vec!["foo".into()]);
+
+                usage.register_with(&"Test.blah$rec".into(), &ReferenceCount::Update(fa));
+
+                usage
+            },
         );
     }
 }
