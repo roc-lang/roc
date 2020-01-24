@@ -2,7 +2,6 @@ use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
 use crate::can::ident::{Lowercase, ModuleName};
-use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
@@ -21,7 +20,7 @@ use crate::types::Reason;
 use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::Bool;
-use crate::uniqueness::sharing::{ReferenceCount, VarUsage};
+use crate::uniqueness::sharing::{FieldAccess, ReferenceCount, VarUsage};
 
 pub use crate::can::expr::Expr::*;
 
@@ -37,7 +36,11 @@ pub fn constrain_declaration(
     _declared_idents: &ImMap<Ident, (Symbol, Region)>,
     expected: Expected<Type>,
 ) -> Constraint {
+    // TODO this means usage is local to individual declarations.
+    // Should be per-module in the future!
     let mut var_usage = VarUsage::default();
+
+    sharing::annotate_usage(&loc_expr.value, &mut var_usage);
 
     constrain_expr(
         &crate::constrain::expr::Env {
@@ -45,7 +48,7 @@ pub fn constrain_declaration(
             module_name,
         },
         var_store,
-        &mut var_usage,
+        &var_usage,
         region,
         &loc_expr.value,
         expected,
@@ -244,7 +247,7 @@ fn constrain_pattern(
 pub fn constrain_expr(
     env: &Env,
     var_store: &VarStore,
-    var_usage: &mut VarUsage,
+    var_usage: &VarUsage,
     region: Region,
     expr: &Expr,
     expected: Expected<Type>,
@@ -447,7 +450,6 @@ pub fn constrain_expr(
             module,
             ..
         } => {
-            var_usage.register(symbol_for_lookup);
             let usage = var_usage.get_usage(symbol_for_lookup);
 
             constrain_var(
@@ -512,14 +514,6 @@ pub fn constrain_expr(
             );
 
             let defs_constraint = And(state.constraints);
-
-            // remove identifiers bound in the arguments from VarUsage
-            // makes e.g. `(\x -> x) (\x -> x)` count as unique in both cases
-            for (_, pattern) in args {
-                for identifier in pattern::symbols_from_pattern(&pattern.value) {
-                    var_usage.unregister(&identifier);
-                }
-            }
 
             exists(
                 vars,
@@ -681,17 +675,14 @@ pub fn constrain_expr(
             let mut constraints = Vec::with_capacity(branches.len() + 1);
             constraints.push(expr_con);
 
-            let old_var_usage = var_usage.clone();
-
             match &expected {
                 Expected::FromAnnotation(name, arity, _, typ) => {
                     constraints.push(Eq(Type::Variable(*expr_var), expected.clone(), region));
 
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
-                        let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = constrain_when_branch(
                             var_store,
-                            &mut branch_var_usage,
+                            var_usage,
                             env,
                             region,
                             loc_pattern,
@@ -709,19 +700,6 @@ pub fn constrain_expr(
                             ),
                         );
 
-                        // required for a case like
-                        //
-                        // when b is
-                        //      Foo x -> x + x
-                        //      Bar x -> x
-                        //
-                        // In this case the `x` in the second branch is used uniquely
-                        for symbol in pattern::symbols_from_pattern(&loc_pattern.value) {
-                            branch_var_usage.unregister(&symbol);
-                        }
-
-                        var_usage.or(&branch_var_usage);
-
                         constraints.push(
                             // Each branch's pattern must have the same type
                             // as the condition expression did.
@@ -735,10 +713,9 @@ pub fn constrain_expr(
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
                     for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
-                        let mut branch_var_usage = old_var_usage.clone();
                         let branch_con = constrain_when_branch(
                             var_store,
-                            &mut branch_var_usage,
+                            var_usage,
                             env,
                             region,
                             loc_pattern,
@@ -754,19 +731,6 @@ pub fn constrain_expr(
                                 region,
                             ),
                         );
-
-                        // required for a case like
-                        //
-                        // case b when
-                        //      Foo x -> x + x
-                        //      Bar x -> x
-                        //
-                        // In this case the `x` in the second branch is used uniquely
-                        for symbol in pattern::symbols_from_pattern(&loc_pattern.value) {
-                            branch_var_usage.unregister(&symbol);
-                        }
-
-                        var_usage.or(&branch_var_usage);
 
                         branch_cons.push(branch_con);
                     }
@@ -793,8 +757,6 @@ pub fn constrain_expr(
             updates,
             module,
         } => {
-            var_usage.register(symbol);
-
             let mut fields: SendMap<Lowercase, Type> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
             let mut cons = Vec::with_capacity(updates.len() + 3);
@@ -943,8 +905,9 @@ fn constrain_var(
     region: Region,
     expected: Expected<Type>,
 ) -> Constraint {
+    use sharing::ReferenceCount::*;
     match usage {
-        Some(sharing::ReferenceCount::Shared) => {
+        Some(Shared) => {
             // the variable is used/consumed more than once, so it must be Shared
             let val_var = var_store.fresh();
             let uniq_var = var_store.fresh();
@@ -967,13 +930,70 @@ fn constrain_var(
                 ]),
             )
         }
-        Some(sharing::ReferenceCount::Unique) => {
+        Some(Unique) => {
             // no additional constraints, keep uniqueness unbound
             Lookup(module, symbol_for_lookup, expected, region)
+        }
+        Some(ReferenceCount::Access(field_access)) | Some(ReferenceCount::Update(field_access)) => {
+            let record_con =
+                constrain_field_access(var_store, &field_access, expected.clone(), region);
+
+            And(vec![
+                Lookup(module, symbol_for_lookup, expected, region),
+                record_con,
+            ])
         }
         Some(other) => panic!("some other rc value: {:?}", other),
         None => panic!("symbol not analyzed"),
     }
+}
+
+fn constrain_field_access(
+    var_store: &VarStore,
+    field_access: &FieldAccess,
+    expected: Expected<Type>,
+    region: Region,
+) -> Constraint {
+    use constrain::attr_type;
+    use sharing::ReferenceCount::Shared;
+
+    let mut field_types = SendMap::default();
+    let mut field_vars = Vec::with_capacity(field_access.fields.len());
+    // let mut field_cons = Vec::new();
+
+    for (field, (rc, nested)) in field_access.fields.clone() {
+        if !nested.is_empty() {
+            panic!("TODO nested record fields are not handled yet");
+        }
+        let field_var = var_store.fresh();
+        field_vars.push(field_var);
+
+        let field_type = if rc == Shared {
+            attr_type(Bool::Zero, Variable(field_var))
+        } else {
+            let uniq_var = var_store.fresh();
+            field_vars.push(uniq_var);
+            attr_type(Bool::Variable(uniq_var), Variable(field_var))
+        };
+        field_types.insert(field.into(), field_type);
+    }
+
+    let record_uniq_var = var_store.fresh();
+    let record_ext_var = var_store.fresh();
+    field_vars.push(record_uniq_var);
+    field_vars.push(record_ext_var);
+
+    let record_type = constrain::attr_type(
+        Bool::Variable(record_uniq_var),
+        Type::Record(
+            field_types,
+            // TODO can we avoid doing Box::new on every single one of these?
+            // For example, could we have a single lazy_static global Box they
+            // could all share?
+            Box::new(Variable(record_ext_var)),
+        ),
+    );
+    exists(field_vars, Eq(record_type, expected, region))
 }
 
 // TODO trim down these arguments
@@ -981,7 +1001,7 @@ fn constrain_var(
 #[inline(always)]
 fn constrain_when_branch(
     var_store: &VarStore,
-    var_usage: &mut VarUsage,
+    var_usage: &VarUsage,
     env: &Env,
     region: Region,
     loc_pattern: &Located<Pattern>,
@@ -1203,7 +1223,7 @@ fn annotation_to_attr_type_many(var_store: &VarStore, anns: &[Type]) -> (Vec<Var
 pub fn constrain_def(
     env: &Env,
     var_store: &VarStore,
-    var_usage: &mut VarUsage,
+    var_usage: &VarUsage,
     def: &Def,
     body_con: Constraint,
 ) -> Constraint {
@@ -1290,7 +1310,7 @@ pub fn constrain_def(
 fn constrain_recursive_defs(
     env: &Env,
     var_store: &VarStore,
-    var_usage: &mut VarUsage,
+    var_usage: &VarUsage,
     defs: &[Def],
     body_con: Constraint,
 ) -> Constraint {
@@ -1308,7 +1328,7 @@ fn constrain_recursive_defs(
 pub fn rec_defs_help(
     env: &Env,
     var_store: &VarStore,
-    var_usage: &mut VarUsage,
+    var_usage: &VarUsage,
     defs: &[Def],
     body_con: Constraint,
     mut rigid_info: Info,
@@ -1449,7 +1469,7 @@ pub fn rec_defs_help(
 fn constrain_field_update(
     env: &Env,
     var_store: &VarStore,
-    var_usage: &mut VarUsage,
+    var_usage: &VarUsage,
     var: Variable,
     region: Region,
     field: Lowercase,
