@@ -1,3 +1,4 @@
+use crate::can::ident::ModuleName;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types;
 use bumpalo::collections::Vec;
@@ -107,7 +108,7 @@ fn layout_from_flat_type<'a>(
             args,
         } => {
             // TODO use SIMD string comparisons to speed these up
-            if module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM {
+            if module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM {
                 // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                 debug_assert!(args.len() == 1);
 
@@ -174,9 +175,9 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
             args,
         }) => {
             // TODO use SIMD string comparisons to speed these up
-            if module_name.as_str() == types::MOD_INT && name.as_str() == types::TYPE_INTEGER {
+            if module_name.as_str() == ModuleName::INT && name.as_str() == types::TYPE_INTEGER {
                 Ok(Layout::Builtin(Builtin::Int64))
-            } else if module_name.as_str() == types::MOD_FLOAT
+            } else if module_name.as_str() == ModuleName::FLOAT
                 && name.as_str() == types::TYPE_FLOATINGPOINT
             {
                 Ok(Layout::Builtin(Builtin::Float64))

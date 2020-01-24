@@ -285,7 +285,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     sorted_fields.push((label.clone(), vars));
                 }
 
-                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+                sorted_fields.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
 
                 let mut any_written_yet = false;
 
@@ -395,7 +395,7 @@ fn write_apply(
     // Hardcoded type aliases
     if module_name == "Str" && type_name == "Str" {
         buf.push_str("Str");
-    } else if module_name == types::MOD_NUM && type_name == types::TYPE_NUM {
+    } else if module_name == ModuleName::NUM && type_name == types::TYPE_NUM {
         let arg = args
             .into_iter()
             .next()

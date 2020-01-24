@@ -7,11 +7,12 @@ use crate::can::problem::RuntimeError;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
-use crate::module::ModuleId;
-use crate::parse::ast::{self, ExposesEntry};
+use crate::module::symbol::ModuleId;
+use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use bumpalo::Bump;
+use inlinable_string::InlinableString;
 
 #[derive(Debug)]
 pub struct Module {
@@ -26,17 +27,14 @@ pub struct ModuleOutput {
     pub lookups: Vec<(Symbol, Variable, Region)>,
 }
 
-pub fn canonicalize_module_defs<'a, I>(
+pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
     loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
     home: ModuleName,
-    _exposes: I,
+    _exposes: Vec<InlinableString>,
     scope: &mut Scope,
     var_store: &VarStore,
-) -> Result<ModuleOutput, RuntimeError>
-where
-    I: Iterator<Item = Located<ExposesEntry<'a>>>,
-{
+) -> Result<ModuleOutput, RuntimeError> {
     let mut exposed_imports = SendMap::default();
 
     // Desugar operators (convert them to Apply calls, taking into account

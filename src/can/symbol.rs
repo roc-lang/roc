@@ -1,4 +1,4 @@
-use crate::module::ModuleName;
+use crate::module::header::ModuleName;
 use inlinable_string::InlinableString;
 use std::fmt;
 
@@ -49,10 +49,6 @@ impl Symbol {
         } else {
             format!("{}.{}", module_parts.join("."), name).into()
         })
-    }
-
-    pub fn from_global_tag(tag_name: &str) -> Symbol {
-        Symbol(tag_name.into())
     }
 
     pub fn from_private_tag(home: &str, tag_name: &str) -> Symbol {

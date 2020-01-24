@@ -105,7 +105,7 @@ pub fn constrain_pattern(
 
             state.constraints.push(record_con);
         }
-        AppliedTag(ext_var, symbol, patterns) => {
+        AppliedTag(ext_var, tag_name, patterns) => {
             let mut argument_types = Vec::with_capacity(patterns.len());
             for (pattern_var, loc_pattern) in patterns {
                 state.vars.push(*pattern_var);
@@ -119,9 +119,9 @@ pub fn constrain_pattern(
 
             let tag_con = Constraint::Pattern(
                 region,
-                PatternCategory::Ctor(symbol.clone()),
+                PatternCategory::Ctor(tag_name.clone()),
                 Type::TagUnion(
-                    vec![(symbol.clone(), argument_types)],
+                    vec![(tag_name.clone(), argument_types)],
                     Box::new(Type::Variable(*ext_var)),
                 ),
                 expected,

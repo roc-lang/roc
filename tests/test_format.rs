@@ -16,7 +16,7 @@ mod test_format {
     use roc::parse;
     use roc::parse::ast::{Attempting, Expr};
     use roc::parse::blankspace::space0_before;
-    use roc::parse::module::{module, module_defs};
+    use roc::parse::module::{self, module_defs};
     use roc::parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
@@ -55,7 +55,7 @@ mod test_format {
         let src = src.trim_end();
         let expected = expected.trim_end();
 
-        match module().parse(&arena, State::new(&src, Attempting::Module)) {
+        match module::header().parse(&arena, State::new(&src, Attempting::Module)) {
             Ok((actual, state)) => {
                 let mut buf = String::new_in(&arena);
 
@@ -880,6 +880,71 @@ mod test_format {
         );
     }
 
+    #[test]
+    fn multi_line_list_def() {
+        //        expr_formats_same(indoc!(
+        //            r#"
+        //            r =
+        //                [
+        //                    1,
+        //                    2
+        //                ]
+        //
+        //            r
+        //            "#
+        //            )
+        //        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                results = [
+                    Ok 4,
+                    Ok 5
+                    ]
+
+                allOks results
+                "#
+            ),
+            indoc!(
+                r#"
+                results =
+                    [
+                        Ok 4,
+                        Ok 5
+                    ]
+
+                allOks results
+                "#
+            ),
+        );
+
+        //        expr_formats_to(indoc!(
+        //                r#"
+        //                results =
+        //                    # Lets count past 6
+        //                    [
+        //                    Ok 6,
+        //                    Err CountError
+        //                    ]
+        //
+        //                allOks results
+        //                "#
+        //            ), indoc!(
+        //                r#"
+        //                results =
+        //                    # Lets count past 6
+        //                    [
+        //                        Ok 6,
+        //                        Err CountError
+        //                    ]
+        //
+        //                allOks results
+        //                "#
+        //            )
+        //        );
+    }
+
     // RECORD LITERALS
 
     #[test]
@@ -909,35 +974,45 @@ mod test_format {
         ));
     }
 
-    //    #[test]
-    //    fn multi_line_list_def() {
-    //        expr_formats_same(indoc!(
-    //            r#"
-    //            scores =
-    //                [
-    //                    5,
-    //                    10
-    //                ]
-    //
-    //            scores
-    //            "#
-    //        ));
-    //    }
-    //
-    //    #[test]
-    //    fn multi_line_record_def() {
-    //        expr_formats_same(indoc!(
-    //            r#"
-    //            pos =
-    //                {
-    //                    x: 5,
-    //                    x: 10
-    //                }
-    //
-    //            pos
-    //            "#
-    //        ));
-    //    }
+    #[test]
+    fn multi_line_record_def() {
+        //        expr_formats_same(indoc!(
+        //            r#"
+        //            pos =
+        //                {
+        //                    x: 4,
+        //                    y: 11,
+        //                    z: 16
+        //                }
+        //
+        //            pos
+        //            "#
+        //        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                pos = {
+                        x: 5,
+                        y: 10
+                    }
+
+                pos
+                "#
+            ),
+            indoc!(
+                r#"
+                pos =
+                    {
+                        x: 5,
+                        y: 10
+                    }
+
+                pos
+                "#
+            ),
+        );
+    }
 
     #[test]
     fn two_fields_center_newline() {
@@ -1341,7 +1416,7 @@ mod test_format {
             5   |   6 | 7 ->
 
                     8
-            9   
+            9
             | 10 -> 11
 
             12 | 13 ->
@@ -1350,7 +1425,7 @@ mod test_format {
                 17
                 |  18 -> 19
             20 -> 21
-              
+
             "#
             ),
             indoc!(

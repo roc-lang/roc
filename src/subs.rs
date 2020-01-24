@@ -1,5 +1,4 @@
-use crate::can::ident::{Lowercase, ModuleName, Uppercase};
-use crate::can::symbol::Symbol;
+use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types;
@@ -445,7 +444,7 @@ impl Content {
         match &self {
             Content::Structure(FlatType::Apply {
                 module_name, name, ..
-            }) => module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM,
+            }) => module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM,
             _ => false,
         }
     }
@@ -460,7 +459,7 @@ pub enum FlatType {
     },
     Func(Vec<Variable>, Variable),
     Record(MutMap<RecordFieldLabel, Variable>, Variable),
-    TagUnion(MutMap<Symbol, Vec<Variable>>, Variable),
+    TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,

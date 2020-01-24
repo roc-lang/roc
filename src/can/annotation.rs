@@ -1,5 +1,5 @@
 use crate::can::env::Env;
-use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
@@ -236,20 +236,19 @@ fn can_tag<'a>(
     tag: &Tag<'a>,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-
     local_aliases: &mut Vec<(ModuleName, Uppercase, crate::types::Type)>,
-    tag_types: &mut Vec<(Symbol, Vec<Type>)>,
+    tag_types: &mut Vec<(TagName, Vec<Type>)>,
 ) {
     match tag {
         Tag::Global { name, args } => {
-            let symbol = Symbol::from_global_tag(name.value);
+            let name = name.value.into();
 
             let arg_types = args
                 .iter()
                 .map(|arg| can_annotation_help(env, &arg.value, var_store, rigids, local_aliases))
                 .collect();
 
-            tag_types.push((symbol, arg_types));
+            tag_types.push((TagName::Global(name), arg_types));
         }
         Tag::Private { name, args } => {
             let symbol = Symbol::from_private_tag(env.home.as_str(), name.value);
@@ -259,7 +258,7 @@ fn can_tag<'a>(
                 .map(|arg| can_annotation_help(env, &arg.value, var_store, rigids, local_aliases))
                 .collect();
 
-            tag_types.push((symbol, arg_types));
+            tag_types.push((TagName::Private(symbol), arg_types));
         }
         Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => {
             can_tag(env, nested, var_store, rigids, local_aliases, tag_types)
