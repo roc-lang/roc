@@ -971,6 +971,7 @@ fn constrain_var(
             // no additional constraints, keep uniqueness unbound
             Lookup(module, symbol_for_lookup, expected, region)
         }
+        Some(other) => panic!("some other rc value: {:?}", other),
         None => panic!("symbol not analyzed"),
     }
 }

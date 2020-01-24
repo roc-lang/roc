@@ -1,4 +1,6 @@
 #[macro_use]
+extern crate maplit;
+#[macro_use]
 extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
@@ -11,8 +13,11 @@ mod helpers;
 #[cfg(test)]
 mod test_infer_uniq {
     use crate::helpers::{assert_correct_variable_usage, uniq_expr};
+    use roc::can::ident::Lowercase;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
+    use roc::uniqueness::sharing::FieldAccess;
+    use roc::uniqueness::sharing::ReferenceCount::{self, *};
 
     // HELPERS
 
@@ -1266,6 +1271,146 @@ mod test_infer_uniq {
                    "#
             ),
             "Attr.Attr * (Attr.Attr * Int -> Attr.Attr * Int)",
+        );
+    }
+
+    fn field_access_seq(
+        accesses: Vec<Vec<&str>>,
+        expected: std::collections::HashMap<&str, ReferenceCount>,
+    ) {
+        let mut state = FieldAccess::default();
+
+        for access in accesses {
+            let temp: Vec<Lowercase> = access.into_iter().map(|v| v.into()).collect();
+            state.sequential(temp);
+        }
+
+        let mut im_expected: std::collections::HashMap<String, ReferenceCount> =
+            std::collections::HashMap::default();
+
+        for (k, v) in expected {
+            im_expected.insert(k.into(), v);
+        }
+
+        let actual: std::collections::HashMap<String, ReferenceCount> = state.into();
+
+        assert_eq!(actual, im_expected);
+    }
+
+    fn field_access_par(
+        accesses: Vec<Vec<&str>>,
+        expected: std::collections::HashMap<&str, ReferenceCount>,
+    ) {
+        let mut state = FieldAccess::default();
+
+        for access in accesses {
+            let temp: Vec<Lowercase> = access.into_iter().map(|v| v.into()).collect();
+            state.parallel(temp);
+        }
+
+        let mut im_expected: std::collections::HashMap<String, ReferenceCount> =
+            std::collections::HashMap::default();
+
+        for (k, v) in expected {
+            im_expected.insert(k.into(), v);
+        }
+
+        let actual: std::collections::HashMap<String, ReferenceCount> = state.into();
+
+        assert_eq!(actual, im_expected);
+    }
+
+    #[test]
+    fn usage_access_two_fields() {
+        field_access_seq(
+            vec![vec!["foo"], vec!["bar"]],
+            hashmap![
+                "foo" => Unique,
+                "bar" => Unique,
+            ],
+        );
+
+        field_access_par(
+            vec![vec!["foo"], vec!["bar"]],
+            hashmap![
+                "foo" => Unique,
+                "bar" => Unique,
+            ],
+        );
+    }
+
+    #[test]
+    fn usage_access_repeated_field_seq() {
+        field_access_seq(
+            vec![vec!["foo"], vec!["foo"]],
+            hashmap![
+                "foo" => Shared,
+            ],
+        );
+    }
+
+    #[test]
+    fn usage_access_repeated_field_par() {
+        field_access_par(
+            vec![vec!["foo"], vec!["foo"]],
+            hashmap![
+                "foo" => Unique,
+            ],
+        );
+    }
+
+    #[test]
+    fn usage_access_nested_field_seq() {
+        field_access_seq(
+            vec![vec!["foo", "bar"], vec!["foo"]],
+            hashmap![
+                "foo" => Unique,
+                "foo.bar" => Shared,
+            ],
+        );
+        field_access_seq(
+            vec![vec!["foo"], vec!["foo", "bar"]],
+            hashmap![
+                "foo" => Unique,
+                "foo.bar" => Shared,
+            ],
+        );
+    }
+    #[test]
+    fn usage_access_nested_field_par() {
+        field_access_par(
+            vec![vec!["foo", "bar"], vec!["foo"]],
+            hashmap![
+                "foo" => Unique,
+                "foo.bar" => Unique,
+            ],
+        );
+        field_access_par(
+            vec![vec!["foo"], vec!["foo", "bar"]],
+            hashmap![
+                "foo" => Unique,
+                "foo.bar" => Unique,
+            ],
+        );
+    }
+
+    #[test]
+    fn usage_access_deeply_nested_field_seq() {
+        field_access_seq(
+            vec![vec!["foo", "bar", "baz"], vec!["foo", "bar"]],
+            hashmap![
+                "foo" => Seen,
+                "foo.bar" => Unique,
+                "foo.bar.baz" => Shared,
+            ],
+        );
+        field_access_seq(
+            vec![vec!["foo", "bar"], vec!["foo", "bar", "baz"]],
+            hashmap![
+                "foo" => Seen,
+                "foo.bar" => Unique,
+                "foo.bar.baz" => Shared,
+            ],
         );
     }
 }
