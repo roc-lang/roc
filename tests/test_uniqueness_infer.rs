@@ -16,13 +16,14 @@ mod test_infer_uniq {
     use roc::can::ident::Lowercase;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
+    use roc::subs::Subs;
     use roc::uniqueness::sharing::FieldAccess;
     use roc::uniqueness::sharing::ReferenceCount::{self, *};
     use roc::uniqueness::sharing::VarUsage;
 
     // HELPERS
 
-    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, Subs, String) {
         let (_output, _problems, subs, variable, constraint) = uniq_expr(src);
 
         assert_correct_variable_usage(&constraint);
@@ -35,19 +36,20 @@ mod test_infer_uniq {
 
         let actual_str = content_to_string(content, &mut subs);
 
-        (unify_problems, actual_str)
+        (unify_problems, subs, actual_str)
     }
     fn infer_eq_ignore_problems(src: &str, expected: &str) {
-        let (_, actual) = infer_eq_help(src);
+        let (_, _, actual) = infer_eq_help(src);
 
         assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (problems, actual) = infer_eq_help(src);
+        let (problems, subs, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
             dbg!(&problems);
+            dbg!(&subs);
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
             println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
@@ -1197,17 +1199,73 @@ mod test_infer_uniq {
         );
     }
 
-    //    #[test]
-    //    fn sharing_analysis_record_update_use_twice_access() {
-    //        infer_eq(
-    //                indoc!(
-    //                    r#"
-    //                    \r -> { r & x: r.x, y: r.y }
-    //                    "#
-    //                ),
-    //            "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)" ,
-    //            );
-    //    }
+    #[test]
+    fn sharing_analysis_record_twice_access() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        \r -> 
+                            v = r.x
+                            w = r.x
+
+                            r
+
+                        "#
+                    ),
+                "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b) }c)" ,
+                );
+    }
+
+    #[test]
+    fn sharing_analysis_record_access_two_fields() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        \r -> 
+                            v = r.x
+                            w = r.y
+
+                            r
+
+                        "#
+                    ),
+                "Attr.Attr * (Attr.Attr ((b | c) | a) { x : (Attr.Attr b d), y : (Attr.Attr c e) }f -> Attr.Attr ((b | c) | a) { x : (Attr.Attr b d), y : (Attr.Attr c e) }f)" ,
+                );
+    }
+
+    #[test]
+    fn sharing_analysis_record_alias() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        \r -> 
+                            v = r.x
+                            w = r.y
+
+                            p = r
+
+                            p
+                        "#
+                    ),
+                "Attr.Attr * (Attr.Attr ((b | c) | a) { x : (Attr.Attr b d), y : (Attr.Attr c e) }f -> Attr.Attr ((b | c) | a) { x : (Attr.Attr b d), y : (Attr.Attr c e) }f)" ,
+                );
+    }
+
+    #[test]
+    fn sharing_analysis_record_update_use_two_fields() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        \r -> 
+                            v = r.x
+                            w = r.y
+                            
+                            { r & x: v, y: w } 
+                        "#
+                    ),
+                "Attr.Attr * (Attr.Attr (b | a) { x : (Attr.Attr b c), y : (Attr.Attr d e) }f -> Attr.Attr (d | b | a) { x : (Attr.Attr b c), y : (Attr.Attr d e) }f)" ,
+                );
+    }
 
     #[test]
     fn sharing_analysis_record_update_duplicate_field() {
@@ -1217,7 +1275,9 @@ mod test_infer_uniq {
                 \r -> { r & x: r.x, y: r.x }
                 "#
             ),
-         "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c)"
+          // the record's uniqueness does not depend on the `c` variable at construction. But
+            // extracting `y` uniquely will force the whole record to be unique
+         "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr c d) }e -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr c d) }e)"
         );
     }
 

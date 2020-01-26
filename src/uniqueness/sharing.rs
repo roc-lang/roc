@@ -66,6 +66,15 @@ pub struct VarUsage {
     usage: ImMap<Symbol, ReferenceCount>,
 }
 
+impl IntoIterator for VarUsage {
+    type Item = (Symbol, ReferenceCount);
+    type IntoIter = im_rc::hashmap::ConsumingIter<(Symbol, ReferenceCount)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.usage.into_iter()
+    }
+}
+
 impl VarUsage {
     pub fn default() -> VarUsage {
         VarUsage {

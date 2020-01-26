@@ -4,7 +4,7 @@ use crate::can::expr::Field;
 use crate::can::ident::{Lowercase, ModuleName};
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, SendMap};
+use crate::collections::{ImMap, ImSet, SendMap};
 use crate::constrain::builtins;
 use crate::constrain::expr::{exists, Env, Info};
 use crate::ident::Ident;
@@ -42,6 +42,7 @@ pub fn constrain_declaration(
 
     sharing::annotate_usage(&loc_expr.value, &mut var_usage);
 
+    let mut applied_usage_constraint = ImSet::default();
     constrain_expr(
         &crate::constrain::expr::Env {
             rigids: ImMap::default(),
@@ -49,6 +50,7 @@ pub fn constrain_declaration(
         },
         var_store,
         &var_usage,
+        &mut applied_usage_constraint,
         region,
         &loc_expr.value,
         expected,
@@ -248,6 +250,7 @@ pub fn constrain_expr(
     env: &Env,
     var_store: &VarStore,
     var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     region: Region,
     expr: &Expr,
     expected: Expected<Type>,
@@ -330,6 +333,7 @@ pub fn constrain_expr(
                     env,
                     var_store,
                     var_usage,
+                    applied_usage_constraint,
                     loc_expr.region,
                     &loc_expr.value,
                     field_expected,
@@ -376,6 +380,7 @@ pub fn constrain_expr(
                     env,
                     var_store,
                     var_usage,
+                    applied_usage_constraint,
                     loc_expr.region,
                     &loc_expr.value,
                     Expected::NoExpectation(Type::Variable(*var)),
@@ -430,6 +435,7 @@ pub fn constrain_expr(
                         env,
                         var_store,
                         var_usage,
+                        applied_usage_constraint,
                         loc_elem.region,
                         &loc_elem.value,
                         elem_expected,
@@ -454,6 +460,7 @@ pub fn constrain_expr(
 
             constrain_var(
                 var_store,
+                applied_usage_constraint,
                 module.clone(),
                 symbol_for_lookup.clone(),
                 usage,
@@ -508,6 +515,7 @@ pub fn constrain_expr(
                 env,
                 var_store,
                 var_usage,
+                applied_usage_constraint,
                 loc_body_expr.region,
                 &loc_body_expr.value,
                 body_type,
@@ -554,6 +562,7 @@ pub fn constrain_expr(
                 env,
                 var_store,
                 var_usage,
+                applied_usage_constraint,
                 fn_region,
                 &fn_expr.value,
                 fn_expected,
@@ -580,6 +589,7 @@ pub fn constrain_expr(
                     env,
                     var_store,
                     var_usage,
+                    applied_usage_constraint,
                     loc_arg.region,
                     &loc_arg.value,
                     expected_arg,
@@ -618,6 +628,7 @@ pub fn constrain_expr(
                 env,
                 var_store,
                 var_usage,
+                applied_usage_constraint,
                 loc_ret.region,
                 &loc_ret.value,
                 expected.clone(),
@@ -625,7 +636,14 @@ pub fn constrain_expr(
             exists(
                 vec![*var],
                 And(vec![
-                    constrain_recursive_defs(env, var_store, var_usage, defs, body_con),
+                    constrain_recursive_defs(
+                        env,
+                        var_store,
+                        var_usage,
+                        applied_usage_constraint,
+                        defs,
+                        body_con,
+                    ),
                     // Record the type of tne entire def-expression in the variable.
                     // Code gen will need that later!
                     Eq(Type::Variable(*var), expected, loc_ret.region),
@@ -639,6 +657,7 @@ pub fn constrain_expr(
                 env,
                 var_store,
                 var_usage,
+                applied_usage_constraint,
                 loc_ret.region,
                 &loc_ret.value,
                 expected.clone(),
@@ -647,7 +666,14 @@ pub fn constrain_expr(
             exists(
                 vec![*var],
                 And(vec![
-                    constrain_def(env, var_store, var_usage, def, body_con),
+                    constrain_def(
+                        env,
+                        var_store,
+                        var_usage,
+                        applied_usage_constraint,
+                        def,
+                        body_con,
+                    ),
                     // Record the type of tne entire def-expression in the variable.
                     // Code gen will need that later!
                     Eq(Type::Variable(*var), expected, loc_ret.region),
@@ -667,6 +693,7 @@ pub fn constrain_expr(
                 env,
                 var_store,
                 var_usage,
+                applied_usage_constraint,
                 region,
                 &loc_cond.value,
                 Expected::NoExpectation(cond_type.clone()),
@@ -683,6 +710,7 @@ pub fn constrain_expr(
                         let branch_con = constrain_when_branch(
                             var_store,
                             var_usage,
+                            applied_usage_constraint,
                             env,
                             region,
                             &loc_pattern.pattern,
@@ -716,6 +744,7 @@ pub fn constrain_expr(
                         let branch_con = constrain_when_branch(
                             var_store,
                             var_usage,
+                            applied_usage_constraint,
                             env,
                             region,
                             &loc_pattern.pattern,
@@ -765,6 +794,7 @@ pub fn constrain_expr(
                     env,
                     var_store,
                     var_usage,
+                    applied_usage_constraint,
                     var,
                     region,
                     field_name.clone(),
@@ -842,6 +872,7 @@ pub fn constrain_expr(
                 env,
                 var_store,
                 var_usage,
+                applied_usage_constraint,
                 loc_expr.region,
                 &loc_expr.value,
                 record_expected,
@@ -899,6 +930,7 @@ pub fn constrain_expr(
 
 fn constrain_var(
     var_store: &VarStore,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     module: ModuleName,
     symbol_for_lookup: Symbol,
     usage: Option<&ReferenceCount>,
@@ -935,14 +967,22 @@ fn constrain_var(
             Lookup(module, symbol_for_lookup, expected, region)
         }
         Some(ReferenceCount::Access(field_access)) | Some(ReferenceCount::Update(field_access)) => {
-            let record_con =
-                constrain_field_access(var_store, &field_access, expected.clone(), region);
+            if !applied_usage_constraint.contains(&symbol_for_lookup) {
+                applied_usage_constraint.insert(symbol_for_lookup.clone());
+                let (record_type, record_con) =
+                    constrain_field_access(var_store, &field_access, expected, region);
 
-            And(vec![
-                Lookup(module, symbol_for_lookup, expected, region),
-                record_con,
-            ])
+                let new_expected = Expected::NoExpectation(record_type);
+                And(vec![
+                    Lookup(module, symbol_for_lookup, new_expected, region),
+                    record_con,
+                ])
+            } else {
+                // TODO this is almost certainly incorrect!
+                True
+            }
         }
+
         Some(other) => panic!("some other rc value: {:?}", other),
         None => panic!("symbol not analyzed"),
     }
@@ -953,13 +993,13 @@ fn constrain_field_access(
     field_access: &FieldAccess,
     expected: Expected<Type>,
     region: Region,
-) -> Constraint {
+) -> (Type, Constraint) {
     use constrain::attr_type;
     use sharing::ReferenceCount::Shared;
 
     let mut field_types = SendMap::default();
     let mut field_vars = Vec::with_capacity(field_access.fields.len());
-    // let mut field_cons = Vec::new();
+    let mut uniq_vars = Vec::new();
 
     for (field, (rc, nested)) in field_access.fields.clone() {
         if !nested.is_empty() {
@@ -968,23 +1008,30 @@ fn constrain_field_access(
         let field_var = var_store.fresh();
         field_vars.push(field_var);
 
+        println!("{:?} at {:?}", field, rc);
+
         let field_type = if rc == Shared {
             attr_type(Bool::Zero, Variable(field_var))
         } else {
             let uniq_var = var_store.fresh();
             field_vars.push(uniq_var);
+            uniq_vars.push(Bool::Variable(uniq_var));
             attr_type(Bool::Variable(uniq_var), Variable(field_var))
         };
         field_types.insert(field.into(), field_type);
     }
-
     let record_uniq_var = var_store.fresh();
+    uniq_vars.push(Bool::Variable(record_uniq_var));
+
+    let record_uniq_type = boolean_algebra::any(uniq_vars);
+
     let record_ext_var = var_store.fresh();
     field_vars.push(record_uniq_var);
     field_vars.push(record_ext_var);
 
     let record_type = constrain::attr_type(
-        Bool::Variable(record_uniq_var),
+        // Bool::Variable(record_uniq_var),
+        record_uniq_type,
         Type::Record(
             field_types,
             // TODO can we avoid doing Box::new on every single one of these?
@@ -993,7 +1040,10 @@ fn constrain_field_access(
             Box::new(Variable(record_ext_var)),
         ),
     );
-    exists(field_vars, Eq(record_type, expected, region))
+    (
+        record_type.clone(),
+        exists(field_vars, Eq(record_type, expected, region)),
+    )
 }
 
 // TODO trim down these arguments
@@ -1002,6 +1052,7 @@ fn constrain_field_access(
 fn constrain_when_branch(
     var_store: &VarStore,
     var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     env: &Env,
     region: Region,
     loc_pattern: &Located<Pattern>,
@@ -1013,6 +1064,7 @@ fn constrain_when_branch(
         env,
         var_store,
         var_usage,
+        applied_usage_constraint,
         region,
         &loc_expr.value,
         expr_expected,
@@ -1224,6 +1276,8 @@ pub fn constrain_def(
     env: &Env,
     var_store: &VarStore,
     var_usage: &VarUsage,
+
+    applied_usage_constraint: &mut ImSet<Symbol>,
     def: &Def,
     body_con: Constraint,
 ) -> Constraint {
@@ -1277,6 +1331,7 @@ pub fn constrain_def(
                 },
                 var_store,
                 var_usage,
+                applied_usage_constraint,
                 def.loc_expr.region,
                 &def.loc_expr.value,
                 annotation_expected,
@@ -1286,6 +1341,7 @@ pub fn constrain_def(
             env,
             var_store,
             var_usage,
+            applied_usage_constraint,
             def.loc_expr.region,
             &def.loc_expr.value,
             Expected::NoExpectation(expr_type),
@@ -1311,6 +1367,7 @@ fn constrain_recursive_defs(
     env: &Env,
     var_store: &VarStore,
     var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     defs: &[Def],
     body_con: Constraint,
 ) -> Constraint {
@@ -1318,6 +1375,7 @@ fn constrain_recursive_defs(
         env,
         var_store,
         var_usage,
+        applied_usage_constraint,
         defs,
         body_con,
         Info::with_capacity(defs.len()),
@@ -1329,6 +1387,7 @@ pub fn rec_defs_help(
     env: &Env,
     var_store: &VarStore,
     var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     defs: &[Def],
     body_con: Constraint,
     mut rigid_info: Info,
@@ -1363,6 +1422,7 @@ pub fn rec_defs_help(
                     env,
                     var_store,
                     var_usage,
+                    applied_usage_constraint,
                     def.loc_expr.region,
                     &def.loc_expr.value,
                     Expected::NoExpectation(expr_type),
@@ -1410,6 +1470,7 @@ pub fn rec_defs_help(
                     },
                     var_store,
                     var_usage,
+                    applied_usage_constraint,
                     def.loc_expr.region,
                     &def.loc_expr.value,
                     Expected::NoExpectation(expr_type.clone()),
@@ -1470,6 +1531,7 @@ fn constrain_field_update(
     env: &Env,
     var_store: &VarStore,
     var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     var: Variable,
     region: Region,
     field: Lowercase,
@@ -1482,6 +1544,7 @@ fn constrain_field_update(
         env,
         var_store,
         var_usage,
+        applied_usage_constraint,
         loc_expr.region,
         &loc_expr.value,
         expected,
