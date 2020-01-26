@@ -172,15 +172,9 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
                 let mut alternatives = Vec::with_capacity_in(loc_patterns.len(), arena);
                 for loc_pattern in loc_patterns {
-                    alternatives.push(parse::ast::WhenPattern {
-                        pattern: Located {
-                            region: loc_pattern.pattern.region,
-                            value: Pattern::Nested(&loc_pattern.pattern.value),
-                        },
-                        guard: loc_pattern.guard.as_ref().map(|guard| Located {
-                            region: guard.region,
-                            value: Nested(&guard.value),
-                        }),
+                    alternatives.push(Located {
+                        region: loc_pattern.region,
+                        value: Pattern::Nested(&loc_pattern.value),
                     })
                 }
 
@@ -263,10 +257,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let pattern_region = condition.region;
 
             branches.push(&*arena.alloc((
-                bumpalo::vec![in arena; parse::ast::WhenPattern { pattern: Located {
+                bumpalo::vec![in arena; Located {
                     value: Pattern::GlobalTag("False"),
                     region: pattern_region,
-                }, guard: None}],
+                }],
                 Located {
                     value: Nested(&else_branch.value),
                     region: else_branch.region,
@@ -274,10 +268,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             )));
 
             branches.push(&*arena.alloc((
-                bumpalo::vec![in arena; parse::ast::WhenPattern { pattern: Located {
+                bumpalo::vec![in arena; Located {
                     value: Pattern::Underscore,
                     region: pattern_region,
-                }, guard: None}],
+                }],
                 Located {
                     value: Nested(&then_branch.value),
                     region: then_branch.region,

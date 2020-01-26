@@ -150,18 +150,11 @@ pub fn fmt_expr<'a>(
                 let is_multiline = match rest.last() {
                     None => false,
                     Some(last_pattern) => {
-                        first_pattern.pattern.region.start_line
-                            != last_pattern.pattern.region.end_line
+                        first_pattern.region.start_line != last_pattern.region.end_line
                     }
                 };
 
-                fmt_pattern(
-                    buf,
-                    &first_pattern.pattern.value,
-                    indent + INDENT,
-                    false,
-                    true,
-                );
+                fmt_pattern(buf, &first_pattern.value, indent + INDENT, false, true);
                 for when_pattern in rest {
                     if is_multiline {
                         buf.push_str("\n");
@@ -170,13 +163,7 @@ pub fn fmt_expr<'a>(
                     } else {
                         buf.push_str(" | ");
                     }
-                    fmt_pattern(
-                        buf,
-                        &when_pattern.pattern.value,
-                        indent + INDENT,
-                        false,
-                        true,
-                    );
+                    fmt_pattern(buf, &when_pattern.value, indent + INDENT, false, true);
                 }
 
                 buf.push_str(" ->\n");
