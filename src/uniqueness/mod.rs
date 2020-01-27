@@ -165,14 +165,16 @@ fn constrain_pattern(
                 state.vars.push(*var);
             }
 
-            let record_uniq_type = if pattern_uniq_vars.is_empty() {
-                // explicitly keep uniqueness of empty record (match) free
+            let record_uniq_type = {
                 let empty_var = var_store.fresh();
                 state.vars.push(empty_var);
-                Bool::Variable(empty_var)
-            } else {
                 state.vars.extend(pattern_uniq_vars.clone());
-                boolean_algebra::any(pattern_uniq_vars.into_iter().map(Bool::Variable))
+                Bool::WithFree(
+                    empty_var,
+                    Box::new(boolean_algebra::any(
+                        pattern_uniq_vars.into_iter().map(Bool::Variable),
+                    )),
+                )
             };
 
             let record_type = constrain::attr_type(
@@ -896,10 +898,8 @@ pub fn constrain_expr(
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type = Bool::or(
-                Bool::Variable(field_uniq_var),
-                Bool::Variable(record_uniq_var),
-            );
+            let record_uniq_type =
+                Bool::WithFree(record_uniq_var, Box::new(Bool::Variable(field_uniq_var)));
             let record_type = constrain::attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
