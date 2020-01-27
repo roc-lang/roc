@@ -5,6 +5,7 @@ use crate::module::symbol::{IdentId, ModuleId, Symbol};
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -51,46 +52,9 @@ impl fmt::Debug for Subs {
     }
 }
 
-/// This is used to issue unique Variable values for type checking. A Variable
-/// is unique within a particular module, but is not globally unique across modules.
-///
-/// VarStore used to issue globally unique Variables that worked across modules,
-/// which meant it needed an Atomic integer that could be safely accessed when
-/// compiling multiple modules in parallel. Now that it is used in a single-threaded
-/// way instead, for a single module, this Atomic is no longer necessary.
-///
-/// However, VarStore still has a potential long-term use which should be explored
-/// and measured: canonicalizing a single module's declarations in parallel.
-/// One example of how this could work: have two VarStores for the same module,
-/// one of which starts at 0 and increments, and the other which starts at
-/// u32::MAX and decrements. They could each be used to canonicalize alternating
-/// defs in parallel, and at the end, it would only take one conditional to
-/// verify that they had not "crossed" and invaded each others' namespaces.
-///
-/// This could be taken a step further, by using four VarStores - one incrementing
-/// from 0, one decrementing from u32::MAX, one starting at u16::MAX and decrementing,
-/// and another starting at (u16::MAX + 1) and incrementing. In this way, the
-/// u32 "variable space" would be divided into fourths, allowing for canonicalization
-/// in 4 threads running in parallel.
-///
-/// At some point, you may carve up the u32 into such small pieces that individual
-/// threads run out of allocation space. When this happens, they could block
-/// waiting to be reassigned a non-exhausted VarStore (e.g. when one of the other ones
-/// finishes, the blocked thread can be notified "ok you were previously incrementing
-/// from 0, but now you're decrementing from X, picking up where another VarStore
-/// left off), and the exhausted VarStore can be taken out of the rotation.
-///
-/// It's unclear whether the performance gains of all this would be worth the
-/// effort. (It's separately unclear whether the "increment and decrement"
-/// distinction would be useful, or if it's actually faster to have everything
-/// increment all the time so as to avoid loading the "do I increment or decrement?"
-/// info from memory.)
-///
-/// In the meantime, now you know why VarStore is still here, even though
-/// it's being used in a single-threaded way. There is more yet to explore here!
 #[derive(Debug)]
 pub struct VarStore {
-    next: u32,
+    next: AtomicU32,
 }
 
 impl Default for VarStore {
@@ -104,7 +68,9 @@ impl VarStore {
     pub fn new(next_var: Variable) -> Self {
         debug_assert!(next_var.0 >= Variable::FIRST_USER_SPACE_VAR.0);
 
-        VarStore { next: next_var.0 }
+        VarStore {
+            next: AtomicU32::new(next_var.0),
+        }
     }
 
     pub fn fresh(&self) -> Variable {
@@ -113,17 +79,13 @@ impl VarStore {
         // Since the counter starts at 0, this will return 0 on first invocation,
         // and var_store.into() will return the number of Variables distributed
         // (in this case, 1).
-        let var = Variable(self.next);
-
-        self.next += 1;
-
-        var
+        Variable(AtomicU32::fetch_add(&self.next, 1, Ordering::Relaxed))
     }
 }
 
 impl Into<Variable> for VarStore {
     fn into(self) -> Variable {
-        Variable(self.next)
+        Variable(self.next.into_inner())
     }
 }
 
