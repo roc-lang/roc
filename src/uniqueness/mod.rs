@@ -212,19 +212,19 @@ fn constrain_pattern(
                 constrain_pattern(var_store, state, loc_pattern, expected);
             }
 
-            let record_uniq_type = if pattern_uniq_vars.is_empty() {
-                // explicitly keep uniqueness of empty tag union (match) free
+            let tag_union_uniq_type = {
                 let empty_var = var_store.fresh();
                 state.vars.push(empty_var);
-                Bool::Variable(empty_var)
-            } else {
-                pattern_uniq_vars.sort();
                 state.vars.extend(pattern_uniq_vars.clone());
-                boolean_algebra::any(pattern_uniq_vars.into_iter().map(Bool::Variable))
+                Bool::WithFree(
+                    empty_var,
+                    Box::new(boolean_algebra::any(
+                        pattern_uniq_vars.into_iter().map(Bool::Variable),
+                    )),
+                )
             };
-
             let union_type = constrain::attr_type(
-                record_uniq_type,
+                tag_union_uniq_type,
                 Type::TagUnion(
                     vec![(symbol.clone(), argument_types)],
                     Box::new(Type::Variable(*ext_var)),

@@ -1055,7 +1055,7 @@ mod test_infer_uniq {
             ),
             // NOTE: Foo loses the relation to the uniqueness attribute `a`
             // That is fine. Whenever we try to extract from it, the relation will be enforced
-            "Attr.Attr * (Attr.Attr a [ Foo (Attr.Attr a b) ]* -> Attr.Attr * [ Foo (Attr.Attr a b) ]*)",
+            "Attr.Attr * (Attr.Attr (a | *) [ Foo (Attr.Attr a b) ]* -> Attr.Attr * [ Foo (Attr.Attr a b) ]*)",
         );
     }
 
@@ -1070,7 +1070,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr.Attr * (Attr.Attr (a | b) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
+            "Attr.Attr * (Attr.Attr ((a | b) | *) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
         );
     }
 
