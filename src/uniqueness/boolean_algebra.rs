@@ -8,6 +8,7 @@
 //
 // > Main reference for this module is "Boolean Reasoning: The Logic of
 // > Boolean Equations" by Frank Markham Brown.
+use self::Bool::*;
 use crate::collections::{ImMap, ImSet};
 use crate::subs::Variable;
 use boolean_expression::Expr;
@@ -20,6 +21,9 @@ fn bool_to_expr(b: Bool) -> Expr<Variable> {
         Or(a, b) => Expr::Or(Box::new(bool_to_expr(*a)), Box::new(bool_to_expr(*b))),
         Not(a) => Expr::Not(Box::new(bool_to_expr(*a))),
         Variable(v) => Expr::Terminal(v),
+        WithFree(var, expr) => {
+            Expr::Or(Box::new(Expr::Terminal(var)), Box::new(bool_to_expr(*expr)))
+        }
     }
 }
 
@@ -42,9 +46,11 @@ pub enum Bool {
     Or(Box<Bool>, Box<Bool>),
     Not(Box<Bool>),
     Variable(Variable),
-}
 
-use self::Bool::*;
+    // the left variable is meant to be "free"
+    // e.g. `a` in Attr (a | b) { x : Attr b c }d
+    WithFree(Variable, Box<Bool>),
+}
 
 #[inline(always)]
 pub fn not(nested: Bool) -> Bool {
@@ -112,6 +118,10 @@ impl Bool {
             Variable(var) => {
                 vars.insert(*var);
             }
+            WithFree(free, bound) => {
+                vars.insert(*free);
+                bound.variables_help(vars);
+            }
         };
     }
 
@@ -126,6 +136,7 @@ impl Bool {
             Or(left, right) => or(left.map_variables(f), right.map_variables(f)),
             Not(nested) => not(nested.map_variables(f)),
             Variable(current) => Variable(f(*current)),
+            WithFree(free, bound) => WithFree(f(*free), Box::new(bound.map_variables(f))),
         }
     }
 
@@ -145,6 +156,11 @@ impl Bool {
             Variable(current) => match substitutions.get(current) {
                 Some(new) => new.clone(),
                 None => Variable(*current),
+            },
+            WithFree(free, bound) => match substitutions.get(free) {
+                Some(Variable(new)) => WithFree(*new, Box::new(bound.substitute(substitutions))),
+                Some(new) => or(new.clone(), bound.substitute(substitutions)),
+                None => WithFree(*free, Box::new(bound.substitute(substitutions))),
             },
         }
     }
