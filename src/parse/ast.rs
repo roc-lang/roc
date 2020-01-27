@@ -180,7 +180,7 @@ pub enum Expr<'a> {
         /// A | B if bool -> expression
         /// <Pattern 1> | <Pattern 2> if <Guard> -> <Expr>
         /// Vec, because there may be many patterns, and the guard
-        /// is Option<Expr> because each branch may be preceeded by
+        /// is Option<Expr> because each branch may be preceded by
         /// a guard (".. if ..").
         Vec<'a, &'a WhenBranch<'a>>,
     ),
