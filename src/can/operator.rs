@@ -1,7 +1,6 @@
 use crate::can::ident::ModuleName;
 use crate::operator::BinOp::Pizza;
 use crate::operator::{BinOp, CalledVia};
-use crate::parse;
 use crate::parse::ast::Expr::{self, *};
 use crate::parse::ast::{AssignedField, Def, Pattern, WhenBranch};
 use crate::region::{Located, Region};

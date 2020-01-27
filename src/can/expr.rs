@@ -17,7 +17,6 @@ use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ident::Ident;
 use crate::operator::CalledVia;
-use crate::parse;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
