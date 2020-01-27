@@ -34,6 +34,8 @@ mod test_infer_uniq {
 
         name_all_type_vars(variable, &mut subs);
 
+        dbg!(&content, &subs);
+
         let actual_str = content_to_string(content, &mut subs);
 
         (unify_problems, subs, actual_str)
@@ -1007,7 +1009,7 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn record_field_access() {
+    fn record_field_access_syntax() {
         infer_eq(
             indoc!(
                 r#"
@@ -1229,7 +1231,7 @@ mod test_infer_uniq {
 
                         "#
                     ),
-                "Attr.Attr * (Attr.Attr ((b | c) | a) { x : (Attr.Attr b d), y : (Attr.Attr c e) }f -> Attr.Attr ((b | c) | a) { x : (Attr.Attr b d), y : (Attr.Attr c e) }f)" ,
+                "Attr.Attr * (Attr.Attr ((c | a) | b) { x : (Attr.Attr a d), y : (Attr.Attr b e) }f -> Attr.Attr ((c | b) | a) { x : (Attr.Attr a d), y : (Attr.Attr b e) }f)",
                 );
     }
 
@@ -1247,24 +1249,24 @@ mod test_infer_uniq {
                             p
                         "#
                     ),
-                "Attr.Attr * (Attr.Attr ((b | c) | a) { x : (Attr.Attr b d), y : (Attr.Attr c e) }f -> Attr.Attr ((b | c) | a) { x : (Attr.Attr b d), y : (Attr.Attr c e) }f)" ,
+                "Attr.Attr * (Attr.Attr ((c | a) | b) { x : (Attr.Attr a d), y : (Attr.Attr b e) }f -> Attr.Attr ((c | a) | b) { x : (Attr.Attr a d), y : (Attr.Attr b e) }f)"
                 );
     }
 
     #[test]
-    fn sharing_analysis_record_update_use_two_fields() {
+    fn sharing_analysis_record_access_field_twice() {
         infer_eq(
-                    indoc!(
-                        r#"
-                        \r -> 
-                            v = r.x
-                            w = r.y
-                            
-                            { r & x: v, y: w } 
+            indoc!(
+                r#"
+                \r ->
+                    n = r.x
+                    m = r.x
+
+                    r
                         "#
-                    ),
-                "Attr.Attr * (Attr.Attr (b | a) { x : (Attr.Attr b c), y : (Attr.Attr d e) }f -> Attr.Attr (d | b | a) { x : (Attr.Attr b c), y : (Attr.Attr d e) }f)" ,
-                );
+            ),
+            "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b) }c)",
+        );
     }
 
     #[test]
@@ -1275,9 +1277,7 @@ mod test_infer_uniq {
                 \r -> { r & x: r.x, y: r.x }
                 "#
             ),
-          // the record's uniqueness does not depend on the `c` variable at construction. But
-            // extracting `y` uniquely will force the whole record to be unique
-         "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr c d) }e -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr c d) }e)"
+         "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c)"
         );
     }
 

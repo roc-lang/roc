@@ -858,10 +858,8 @@ pub fn constrain_expr(
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type = Bool::or(
-                Bool::Variable(record_uniq_var),
-                Bool::Variable(field_uniq_var),
-            );
+            let record_uniq_type =
+                Bool::WithFree(record_uniq_var, Box::new(Bool::Variable(field_uniq_var)));
             let record_type = constrain::attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
@@ -972,14 +970,14 @@ fn constrain_var(
                 let (record_type, record_con) =
                     constrain_field_access(var_store, &field_access, expected, region);
 
+                // NOTE breaking the expectation up like this REALLY matters!
                 let new_expected = Expected::NoExpectation(record_type);
                 And(vec![
                     Lookup(module, symbol_for_lookup, new_expected, region),
                     record_con,
                 ])
             } else {
-                // TODO this is almost certainly incorrect!
-                True
+                Lookup(module, symbol_for_lookup, expected, region)
             }
         }
 
@@ -1008,8 +1006,6 @@ fn constrain_field_access(
         let field_var = var_store.fresh();
         field_vars.push(field_var);
 
-        println!("{:?} at {:?}", field, rc);
-
         let field_type = if rc == Shared {
             attr_type(Bool::Zero, Variable(field_var))
         } else {
@@ -1021,9 +1017,9 @@ fn constrain_field_access(
         field_types.insert(field.into(), field_type);
     }
     let record_uniq_var = var_store.fresh();
-    uniq_vars.push(Bool::Variable(record_uniq_var));
 
-    let record_uniq_type = boolean_algebra::any(uniq_vars);
+    let record_uniq_type =
+        Bool::WithFree(record_uniq_var, Box::new(boolean_algebra::any(uniq_vars)));
 
     let record_ext_var = var_store.fresh();
     field_vars.push(record_uniq_var);
@@ -1383,6 +1379,7 @@ fn constrain_recursive_defs(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn rec_defs_help(
     env: &Env,
     var_store: &VarStore,
@@ -1526,6 +1523,7 @@ pub fn rec_defs_help(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn constrain_field_update(
     env: &Env,
