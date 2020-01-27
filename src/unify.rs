@@ -1,10 +1,11 @@
 use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use crate::collections::{relative_complement, union, ImMap, MutMap};
 use crate::subs::Content::{self, *};
-use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
+use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
 use crate::uniqueness::boolean_algebra;
+use crate::uniqueness::boolean_algebra::Bool;
 use std::hash::Hash;
 
 type Pool = Vec<Variable>;
@@ -426,33 +427,36 @@ fn unify_flat_type(
             unify_tag_union(subs, pool, ctx, union1, union2)
         }
 
-        (Boolean(b1_raw), Boolean(b2_raw)) => {
-            // first propagate Subs substitiutions into the booleans
-            let mut global_substitution = ImMap::default();
+        (Boolean(Bool::WithFree(free1, rest1)), Boolean(Bool::WithFree(free2, rest2))) => {
+            // unify the free variables
+            let free_var_problems = unify_pool(subs, pool, *free1, *free2);
 
-            for v in b1_raw
-                .variables()
-                .into_iter()
-                .chain(b2_raw.variables().into_iter())
-            {
-                if let Structure(Boolean(replacement)) = subs.get(v).content {
-                    global_substitution.insert(v, replacement);
-                }
-            }
+            // create a new variable. Its content will be a WithFree where
+            //
+            // * the free variable is the unification of `free1` and `free2`
+            // * the `rest` is the union of the two rests
+            let new = subs.fresh_unnamed_flex_var();
 
-            let b1 = boolean_algebra::simplify(b1_raw.substitute(&global_substitution));
-            let b2 = boolean_algebra::simplify(b2_raw.substitute(&global_substitution));
+            let combined =
+                Bool::WithFree(*free1, Box::new(Bool::or(*rest1.clone(), *rest2.clone())));
 
-            if let Some(substitution) = boolean_algebra::try_unify(b1, b2) {
-                for (var, replacement) in substitution {
-                    subs.set_content(var, Structure(FlatType::Boolean(replacement)));
-                }
+            let content = Content::Structure(FlatType::Boolean(combined));
 
-                vec![]
-            } else {
-                mismatch()
-            }
+            let desc = Descriptor {
+                content,
+                rank: Rank::NONE,
+                mark: Mark::NONE,
+                copy: OptVariable::NONE,
+            };
+
+            // force first and second to equal this new variable
+            subs.union(ctx.first, new, desc.clone());
+            subs.union(ctx.second, new, desc);
+
+            free_var_problems
         }
+
+        (Boolean(b1_raw), Boolean(b2_raw)) => unify_boolean(subs, b1_raw, b2_raw),
 
         (
             Apply {
@@ -500,13 +504,69 @@ fn unify_flat_type(
     }
 }
 
+fn unify_boolean(subs: &mut Subs, b1_raw: &Bool, b2_raw: &Bool) -> Vec<Mismatch> {
+    use crate::subs::FlatType::*;
+    // first propagate Subs substitiutions into the booleans
+    let mut global_substitution = ImMap::default();
+
+    for v in b1_raw
+        .variables()
+        .into_iter()
+        .chain(b2_raw.variables().into_iter())
+    {
+        match subs.get(v).content {
+            Structure(Boolean(replacement)) if !replacement.variables().contains(&v) => {
+                global_substitution.insert(v, replacement);
+            }
+            _ => {
+                let root = subs.get_root_key(v);
+                if root != v {
+                    global_substitution.insert(v, boolean_algebra::Bool::Variable(root));
+                }
+            }
+        }
+    }
+
+    let b1 = boolean_algebra::simplify(b1_raw.substitute(&global_substitution));
+    let b2 = boolean_algebra::simplify(b2_raw.substitute(&global_substitution));
+
+    // assumption: recursion in subsitutions means a new variable must be introduced. so
+    //
+    // a := a | b
+    //
+    // becomes
+    //
+    // a := c | b
+    if let Some(substitution) = boolean_algebra::try_unify(b1, b2) {
+        for (var, replacement) in substitution {
+            if replacement.variables().contains(&var) {
+                let mut sub = ImMap::default();
+                sub.insert(
+                    var,
+                    boolean_algebra::Bool::Variable(subs.fresh_unnamed_flex_var()),
+                );
+                let modified = boolean_algebra::simplify(replacement.substitute(&sub));
+                subs.set_content(var, Structure(FlatType::Boolean(modified)));
+            } else {
+                subs.set_content(var, Structure(FlatType::Boolean(replacement)));
+            }
+        }
+
+        vec![]
+    } else {
+        mismatch()
+    }
+}
+
 fn unify_zip<'a, I>(subs: &mut Subs, pool: &mut Pool, left_iter: I, right_iter: I) -> Outcome
 where
     I: Iterator<Item = &'a Variable>,
 {
     let mut problems = Vec::new();
 
-    for (&l_var, &r_var) in left_iter.zip(right_iter) {
+    let it = left_iter.zip(right_iter);
+
+    for (&l_var, &r_var) in it {
         problems.extend(unify_pool(subs, pool, l_var, r_var));
     }
 
@@ -552,6 +612,7 @@ fn unify_flex(
             // (This includes using right's name if both are flex and named.)
             merge(subs, ctx, other.clone())
         }
+
         Error => merge(subs, ctx, Error),
     }
 }
