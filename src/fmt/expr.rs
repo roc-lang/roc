@@ -144,7 +144,9 @@ pub fn fmt_expr<'a>(
             buf.push_str(" is\n");
 
             let mut it = branches.iter().peekable();
-            while let Some((patterns, expr)) = it.next() {
+            while let Some(branch) = it.next() {
+                let patterns = &branch.patterns;
+                let expr = &branch.value;
                 add_spaces(buf, indent + INDENT);
                 let (first_pattern, rest) = patterns.split_first().unwrap();
                 let is_multiline = match rest.last() {

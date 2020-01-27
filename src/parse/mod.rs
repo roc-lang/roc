@@ -855,6 +855,7 @@ fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 
 mod when {
     use super::*;
+    use crate::parse::ast::WhenBranch;
 
     /// Parser for when expressions.
     pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
@@ -900,9 +901,9 @@ mod when {
     /// Parsing branches of when conditional.
     fn branches<'a>(
         min_indent: u16,
-    ) -> impl Parser<'a, Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)>> {
+    ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>> {
         move |arena, state| {
-            let mut branches: Vec<'a, &'a (Vec<'a, Located<Pattern<'a>>>, Located<Expr<'a>>)> =
+            let mut branches: Vec<'a, &'a WhenBranch<'a>> =
                 Vec::with_capacity_in(2, arena);
 
             // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
@@ -918,9 +919,13 @@ mod when {
             let (loc_first_expr, mut state) = branch_result(indented_more).parse(arena, state)?;
 
             // Record this as the first branch, then optionally parse additional branches.
-            branches.push(arena.alloc((loc_first_patterns, loc_first_expr)));
+            branches.push(arena.alloc(WhenBranch {
+                patterns: loc_first_patterns,
+                value: loc_first_expr,
+                guard: None
+            }));
 
-            let branch_parser = and!(
+            let branch_parser = map!(and!(
                 then(
                     branch_alternatives(min_indent),
                     move |_arena, state, loc_patterns| {
@@ -934,7 +939,11 @@ mod when {
                     },
                 ),
                 branch_result(indented_more)
-            );
+            ), |(patterns, expr)| WhenBranch {
+                patterns: patterns,
+                value: expr,
+                guard: None
+            });
 
             loop {
                 match branch_parser.parse(arena, state) {

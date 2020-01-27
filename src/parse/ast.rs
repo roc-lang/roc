@@ -28,6 +28,13 @@ pub struct InterfaceHeader<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct WhenBranch<'a> {
+    pub patterns: Vec<'a, Loc<Pattern<'a>>>,
+    pub value: Loc<Expr<'a>>,
+    pub guard: Option<Loc<Expr<'a>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
@@ -173,9 +180,9 @@ pub enum Expr<'a> {
         /// A | B if bool -> expression
         /// <Pattern 1> | <Pattern 2> if <Guard> -> <Expr>
         /// Vec, because there may be many patterns, and the guard
-        /// is Option<Expr> because each pattern may have a guard
-        /// (".. if ..").
-        Vec<'a, &'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)>,
+        /// is Option<Expr> because each branch may be preceeded by
+        /// a guard (".. if ..").
+        Vec<'a, &'a WhenBranch<'a>>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
