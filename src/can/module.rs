@@ -26,7 +26,7 @@ pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
     loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
     home: ModuleId,
-    module_ids: ModuleIds,
+    module_ids: &ModuleIds,
     dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     var_store: &VarStore,
@@ -84,7 +84,7 @@ pub fn canonicalize_module_defs<'a>(
                     // to add the usual Lookup constraint as if this were a normal def.
                     lookups.push((symbol, expr_var, region));
                 }
-                Err((shadowed_symbol, region)) => {
+                Err((_shadowed_symbol, _region)) => {
                     panic!("TODO gracefully handle shadowing in imports.")
                 }
             }

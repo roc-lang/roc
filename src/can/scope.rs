@@ -1,13 +1,43 @@
 use crate::can::ident::Ident;
-use crate::can::problem::{Problem, RuntimeError};
-use crate::collections::ImMap;
+use crate::can::problem::RuntimeError;
+use crate::collections::{ImMap, MutSet};
 use crate::module::symbol::{IdentIds, ModuleId, Symbol};
 use crate::region::{Located, Region};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Scope {
+    /// All the identifiers in scope, mapped to were they were defined and
+    /// the Symbol they resolve to.
     idents: ImMap<Ident, (Symbol, Region)>,
+
+    /// The current module being processed. This will be used to turn
+    /// unqualified idents into Symbols.
     home: ModuleId,
+
+    /// Symbols which have actually been referenced in this scope.
+    /// Every time a Scope::lookup is performed, this gets updated.
+    /// This is eventually used to determine unused defs.
+    referenced: MutSet<Symbol>,
+
+    /// Symbols which were introduced in this Scope (as opposed to those
+    /// which were inherited from a parent scope).
+    /// This is eventually used to determine unused defs.
+    introduced: MutSet<Symbol>,
+}
+
+impl Clone for Scope {
+    fn clone(&self) -> Self {
+        Scope {
+            idents: self.idents.clone(),
+            home: self.home,
+
+            // Always begin with an empty introduced and referenced,
+            // because these should only record things that were
+            // introduced and referenced since the scope was freshly cloned.
+            introduced: MutSet::default(),
+            referenced: MutSet::default(),
+        }
+    }
 }
 
 impl Scope {
@@ -15,6 +45,8 @@ impl Scope {
         Scope {
             home,
             idents: ImMap::default(),
+            referenced: MutSet::default(),
+            introduced: MutSet::default(),
         }
     }
 
@@ -26,8 +58,21 @@ impl Scope {
         self.idents.len()
     }
 
-    pub fn lookup(&self, ident: &Ident) -> Option<&Symbol> {
-        self.idents.get(ident).map(|(symbol, _)| symbol)
+    pub fn lookup(&mut self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
+        match self.idents.get(ident) {
+            Some((symbol, _)) => {
+                let symbol = *symbol;
+
+                // Record that this symbol has been referenced.
+                self.referenced.insert(symbol);
+
+                Ok(symbol)
+            }
+            None => Err(RuntimeError::UnrecognizedLookup(Located {
+                region,
+                value: ident.clone().into(),
+            })),
+        }
     }
 
     /// Introduce a new ident to scope.
@@ -39,23 +84,21 @@ impl Scope {
         ident: Ident,
         ident_ids: &mut IdentIds,
         region: Region,
-    ) -> Result<Symbol, Problem> {
+    ) -> Result<Symbol, (Region, Located<Ident>)> {
         match self.idents.get(&ident) {
-            Some((symbol, original_region)) => {
+            Some((_, original_region)) => {
                 let shadow = Located {
                     value: ident,
                     region,
                 };
 
-                Err(Problem::RuntimeError(RuntimeError::Shadowing {
-                    original_region: original_region.clone(),
-                    shadow,
-                }))
+                Err((original_region.clone(), shadow))
             }
             None => {
                 let ident_id = ident_ids.add(ident.clone().into());
                 let symbol = Symbol::new(self.home, ident_id);
 
+                self.introduced.insert(symbol);
                 self.idents.insert(ident, (symbol, region));
 
                 Ok(symbol)
@@ -76,6 +119,7 @@ impl Scope {
         match self.idents.get(&ident) {
             Some(shadowed) => Err(shadowed.clone()),
             None => {
+                self.introduced.insert(symbol);
                 self.idents.insert(ident, (symbol, region));
 
                 Ok(symbol)

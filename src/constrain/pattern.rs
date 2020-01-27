@@ -130,7 +130,7 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             state.constraints.push(tag_con);
         }
-        Shadowed(_) => {
+        Shadowed(_, _) => {
             panic!("TODO constrain Shadowed pattern");
         }
     }

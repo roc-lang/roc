@@ -23,7 +23,7 @@ pub enum Pattern {
     Underscore,
 
     // Runtime Exceptions
-    Shadowed(Located<Ident>),
+    Shadowed(Region, Located<Ident>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
 }
@@ -62,23 +62,28 @@ pub enum PatternType {
 }
 
 pub fn canonicalize_pattern<'a>(
-    env: &'a mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
     pattern_type: PatternType,
-    pattern: &'a ast::Pattern<'a>,
+    pattern: &ast::Pattern<'a>,
     region: Region,
 ) -> Located<Pattern> {
     use crate::parse::ast::Pattern::*;
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => {
-            match canonicalize_pattern_identifier((*name).into(), env, scope, region) {
-                Ok(symbol) => Pattern::Identifier(symbol),
-                Err(loc_shadowed_ident) => Pattern::Shadowed(loc_shadowed_ident),
+        Identifier(name) => match scope.introduce((*name).into(), &mut env.ident_ids, region) {
+            Ok(symbol) => Pattern::Identifier(symbol),
+            Err((original_region, shadow)) => {
+                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                    original_region: original_region.clone(),
+                    shadow: shadow.clone(),
+                }));
+
+                Pattern::Shadowed(original_region, shadow)
             }
-        }
+        },
         GlobalTag(name) => {
             // Canonicalize the tag's name.
             Pattern::AppliedTag(var_store.fresh(), TagName::Global((*name).into()), vec![])
@@ -94,6 +99,16 @@ pub fn canonicalize_pattern<'a>(
             )
         }
         Apply(tag, patterns) => {
+            let tag_name = match tag.value {
+                GlobalTag(name) => TagName::Global(name.into()),
+                PrivateTag(name) => {
+                    let ident_id = env.ident_ids.private_tag(&name.into());
+
+                    TagName::Private(Symbol::new(env.home, ident_id))
+                }
+                _ => unreachable!("Other patterns cannot be applied"),
+            };
+
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
                 can_patterns.push((
@@ -108,16 +123,6 @@ pub fn canonicalize_pattern<'a>(
                     ),
                 ));
             }
-
-            let tag_name = match tag.value {
-                GlobalTag(name) => TagName::Global(name.into()),
-                PrivateTag(name) => {
-                    let ident_id = env.ident_ids.private_tag(&name.into());
-
-                    TagName::Private(Symbol::new(env.home, ident_id))
-                }
-                _ => unreachable!("Other patterns cannot be applied"),
-            };
 
             Pattern::AppliedTag(var_store.fresh(), tag_name, can_patterns)
         }
@@ -187,69 +192,74 @@ pub fn canonicalize_pattern<'a>(
         RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
             let mut fields = Vec::with_capacity(patterns.len());
+            let mut opt_erroneous = None;
 
             for loc_pattern in patterns {
                 match loc_pattern.value {
                     Identifier(label) => {
-                        let symbol = match canonicalize_pattern_identifier(
-                            &label, env, scope, region,
-                        ) {
-                            Ok(symbol) => symbol,
-                            Err(loc_shadowed_ident) => {
-                                // If any idents are shadowed, consider the entire
-                                // destructure pattern shadowed!
-                                let _loc_pattern = Located {
-                                    region,
-                                    value: Pattern::Shadowed(loc_shadowed_ident),
-                                };
-                                panic!("TODO gather all the shadowing errors in this Def, not just the first one, and report them in Problems.");
+                        match scope.introduce(label.into(), &mut env.ident_ids, region) {
+                            Ok(symbol) => {
+                                fields.push(RecordDestruct {
+                                    var: var_store.fresh(),
+                                    label: Lowercase::from(label),
+                                    symbol,
+                                    guard: None,
+                                });
+                            }
+                            Err((original_region, shadow)) => {
+                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                                    original_region: original_region.clone(),
+                                    shadow: shadow.clone(),
+                                }));
+
+                                // No matter what the other patterns
+                                // are, we're definitely shadowed and will
+                                // get a runtime exception as soon as we
+                                // encounter the first bad pattern.
+                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
                             }
                         };
-
-                        fields.push(RecordDestruct {
-                            var: var_store.fresh(),
-                            label: Lowercase::from(label),
-                            symbol,
-                            guard: None,
-                        });
                     }
                     RecordField(label, loc_guard) => {
-                        let symbol = match canonicalize_pattern_identifier(
-                            &label, env, scope, region,
-                        ) {
-                            Ok(symbol) => symbol,
-                            Err(loc_shadowed_ident) => {
-                                // If any idents are shadowed, consider the entire
-                                // destructure pattern shadowed!
-                                let _loc_pattern = Located {
-                                    region,
-                                    value: Pattern::Shadowed(loc_shadowed_ident),
-                                };
-                                panic!("TODO gather all the shadowing errors in this Def, not just the first one, and report them in Problems.");
+                        match scope.introduce(label.into(), &mut env.ident_ids, region) {
+                            Ok(symbol) => {
+                                let can_guard = canonicalize_pattern(
+                                    env,
+                                    var_store,
+                                    scope,
+                                    pattern_type,
+                                    &loc_guard.value,
+                                    loc_guard.region,
+                                );
+
+                                fields.push(RecordDestruct {
+                                    var: var_store.fresh(),
+                                    label: Lowercase::from(label),
+                                    symbol,
+                                    guard: Some((var_store.fresh(), can_guard)),
+                                });
+                            }
+                            Err((original_region, shadow)) => {
+                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                                    original_region: original_region.clone(),
+                                    shadow: shadow.clone(),
+                                }));
+
+                                // No matter what the other patterns
+                                // are, we're definitely shadowed and will
+                                // get a runtime exception as soon as we
+                                // encounter the first bad pattern.
+                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
                             }
                         };
-
-                        let can_guard = canonicalize_pattern(
-                            env,
-                            var_store,
-                            scope,
-                            pattern_type,
-                            &loc_guard.value,
-                            loc_guard.region,
-                        );
-
-                        fields.push(RecordDestruct {
-                            var: var_store.fresh(),
-                            label: Lowercase::from(label),
-                            symbol,
-                            guard: Some((var_store.fresh(), can_guard)),
-                        });
                     }
                     _ => panic!("invalid pattern in record"),
                 }
             }
 
-            Pattern::RecordDestructure(ext_var, fields)
+            // If we encountered an erroneous pattern (e.g. one with shadowing),
+            // use the resulting RuntimeError. Otherwise, return a successful record destructure.
+            opt_erroneous.unwrap_or_else(|| Pattern::RecordDestructure(ext_var, fields))
         }
         RecordField(_name, _loc_pattern) => {
             unreachable!("should have been handled in RecordDestructure");
@@ -264,35 +274,13 @@ pub fn canonicalize_pattern<'a>(
     }
 }
 
-pub fn canonicalize_pattern_identifier(
-    name: &str,
-    env: &mut Env,
-    scope: &mut Scope,
-    region: Region,
-) -> Result<Symbol, Located<Ident>> {
-    let ident: Ident = (*name).into();
-
-    // Detect and report shadowing
-    match scope.introduce(ident, &mut env.ident_ids, region) {
-        Ok(symbol) => Ok(symbol),
-        Err(problem) => {
-            let loc_shadowed_ident = Located {
-                region,
-                value: ident,
-            };
-
-            // This is already in scope, meaning it's about to be shadowed.
-            // Shadowing is not allowed!
-            env.problem(problem);
-
-            Err(loc_shadowed_ident)
-        }
-    }
-}
-
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
-fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region) -> Pattern {
+fn unsupported_pattern<'a>(
+    env: &mut Env<'a>,
+    pattern_type: PatternType,
+    region: Region,
+) -> Pattern {
     env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
@@ -328,7 +316,7 @@ fn add_idents_from_pattern<'a>(
     ident_ids: &mut IdentIds,
     region: &'a Region,
     pattern: &'a ast::Pattern<'a>,
-    scope: &'a Scope,
+    scope: &'a mut Scope,
     problems: &mut Vec<Problem>,
     answer: &'a mut Vector<(Ident, (Symbol, Region))>,
 ) {
@@ -339,8 +327,11 @@ fn add_idents_from_pattern<'a>(
             Ok(symbol) => {
                 answer.push_back(((*ident).into(), (symbol, *region)));
             }
-            Err(problem) => {
-                problems.push(problem);
+            Err((original_region, shadow)) => {
+                problems.push(Problem::RuntimeError(RuntimeError::Shadowing {
+                    original_region,
+                    shadow,
+                }));
             }
         },
         QualifiedIdentifier { module_name, ident } => {
@@ -376,13 +367,15 @@ fn add_idents_from_pattern<'a>(
             }
         }
         RecordField(ident, loc_pattern) => {
-            let symbol = match scope.introduce((*ident).into(), &mut ident_ids, loc_pattern.region)
-            {
+            match scope.introduce((*ident).into(), ident_ids, loc_pattern.region) {
                 Ok(symbol) => {
                     answer.push_back(((*ident).into(), (symbol, *region)));
                 }
-                Err(problem) => {
-                    problems.push(problem);
+                Err((original_region, shadow)) => {
+                    problems.push(Problem::RuntimeError(RuntimeError::Shadowing {
+                        original_region,
+                        shadow,
+                    }));
                 }
             };
 

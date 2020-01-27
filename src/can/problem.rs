@@ -32,8 +32,13 @@ pub enum RuntimeError {
     ValueNotExposed {
         module_name: InlinableString,
         ident: InlinableString,
+        region: Region,
     },
-    ModuleNotImported(InlinableString),
+    ModuleNotImported {
+        module_name: InlinableString,
+        ident: InlinableString,
+        region: Region,
+    },
     InvalidPrecedence(PrecedenceProblem, Region),
     FloatOutsideRange(Box<str>),
     IntOutsideRange(Box<str>),

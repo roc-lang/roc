@@ -8,8 +8,7 @@ use crate::can::num::{
 use crate::can::pattern::add_idents_to_scope;
 use crate::can::pattern::PatternType::*;
 use crate::can::pattern::{canonicalize_pattern, Pattern};
-use crate::can::problem::Problem;
-use crate::can::problem::RuntimeError::{self, *};
+use crate::can::problem::{Problem, RuntimeError};
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
 use crate::collections::{ImSet, MutMap, MutSet, SendMap};
@@ -20,7 +19,6 @@ use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use im_rc::Vector;
-use inlinable_string::InlinableString;
 use std::fmt::Debug;
 use std::i64;
 use std::ops::Neg;
@@ -141,12 +139,12 @@ pub enum Recursive {
     NotRecursive,
 }
 
-pub fn canonicalize_expr(
-    env: &mut Env,
+pub fn canonicalize_expr<'a>(
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
     region: Region,
-    expr: &ast::Expr,
+    expr: &'a ast::Expr,
 ) -> (Located<Expr>, Output) {
     use Expr::*;
 
@@ -167,7 +165,7 @@ pub fn canonicalize_expr(
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
-            if let Var(symbol) = can_update.value {
+            if let Var(symbol) = &can_update.value {
                 let (can_fields, mut output) = canonicalize_fields(env, var_store, scope, fields);
 
                 output.references = output.references.union(update_out.references);
@@ -175,7 +173,7 @@ pub fn canonicalize_expr(
                 let answer = Update {
                     record_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
-                    symbol,
+                    symbol: *symbol,
                     updates: can_fields,
                 };
 
@@ -451,7 +449,6 @@ pub fn canonicalize_expr(
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for (loc_branch, loc_expr) in branches {
-                let loc_first_pattern = &loc_branch.first().unwrap();
                 let (can_when_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
                     env,
                     var_store,
@@ -655,12 +652,12 @@ pub fn canonicalize_expr(
 
 #[inline(always)]
 fn canonicalize_when_branch<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &Scope,
     region: Region,
-    loc_pattern_and_guard: &parse::ast::WhenPattern,
-    loc_expr: &Located<ast::Expr<'a>>,
+    loc_pattern_and_guard: &'a parse::ast::WhenPattern,
+    loc_expr: &'a Located<ast::Expr<'a>>,
     output: &mut Output,
 ) -> (WhenPattern, Located<Expr>, References) {
     // Each case branch gets a new scope for canonicalization.
@@ -862,7 +859,7 @@ where
 }
 
 fn canonicalize_fields<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
     fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
@@ -889,7 +886,7 @@ fn canonicalize_fields<'a>(
 }
 
 fn canonicalize_field<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
@@ -927,36 +924,23 @@ fn canonicalize_field<'a>(
     }
 }
 
-fn canonicalize_lookup(
-    env: &mut Env,
-    scope: &Scope,
+fn canonicalize_lookup<'a>(
+    env: &mut Env<'_>,
+    scope: &mut Scope,
     module_name: &str,
     ident: &str,
     region: Region,
 ) -> (Expr, Output) {
     use Expr::*;
 
-    let mut output = Output::default();
+    let output = Output::default();
     let can_expr = if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
-        let ident: InlinableString = (*ident).into();
-
-        match scope.lookup(&ident.into()) {
-            Some(symbol) => {
-                // This ident was in scope, so record that it got referenced.
-                output.references.lookups.insert(*symbol);
-
-                Var(*symbol)
-            }
-            None => {
-                // This ident wasn't in scope, so report an error.
-                let problem = UnrecognizedLookup(Located {
-                    region,
-                    value: ident,
-                });
-
-                env.problem(Problem::RuntimeError(problem));
+        match scope.lookup(&(*ident).into(), region) {
+            Ok(symbol) => Var(symbol),
+            Err(problem) => {
+                env.problem(Problem::RuntimeError(problem.clone()));
 
                 RuntimeError(problem)
             }
@@ -964,12 +948,12 @@ fn canonicalize_lookup(
     } else {
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
-        match env.qualified_lookup(module_name, ident) {
+        match env.qualified_lookup(module_name, ident, region) {
             Ok(symbol) => Var(symbol),
             Err(problem) => {
                 // Either the module wasn't imported, or
                 // it was imported but it doesn't expose this ident.
-                env.problem(Problem::RuntimeError(problem));
+                env.problem(Problem::RuntimeError(problem.clone()));
 
                 RuntimeError(problem)
             }

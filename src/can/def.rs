@@ -86,7 +86,7 @@ impl Declaration {
 
 #[inline(always)]
 pub fn canonicalize_defs<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     var_store: &VarStore,
     scope: &mut Scope,
@@ -114,10 +114,11 @@ pub fn canonicalize_defs<'a>(
 
     // Record both the original and final idents from the scope,
     // so we can diff them while detecting unused defs.
+    let original_scope = scope.clone();
     let original_idents = {
         let mut set = HashSet::with_capacity_and_hasher(scope.num_idents(), default_hasher());
 
-        for (ident, _) in scope.idents() {
+        for (ident, _) in original_scope.idents() {
             set.insert(ident);
         }
 
@@ -146,14 +147,20 @@ pub fn canonicalize_defs<'a>(
                         if pattern.value.equivalent(&body_pattern.value) {
                             iter.next();
 
-                            let typed = TypedBody(body_pattern, annotation.clone(), body_expr);
-
-                            to_pending_def(env, var_store, &typed, scope, pattern_type)
+                            pending_typed_body(
+                                env,
+                                body_pattern,
+                                annotation,
+                                body_expr,
+                                var_store,
+                                scope,
+                                pattern_type,
+                            )
                         } else {
                             panic!("TODO gracefully handle the case where a type annotation appears immediately before a body def, but the patterns are different. This should be an error; put a newline or comment between them!");
                         }
                     }
-                    None => to_pending_def(env, var_store, &loc_def.value, scope, pattern_type),
+                    _ => to_pending_def(env, var_store, &loc_def.value, scope, pattern_type),
                 }
             }
             _ => to_pending_def(env, var_store, &loc_def.value, scope, pattern_type),
@@ -205,7 +212,7 @@ pub fn canonicalize_defs<'a>(
 
 #[inline(always)]
 pub fn sort_can_defs(
-    env: &mut Env,
+    env: &mut Env<'_>,
     defs: CanDefs,
     mut output: Output,
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
@@ -580,7 +587,7 @@ fn group_to_declaration(
 }
 
 fn canonicalize_pending_def<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     pending_def: PendingDef<'a>,
     scope: &mut Scope,
@@ -651,7 +658,7 @@ fn canonicalize_pending_def<'a>(
             for (_, (symbol, _)) in add_idents_to_scope(
                 &mut env.ident_ids,
                 std::iter::once(loc_pattern),
-                &mut scope,
+                scope,
                 &mut env.problems,
             ) {
                 // We could potentially avoid some clones here by using Rc strategically,
@@ -660,10 +667,12 @@ fn canonicalize_pending_def<'a>(
                     symbol,
                     Def {
                         expr_var,
+                        // TODO try to remove this .clone()!
                         loc_pattern: loc_can_pattern.clone(),
                         loc_expr: Located {
                             region: loc_can_expr.region,
-                            value: loc_can_expr.value,
+                            // TODO try to remove this .clone()!
+                            value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
                         annotation: Some((can_annotation.clone(), found_rigids.clone())),
@@ -673,6 +682,11 @@ fn canonicalize_pending_def<'a>(
         }
         TypedBody(loc_pattern, loc_can_pattern, loc_annotation, loc_expr) => {
             let (can_annotation, seen_rigids) = loc_annotation.value;
+
+            // union seen rigids with already found ones
+            for (k, v) in seen_rigids {
+                found_rigids.insert(k, v);
+            }
 
             // bookkeeping for tail-call detection. If we're assigning to an
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
@@ -753,7 +767,7 @@ fn canonicalize_pending_def<'a>(
             for (ident, (symbol, region)) in add_idents_to_scope(
                 &mut env.ident_ids,
                 std::iter::once(loc_pattern),
-                &mut scope,
+                scope,
                 &mut env.problems,
             ) {
                 let refs =
@@ -882,7 +896,7 @@ fn canonicalize_pending_def<'a>(
             for (ident, (symbol, region)) in add_idents_to_scope(
                 &mut env.ident_ids,
                 std::iter::once(loc_pattern),
-                &mut scope,
+                scope,
                 &mut env.problems,
             ) {
                 let refs =
@@ -910,10 +924,12 @@ fn canonicalize_pending_def<'a>(
                     symbol,
                     Def {
                         expr_var,
-                        loc_pattern: loc_can_pattern,
+                        // TODO try to remove this .clone()!
+                        loc_pattern: loc_can_pattern.clone(),
                         loc_expr: Located {
+                            // TODO try to remove this .clone()!
                             region: loc_can_expr.region,
-                            value: loc_can_expr.value,
+                            value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
                         annotation: None,
@@ -926,7 +942,7 @@ fn canonicalize_pending_def<'a>(
 
 #[inline(always)]
 pub fn can_defs_with_return<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     mut scope: Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
@@ -980,17 +996,6 @@ fn decl_to_let(var_store: &VarStore, decl: Declaration, loc_ret: Located<Expr>) 
     }
 }
 
-fn pattern_from_def<'a>(def: &'a ast::Def<'a>) -> Option<&'a Located<ast::Pattern<'a>>> {
-    use crate::parse::ast::Def::*;
-
-    match def {
-        Annotation(ref loc_pattern, _) => Some(loc_pattern),
-        Body(ref loc_pattern, _) => Some(loc_pattern),
-        TypedBody(ref loc_pattern, _, _) => Some(loc_pattern),
-        SpaceBefore(def, _) | SpaceAfter(def, _) | Nested(def) => pattern_from_def(def),
-    }
-}
-
 fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) -> Recursive {
     let mut visited = MutSet::default();
 
@@ -1026,7 +1031,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
 }
 
 fn to_pending_def<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     def: &'a ast::Def<'a>,
     scope: &mut Scope,
@@ -1034,47 +1039,84 @@ fn to_pending_def<'a>(
 ) -> PendingDef<'a> {
     use crate::parse::ast::Def::*;
 
-    let mut to_can_pattern = |loc_pattern: &'a Located<ast::Pattern<'a>>| {
-        // This takes care of checking for shadowing and adding idents to scope.
-        canonicalize_pattern(
-            env,
-            var_store,
-            scope,
-            pattern_type,
-            &loc_pattern.value,
-            loc_pattern.region,
-        )
-    };
-
     match def {
         Annotation(loc_pattern, loc_ann) => {
-            let loc_can_pattern = to_can_pattern(&loc_pattern);
+            // This takes care of checking for shadowing and adding idents to scope.
+            let loc_can_pattern = canonicalize_pattern(
+                env,
+                var_store,
+                scope,
+                pattern_type,
+                &loc_pattern.value,
+                loc_pattern.region,
+            );
+
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
             let loc_can_ann = Located {
                 region: loc_ann.region,
-                value: canonicalize_annotation(env, &loc_ann.value, var_store),
+                value: canonicalize_annotation(
+                    env,
+                    scope,
+                    &loc_ann.value,
+                    loc_ann.region,
+                    var_store,
+                ),
             };
 
             PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_can_ann)
         }
         Body(loc_pattern, loc_expr) => {
-            let loc_can_pattern = to_can_pattern(&loc_pattern);
+            // This takes care of checking for shadowing and adding idents to scope.
+            let loc_can_pattern = canonicalize_pattern(
+                env,
+                var_store,
+                scope,
+                pattern_type,
+                &loc_pattern.value,
+                loc_pattern.region,
+            );
 
             PendingDef::Body(loc_pattern, loc_can_pattern, loc_expr)
         }
-        TypedBody(loc_pattern, loc_ann, loc_expr) => {
-            let loc_can_ann = Located {
-                region: loc_ann.region,
-                value: canonicalize_annotation(env, &loc_ann.value, var_store),
-            };
-            let loc_can_pattern = to_can_pattern(&loc_pattern);
-
-            PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_can_ann, loc_expr)
-        }
+        TypedBody(loc_pattern, loc_ann, loc_expr) => pending_typed_body(
+            env,
+            loc_pattern,
+            loc_ann,
+            loc_expr,
+            var_store,
+            scope,
+            pattern_type,
+        ),
 
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) | Nested(sub_def) => {
             to_pending_def(env, var_store, sub_def, scope, pattern_type)
         }
     }
+}
+
+fn pending_typed_body<'a>(
+    env: &mut Env<'a>,
+    loc_pattern: &'a Located<ast::Pattern<'a>>,
+    loc_ann: &'a Located<ast::TypeAnnotation<'a>>,
+    loc_expr: &'a Located<ast::Expr<'a>>,
+    var_store: &VarStore,
+    scope: &mut Scope,
+    pattern_type: PatternType,
+) -> PendingDef<'a> {
+    let loc_can_ann = Located {
+        region: loc_ann.region,
+        value: canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store),
+    };
+    // This takes care of checking for shadowing and adding idents to scope.
+    let loc_can_pattern = canonicalize_pattern(
+        env,
+        var_store,
+        scope,
+        pattern_type,
+        &loc_pattern.value,
+        loc_pattern.region,
+    );
+
+    PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_can_ann, loc_expr)
 }

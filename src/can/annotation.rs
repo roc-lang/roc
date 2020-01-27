@@ -1,8 +1,11 @@
 use crate::can::env::Env;
+use crate::can::ident::Ident;
 use crate::can::ident::{Lowercase, TagName};
+use crate::can::scope::Scope;
 use crate::collections::{ImMap, SendMap};
 use crate::module::symbol::Symbol;
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
+use crate::region::Region;
 use crate::subs::{VarStore, Variable};
 use crate::types::{Problem, RecordFieldLabel, Type};
 
@@ -10,7 +13,9 @@ pub type Annotation = (Type, SendMap<Variable, Lowercase>);
 
 pub fn canonicalize_annotation(
     env: &mut Env,
+    scope: &mut Scope,
     annotation: &crate::parse::ast::TypeAnnotation,
+    region: Region,
     var_store: &VarStore,
 ) -> Annotation {
     // NOTE on rigids
@@ -25,7 +30,15 @@ pub fn canonicalize_annotation(
     // `ftv : SendMap<Variable, Lowercase>`.
     let mut rigids = ImMap::default();
     let mut local_aliases = Vec::new();
-    let mut typ = can_annotation_help(env, annotation, var_store, &mut rigids, &mut local_aliases);
+    let mut typ = can_annotation_help(
+        env,
+        annotation,
+        region,
+        scope,
+        var_store,
+        &mut rigids,
+        &mut local_aliases,
+    );
 
     for (symbol, tipe) in local_aliases {
         typ.substitute_alias(symbol, &tipe);
@@ -43,6 +56,8 @@ pub fn canonicalize_annotation(
 fn can_annotation_help(
     env: &mut Env,
     annotation: &crate::parse::ast::TypeAnnotation,
+    region: Region,
+    scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
     local_aliases: &mut Vec<(Symbol, crate::types::Type)>,
@@ -57,54 +72,67 @@ fn can_annotation_help(
                 args.push(can_annotation_help(
                     env,
                     &arg.value,
+                    region,
+                    scope,
                     var_store,
                     rigids,
                     local_aliases,
                 ));
             }
 
-            let ret =
-                can_annotation_help(env, &return_type.value, var_store, rigids, local_aliases);
+            let ret = can_annotation_help(
+                env,
+                &return_type.value,
+                region,
+                scope,
+                var_store,
+                rigids,
+                local_aliases,
+            );
             Type::Function(args, Box::new(ret))
         }
         Apply(module_name, ident, type_arguments) => {
-            let module_id = if module_name.is_empty() {
-                env.home
+            let symbol = if module_name.is_empty() {
+                // Since module_name was empty, this is an unqualified type.
+                // Look it up in scope!
+                let ident: Ident = (*ident).into();
+
+                match scope.lookup(&ident, region) {
+                    Ok(symbol) => symbol,
+                    Err(problem) => {
+                        env.problem(crate::can::problem::Problem::RuntimeError(problem));
+
+                        return Type::Erroneous(Problem::UnrecognizedIdent(ident.into()));
+                    }
+                }
             } else {
-                *env.module_ids
-                    .get_id(&(*module_name).into())
-                    .unwrap_or_else(|| {
-                        panic!(
-                        "TODO gracefully handle module_name of {:?} not being in env.module_ids",
-                        module_name
-                    )
-                    })
+                match env.qualified_lookup(module_name, ident, region) {
+                    Ok(symbol) => symbol,
+                    Err(problem) => {
+                        // Either the module wasn't imported, or
+                        // it was imported but it doesn't expose this ident.
+                        env.problem(crate::can::problem::Problem::RuntimeError(problem));
+
+                        return Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
+                    }
+                }
             };
 
-            match env.qualified_lookup(module_name, ident) {
-                Ok(symbol) => {
-                    let mut args = Vec::new();
+            let mut args = Vec::new();
 
-                    for arg in *type_arguments {
-                        args.push(can_annotation_help(
-                            env,
-                            &arg.value,
-                            var_store,
-                            rigids,
-                            local_aliases,
-                        ));
-                    }
-
-                    Type::Apply(symbol, args)
-                }
-                Err(problem) => {
-                    // Either the module wasn't imported, or
-                    // it was imported but it doesn't expose this ident.
-                    env.problem(crate::can::problem::Problem::RuntimeError(problem));
-
-                    Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()))
-                }
+            for arg in *type_arguments {
+                args.push(can_annotation_help(
+                    env,
+                    &arg.value,
+                    region,
+                    scope,
+                    var_store,
+                    rigids,
+                    local_aliases,
+                ));
             }
+
+            Type::Apply(symbol, args)
         }
         BoundVariable(v) => {
             let name = Lowercase::from(*v);
@@ -119,65 +147,69 @@ fn can_annotation_help(
         }
         As(loc_inner, _spaces, loc_as) => match loc_as.value {
             TypeAnnotation::Apply(module_name, ident, loc_vars) if module_name.is_empty() => {
-                let module_id = if module_name.is_empty() {
-                    env.home
+                let symbol = if module_name.is_empty() {
+                    // Since module_name was empty, this is an unqualified type.
+                    // Look it up in scope!
+                    let ident: Ident = (*ident).into();
+
+                    match scope.lookup(&ident, region) {
+                        Ok(symbol) => symbol,
+                        Err(problem) => {
+                            env.problem(crate::can::problem::Problem::RuntimeError(problem));
+
+                            return Type::Erroneous(Problem::UnrecognizedIdent(ident.into()));
+                        }
+                    }
                 } else {
-                    *env.module_ids
-                        .get_id(&(*module_name).into())
-                        .unwrap_or_else(|| {
-                            panic!(
-                        "TODO gracefully handle module_name of {:?} not being in env.module_ids",
-                        module_name
-                    )
-                        })
+                    match env.qualified_lookup(module_name, ident, region) {
+                        Ok(symbol) => symbol,
+                        Err(problem) => {
+                            // Either the module wasn't imported, or
+                            // it was imported but it doesn't expose this ident.
+                            env.problem(crate::can::problem::Problem::RuntimeError(problem));
+
+                            return Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
+                        }
+                    }
                 };
 
-                match env.qualified_lookup(module_name, ident) {
-                    Ok(symbol) => {
-                        let inner_type = can_annotation_help(
-                            env,
-                            &loc_inner.value,
-                            var_store,
-                            rigids,
-                            local_aliases,
-                        );
-                        let mut vars = Vec::with_capacity(loc_vars.len());
+                let inner_type = can_annotation_help(
+                    env,
+                    &loc_inner.value,
+                    region,
+                    scope,
+                    var_store,
+                    rigids,
+                    local_aliases,
+                );
+                let mut vars = Vec::with_capacity(loc_vars.len());
 
-                        for loc_var in loc_vars {
-                            match loc_var.value {
-                                BoundVariable(ident) => {
-                                    let var_name = Lowercase::from(ident);
+                for loc_var in loc_vars {
+                    match loc_var.value {
+                        BoundVariable(ident) => {
+                            let var_name = Lowercase::from(ident);
 
-                                    if let Some(var) = rigids.get(&var_name) {
-                                        vars.push((var_name, *var));
-                                    } else {
-                                        let var = var_store.fresh();
-                                        rigids.insert(var_name.clone(), var);
-                                        vars.push((var_name, var));
-                                    }
-                                }
-                                _ => {
-                                    // If anything other than a lowercase identifier
-                                    // appears here, the whole annotation is invalid.
-                                    return Type::Erroneous(Problem::CanonicalizationProblem);
-                                }
+                            if let Some(var) = rigids.get(&var_name) {
+                                vars.push((var_name, *var));
+                            } else {
+                                let var = var_store.fresh();
+                                rigids.insert(var_name.clone(), var);
+                                vars.push((var_name, var));
                             }
                         }
-
-                        let alias = Type::Alias(symbol, vars, Box::new(inner_type));
-
-                        local_aliases.push((symbol, alias.clone()));
-
-                        alias
-                    }
-                    Err(problem) => {
-                        // Either the module wasn't imported, or
-                        // it was imported but it doesn't expose this ident.
-                        env.problem(crate::can::problem::Problem::RuntimeError(problem));
-
-                        Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()))
+                        _ => {
+                            // If anything other than a lowercase identifier
+                            // appears here, the whole annotation is invalid.
+                            return Type::Erroneous(Problem::CanonicalizationProblem);
+                        }
                     }
                 }
+
+                let alias = Type::Alias(symbol, vars, Box::new(inner_type));
+
+                local_aliases.push((symbol, alias.clone()));
+
+                alias
             }
             _ => {
                 // This is a syntactically invalid type alias.
@@ -192,6 +224,8 @@ fn can_annotation_help(
                 can_assigned_field(
                     env,
                     &field.value,
+                    region,
+                    scope,
                     var_store,
                     rigids,
                     local_aliases,
@@ -200,9 +234,15 @@ fn can_annotation_help(
             }
 
             let ext_type = match ext {
-                Some(loc_ann) => {
-                    can_annotation_help(env, &loc_ann.value, var_store, rigids, local_aliases)
-                }
+                Some(loc_ann) => can_annotation_help(
+                    env,
+                    &loc_ann.value,
+                    region,
+                    scope,
+                    var_store,
+                    rigids,
+                    local_aliases,
+                ),
                 None => Type::EmptyRec,
             };
 
@@ -215,6 +255,8 @@ fn can_annotation_help(
                 can_tag(
                     env,
                     &tag.value,
+                    region,
+                    scope,
                     var_store,
                     rigids,
                     local_aliases,
@@ -223,16 +265,22 @@ fn can_annotation_help(
             }
 
             let ext_type = match ext {
-                Some(loc_ann) => {
-                    can_annotation_help(env, &loc_ann.value, var_store, rigids, local_aliases)
-                }
+                Some(loc_ann) => can_annotation_help(
+                    env,
+                    &loc_ann.value,
+                    region,
+                    scope,
+                    var_store,
+                    rigids,
+                    local_aliases,
+                ),
                 None => Type::EmptyTagUnion,
             };
 
             Type::TagUnion(tag_types, Box::new(ext_type))
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            can_annotation_help(env, nested, var_store, rigids, local_aliases)
+            can_annotation_help(env, nested, region, scope, var_store, rigids, local_aliases)
         }
         Wildcard | Malformed(_) => {
             let var = var_store.fresh();
@@ -244,6 +292,8 @@ fn can_annotation_help(
 fn can_assigned_field<'a>(
     env: &mut Env,
     field: &AssignedField<'a, TypeAnnotation<'a>>,
+    region: Region,
+    scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
     local_aliases: &mut Vec<(Symbol, Type)>,
@@ -253,8 +303,15 @@ fn can_assigned_field<'a>(
 
     match field {
         LabeledValue(field_name, _, annotation) => {
-            let field_type =
-                can_annotation_help(env, &annotation.value, var_store, rigids, local_aliases);
+            let field_type = can_annotation_help(
+                env,
+                &annotation.value,
+                region,
+                scope,
+                var_store,
+                rigids,
+                local_aliases,
+            );
             let label = Lowercase::from(field_name.value);
             field_types.insert(label, field_type);
         }
@@ -272,9 +329,16 @@ fn can_assigned_field<'a>(
             };
             field_types.insert(field_name, field_type);
         }
-        SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            can_assigned_field(env, nested, var_store, rigids, local_aliases, field_types)
-        }
+        SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_assigned_field(
+            env,
+            nested,
+            region,
+            scope,
+            var_store,
+            rigids,
+            local_aliases,
+            field_types,
+        ),
         Malformed(_) => {}
     }
 }
@@ -282,6 +346,8 @@ fn can_assigned_field<'a>(
 fn can_tag<'a>(
     env: &mut Env,
     tag: &Tag<'a>,
+    region: Region,
+    scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
     local_aliases: &mut Vec<(Symbol, Type)>,
@@ -293,7 +359,17 @@ fn can_tag<'a>(
 
             let arg_types = args
                 .iter()
-                .map(|arg| can_annotation_help(env, &arg.value, var_store, rigids, local_aliases))
+                .map(|arg| {
+                    can_annotation_help(
+                        env,
+                        &arg.value,
+                        region,
+                        scope,
+                        var_store,
+                        rigids,
+                        local_aliases,
+                    )
+                })
                 .collect();
 
             tag_types.push((TagName::Global(name), arg_types));
@@ -304,14 +380,31 @@ fn can_tag<'a>(
 
             let arg_types = args
                 .iter()
-                .map(|arg| can_annotation_help(env, &arg.value, var_store, rigids, local_aliases))
+                .map(|arg| {
+                    can_annotation_help(
+                        env,
+                        &arg.value,
+                        region,
+                        scope,
+                        var_store,
+                        rigids,
+                        local_aliases,
+                    )
+                })
                 .collect();
 
             tag_types.push((TagName::Private(symbol), arg_types));
         }
-        Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => {
-            can_tag(env, nested, var_store, rigids, local_aliases, tag_types)
-        }
+        Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => can_tag(
+            env,
+            nested,
+            region,
+            scope,
+            var_store,
+            rigids,
+            local_aliases,
+            tag_types,
+        ),
         Tag::Malformed(_) => {}
     }
 }

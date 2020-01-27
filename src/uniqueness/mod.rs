@@ -234,7 +234,7 @@ fn constrain_pattern(
             state.constraints.push(tag_con);
         }
 
-        Underscore | Shadowed(_) | UnsupportedPattern(_) => {
+        Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
             // no constraints
         }
     }
@@ -1065,7 +1065,8 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
 
                 match arg {
                     Apply(symbol, _)
-                        if module_id == ModuleId::INT && ident_id == IdentId::INT_INTEGER =>
+                        if symbol.module_id() == ModuleId::INT
+                            && symbol.ident_id() == IdentId::INT_INTEGER =>
                     {
                         return (
                             vec![uniq_var],
@@ -1073,8 +1074,8 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                         )
                     }
                     Apply(symbol, _)
-                        if module_id == ModuleId::FLOAT
-                            && ident_id == IdentId::FLOAT_FLOATINGPOINT =>
+                        if symbol.module_id() == ModuleId::FLOAT
+                            && symbol.ident_id() == IdentId::FLOAT_FLOATINGPOINT =>
                     {
                         return (
                             vec![uniq_var],

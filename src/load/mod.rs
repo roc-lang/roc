@@ -92,12 +92,12 @@ pub enum LoadingProblem {
     MsgChannelDied,
 }
 
-enum MaybeShared<'a, T> {
-    Shared(Arc<Mutex<T>>),
-    Unique(&'a mut T),
+enum MaybeShared<'a, 'b, A, B> {
+    Shared(Arc<Mutex<A>>, Arc<Mutex<B>>),
+    Unique(&'a mut A, &'b mut B),
 }
 
-type SharedModules<'a> = MaybeShared<'a, (ModuleIds, MutMap<ModuleId, IdentIds>)>;
+type SharedModules<'a, 'b> = MaybeShared<'a, 'b, ModuleIds, MutMap<ModuleId, IdentIds>>;
 
 type MsgSender = mpsc::Sender<Msg>;
 type MsgReceiver = mpsc::Receiver<Msg>;
@@ -124,7 +124,7 @@ type MsgReceiver = mpsc::Receiver<Msg>;
 pub async fn load<'a>(
     src_dir: PathBuf,
     filename: PathBuf,
-    subs_by_module: SubsByModule,
+    mut subs_by_module: SubsByModule,
 ) -> Result<LoadedModule, LoadingProblem> {
     use self::MaybeShared::*;
 
@@ -139,14 +139,14 @@ pub async fn load<'a>(
 
     // Load the root module synchronously; we can't proceed until we have its id.
     let root_id = load_filename(
-        &env,
         filename,
         msg_tx.clone(),
-        Unique(&mut (module_ids, all_ident_ids)),
+        Unique(&mut module_ids, &mut all_ident_ids),
     )?;
 
     // From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
-    let modules_and_idents = Arc::new(Mutex::new((module_ids, all_ident_ids)));
+    let arc_modules = Arc::new(Mutex::new(module_ids));
+    let arc_idents = Arc::new(Mutex::new(all_ident_ids));
 
     // All the dependent modules we've already begun loading -
     // meaning we should never kick off another load_module on them!
@@ -190,7 +190,7 @@ pub async fn load<'a>(
 
         match msg {
             Header(header) => {
-                let deps_by_name = header.deps_by_name;
+                let deps_by_name = &header.deps_by_name;
                 let mut headers_needed =
                     HashSet::with_capacity_and_hasher(deps_by_name.len(), default_hasher());
 
@@ -206,7 +206,7 @@ pub async fn load<'a>(
                 for ident in header.exposes.iter() {
                     debug_assert!(exposed_ids.get_id(ident.as_inline_str()).is_none());
 
-                    let exposed_id = exposed_ids.add(ident.clone().into());
+                    exposed_ids.add(ident.clone().into());
                 }
 
                 let module_id = header.module_id;
@@ -233,7 +233,7 @@ pub async fn load<'a>(
 
                             spawn_parse_and_constrain(
                                 header,
-                                module_ids.clone(),
+                                Arc::clone(&arc_modules),
                                 &exposed_idents_by_module,
                                 &subs_by_module,
                                 &mut waiting_for_solve,
@@ -252,7 +252,8 @@ pub async fn load<'a>(
 
                         let env = env.clone();
                         let msg_tx = msg_tx.clone();
-                        let shared_module_ids = Shared(Arc::clone(&modules_and_idents));
+                        let shared_module_ids =
+                            Shared(Arc::clone(&arc_modules), Arc::clone(&arc_idents));
                         let dep_name = dep_name.clone();
 
                         // Start loading this module in the background.
@@ -265,7 +266,7 @@ pub async fn load<'a>(
                 if headers_needed.is_empty() {
                     spawn_parse_and_constrain(
                         header,
-                        module_ids.clone(),
+                        Arc::clone(&arc_modules),
                         &exposed_idents_by_module,
                         &subs_by_module,
                         &mut waiting_for_solve,
@@ -316,7 +317,7 @@ pub async fn load<'a>(
                         constraint,
                         next_var,
                         msg_tx.clone(),
-                        subs_by_module,
+                        &subs_by_module,
                         &mut declarations_by_id,
                         vars_by_symbol.clone(),
                     );
@@ -347,12 +348,19 @@ pub async fn load<'a>(
                     // Once we've solved the originally requested module, we're done!
                     msg_rx.close();
 
-                    let (module_ids, all_ident_ids) = Arc::try_unwrap(modules_and_idents)
+                    let module_ids = Arc::try_unwrap(arc_modules)
                         .unwrap_or_else(|_| {
                             panic!("There were still outstanding Arc references to module_ids")
                         })
                         .into_inner()
                         .expect("Unwrapping mutex for module_ids");
+
+                    let all_ident_ids = Arc::try_unwrap(arc_idents)
+                        .unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to all_ident_ids")
+                        })
+                        .into_inner()
+                        .expect("Unwrapping mutex for all_ident_ids");
 
                     let solved = Arc::try_unwrap(subs).unwrap_or_else(|_| {
                         panic!("There were still outstanding Arc references to Solved<Subs>")
@@ -394,16 +402,16 @@ pub async fn load<'a>(
                                     .remove(&listener_id)
                                     .expect("Could not find listener ID in unsolved_modules");
 
-                                let subs_by_dep = MutMap::default();
+                                let mut subs_by_dep = MutMap::default();
 
-                                for (module_id, subs) in subs_by_module {
+                                for (module_id, subs) in subs_by_module.iter() {
                                     // TODO FIXME actually determine if this is a dependency of the
                                     // module in question! Otherwise we'll deep clone the subs for
                                     // *every single module* instead of just the ones we need.
                                     let is_dep = true;
 
                                     if is_dep {
-                                        subs_by_dep.insert(module_id, subs.clone());
+                                        subs_by_dep.insert(*module_id, subs.clone());
                                     }
                                 }
 
@@ -412,7 +420,7 @@ pub async fn load<'a>(
                                     constraint,
                                     next_var,
                                     msg_tx.clone(),
-                                    subs_by_dep,
+                                    &subs_by_dep,
                                     &mut declarations_by_id,
                                     vars_by_symbol.clone(),
                                 );
@@ -433,7 +441,7 @@ fn load_module(
     env: Env,
     module_name: ModuleName,
     msg_tx: MsgSender,
-    module_ids: SharedModules<'_>,
+    module_ids: SharedModules<'_, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
     let mut filename = PathBuf::new();
 
@@ -447,15 +455,14 @@ fn load_module(
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
 
-    load_filename(&env, filename, msg_tx, module_ids)
+    load_filename(filename, msg_tx, module_ids)
 }
 
 /// Load a module by its filename
 fn load_filename(
-    env: &Env,
     filename: PathBuf,
     msg_tx: MsgSender,
-    module_ids: SharedModules<'_>,
+    module_ids: SharedModules<'_, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
     match read_to_string(&filename) {
         Ok(src) => {
@@ -468,7 +475,7 @@ fn load_filename(
             #[allow(clippy::let_and_return)]
             let answer = match module::header().parse(&arena, state) {
                 Ok((ast::Module::Interface { header }, state)) => {
-                    let module_id = send_interface_header(env, header, state, module_ids, msg_tx);
+                    let module_id = send_interface_header(header, state, module_ids, msg_tx);
 
                     Ok(module_id)
                 }
@@ -488,10 +495,9 @@ fn load_filename(
 }
 
 fn send_interface_header<'a>(
-    env: &Env,
     header: InterfaceHeader<'a>,
     state: State<'a>,
-    shared_modules: SharedModules<'_>,
+    shared_modules: SharedModules<'_, '_>,
     msg_tx: MsgSender,
 ) -> ModuleId {
     use MaybeShared::*;
@@ -528,25 +534,11 @@ fn send_interface_header<'a>(
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let module_id: ModuleId;
 
-    let mut add_exposed_to_scope =
-        |exposed: Vec<Ident>, ident_ids: &mut IdentIds, region: Region| {
-            for ident in exposed {
-                // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(ident_ids.get_id(ident.as_inline_str()).is_none());
-                let ident_id = ident_ids.add(ident.into());
-                let symbol = Symbol::new(module_id, ident_id);
-
-                scope.insert(ident.clone(), (symbol, region.clone()));
-            }
-        };
-
     match shared_modules {
-        Shared(arc) => {
+        Shared(arc_module_ids, arc_all_ident_ids) => {
             // Lock just long enough to perform the minimal operations necessary.
-            let mut unlocked = (*arc).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
-
-            let mut module_ids = unlocked.0;
-            let mut all_ident_ids = unlocked.1;
+            let mut module_ids = (*arc_module_ids).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
+            let mut all_ident_ids = (*arc_all_ident_ids).lock().expect("Failed to acquire lock for interning ident IDs, presumably because a thread panicked.");
 
             module_id = module_ids.get_or_insert(&declared_name.as_inline_str());
 
@@ -559,36 +551,30 @@ fn send_interface_header<'a>(
             for (_, exposed, region) in imports.into_iter() {
                 if !exposed.is_empty() {
                     let ident_ids = all_ident_ids.get_mut(&module_id).unwrap_or_else(|| {
-                        panic!(
-                            "Could not find {:?} in all_ident_ids {:?}",
-                            module_id, all_ident_ids
-                        )
+                        panic!("Could not find {:?} in all_ident_ids", module_id)
                     });
 
-                    add_exposed_to_scope(exposed, ident_ids, region);
+                    add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
                 }
             }
         }
-        Unique((module_ids, all_ident_ids)) => {
+        Unique(module_ids, all_ident_ids) => {
             // If this is the original file the user loaded,
             // then we already have a mutable reference,
             // and won't need to pay locking costs.
             module_id = module_ids.get_or_insert(declared_name.as_inline_str());
 
             for (module_name, exposed, region) in imports.into_iter() {
-                let module_id = module_ids.get_or_insert(&module_name.into());
+                let module_id = module_ids.get_or_insert(&module_name.clone().into());
 
-                deps_by_name.insert(module_name.clone(), module_id);
+                deps_by_name.insert(module_name, module_id);
 
                 if !exposed.is_empty() {
-                    let mut ident_ids = all_ident_ids.get_mut(&module_id).unwrap_or_else(|| {
-                        panic!(
-                            "Could not find {:?} in all_ident_ids {:?}",
-                            module_id, all_ident_ids
-                        )
+                    let ident_ids = all_ident_ids.get_mut(&module_id).unwrap_or_else(|| {
+                        panic!("Could not find {:?} in all_ident_ids", module_id)
                     });
 
-                    add_exposed_to_scope(exposed, ident_ids, region);
+                    add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
                 }
             }
         }
@@ -628,6 +614,23 @@ fn send_interface_header<'a>(
     module_id
 }
 
+fn add_exposed_to_scope(
+    module_id: ModuleId,
+    scope: &mut MutMap<Ident, (Symbol, Region)>,
+    exposed: Vec<Ident>,
+    ident_ids: &mut IdentIds,
+    region: Region,
+) {
+    for ident in exposed {
+        // Since this value is exposed, add it to our module's default scope.
+        debug_assert!(ident_ids.get_id(ident.clone().as_inline_str()).is_none());
+        let ident_id = ident_ids.add(ident.clone().into());
+        let symbol = Symbol::new(module_id, ident_id);
+
+        scope.insert(ident, (symbol, region.clone()));
+    }
+}
+
 // TODO trim down these arguments - possibly by moving Constraint into Module
 #[allow(clippy::too_many_arguments)]
 fn solve_module(
@@ -635,7 +638,7 @@ fn solve_module(
     constraint: Constraint,
     next_var: Variable,
     msg_tx: MsgSender,
-    subs_by_module: SubsByModule,
+    _subs_by_module: &SubsByModule,
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
     mut vars_by_symbol: SendMap<Symbol, Variable>,
 ) {
@@ -699,7 +702,7 @@ fn solve_module(
 
 fn spawn_parse_and_constrain(
     header: ModuleHeader,
-    module_ids: ModuleIds,
+    module_ids: Arc<Mutex<ModuleIds>>,
     exposed_idents: &MutMap<ModuleId, Arc<IdentIds>>,
     subs_by_module: &SubsByModule,
     waiting_for_solve: &mut MutMap<ModuleId, MutSet<ModuleId>>,
@@ -749,7 +752,7 @@ fn spawn_parse_and_constrain(
 /// Parse the module, canonicalize it, and generate constraints for it.
 fn parse_and_constrain(
     header: ModuleHeader,
-    module_ids: ModuleIds,
+    arc_module_ids: Arc<Mutex<ModuleIds>>,
     dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
     msg_tx: MsgSender,
 ) {
@@ -763,11 +766,14 @@ fn parse_and_constrain(
         .parse(&arena, state)
         .expect("TODO gracefully handle parse error on module defs");
 
+    let module_ids = (*arc_module_ids).lock().expect(
+        "Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.",
+    );
     let (declarations, exposed_imports, constraint) = match canonicalize_module_defs(
         &arena,
         parsed_defs,
         module_id,
-        module_ids,
+        &module_ids,
         dep_idents,
         header.exposed_imports,
         &var_store,
@@ -776,7 +782,7 @@ fn parse_and_constrain(
             declarations,
             exposed_imports,
             lookups,
-            ident_ids,
+            ident_ids: _,
         }) => {
             let constraint = constrain_module(module_name, &declarations, lookups);
 

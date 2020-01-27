@@ -302,7 +302,9 @@ fn write_flat_type(
                 }
 
                 sorted_fields.sort_by(|(a, _), (b, _)| {
-                    a.to_string(interns, home).cmp(&b.to_string(&interns, home))
+                    a.clone()
+                        .to_string(interns, home)
+                        .cmp(&b.clone().to_string(&interns, home))
                 });
 
                 let mut any_written_yet = false;

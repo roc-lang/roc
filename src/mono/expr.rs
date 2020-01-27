@@ -457,7 +457,7 @@ fn from_can_when<'a>(
 
                             opt_default_branch = Some(arena.alloc(mono_expr));
                         }
-                        Shadowed(_loc_ident) => {
+                        Shadowed(_, _) => {
                             panic!("TODO runtime error for shadowing in a pattern");
                         }
                         // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!

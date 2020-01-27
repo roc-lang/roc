@@ -341,7 +341,7 @@ fn desugar_field<'a>(
 
 // TODO move this desugaring to canonicalization, to avoid dealing with strings as much
 #[inline(always)]
-fn binop_to_function(binop: BinOp, arena: &Bump) -> (&str, &str) {
+fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
     use self::BinOp::*;
 
     match binop {
@@ -525,7 +525,7 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
             binop => {
                 // This is a normal binary operator like (+), so desugar it
                 // into the appropriate function call.
-                let (module_name, ident) = binop_to_function(binop, arena);
+                let (module_name, ident) = binop_to_function(binop);
                 let mut args = Vec::with_capacity_in(2, arena);
 
                 args.push(left);
