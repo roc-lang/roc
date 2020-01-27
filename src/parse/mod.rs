@@ -899,12 +899,9 @@ mod when {
     }
 
     /// Parsing branches of when conditional.
-    fn branches<'a>(
-        min_indent: u16,
-    ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>> {
+    fn branches<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>> {
         move |arena, state| {
-            let mut branches: Vec<'a, &'a WhenBranch<'a>> =
-                Vec::with_capacity_in(2, arena);
+            let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
 
             // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
             // 2. Parse the other branches. Their indentation levels must be == the first branch's.
@@ -922,28 +919,31 @@ mod when {
             branches.push(arena.alloc(WhenBranch {
                 patterns: loc_first_patterns,
                 value: loc_first_expr,
-                guard: None
+                guard: None,
             }));
 
-            let branch_parser = map!(and!(
-                then(
-                    branch_alternatives(min_indent),
-                    move |_arena, state, loc_patterns| {
-                        if alternatives_indented_correctly(&loc_patterns, original_indent) {
-                            Ok((loc_patterns, state))
-                        } else {
-                            panic!(
+            let branch_parser = map!(
+                and!(
+                    then(
+                        branch_alternatives(min_indent),
+                        move |_arena, state, loc_patterns| {
+                            if alternatives_indented_correctly(&loc_patterns, original_indent) {
+                                Ok((loc_patterns, state))
+                            } else {
+                                panic!(
                                 "TODO additional branch didn't have same indentation as first branch"
                             );
-                        }
-                    },
+                            }
+                        },
+                    ),
+                    branch_result(indented_more)
                 ),
-                branch_result(indented_more)
-            ), |(patterns, expr)| WhenBranch {
-                patterns: patterns,
-                value: expr,
-                guard: None
-            });
+                |(patterns, expr)| WhenBranch {
+                    patterns: patterns,
+                    value: expr,
+                    guard: None
+                }
+            );
 
             loop {
                 match branch_parser.parse(arena, state) {

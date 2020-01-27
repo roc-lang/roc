@@ -172,7 +172,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
                 let mut alternatives = Vec::with_capacity_in(branch.patterns.len(), arena);
                 for loc_pattern in &branch.patterns {
-                    alternatives.push( Located {
+                    alternatives.push(Located {
                         region: loc_pattern.region,
                         value: Pattern::Nested(&loc_pattern.value),
                     })
