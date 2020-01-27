@@ -205,10 +205,7 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
 }
 
 fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    use crate::collections::ImMap;
-    use crate::subs::Content::Structure;
     use crate::subs::FlatType::*;
-    use crate::uniqueness::boolean_algebra;
 
     match flat_type {
         Apply {
@@ -321,21 +318,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
             }
         }
         Boolean(b) => {
-            // push global substitutions into the boolean
-            let mut global_substitution = ImMap::default();
-
-            for v in b.variables() {
-                if let Structure(Boolean(replacement)) = subs.get(v).content {
-                    global_substitution.insert(v, replacement);
-                }
-            }
-
-            write_boolean(
-                boolean_algebra::simplify(b.substitute(&global_substitution)),
-                subs,
-                buf,
-                Parens::InTypeParam,
-            );
+            write_boolean(fully_simplify(subs, b), subs, buf, Parens::InTypeParam);
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
@@ -373,11 +356,52 @@ fn write_boolean(boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Paren
         Bool::One => {
             buf.push_str("Attr.Unique");
         }
+        Bool::WithFree(var, rest) => {
+            write_content(subs.get(var).content, subs, buf, parens);
+            buf.push_str(" | ");
+            write_boolean(*rest, subs, buf, Parens::InTypeParam);
+        }
     };
 
     if write_parens {
         buf.push_str(")");
     }
+}
+
+fn fully_simplify(subs: &mut Subs, mut term: Bool) -> Bool {
+    use crate::collections::ImMap;
+    use crate::subs::Content::Structure;
+    use crate::subs::FlatType::*;
+    use crate::uniqueness::boolean_algebra;
+    let mut made_change = true;
+
+    let mut i = 0;
+
+    while made_change && i < 100 {
+        i += 1;
+        // push global substitutions into the boolean
+        let mut global_substitution = ImMap::default();
+
+        for v in term.variables() {
+            match subs.get(v).content {
+                Structure(Boolean(replacement)) if !replacement.variables().contains(&v) => {
+                    global_substitution.insert(v, replacement);
+                }
+                _ => {
+                    let root = subs.get_root_key(v);
+                    if root != v {
+                        global_substitution.insert(v, boolean_algebra::Bool::Variable(root));
+                    }
+                }
+            }
+        }
+
+        made_change = !global_substitution.is_empty();
+
+        term = boolean_algebra::simplify(term.substitute(&global_substitution));
+    }
+
+    term
 }
 
 fn write_apply(
