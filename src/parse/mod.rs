@@ -906,7 +906,7 @@ mod when {
             // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
             // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
-            let (loc_first_patterns, state) =
+            let ((loc_first_patterns, loc_first_guard), state) =
                 branch_alternatives(min_indent).parse(arena, state)?;
             let loc_first_pattern = loc_first_patterns.first().unwrap();
             let original_indent = loc_first_pattern.region.start_col;
@@ -919,16 +919,16 @@ mod when {
             branches.push(arena.alloc(WhenBranch {
                 patterns: loc_first_patterns,
                 value: loc_first_expr,
-                guard: None,
+                guard: loc_first_guard,
             }));
 
             let branch_parser = map!(
                 and!(
                     then(
                         branch_alternatives(min_indent),
-                        move |_arena, state, loc_patterns| {
+                        move |_arena, state, (loc_patterns, loc_guard)| {
                             if alternatives_indented_correctly(&loc_patterns, original_indent) {
-                                Ok((loc_patterns, state))
+                                Ok(((loc_patterns, loc_guard), state))
                             } else {
                                 panic!(
                                 "TODO additional branch didn't have same indentation as first branch"
@@ -938,10 +938,10 @@ mod when {
                     ),
                     branch_result(indented_more)
                 ),
-                |(patterns, expr)| WhenBranch {
+                |((patterns, guard), expr)| WhenBranch {
                     patterns: patterns,
                     value: expr,
-                    guard: None
+                    guard: guard
                 }
             );
 
@@ -965,10 +965,26 @@ mod when {
     }
 
     /// Parsing alternative patterns in when branches.
-    fn branch_alternatives<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>> {
-        sep_by1(
-            char('|'),
-            space0_around(loc_pattern(min_indent), min_indent),
+    fn branch_alternatives<'a>(min_indent: u16) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>)> {
+        one_of!(
+            map!(
+                sep_by1(
+                    char('|'),
+                    space0_around(loc_pattern(min_indent), min_indent),
+                ),
+                |patterns| {
+                    (patterns, None)
+                }
+            ),
+            map!(
+                sep_by1(
+                    char('|'),
+                    space0_around(loc_pattern(min_indent), min_indent),
+                ),
+                |patterns| {
+                    (patterns, None)
+                }
+            )
         )
     }
 
