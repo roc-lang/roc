@@ -741,8 +741,6 @@ fn canonicalize_when_branch<'a>(
     // rest of this block.
     let mut scope = scope.clone();
 
-    let loc_pattern = loc_pattern;
-
     // Exclude the current ident from shadowable_idents; you can't shadow yourself!
     // (However, still include it in scope, because you *can* recursively refer to yourself.)
     let mut shadowable_idents = scope.idents.clone();
