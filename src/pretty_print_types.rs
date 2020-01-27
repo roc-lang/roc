@@ -30,9 +30,9 @@ enum Parens {
     Unnecessary,
 }
 
-struct Env {
+struct Env<'a> {
     home: ModuleId,
-    interns: Interns,
+    interns: &'a Interns,
 }
 
 /// How many times a root variable appeared in Subs.
@@ -188,12 +188,9 @@ pub fn content_to_string(
     interns: &Interns,
 ) -> String {
     let mut buf = String::new();
-    let env = &Env {
-        home,
-        interns: *interns,
-    };
+    let env = Env { home, interns };
 
-    write_content(env, content, subs, &mut buf, Parens::Unnecessary);
+    write_content(&env, content, subs, &mut buf, Parens::Unnecessary);
 
     buf
 }
@@ -292,7 +289,7 @@ fn write_flat_type(
             if tags.is_empty() {
                 buf.push_str(EMPTY_TAG_UNION)
             } else {
-                let interns = env.interns;
+                let interns = &env.interns;
                 let home = env.home;
 
                 buf.push_str("[ ");
@@ -305,8 +302,7 @@ fn write_flat_type(
                 }
 
                 sorted_fields.sort_by(|(a, _), (b, _)| {
-                    a.to_string(&interns, home)
-                        .cmp(&b.to_string(&interns, home))
+                    a.to_string(interns, home).cmp(&b.to_string(&interns, home))
                 });
 
                 let mut any_written_yet = false;
@@ -515,8 +511,8 @@ fn write_fn(
 }
 
 fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
-    let interns = env.interns;
-    let ident = symbol.ident_string(&interns);
+    let interns = &env.interns;
+    let ident = symbol.ident_string(interns);
     let module_id = symbol.module_id();
 
     // Don't qualify the symbol if it's in our home module

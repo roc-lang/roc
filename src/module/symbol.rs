@@ -429,11 +429,11 @@ impl IdentIds {
         let by_id = &mut self.by_id;
         let ident_id = IdentId(by_id.len() as u32);
 
-        by_id.push(ident_name);
-
         if cfg!(debug_assertions) {
-            Self::insert_debug_name(ident_id, &ident_name);
+            Self::insert_debug_name(ident_id, ident_name.to_string().into());
         }
+
+        by_id.push(ident_name);
 
         ident_id
     }
@@ -459,7 +459,7 @@ impl IdentIds {
                     .insert(private_tag_name.clone(), ident_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(ident_id, &private_tag_name);
+                    Self::insert_debug_name(ident_id, private_tag_name.to_string().into());
                 }
 
                 ident_id
@@ -485,10 +485,10 @@ impl IdentIds {
     }
 
     #[cfg(debug_assertions)]
-    fn insert_debug_name(ident_id: IdentId, ident_name: &InlinableString) {
+    fn insert_debug_name(ident_id: IdentId, ident_name: Box<str>) {
         let mut names = DEBUG_IDENT_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_IDENT_ID_NAMES, presumably because a thread panicked.");
 
-        names.insert(ident_id.0, ident_name.to_string().into());
+        names.insert(ident_id.0, ident_name);
     }
 
     #[cfg(not(debug_assertions))]

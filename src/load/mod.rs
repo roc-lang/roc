@@ -558,7 +558,7 @@ fn send_interface_header<'a>(
 
             for (_, exposed, region) in imports.into_iter() {
                 if !exposed.is_empty() {
-                    let mut ident_ids = all_ident_ids.get_mut(&module_id).unwrap_or_else(|| {
+                    let ident_ids = all_ident_ids.get_mut(&module_id).unwrap_or_else(|| {
                         panic!(
                             "Could not find {:?} in all_ident_ids {:?}",
                             module_id, all_ident_ids
@@ -721,7 +721,7 @@ fn spawn_parse_and_constrain(
     for dep_id in header.deps_by_name.values() {
         // We already verified that these are all present,
         // so unwrapping should always succeed here.
-        let mut idents = exposed_idents.get(&dep_id).unwrap();
+        let idents = exposed_idents.get(&dep_id).unwrap();
 
         dep_idents.insert(*dep_id, Arc::clone(&idents));
     }
