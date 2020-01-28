@@ -14,6 +14,7 @@ mod helpers;
 mod test_infer_uniq {
     use crate::helpers::{assert_correct_variable_usage, can_expr, uniq_expr};
     use roc::can::ident::Lowercase;
+    use roc::collections::ImMap;
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -1316,6 +1317,25 @@ mod test_infer_uniq {
     }
 
     #[test]
+    fn record_update_is_safe() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r ->
+
+                    s = { r & y: r.x }
+
+                    p = s.x
+                    q = s.y
+
+                    s
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c)",
+        );
+    }
+
+    #[test]
     fn when_with_annotation() {
         infer_eq(
             indoc!(
@@ -1580,7 +1600,84 @@ mod test_infer_uniq {
                 let mut usage = VarUsage::default();
                 let fa = FieldAccess::from_chain(vec!["foo".into()]);
 
-                usage.register_with(&"Test.blah$rec".into(), &ReferenceCount::Update(fa));
+                let overwritten = hashset!["foo".into()].into();
+                usage.register_with(
+                    &"Test.blah$rec".into(),
+                    &ReferenceCount::Update(overwritten, fa),
+                );
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn usage_record_update_unique_not_overwritten() {
+        usage_eq(
+            indoc!(
+                r#"
+            r = { x : 42, y : 2020 }
+            s = { r & y: r.x }
+
+            p = s.x
+            q = s.y
+
+            s
+                   "#
+            ),
+            {
+                let mut usage = VarUsage::default();
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
+                let fa = FieldAccess { fields: fields };
+                let overwritten = hashset!["y".into()].into();
+                usage.register_with(
+                    &"Test.blah$r".into(),
+                    &ReferenceCount::Update(overwritten, fa),
+                );
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                let fa = FieldAccess { fields: fields };
+                usage.register_with(&"Test.blah$s".into(), &ReferenceCount::Access(fa));
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn usage_record_update_unique_overwritten() {
+        usage_eq(
+            indoc!(
+                r#"
+            r = { x : 42, y : 2020 } 
+            s = { r & x: 0, y: r.x }
+
+            p = s.x
+            q = s.y
+
+            s
+                   "#
+            ),
+            {
+                // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
+                let mut usage = VarUsage::default();
+
+                let fa = FieldAccess::from_chain(vec!["x".into()]);
+                let overwritten = hashset!["x".into(), "y".into()].into();
+                usage.register_with(
+                    &"Test.blah$r".into(),
+                    &ReferenceCount::Update(overwritten, fa),
+                );
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                let fa = FieldAccess { fields: fields };
+                usage.register_with(&"Test.blah$s".into(), &ReferenceCount::Access(fa));
 
                 usage
             },

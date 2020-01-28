@@ -964,7 +964,8 @@ fn constrain_var(
             // no additional constraints, keep uniqueness unbound
             Lookup(module, symbol_for_lookup, expected, region)
         }
-        Some(ReferenceCount::Access(field_access)) | Some(ReferenceCount::Update(field_access)) => {
+        Some(ReferenceCount::Access(field_access))
+        | Some(ReferenceCount::Update(_, field_access)) => {
             if !applied_usage_constraint.contains(&symbol_for_lookup) {
                 applied_usage_constraint.insert(symbol_for_lookup.clone());
 

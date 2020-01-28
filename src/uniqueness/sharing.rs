@@ -1,14 +1,14 @@
 use crate::can::expr::Expr;
 use crate::can::ident::Lowercase;
 use crate::can::symbol::Symbol;
-use crate::collections::ImMap;
+use crate::collections::{ImMap, ImSet};
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum ReferenceCount {
     Seen,
     Unique,
     Access(FieldAccess),
-    Update(FieldAccess),
+    Update(ImSet<Lowercase>, FieldAccess),
     Shared,
 }
 
@@ -21,16 +21,24 @@ impl ReferenceCount {
             (_, Shared) => Shared,
 
             // Update
-            (Update(_), Update(_)) => Shared,
-            (Update(_), Access(_)) => Shared,
-            (Access(fa1), Update(fa2)) => {
+            (Update(_, _), Update(_, _)) => Shared,
+            (Update(_, _), Access(_)) => Shared,
+            (Access(fa1), Update(overwritten, fa2)) => {
                 let mut fa = fa1.clone();
                 fa.sequential_merge(fa2);
 
-                Update(fa)
+                // fields that are accessed, but not overwritten in the update, must be shared!
+                for (label, (_, inner)) in fa.fields.clone().iter() {
+                    if !overwritten.contains(&label.clone().into()) {
+                        fa.fields
+                            .insert(label.clone(), (ReferenceCount::Shared, inner.clone()));
+                    }
+                }
+
+                Update(overwritten.clone(), fa)
             }
-            (_, Update(fa)) => Update(fa.clone()),
-            (Update(fa), _) => Update(fa.clone()),
+            (_, Update(overwritten, fa)) => Update(overwritten.clone(), fa.clone()),
+            (Update(overwritten, fa), _) => Update(overwritten.clone(), fa.clone()),
 
             // Access
             (Access(fa1), Access(fa2)) => {
@@ -349,11 +357,17 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         Expr::Update {
             symbol, updates, ..
         } => {
-            for (_, field) in updates {
+            let mut labels = ImSet::default();
+
+            for (label, field) in updates {
                 annotate_usage(&field.loc_expr.value, usage);
+                labels.insert(label.clone());
             }
 
-            usage.register_with(symbol, &ReferenceCount::Update(FieldAccess::default()));
+            usage.register_with(
+                symbol,
+                &ReferenceCount::Update(labels, FieldAccess::default()),
+            );
         }
         Expr::Access {
             field, loc_expr, ..
