@@ -967,15 +967,23 @@ fn constrain_var(
         Some(ReferenceCount::Access(field_access)) | Some(ReferenceCount::Update(field_access)) => {
             if !applied_usage_constraint.contains(&symbol_for_lookup) {
                 applied_usage_constraint.insert(symbol_for_lookup.clone());
-                let (record_type, record_con) =
-                    constrain_field_access(var_store, &field_access, expected, region);
+
+                let mut variables = Vec::new();
+                let (free, rest, inner_type) =
+                    constrain_field_access(var_store, &field_access, &mut variables);
+
+                let record_type =
+                    constrain::attr_type(Bool::WithFree(free, Box::new(rest)), inner_type);
 
                 // NOTE breaking the expectation up like this REALLY matters!
-                let new_expected = Expected::NoExpectation(record_type);
-                And(vec![
-                    Lookup(module, symbol_for_lookup, new_expected, region),
-                    record_con,
-                ])
+                let new_expected = Expected::NoExpectation(record_type.clone());
+                exists(
+                    variables,
+                    And(vec![
+                        Lookup(module, symbol_for_lookup, new_expected, region),
+                        Eq(record_type, expected, region),
+                    ]),
+                )
             } else {
                 Lookup(module, symbol_for_lookup, expected, region)
             }
@@ -989,45 +997,53 @@ fn constrain_var(
 fn constrain_field_access(
     var_store: &VarStore,
     field_access: &FieldAccess,
-    expected: Expected<Type>,
-    region: Region,
-) -> (Type, Constraint) {
+    field_vars: &mut Vec<Variable>,
+) -> (Variable, Bool, Type) {
     use constrain::attr_type;
     use sharing::ReferenceCount::Shared;
 
     let mut field_types = SendMap::default();
-    let mut field_vars = Vec::with_capacity(field_access.fields.len());
     let mut uniq_vars = Vec::new();
 
     for (field, (rc, nested)) in field_access.fields.clone() {
-        if !nested.is_empty() {
-            panic!("TODO nested record fields are not handled yet");
-        }
-        let field_var = var_store.fresh();
-        field_vars.push(field_var);
+        // handle nested fields
+        let field_type = if nested.is_empty() {
+            // generate constraint for this field
+            let field_var = var_store.fresh();
+            field_vars.push(field_var);
 
-        let field_type = if rc == Shared {
-            attr_type(Bool::Zero, Variable(field_var))
+            if rc == Shared {
+                attr_type(Bool::Zero, Variable(field_var))
+            } else {
+                // TODO don't generate constraint when field is possible unique?
+                let uniq_var = var_store.fresh();
+                field_vars.push(uniq_var);
+                uniq_vars.push(Bool::Variable(uniq_var));
+                attr_type(Bool::Variable(uniq_var), Variable(field_var))
+            }
         } else {
-            let uniq_var = var_store.fresh();
-            field_vars.push(uniq_var);
-            uniq_vars.push(Bool::Variable(uniq_var));
-            attr_type(Bool::Variable(uniq_var), Variable(field_var))
+            let (inner_free, inner_rest, inner_type) =
+                constrain_field_access(var_store, &nested, field_vars);
+
+            if rc == Shared {
+                attr_type(Bool::Zero, inner_type)
+            } else {
+                uniq_vars.push(Bool::Variable(inner_free));
+                uniq_vars.push(inner_rest.clone());
+                attr_type(Bool::WithFree(inner_free, Box::new(inner_rest)), inner_type)
+            }
         };
         field_types.insert(field.into(), field_type);
     }
+
     let record_uniq_var = var_store.fresh();
-
-    let record_uniq_type =
-        Bool::WithFree(record_uniq_var, Box::new(boolean_algebra::any(uniq_vars)));
-
     let record_ext_var = var_store.fresh();
     field_vars.push(record_uniq_var);
     field_vars.push(record_ext_var);
 
-    let record_type = constrain::attr_type(
-        // Bool::Variable(record_uniq_var),
-        record_uniq_type,
+    (
+        record_uniq_var,
+        boolean_algebra::any(uniq_vars),
         Type::Record(
             field_types,
             // TODO can we avoid doing Box::new on every single one of these?
@@ -1035,10 +1051,6 @@ fn constrain_field_access(
             // could all share?
             Box::new(Variable(record_ext_var)),
         ),
-    );
-    (
-        record_type.clone(),
-        exists(field_vars, Eq(record_type, expected, region)),
     )
 }
 

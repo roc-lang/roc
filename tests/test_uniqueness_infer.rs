@@ -1282,6 +1282,40 @@ mod test_infer_uniq {
     }
 
     #[test]
+    fn record_access_nested_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r -> 
+                    v = r.foo.bar
+                    w = r.foo.baz
+
+                    r
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (((b | a) | d) | c) { foo : (Attr.Attr ((d | b) | a) { bar : (Attr.Attr b f), baz : (Attr.Attr a e) }g) }h -> Attr.Attr (((c | a) | b) | d) { foo : (Attr.Attr ((d | a) | b) { bar : (Attr.Attr b f), baz : (Attr.Attr a e) }g) }h)"
+        );
+    }
+
+    #[test]
+    fn record_access_nested_field_is_safe() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r -> 
+                    v = r.foo.bar
+
+                    x = v
+                    y = v
+
+                    r
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared c) }d) }e -> Attr.Attr (b | a) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared c) }d) }e)"
+        );
+    }
+
+    #[test]
     fn when_with_annotation() {
         infer_eq(
             indoc!(
