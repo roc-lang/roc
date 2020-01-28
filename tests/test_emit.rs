@@ -10,7 +10,7 @@ extern crate roc;
 mod helpers;
 
 #[cfg(test)]
-mod test_crane {
+mod test_emit {
     use crate::helpers::can_expr;
     use bumpalo::Bump;
     use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
