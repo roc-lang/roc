@@ -1,5 +1,8 @@
 use crate::can::pattern::Pattern;
-use crate::can::{self, ident::ModuleName};
+use crate::can::{
+    self,
+    ident::{Lowercase, ModuleName},
+};
 use crate::collections::MutMap;
 use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
@@ -91,7 +94,12 @@ pub enum Expr<'a> {
         arguments: &'a [Expr<'a>],
     },
 
-    Struct(&'a [(InlinableString, Expr<'a>)]),
+    Struct(&'a [(Lowercase, Expr<'a>)]),
+    Access {
+        label: Lowercase,
+        field_layout: Layout<'a>,
+        struct_layout: Layout<'a>,
+    },
 
     RuntimeError(&'a str),
 }
