@@ -217,6 +217,53 @@ fn from_can<'a>(
             branches,
         } => from_can_when(env, cond_var, expr_var, *loc_cond, branches, procs),
 
+        Record(_, fields) => {
+            let arena = env.arena;
+            let mut field_bodies = Vec::with_capacity_in(fields.len(), arena);
+
+            for (label, field) in fields {
+                let expr = from_can(env, field.loc_expr.value, procs, None);
+
+                field_bodies.push((label, expr));
+            }
+
+            Expr::Struct(field_bodies.into_bump_slice())
+        }
+
+        Access {
+            ext_var,
+            field_var,
+            field,
+            ..
+        } => {
+            let subs = env.subs;
+            let arena = env.arena;
+
+            let struct_content = subs.get_without_compacting(ext_var).content;
+            let struct_layout = match Layout::from_content(arena, struct_content, subs) {
+                Ok(layout) => layout,
+                Err(()) => {
+                    // Invalid field!
+                    panic!("TODO gracefully handle Access with invalid struct_layout");
+                }
+            };
+
+            let field_content = subs.get_without_compacting(field_var).content;
+            let field_layout = match Layout::from_content(arena, field_content, subs) {
+                Ok(layout) => layout,
+                Err(()) => {
+                    // Invalid field!
+                    panic!("TODO gracefully handle Access with invalid field_layout");
+                }
+            };
+
+            Expr::Access {
+                label: field,
+                field_layout,
+                struct_layout,
+            }
+        }
+
         other => panic!("TODO convert canonicalized {:?} to ll::Expr", other),
     }
 }
