@@ -4,13 +4,13 @@ use self::bumpalo::Bump;
 use roc::can::env::Env;
 use roc::can::expr::Output;
 use roc::can::expr::{canonicalize_expr, Expr};
+use roc::can::ident::Ident;
 use roc::can::operator;
 use roc::can::problem::Problem;
 use roc::can::scope::Scope;
 use roc::collections::{ImMap, ImSet, MutMap, SendSet};
 use roc::constrain::expr::constrain_expr;
-use roc::ident::Ident;
-use roc::module::symbol::Symbol;
+use roc::module::symbol::{ModuleId, ModuleIds, Symbol};
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
@@ -44,6 +44,10 @@ where
         .expect("Error while spawning expanded dev stack size thread")
         .join()
         .expect("Error while joining expanded dev stack size thread")
+}
+
+pub fn test_home() -> ModuleId {
+    ModuleIds::default().get_or_insert(&"Test".into())
 }
 
 /// In --release builds, don't increase the stack size. Run the test normally.
@@ -80,14 +84,16 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 #[allow(dead_code)]
 pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, VarStore, Variable, Constraint) {
     let (loc_expr, output, problems, var_store, var, constraint) =
-        can_expr_with(&Bump::new(), "blah", expr_str);
+        can_expr_with_arena(&Bump::new(), test_home(), expr_str);
 
     (loc_expr.value, output, problems, var_store, var, constraint)
 }
 
 #[allow(dead_code)]
 pub fn uniq_expr(expr_str: &str) -> (Output, Vec<Problem>, Subs, Variable, Constraint) {
-    uniq_expr_with(&Bump::new(), expr_str, &ImMap::default())
+    let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
+
+    uniq_expr_with(&Bump::new(), expr_str, declared_idents)
 }
 
 #[allow(dead_code)]
@@ -96,16 +102,17 @@ pub fn uniq_expr_with(
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
 ) -> (Output, Vec<Problem>, Subs, Variable, Constraint) {
-    let home = "Test";
+    let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
+    let home = test_home();
     let (loc_expr, output, problems, var_store1, variable, _) =
-        can_expr_with(arena, home, expr_str);
+        can_expr_with(arena, home, expr_str, declared_idents);
 
     // double check
     let var_store2 = VarStore::new(var_store1.fresh());
 
     let expected2 = Expected::NoExpectation(Type::Variable(variable));
     let constraint2 = roc::uniqueness::constrain_declaration(
-        home.into(),
+        home,
         &var_store2,
         Region::zero(),
         loc_expr,
@@ -119,9 +126,27 @@ pub fn uniq_expr_with(
 }
 
 #[allow(dead_code)]
+pub fn can_expr_with_arena(
+    arena: &Bump,
+    home: ModuleId,
+    expr_str: &str,
+) -> (
+    Located<Expr>,
+    Output,
+    Vec<Problem>,
+    VarStore,
+    Variable,
+    Constraint,
+) {
+    let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
+
+    can_expr_with(arena, home, expr_str, declared_idents)
+}
+
+#[allow(dead_code)]
 pub fn can_expr_with(
     arena: &Bump,
-    name: &str,
+    home: ModuleId,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
 ) -> (
@@ -143,7 +168,6 @@ pub fn can_expr_with(
     let variable = var_store.fresh();
     let expected = Expected::NoExpectation(Type::Variable(variable));
     let module_ids = ModuleIds::default();
-    let home = ModuleIds::get_or_insert("Test");
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -154,10 +178,8 @@ pub fn can_expr_with(
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    // If we're canonicalizing the declaration `foo = ...` inside the `Main` module,
-    // scope_prefix will be "Main.foo$" and its first closure will be named "Main.foo$0"
     let mut scope = Scope::new(home);
-    let mut env = Env::new(home.into());
+    let mut env = Env::new(home, dep_idents, &module_ids, home_ident_ids);
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &var_store,
@@ -169,7 +191,7 @@ pub fn can_expr_with(
     let constraint = constrain_expr(
         &roc::constrain::expr::Env {
             rigids: ImMap::default(),
-            module_name: home.into(),
+            home,
         },
         loc_expr.region,
         &loc_expr.value,
@@ -315,7 +337,7 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
                 used.insert(v);
             }
         }
-        Lookup(_, _, expectation, _) => {
+        Lookup(_, expectation, _) => {
             for v in expectation.get_type_ref().variables() {
                 used.insert(v);
             }

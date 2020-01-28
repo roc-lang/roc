@@ -757,7 +757,6 @@ fn parse_and_constrain(
     msg_tx: MsgSender,
 ) {
     let module_id = header.module_id;
-    let module_name = header.module_name;
     let var_store = VarStore::default();
     let arena = Bump::new();
     let state = State::new(&header.src, Attempting::Module);
@@ -784,7 +783,7 @@ fn parse_and_constrain(
             lookups,
             ident_ids: _,
         }) => {
-            let constraint = constrain_module(module_name, &declarations, lookups);
+            let constraint = constrain_module(module_id, &declarations, lookups);
 
             (declarations, exposed_imports, constraint)
         }

@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_load {
-    use crate::helpers::{builtins_dir, fixtures_dir};
+    use crate::helpers::{builtins_dir, fixtures_dir, test_home};
     use inlinable_string::InlinableString;
     use roc::can::def::Declaration::*;
     use roc::collections::MutMap;
@@ -50,7 +50,7 @@ mod test_load {
     async fn load_without_builtins(
         dir_name: &str,
         module_name: &str,
-        subs_by_module: &mut SubsByModule,
+        subs_by_module: SubsByModule,
     ) -> LoadedModule {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
@@ -72,7 +72,7 @@ mod test_load {
     // async fn load_with_builtins(
     //     dir_name: &str,
     //     module_name: &str,
-    //     subs_by_module: &mut SubsByModule,
+    //     subs_by_module: SubsByModule,
     // ) -> LoadedModule {
     //     load_builtins(subs_by_module).await;
 
@@ -91,6 +91,7 @@ mod test_load {
     // }
 
     fn expect_types(loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
+        let home = test_home();
         let mut subs = loaded_module.solved.into_inner();
 
         assert_eq!(loaded_module.problems, Vec::new());
@@ -117,7 +118,7 @@ mod test_load {
 
                 let actual_str = content_to_string(content, &mut subs);
                 let expected_type = expected_types
-                    .get(symbol.as_str())
+                    .get(symbol.fully_qualified(interns, home).to_string().as_str())
                     .unwrap_or_else(|| panic!("Defs included an unexpected symbol: {:?}", symbol));
 
                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
@@ -129,12 +130,12 @@ mod test_load {
 
     #[test]
     fn interface_with_deps() {
-        let mut subs_by_module = MutMap::default();
+        let subs_by_module = MutMap::default();
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
 
         test_async(async {
-            let loaded = load(src_dir, filename, &mut subs_by_module).await;
+            let loaded = load(src_dir, filename, subs_by_module).await;
             let loaded_module = loaded.expect("Test module failed to load");
             assert_eq!(loaded_module.problems, Vec::new());
 
@@ -156,12 +157,12 @@ mod test_load {
 
     #[test]
     fn load_only_builtins() {
-        let mut subs_by_module = MutMap::default();
+        let subs_by_module = MutMap::default();
         let src_dir = builtins_dir();
         let filename = src_dir.join("Defaults.roc");
 
         test_async(async {
-            let loaded = load(src_dir, filename, &mut subs_by_module).await;
+            let loaded = load(src_dir, filename, subs_by_module).await;
             let loaded_module = loaded.expect("Test module failed to load");
             assert_eq!(loaded_module.problems, Vec::new());
 
@@ -196,9 +197,9 @@ mod test_load {
     // #[test]
     // fn interface_with_builtins() {
     //     test_async(async {
-    //         let mut subs_by_module = MutMap::default();
+    //         let subs_by_module = MutMap::default();
     //         let loaded_module =
-    //             load_with_builtins("interface_with_deps", "WithBuiltins", &mut subs_by_module)
+    //             load_with_builtins("interface_with_deps", "WithBuiltins", subs_by_module)
     //                 .await;
 
     //         assert_eq!(loaded_module.problems, Vec::new());
@@ -242,9 +243,9 @@ mod test_load {
     // #[test]
     // fn load_and_infer_with_builtins() {
     //     test_async(async {
-    //         let mut subs_by_module = MutMap::default();
+    //         let subs_by_module = MutMap::default();
     //         let loaded_module =
-    //             load_with_builtins("interface_with_deps", "WithBuiltins", &mut subs_by_module)
+    //             load_with_builtins("interface_with_deps", "WithBuiltins", subs_by_module)
     //                 .await;
 
     //         expect_types(
@@ -266,9 +267,9 @@ mod test_load {
     #[test]
     fn load_principal_types() {
         test_async(async {
-            let mut subs_by_module = MutMap::default();
+            let subs_by_module = MutMap::default();
             let loaded_module =
-                load_without_builtins("interface_with_deps", "Principal", &mut subs_by_module)
+                load_without_builtins("interface_with_deps", "Principal", subs_by_module)
                     .await;
 
             expect_types(
@@ -286,9 +287,9 @@ mod test_load {
     //     test_async(async {
     //         use roc::types::{ErrorType, Mismatch, Problem, TypeExt};
 
-    //         let mut subs_by_module = MutMap::default();
+    //         let subs_by_module = MutMap::default();
     //         let loaded_module =
-    //             load_without_builtins("interface_with_deps", "Records", &mut subs_by_module).await;
+    //             load_without_builtins("interface_with_deps", "Records", subs_by_module).await;
 
     //         // NOTE: `a` here is unconstrained, so unifies with <type error>
     //         let expected_types = hashmap! {
@@ -344,11 +345,11 @@ mod test_load {
     // #[test]
     // fn load_and_infer_without_builtins() {
     //     test_async(async {
-    //         let mut subs_by_module = MutMap::default();
+    //         let subs_by_module = MutMap::default();
     //         let loaded_module = load_without_builtins(
     //             "interface_with_deps",
     //             "WithoutBuiltins",
-    //             &mut subs_by_module,
+    //             subs_by_module,
     //         )
     //         .await;
 

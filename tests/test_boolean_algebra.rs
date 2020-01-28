@@ -18,7 +18,7 @@ mod test_boolean_algebra {
     use roc::uniqueness::boolean_algebra::Bool::{self, *};
 
     // HELPERS
-    fn to_var(v: usize) -> subs::Variable {
+    fn to_var(v: u32) -> subs::Variable {
         unsafe { subs::Variable::unsafe_debug_variable(v) }
     }
 

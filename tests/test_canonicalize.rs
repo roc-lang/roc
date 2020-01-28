@@ -10,7 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_canonicalize {
-    use crate::helpers::{can_expr_with, with_larger_debug_stack};
+    use crate::helpers::{can_expr_with_arena, test_home, with_larger_debug_stack};
     use bumpalo::Bump;
     use roc::can::expr::Expr::{self, *};
     use roc::can::expr::Output;
@@ -18,19 +18,13 @@ mod test_canonicalize {
     use roc::can::problem::Problem;
     use roc::can::problem::RuntimeError;
     use roc::can::procedure::References;
-    use roc::collections::{ImMap, ImSet, SendMap};
-    use roc::ident::Ident;
+    use roc::collections::{ImSet, SendMap};
     use roc::module::symbol::Symbol;
     use roc::region::{Located, Region};
     use std::{f64, i64};
 
-    fn sym(name: &str) -> Symbol {
-        Symbol::new("Test.Blah$", name)
-    }
-
     struct Out<'a> {
-        locals: Vec<&'a str>,
-        globals: Vec<&'a str>,
+        lookups: Vec<&'a str>,
         calls: Vec<&'a str>,
         tail_call: Option<&'a str>,
     }
@@ -38,8 +32,7 @@ mod test_canonicalize {
     impl<'a> Into<Output> for Out<'a> {
         fn into(self) -> Output {
             let references = References {
-                locals: vec_to_set(self.locals),
-                globals: vec_to_set(self.globals),
+                lookups: vec_to_set(self.lookups),
                 calls: vec_to_set(self.calls),
             };
 
@@ -60,14 +53,14 @@ mod test_canonicalize {
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input);
+        let (actual, _, _, _, _, _) = can_expr_with_arena(&arena, test_home(), input);
 
         assert_eq!(actual.value, expected);
     }
 
     fn assert_can_float(input: &str, expected: f64) {
         let arena = Bump::new();
-        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input);
+        let (loc_actual, _, _, _, _, _) = can_expr_with_arena(&arena, test_home(), input);
 
         match loc_actual.value {
             Expr::Float(_, actual) => {
@@ -80,7 +73,7 @@ mod test_canonicalize {
     }
     fn assert_can_int(input: &str, expected: i64) {
         let arena = Bump::new();
-        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input);
+        let (loc_actual, _, _, _, _, _) = can_expr_with_arena(&arena, test_home(), input);
 
         match loc_actual.value {
             Expr::Int(_, actual) => {
@@ -214,15 +207,14 @@ mod test_canonicalize {
         "#
         );
         let (_actual, output, problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src);
+            can_expr_with_arena(&arena, test_home(), src);
 
         assert_eq!(problems, vec![]);
 
         assert_eq!(
             output,
             Out {
-                locals: vec!["func"],
-                globals: vec![],
+                lookups: vec!["func"],
                 calls: vec!["func"],
                 tail_call: None
             }
@@ -244,15 +236,14 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (_actual, output, problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src);
+            can_expr_with_arena(&arena, test_home(), src);
 
         assert_eq!(problems, vec![]);
 
         assert_eq!(
             output,
             Out {
-                locals: vec!["identity", "apply"],
-                globals: vec![],
+                lookups: vec!["identity", "apply"],
                 calls: vec!["f", "apply"],
                 tail_call: None
             }
@@ -324,7 +315,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src);
+                can_expr_with_arena(&arena, test_home(), src);
 
             let detected0 = get_closure(&actual.value, 0);
             let detected1 = get_closure(&actual.value, 1);
@@ -351,7 +342,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src);
+                can_expr_with_arena(&arena, test_home(), src);
 
             let detected = get_closure(&actual.value, 0);
             assert_eq!(detected, Recursive::TailRecursive);
@@ -369,7 +360,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src);
+            can_expr_with_arena(&arena, test_home(), src);
 
         let detected = get_closure(&actual.value, 0);
         assert_eq!(detected, Recursive::TailRecursive);
@@ -388,7 +379,7 @@ mod test_canonicalize {
         );
         let arena = Bump::new();
         let (actual, _output, _problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src);
+            can_expr_with_arena(&arena, test_home(), src);
 
         let detected = get_closure(&actual.value, 0);
         assert_eq!(detected, Recursive::Recursive);
@@ -414,7 +405,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src);
+                can_expr_with_arena(&arena, test_home(), src);
 
             let detected = get_closure(&actual.value, 0);
             assert_eq!(detected, Recursive::Recursive);
@@ -436,7 +427,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src);
+                can_expr_with_arena(&arena, test_home(), src);
 
             let is_circular_def =
                 if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
@@ -461,7 +452,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src);
+                can_expr_with_arena(&arena, test_home(), src);
 
             let is_circular_def =
                 if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
@@ -470,10 +461,8 @@ mod test_canonicalize {
                     false
                 };
 
-            let problem = Problem::CircularAssignment(vec![Located::at(
-                Region::new(0, 0, 0, 1),
-                Ident::Unqualified("x".into()),
-            )]);
+            let problem =
+                Problem::CircularDef(vec![Located::at(Region::new(0, 0, 0, 1), "x".into())]);
 
             assert_eq!(is_circular_def, true);
             assert_eq!(problems, vec![problem]);
@@ -494,7 +483,7 @@ mod test_canonicalize {
             );
             let arena = Bump::new();
             let (actual, _output, problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src);
+                can_expr_with_arena(&arena, test_home(), src);
 
             let is_circular_def =
                 if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
@@ -503,10 +492,10 @@ mod test_canonicalize {
                     false
                 };
 
-            let problem = Problem::CircularAssignment(vec![
-                Located::at(Region::new(0, 0, 0, 1), Ident::Unqualified("x".into())),
-                Located::at(Region::new(1, 1, 0, 1), Ident::Unqualified("y".into())),
-                Located::at(Region::new(2, 2, 0, 1), Ident::Unqualified("z".into())),
+            let problem = Problem::CircularDef(vec![
+                Located::at(Region::new(0, 0, 0, 1), "x".into()),
+                Located::at(Region::new(1, 1, 0, 1), "y".into()),
+                Located::at(Region::new(2, 2, 0, 1), "z".into()),
             ]);
 
             assert_eq!(is_circular_def, true);
@@ -530,7 +519,7 @@ mod test_canonicalize {
 
     //    assert_eq!(
     //        problems,
-    //        vec![Problem::UnusedAssignment(loc(Ident::Unqualified(
+    //        vec![Problem::UnusedAssignment(loc((
     //            "unused".to_string()
     //        )))]
     //    );
@@ -538,8 +527,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["func", "local"],
-    //            globals: vec![],
+    //            lookups: vec!["func", "local"],
     //            calls: vec!["func"],
     //            tail_call: None
     //        }
@@ -563,16 +551,15 @@ mod test_canonicalize {
     //    assert_eq!(
     //        problems,
     //        vec![
-    //            Problem::UnusedAssignment(loc(Ident::Unqualified("unused".to_string()))),
-    //            Problem::UnusedAssignment(loc(Ident::Unqualified("func".to_string()))),
+    //            Problem::UnusedAssignment(loc(("unused".to_string()))),
+    //            Problem::UnusedAssignment(loc(("func".to_string()))),
     //        ]
     //    );
 
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["local"],
-    //            globals: vec![],
+    //            lookups: vec!["local"],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -592,21 +579,20 @@ mod test_canonicalize {
 
     //    assert_eq!(
     //        problems,
-    //        vec![Problem::UnrecognizedLookup(loc(Ident::Unqualified(
+    //        vec![Problem::UnrecognizedLookup(loc((
     //            "x".to_string()
     //        )))]
     //    );
 
     //    assert_eq!(
     //        expr,
-    //        UnrecognizedLookup(loc(Ident::Unqualified("x".to_string())))
+    //        UnrecognizedLookup(loc(("x".to_string())))
     //    );
 
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec![],
-    //            globals: vec![],
+    //            lookups: vec![],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -627,7 +613,7 @@ mod test_canonicalize {
 
     //    assert_eq!(
     //        problems,
-    //        vec![Problem::UnrecognizedLookup(loc(Ident::Unqualified(
+    //        vec![Problem::UnrecognizedLookup(loc((
     //            "z".to_string()
     //        )))]
     //    );
@@ -635,8 +621,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["a", "b"],
-    //            globals: vec![],
+    //            lookups: vec!["a", "b"],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -665,8 +650,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["c"],
-    //            globals: vec![],
+    //            lookups: vec!["c"],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -693,8 +677,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["fibonacci"],
-    //            globals: vec![],
+    //            lookups: vec!["fibonacci"],
     //            calls: vec!["fibonacci"],
     //            tail_call: None
     //        }
@@ -727,8 +710,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["factorial", "factorialHelp"],
-    //            globals: vec![],
+    //            lookups: vec!["factorial", "factorialHelp"],
     //            calls: vec!["factorial", "factorialHelp"],
     //            tail_call: None
     //        }
@@ -754,8 +736,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["a", "b"],
-    //            globals: vec![],
+    //            lookups: vec!["a", "b"],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -783,8 +764,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["increment", "x", "y", "z"],
-    //            globals: vec![],
+    //            lookups: vec!["increment", "x", "y", "z"],
     //            calls: vec!["increment"],
     //            tail_call: None
     //        }
@@ -823,8 +803,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["func1", "func2", "x", "y", "z"],
-    //            globals: vec![],
+    //            lookups: vec!["func1", "func2", "x", "y", "z"],
     //            calls: vec!["func1", "func2"],
     //            tail_call: None
     //        }

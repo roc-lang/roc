@@ -1,7 +1,7 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
-use crate::can::ident::{Ident, Lowercase, ModuleName};
+use crate::can::ident::{Ident, Lowercase};
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::collections::{ImMap, SendMap};
@@ -29,7 +29,7 @@ mod constrain;
 pub mod sharing;
 
 pub fn constrain_declaration(
-    module_name: ModuleName,
+    home: ModuleId,
     var_store: &VarStore,
     region: Region,
     loc_expr: Located<Expr>,
@@ -41,7 +41,7 @@ pub fn constrain_declaration(
     constrain_expr(
         &crate::constrain::expr::Env {
             rigids: ImMap::default(),
-            module_name,
+            home,
         },
         var_store,
         &mut var_usage,
@@ -1222,7 +1222,7 @@ pub fn constrain_def(
             constrain_expr(
                 &Env {
                     rigids: ftv,
-                    module_name: env.module_name.clone(),
+                    home: env.home,
                 },
                 var_store,
                 var_usage,
@@ -1355,7 +1355,7 @@ pub fn rec_defs_help(
                 let expr_con = constrain_expr(
                     &Env {
                         rigids: ftv,
-                        module_name: env.module_name.clone(),
+                        home: env.home,
                     },
                     var_store,
                     var_usage,
