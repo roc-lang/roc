@@ -3,8 +3,7 @@ use crate::can::ident::{Ident, ModuleName};
 use crate::can::module::{canonicalize_module_defs, ModuleOutput};
 use crate::collections::{default_hasher, insert_all, MutMap, MutSet, SendMap};
 use crate::constrain::module::constrain_module;
-use crate::module::symbol::Symbol;
-use crate::module::symbol::{IdentIds, ModuleId, ModuleIds};
+use crate::module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
@@ -36,8 +35,7 @@ pub struct Module {
 
 pub struct LoadedModule {
     pub module_id: ModuleId,
-    pub module_ids: ModuleIds,
-    pub all_ident_ids: MutMap<ModuleId, IdentIds>,
+    pub interns: Interns,
     pub solved: Solved<Subs>,
     pub problems: Vec<Problem>,
     pub declarations: Vec<Declaration>,
@@ -370,10 +368,14 @@ pub async fn load<'a>(
                         .remove(&module_id)
                         .expect("declarations_by_id was missing root module_id entry");
 
-                    return Ok(LoadedModule {
-                        module_id: root_id,
+                    let interns = Interns {
                         module_ids,
                         all_ident_ids,
+                    };
+
+                    return Ok(LoadedModule {
+                        module_id: root_id,
+                        interns,
                         solved,
                         problems: all_problems,
                         declarations,

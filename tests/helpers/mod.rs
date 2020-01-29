@@ -10,7 +10,7 @@ use roc::can::problem::Problem;
 use roc::can::scope::Scope;
 use roc::collections::{ImMap, ImSet, MutMap, SendSet};
 use roc::constrain::expr::constrain_expr;
-use roc::module::symbol::{ModuleId, ModuleIds, Symbol};
+use roc::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
@@ -82,11 +82,8 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 }
 
 #[allow(dead_code)]
-pub fn can_expr(expr_str: &str) -> (Expr, Output, Vec<Problem>, VarStore, Variable, Constraint) {
-    let (loc_expr, output, problems, var_store, var, constraint) =
-        can_expr_with_arena(&Bump::new(), test_home(), expr_str);
-
-    (loc_expr.value, output, problems, var_store, var, constraint)
+pub fn can_expr(expr_str: &str) -> CanExprOut {
+    can_expr_with(&Bump::new(), test_home(), expr_str)
 }
 
 #[allow(dead_code)]
@@ -102,10 +99,9 @@ pub fn uniq_expr_with(
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
 ) -> (Output, Vec<Problem>, Subs, Variable, Constraint) {
-    let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
     let home = test_home();
     let (loc_expr, output, problems, var_store1, variable, _) =
-        can_expr_with(arena, home, expr_str, declared_idents);
+        can_expr_with(arena, home, expr_str);
 
     // double check
     let var_store2 = VarStore::new(var_store1.fresh());
@@ -125,38 +121,19 @@ pub fn uniq_expr_with(
     (output, problems, subs2, variable, constraint2)
 }
 
-#[allow(dead_code)]
-pub fn can_expr_with_arena(
-    arena: &Bump,
+pub struct CanExprOut {
+    loc_expr: Located<Expr>,
+    output: Output,
+    problems: Vec<Problem>,
     home: ModuleId,
-    expr_str: &str,
-) -> (
-    Located<Expr>,
-    Output,
-    Vec<Problem>,
-    VarStore,
-    Variable,
-    Constraint,
-) {
-    let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
-
-    can_expr_with(arena, home, expr_str, declared_idents)
+    ident_ids: IdentIds,
+    var_store: VarStore,
+    var: Variable,
+    constraint: Constraint,
 }
 
 #[allow(dead_code)]
-pub fn can_expr_with(
-    arena: &Bump,
-    home: ModuleId,
-    expr_str: &str,
-    declared_idents: &ImMap<Ident, (Symbol, Region)>,
-) -> (
-    Located<Expr>,
-    Output,
-    Vec<Problem>,
-    VarStore,
-    Variable,
-    Constraint,
-) {
+pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
@@ -179,6 +156,8 @@ pub fn can_expr_with(
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
     let mut scope = Scope::new(home);
+    let dep_idents = MutMap::default();
+    let home_ident_ids = IdentIds::default();
     let mut env = Env::new(home, dep_idents, &module_ids, home_ident_ids);
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
@@ -202,6 +181,8 @@ pub fn can_expr_with(
         loc_expr,
         output,
         env.problems,
+        env.home,
+        env.ident_ids,
         var_store,
         variable,
         constraint,
@@ -313,7 +294,7 @@ pub fn variable_usage(con: &Constraint) -> (SeenVariables, Vec<Variable>) {
     let mut used = ImSet::default();
     variable_usage_help(con, &mut declared, &mut used);
 
-    used.remove(&Variable::unsafe_debug_variable(1));
+    used.remove(unsafe { &Variable::unsafe_debug_variable(1) });
 
     let mut used_vec: Vec<Variable> = used.into_iter().collect();
     used_vec.sort();

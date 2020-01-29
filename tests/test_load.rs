@@ -60,6 +60,7 @@ mod test_load {
         assert_eq!(loaded_module.problems, Vec::new());
 
         let expected_name = loaded_module
+            .interns
             .module_ids
             .get_name(loaded_module.module_id)
             .expect("Test ModuleID not found in module_ids");
@@ -118,7 +119,12 @@ mod test_load {
 
                 let actual_str = content_to_string(content, &mut subs);
                 let expected_type = expected_types
-                    .get(symbol.fully_qualified(interns, home).to_string().as_str())
+                    .get(
+                        symbol
+                            .fully_qualified(&loaded_module.interns, home)
+                            .to_string()
+                            .as_str(),
+                    )
                     .unwrap_or_else(|| panic!("Defs included an unexpected symbol: {:?}", symbol));
 
                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
@@ -146,6 +152,7 @@ mod test_load {
                 .sum();
 
             let expected_name = loaded_module
+                .interns
                 .module_ids
                 .get_name(loaded_module.module_id)
                 .expect("Test ModuleID not found in module_ids");
@@ -172,7 +179,7 @@ mod test_load {
                 .map(|decl| decl.def_count())
                 .sum();
 
-            let module_ids = loaded_module.module_ids;
+            let module_ids = loaded_module.interns.module_ids;
             let expected_name = module_ids
                 .get_name(loaded_module.module_id)
                 .expect("Test ModuleID not found in module_ids");
@@ -269,8 +276,7 @@ mod test_load {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
-                load_without_builtins("interface_with_deps", "Principal", subs_by_module)
-                    .await;
+                load_without_builtins("interface_with_deps", "Principal", subs_by_module).await;
 
             expect_types(
                 loaded_module,
