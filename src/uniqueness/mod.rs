@@ -7,7 +7,7 @@ use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::builtins;
 use crate::constrain::expr::{exists, Env, Info};
-use crate::module::symbol::{IdentId, ModuleId, Symbol};
+use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use crate::types::AnnotationSource::TypedWhenBranch;
@@ -1054,29 +1054,21 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
 
         Apply(symbol, args) => {
             let uniq_var = var_store.fresh();
-            let module_id = symbol.module_id();
-            let ident_id = symbol.ident_id();
 
-            if module_id == ModuleId::NUM && ident_id == IdentId::NUM_NUM {
+            if *symbol == Symbol::NUM_NUM {
                 let arg = args
                     .iter()
                     .next()
                     .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
 
                 match arg {
-                    Apply(symbol, _)
-                        if symbol.module_id() == ModuleId::INT
-                            && symbol.ident_id() == IdentId::INT_INTEGER =>
-                    {
+                    Apply(symbol, _) if *symbol == Symbol::INT_INTEGER => {
                         return (
                             vec![uniq_var],
                             constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
                         )
                     }
-                    Apply(symbol, _)
-                        if symbol.module_id() == ModuleId::FLOAT
-                            && symbol.ident_id() == IdentId::FLOAT_FLOATINGPOINT =>
-                    {
+                    Apply(symbol, _) if *symbol == Symbol::FLOAT_FLOATINGPOINT => {
                         return (
                             vec![uniq_var],
                             constrain::attr_type(Bool::Variable(uniq_var), Type::float()),

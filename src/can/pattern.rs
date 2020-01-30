@@ -88,7 +88,7 @@ pub fn canonicalize_pattern<'a>(
             Pattern::AppliedTag(var_store.fresh(), TagName::Global((*name).into()), vec![])
         }
         PrivateTag(name) => {
-            let ident_id = env.ident_ids.private_tag(&(*name).into());
+            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
 
             // Canonicalize the tag's name.
             Pattern::AppliedTag(
@@ -101,7 +101,7 @@ pub fn canonicalize_pattern<'a>(
             let tag_name = match tag.value {
                 GlobalTag(name) => TagName::Global(name.into()),
                 PrivateTag(name) => {
-                    let ident_id = env.ident_ids.private_tag(&name.into());
+                    let ident_id = env.ident_ids.get_or_insert(&name.into());
 
                     TagName::Private(Symbol::new(env.home, ident_id))
                 }

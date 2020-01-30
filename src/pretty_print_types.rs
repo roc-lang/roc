@@ -1,6 +1,6 @@
 use crate::can::ident::Lowercase;
 use crate::collections::{MutMap, MutSet};
-use crate::module::symbol::{IdentId, Interns, ModuleId, Symbol};
+use crate::module::symbol::{Interns, ModuleId, Symbol};
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::name_type_var;
 use crate::uniqueness::boolean_algebra::Bool;
@@ -411,70 +411,73 @@ fn write_apply(
     parens: Parens,
 ) {
     let write_parens = parens == Parens::InTypeParam && !args.is_empty();
-    let module_id = symbol.module_id();
-    let ident_id = symbol.ident_id();
 
     // Hardcoded type aliases
-    if module_id == ModuleId::STR && ident_id == IdentId::STR_STR {
-        buf.push_str("Str");
-    } else if module_id == ModuleId::NUM && ident_id == IdentId::NUM_NUM {
-        let arg = args
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
-        let arg_content = subs.get(arg).content;
-        let mut arg_param = String::new();
+    match symbol {
+        Symbol::STR_STR => {
+            buf.push_str("Str");
+        }
+        Symbol::NUM_NUM => {
+            let arg = args
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
+            let arg_content = subs.get(arg).content;
+            let mut arg_param = String::new();
 
-        write_content(env, arg_content, subs, &mut arg_param, Parens::InTypeParam);
+            write_content(env, arg_content, subs, &mut arg_param, Parens::InTypeParam);
 
-        if arg_param == "Int.Integer" {
-            buf.push_str("Int");
-        } else if arg_param == "Float.FloatingPoint" {
-            buf.push_str("Float");
-        } else {
+            if arg_param == "Int.Integer" {
+                buf.push_str("Int");
+            } else if arg_param == "Float.FloatingPoint" {
+                buf.push_str("Float");
+            } else {
+                if write_parens {
+                    buf.push_str("(");
+                }
+
+                buf.push_str("Num ");
+                buf.push_str(&arg_param);
+
+                if write_parens {
+                    buf.push_str(")");
+                }
+            }
+        }
+        Symbol::LIST_LIST => {
             if write_parens {
                 buf.push_str("(");
             }
 
-            buf.push_str("Num ");
-            buf.push_str(&arg_param);
+            buf.push_str("List ");
+
+            let arg = args
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("List did not have any type parameters somehow."));
+            let arg_content = subs.get(arg).content;
+
+            write_content(env, arg_content, subs, buf, Parens::InTypeParam);
 
             if write_parens {
                 buf.push_str(")");
             }
         }
-    } else if module_id == ModuleId::LIST && ident_id == IdentId::LIST_LIST {
-        if write_parens {
-            buf.push_str("(");
-        }
+        _ => {
+            if write_parens {
+                buf.push_str("(");
+            }
 
-        buf.push_str("List ");
+            write_symbol(env, symbol, buf);
 
-        let arg = args
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("List did not have any type parameters somehow."));
-        let arg_content = subs.get(arg).content;
+            for arg in args {
+                buf.push_str(" ");
+                write_content(env, subs.get(arg).content, subs, buf, Parens::InTypeParam);
+            }
 
-        write_content(env, arg_content, subs, buf, Parens::InTypeParam);
-
-        if write_parens {
-            buf.push_str(")");
-        }
-    } else {
-        if write_parens {
-            buf.push_str("(");
-        }
-
-        write_symbol(env, symbol, buf);
-
-        for arg in args {
-            buf.push_str(" ");
-            write_content(env, subs.get(arg).content, subs, buf, Parens::InTypeParam);
-        }
-
-        if write_parens {
-            buf.push_str(")");
+            if write_parens {
+                buf.push_str(")");
+            }
         }
     }
 }

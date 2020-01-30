@@ -1,10 +1,8 @@
-use crate::can::ident::ModuleName;
 use crate::collections::{default_hasher, MutMap};
 use inlinable_string::InlinableString;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::{fmt, u32};
-
-pub const NUM_BUILTIN_MODULES: usize = 12;
 
 // TODO: benchmark this as { ident_id: u32, module_id: u32 } and see if perf stays the same
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -14,27 +12,9 @@ pub struct Symbol(u64);
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
 impl Symbol {
-    // Attr
-    pub const ATTR_ATTR: Symbol = Symbol::new(ModuleId::ATTR, IdentId::ATTR_ATTR);
-
-    // Str
-    pub const STR_STR: Symbol = Symbol::new(ModuleId::STR, IdentId::STR_STR);
-
-    // Num
-    pub const NUM_ABS: Symbol = Symbol::new(ModuleId::NUM, IdentId::NUM_ABS);
-    pub const NUM_NUM: Symbol = Symbol::new(ModuleId::NUM, IdentId::NUM_NUM);
-    pub const NUM_INT: Symbol = Symbol::new(ModuleId::NUM, IdentId::INT_INT);
-    pub const INT_INTEGER: Symbol = Symbol::new(ModuleId::NUM, IdentId::INT_INTEGER);
-    pub const NUM_FLOAT: Symbol = Symbol::new(ModuleId::NUM, IdentId::FLOAT_FLOAT);
-    pub const FLOAT_FLOATINGPOINT: Symbol =
-        Symbol::new(ModuleId::NUM, IdentId::FLOAT_FLOATINGPOINT);
-
-    // Bool
-    pub const BOOL_NOT: Symbol = Symbol::new(ModuleId::BOOL, IdentId::BOOL_NOT);
-    pub const BOOL_BOOL: Symbol = Symbol::new(ModuleId::BOOL, IdentId::BOOL_BOOL);
-
-    // List
-    pub const LIST_LIST: Symbol = Symbol::new(ModuleId::LIST, IdentId::LIST_LIST);
+    // NOTE: the define_builtins! macro adds a bunch of constants to this impl,
+    //
+    // e.g. pub const NUM_NUM: Symbol = …
 
     pub const fn new(module_id: ModuleId, ident_id: IdentId) -> Symbol {
         // The bit layout of the u64 inside a Symbol is:
@@ -151,18 +131,9 @@ pub struct ModuleId(u32);
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
 impl ModuleId {
-    // NOTE: Always add constants to the *end* of this list (with a unique integer),
-    // and then also go to `impl Default for ModuleIds` and incorporate the new constant
-    // into the *end* of its default module insertions. Insertion order matters for those!
-    pub const STR: ModuleId = ModuleId(0);
-    pub const BOOL: ModuleId = ModuleId(1);
-    pub const INT: ModuleId = ModuleId(2);
-    pub const FLOAT: ModuleId = ModuleId(3);
-    pub const LIST: ModuleId = ModuleId(4);
-    pub const MAP: ModuleId = ModuleId(5);
-    pub const SET: ModuleId = ModuleId(6);
-    pub const NUM: ModuleId = ModuleId(7);
-    pub const ATTR: ModuleId = ModuleId(u32::MAX);
+    // NOTE: the define_builtins! macro adds a bunch of constants to this impl,
+    //
+    // e.g. pub const NUM: ModuleId = …
 
     #[cfg(debug_assertions)]
     pub fn name(self) -> Box<str> {
@@ -220,56 +191,6 @@ pub struct ModuleIds {
     by_name: MutMap<InlinableString, ModuleId>,
     /// Each ModuleId is an index into this Vec
     by_id: Vec<InlinableString>,
-}
-
-impl Default for ModuleIds {
-    fn default() -> Self {
-        // +1 because the user will be compiling at least 1 non-builtin module!
-        let capacity = NUM_BUILTIN_MODULES + 1;
-
-        let mut by_name = HashMap::with_capacity_and_hasher(capacity, default_hasher());
-        let mut by_id = Vec::with_capacity(capacity);
-
-        let mut insert_both = |id: ModuleId, name_str: &'static str| {
-            let name: InlinableString = name_str.into();
-
-            // It's very important that these are inserted in the correct order!
-            debug_assert!(id.0 as usize == by_id.len(), "When setting up default ModuleIds, `{:?}` was inserted in the wrong order. It has a hardcoded ID of {:?} but was inserted at index {:?}", name_str, id.0, by_id.len());
-
-            // Make sure we haven't already inserted an entry for this module name.
-            debug_assert!(!by_name.contains_key(&name), "Duplicate default module! We already have an ID for module `{:?}` (namely {:?}), but we tried to insert it again with ID {:?}", name, by_name.get(&name).unwrap(), id.0);
-
-            if cfg!(debug_assertions) {
-                Self::insert_debug_name(id, &name);
-            }
-
-            by_name.insert(name.clone(), id);
-            by_id.push(name);
-        };
-
-        // These MUST be inserted in the correct order:
-        //
-        // * The first ModuleId pased in must be 0
-        // * Each subsequent ModuleId must be 1 greater than the previous one
-        //
-        // This is because these will be translated into indices into a Vec,
-        // and each time this gets called, the name gets pushed onto the Vec.
-        // So for these IDs to correspond to the correct names, they must be
-        // inserted in this order!
-        //
-        // Everywherere else this invariant is enforced by the API,
-        // but for these hardcoded modules we have to enforce it manually.
-        insert_both(ModuleId::STR, ModuleName::STR);
-        insert_both(ModuleId::BOOL, ModuleName::BOOL);
-        insert_both(ModuleId::INT, ModuleName::INT);
-        insert_both(ModuleId::FLOAT, ModuleName::FLOAT);
-        insert_both(ModuleId::LIST, ModuleName::LIST);
-        insert_both(ModuleId::MAP, ModuleName::MAP);
-        insert_both(ModuleId::SET, ModuleName::SET);
-        insert_both(ModuleId::NUM, ModuleName::NUM);
-
-        ModuleIds { by_name, by_id }
-    }
 }
 
 impl ModuleIds {
@@ -358,30 +279,9 @@ impl fmt::Debug for IdentId {
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
 impl IdentId {
-    // Attr
-    pub const ATTR_ATTR: IdentId = IdentId(0);
-
-    // Num
-    pub const NUM_ABS: IdentId = IdentId(0);
-    pub const NUM_NUM: IdentId = IdentId(1);
-
-    // Int
-    pub const INT_INT: IdentId = IdentId(2);
-    pub const INT_INTEGER: IdentId = IdentId(3);
-
-    // Float
-    pub const FLOAT_FLOAT: IdentId = IdentId(4);
-    pub const FLOAT_FLOATINGPOINT: IdentId = IdentId(5);
-
-    // Bool
-    pub const BOOL_BOOL: IdentId = IdentId(0);
-    pub const BOOL_NOT: IdentId = IdentId(1);
-
-    // Str
-    pub const STR_STR: IdentId = IdentId(0);
-
-    // List
-    pub const LIST_LIST: IdentId = IdentId(0);
+    // NOTE: the define_builtins! macro adds a bunch of constants to this impl,
+    //
+    // e.g. pub const NUM_NUM: IdentId = …
 
     #[cfg(debug_assertions)]
     pub fn name(self) -> Box<str> {
@@ -408,8 +308,7 @@ impl IdentId {
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Debug, Clone, Default)]
 pub struct IdentIds {
-    /// Only private tag names can be looked up by name.
-    private_tag_names: MutMap<InlinableString, IdentId>,
+    by_ident: MutMap<InlinableString, IdentId>,
 
     /// Each IdentId is an index into this Vec
     by_id: Vec<InlinableString>,
@@ -433,6 +332,7 @@ impl IdentIds {
             Self::insert_debug_name(ident_id, ident_name.to_string().into());
         }
 
+        self.by_ident.insert(ident_name.clone(), ident_id);
         by_id.push(ident_name);
 
         ident_id
@@ -446,20 +346,19 @@ impl IdentIds {
     /// something in a sibling scope - both of which can cause bugs.
     ///
     /// Thus, only ever call this for private tags!
-    pub fn private_tag(&mut self, private_tag_name: &InlinableString) -> IdentId {
-        match self.private_tag_names.get(private_tag_name) {
+    pub fn get_or_insert(&mut self, name: &InlinableString) -> IdentId {
+        match self.by_ident.get(name) {
             Some(id) => *id,
             None => {
                 let by_id = &mut self.by_id;
                 let ident_id = IdentId(by_id.len() as u32);
 
-                by_id.push(private_tag_name.clone());
+                by_id.push(name.clone());
 
-                self.private_tag_names
-                    .insert(private_tag_name.clone(), ident_id);
+                self.by_ident.insert(name.clone(), ident_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(ident_id, private_tag_name.to_string().into());
+                    Self::insert_debug_name(ident_id, name.to_string().into());
                 }
 
                 ident_id
@@ -498,10 +397,152 @@ impl IdentIds {
     }
 
     pub fn get_id(&self, ident_name: &InlinableString) -> Option<&IdentId> {
-        self.private_tag_names.get(ident_name)
+        self.by_ident.get(ident_name)
     }
 
     pub fn get_name(&self, id: IdentId) -> Option<&InlinableString> {
         self.by_id.get(id.0 as usize)
     }
+}
+
+// BUILTINS
+
+macro_rules! define_builtins {
+    {
+        $(
+            $module_id:literal $module_const:ident: $module_name:literal => {
+                $(
+                    $ident_id:literal $ident_const:ident: $ident_name:literal
+                )+
+            }
+        )+
+        num_modules: $total:literal
+    } => {
+        impl IdentIds {
+            pub fn exposed_builtins() -> MutMap<ModuleId, Arc<IdentIds>> {
+                let mut exposed_idents_by_module = MutMap::default();
+
+                $(
+                    debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
+
+                    exposed_idents_by_module.insert(
+                        ModuleId($module_id),
+                        Arc::new({
+                            let by_id = vec! [
+                                $(
+                                    $ident_name.into(),
+                                )+
+                            ];
+                            let mut by_ident = MutMap::default();
+
+                            $(
+                                debug_assert!(!by_ident.contains_key($ident_name.clone().into()), "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - the Ident name {:?} is already present in the map. Check the map for duplicate ident names within the {:?} module!", $ident_id, $ident_name, $module_id, $module_name, $ident_name, $module_name);
+                                debug_assert!(by_ident.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_ident.len(), $ident_id, $ident_name, by_ident.len(), $ident_name);
+
+                                by_ident.insert($ident_name.into(), IdentId($ident_id));
+
+                                if cfg!(debug_assertions) {
+                                   IdentIds::insert_debug_name(IdentId($ident_id), $ident_name.into());
+                                }
+                            )+
+
+                            IdentIds {
+                                by_ident,
+                                by_id,
+                                next_generated_name: 0,
+                            }
+                        })
+                    );
+
+                    if cfg!(debug_assertions) {
+                        ModuleIds::insert_debug_name(ModuleId($module_id), &$module_name.into());
+                    }
+                )+
+
+                debug_assert!(exposed_idents_by_module.len() == $total, "Error setting up Builtins: `total:` is set to the wrong amount. It was set to {} but {} modules were set up.", $total, exposed_idents_by_module.len());
+
+                exposed_idents_by_module
+            }
+        }
+
+        impl ModuleId {
+            $(
+                pub const $module_const: ModuleId = ModuleId($module_id);
+            )+
+        }
+
+        impl Default for ModuleIds {
+            fn default() -> Self {
+                // +1 because the user will be compiling at least 1 non-builtin module!
+                let capacity = $total + 1;
+
+                let mut by_name = HashMap::with_capacity_and_hasher(capacity, default_hasher());
+                let mut by_id = Vec::with_capacity(capacity);
+
+                let mut insert_both = |id: ModuleId, name_str: &'static str| {
+                    let name: InlinableString = name_str.into();
+
+                    if cfg!(debug_assertions) {
+                        Self::insert_debug_name(id, &name);
+                    }
+
+                    by_name.insert(name.clone(), id);
+                    by_id.push(name);
+                };
+
+                $(
+                    insert_both(ModuleId($module_id), $module_name);
+                )+
+
+                ModuleIds { by_name, by_id }
+            }
+        }
+
+        impl Symbol {
+            $(
+                $(
+                    pub const $ident_const: Symbol = Symbol::new(ModuleId($module_id), IdentId($ident_id));
+                )+
+            )+
+
+        }
+    };
+}
+
+define_builtins! {
+    0 ATTR: "Attr" => {
+        0 ATTR_ATTR: "Attr" // the Attr.Attr type alias, used in uniqueness types
+    }
+    1 NUM: "Num" => {
+        0 NUM_NUM: "Num" // the Num.Num type alias
+        1 NUM_ABS: "abs"
+        2 NUM_ADD: "add"
+        3 NUM_SUB: "sub"
+        4 NUM_MUL: "mul"
+    }
+    2 INT: "Int" => {
+        0 INT_INT: "Int" // the Int.Int type alias
+        1 INT_INTEGER: "Integer" // Int : Num Integer
+        2 INT_DIV: "div"
+    }
+    3 FLOAT: "Float" => {
+        0 FLOAT_FLOAT: "Float" // the Float.Float type alias
+        1 FLOAT_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
+        2 FLOAT_DIV: "div"
+    }
+    4 BOOL: "Bool" => {
+        0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
+        1 BOOL_AND: "and"
+        2 BOOL_OR: "or"
+    }
+    5 STR: "Str" => {
+        0 STR_STR: "Str" // the Str.Str type alias
+        1 STR_ISEMPTY: "isEmpty"
+    }
+    6 LIST: "List" => {
+        0 LIST_LIST: "List" // the List.List type alias
+        1 LIST_ISEMPTY: "isEmpty"
+    }
+
+    num_modules: 7 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
 }

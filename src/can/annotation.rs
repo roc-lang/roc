@@ -446,7 +446,7 @@ fn can_tag<'a>(
             references
         }
         Tag::Private { name, args } => {
-            let ident_id = env.ident_ids.private_tag(&name.value.into());
+            let ident_id = env.ident_ids.get_or_insert(&name.value.into());
             let symbol = Symbol::new(env.home, ident_id);
             let mut references = MutSet::default();
             let mut arg_types = Vec::with_capacity(args.len());

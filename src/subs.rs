@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
-use crate::module::symbol::{IdentId, ModuleId, Symbol};
+use crate::module::symbol::Symbol;
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
@@ -448,9 +448,7 @@ impl Content {
     #[inline(always)]
     pub fn is_number(&self) -> bool {
         match &self {
-            Content::Structure(FlatType::Apply(symbol, _)) => {
-                symbol.module_id() == ModuleId::NUM && symbol.ident_id() == IdentId::NUM_NUM
-            }
+            Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _)) => true,
             _ => false,
         }
     }

@@ -516,7 +516,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::PrivateTag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
-            let tag_ident = env.ident_ids.private_tag(&(*tag).into());
+            let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
             let symbol = Symbol::new(env.home, tag_ident);
 
             (

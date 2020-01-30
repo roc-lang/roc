@@ -1,7 +1,7 @@
 use crate::can;
 use crate::can::pattern::Pattern;
 use crate::collections::MutMap;
-use crate::module::symbol::{IdentId, ModuleId};
+use crate::module::symbol::Symbol;
 use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
 use crate::subs::{Content, FlatType, Subs, Variable};
@@ -394,25 +394,13 @@ fn from_can_when<'a>(
             // TODO we can also Switch on record fields if we're pattern matching
             // on a record field that's also Switchable.
             let is_switchable = match &content {
-                Content::Structure(FlatType::Apply(symbol, args))
-                    if symbol.module_id() == ModuleId::NUM
-                        && symbol.ident_id() == IdentId::NUM_NUM =>
-                {
+                Content::Structure(FlatType::Apply(Symbol::NUM_NUM, args)) => {
                     debug_assert!(args.len() == 1);
 
                     let arg = args.iter().next().unwrap();
 
                     match subs.get_without_compacting(*arg).content {
-                        Content::Structure(FlatType::Apply(symbol, _))
-                            if symbol.module_id() == ModuleId::INT =>
-                        {
-                            // This check should never fail; the only type
-                            // that fits the pattern of Num.Num Int._____
-                            // is an Int!
-                            debug_assert!(symbol.ident_id() == IdentId::INT_INTEGER);
-
-                            true
-                        }
+                        Content::Structure(FlatType::Apply(Symbol::INT_INTEGER, _)) => true,
                         _ => false,
                     }
                 }

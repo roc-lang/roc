@@ -3,7 +3,7 @@ use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{BasicType, FunctionType};
 use inkwell::AddressSpace;
 
-use crate::module::symbol::{IdentId, ModuleId};
+use crate::module::symbol::Symbol;
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs, Variable};
@@ -31,10 +31,7 @@ pub fn content_to_basic_type<'ctx>(
     match content {
         Content::Structure(flat_type) => match flat_type {
             Apply(symbol, args) => {
-                let module_id = symbol.module_id();
-                let ident_id = symbol.ident_id();
-
-                if module_id == ModuleId::NUM && ident_id == IdentId::NUM_NUM {
+                if *symbol == Symbol::NUM_NUM {
                     let arg = *args.iter().next().unwrap();
                     let arg_content = subs.get_without_compacting(arg).content;
 
@@ -70,29 +67,20 @@ pub fn content_to_basic_type<'ctx>(
 fn num_to_basic_type(content: Content, context: &Context) -> Result<BasicTypeEnum<'_>, String> {
     match content {
         Content::Structure(flat_type) => match flat_type {
-            Apply(symbol, args) => {
-                let module_id = symbol.module_id();
-                let ident_id = symbol.ident_id();
-
-                if module_id == ModuleId::FLOAT
-                    && ident_id == IdentId::FLOAT_FLOATINGPOINT
-                    && args.is_empty()
-                {
+            Apply(symbol, args) => match symbol {
+                Symbol::FLOAT_FLOATINGPOINT => {
                     debug_assert!(args.is_empty());
                     Ok(BasicTypeEnum::FloatType(context.f64_type()))
-                } else if module_id == ModuleId::INT
-                    && ident_id == IdentId::INT_INTEGER
-                    && args.is_empty()
-                {
+                }
+                Symbol::INT_INTEGER => {
                     debug_assert!(args.is_empty());
                     Ok(BasicTypeEnum::IntType(context.i64_type()))
-                } else {
-                    Err(format!(
-                        "Unrecognized numeric type: {:?} with args {:?}",
-                        symbol, args
-                    ))
                 }
-            }
+                _ => Err(format!(
+                    "Unrecognized numeric type: {:?} with args {:?}",
+                    symbol, args
+                )),
+            },
             other => panic!(
                 "TODO handle num_to_basic_type (branch 0) for {:?} which is NESTED inside Num.Num",
                 other

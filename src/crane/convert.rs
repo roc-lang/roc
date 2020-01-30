@@ -2,7 +2,7 @@ use cranelift::prelude::AbiParam;
 use cranelift_codegen::ir::{types, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
 
-use crate::module::symbol::{IdentId, ModuleId};
+use crate::module::symbol::Symbol;
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs, Variable};
@@ -18,10 +18,7 @@ pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConf
     match content {
         Content::Structure(flat_type) => match flat_type {
             Apply(symbol, args) => {
-                let module_id = symbol.module_id();
-                let ident_id = symbol.ident_id();
-
-                if module_id == ModuleId::NUM && ident_id == IdentId::NUM_NUM {
+                if *symbol == Symbol::NUM_NUM {
                     let arg = *args.iter().next().unwrap();
                     let arg_content = subs.get_without_compacting(arg).content;
 
@@ -43,29 +40,20 @@ pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConf
 fn num_to_crane_type(content: Content) -> Type {
     match content {
         Content::Structure(flat_type) => match flat_type {
-            Apply(symbol, args) => {
-                let module_id = symbol.module_id();
-                let ident_id = symbol.ident_id();
-
-                if module_id == ModuleId::FLOAT
-                    && ident_id == IdentId::FLOAT_FLOATINGPOINT
-                    && args.is_empty()
-                {
+            Apply(symbol, args) => match symbol {
+                Symbol::FLOAT_FLOATINGPOINT => {
                     debug_assert!(args.is_empty());
                     types::F64
-                } else if module_id == ModuleId::INT
-                    && ident_id == IdentId::INT_INTEGER
-                    && args.is_empty()
-                {
+                }
+                Symbol::INT_INTEGER => {
                     debug_assert!(args.is_empty());
                     types::I64
-                } else {
-                    panic!(
-                        "Unrecognized numeric type: {:?} with args {:?}",
-                        symbol, args
-                    )
                 }
-            }
+                _ => panic!(
+                    "Unrecognized numeric type: {:?} with args {:?}",
+                    symbol, args
+                ),
+            },
             other => panic!(
                 "TODO handle num_to_crane_type (branch 0) for {:?} which is NESTED inside Num.Num",
                 other

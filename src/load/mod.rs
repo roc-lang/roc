@@ -159,7 +159,8 @@ pub async fn load<'a>(
     // The declarations we'll ultimately be returning
     let mut declarations_by_id: MutMap<ModuleId, Vec<Declaration>> = MutMap::default();
 
-    let mut exposed_idents_by_module: MutMap<ModuleId, Arc<IdentIds>> = MutMap::default();
+    let mut exposed_idents_by_module: MutMap<ModuleId, Arc<IdentIds>> =
+        IdentIds::exposed_builtins();
 
     // Modules which are waiting for certain headers to be parsed
     let mut waiting_for_headers: MutMap<ModuleId, MutSet<ModuleId>> = MutMap::default();

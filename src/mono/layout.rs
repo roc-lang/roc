@@ -1,4 +1,4 @@
-use crate::module::symbol::{IdentId, ModuleId};
+use crate::module::symbol::Symbol;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -102,10 +102,7 @@ fn layout_from_flat_type<'a>(
 
     match flat_type {
         Apply(symbol, args) => {
-            let module_id = symbol.module_id();
-            let ident_id = symbol.ident_id();
-
-            if module_id == ModuleId::NUM && ident_id == IdentId::NUM_NUM {
+            if symbol == Symbol::NUM_NUM {
                 // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                 debug_assert!(args.len() == 1);
 
@@ -159,21 +156,16 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
         var @ FlexVar(_) | var @ RigidVar(_) => {
             panic!("Layout::from_content encountered an unresolved {:?}", var);
         }
-        Structure(Apply(symbol, args)) => {
-            let module_id = symbol.module_id();
-            let ident_id = symbol.ident_id();
-
-            if module_id == ModuleId::INT && ident_id == IdentId::INT_INTEGER {
-                Ok(Layout::Builtin(Builtin::Int64))
-            } else if module_id == ModuleId::FLOAT && ident_id == IdentId::FLOAT_FLOATINGPOINT {
-                Ok(Layout::Builtin(Builtin::Float64))
-            } else {
+        Structure(Apply(symbol, args)) => match symbol {
+            Symbol::INT_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::FLOAT_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
+            _ => {
                 panic!(
                     "Invalid Num.Num type application: {:?}",
                     Apply(symbol, args)
                 );
             }
-        }
+        },
         Structure(_) => {
             panic!("Invalid Num.Num type application: {:?}", content);
         }
