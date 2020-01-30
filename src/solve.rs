@@ -364,7 +364,6 @@ fn solve(
                         debug_assert!(rigid_vars
                             .iter()
                             .all(|&var| subs.get_without_compacting(var).rank == Rank::NONE));
-
                         let mut new_vars_by_symbol = vars_by_symbol.clone();
 
                         for (symbol, loc_var) in local_def_vars.iter() {
@@ -498,12 +497,31 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
+        RecursiveTagUnion(rec_var, tags, ext) => {
+            let mut tag_vars = MutMap::default();
+
+            for (tag, tag_argument_types) in tags {
+                let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
+
+                for arg_type in tag_argument_types {
+                    tag_argument_vars.push(type_to_variable(subs, rank, pools, aliases, arg_type));
+                }
+
+                tag_vars.insert(tag.clone(), tag_argument_vars);
+            }
+
+            let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
+            let content =
+                Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, ext_var));
+
+            register(subs, rank, pools, content)
+        }
         Alias(symbol, args, alias_type) => {
             let mut arg_vars = Vec::with_capacity(args.len());
             let mut new_aliases = ImMap::default();
 
-            for (arg, arg_var) in args {
-                let arg_var = *arg_var;
+            for (arg, arg_type) in args {
+                let arg_var = type_to_variable(subs, rank, pools, &ImMap::default(), arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
                 new_aliases.insert(arg.clone(), arg_var);
@@ -531,13 +549,32 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    if subs.occurs(var) {
-        let error_type = subs.var_to_error_type(var);
-        let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+    if let Some(recursive) = subs.occurs(var) {
+        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
+            let rec_var = subs.fresh_unnamed_flex_var();
 
-        subs.set_content(var, Content::Error);
+            let mut new_tags = MutMap::default();
 
-        problems.push(problem);
+            for (label, args) in tags {
+                let new_args = args
+                    .clone()
+                    .into_iter()
+                    .map(|var| if var == recursive { rec_var } else { var })
+                    .collect();
+
+                new_tags.insert(label.clone(), new_args);
+            }
+
+            let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+            subs.set_content(recursive, Content::Structure(flat_type));
+        } else {
+            let error_type = subs.var_to_error_type(var);
+            let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+
+            subs.set_content(var, Content::Error);
+
+            problems.push(problem);
+        }
     }
 }
 
@@ -727,6 +764,20 @@ fn adjust_rank_content(
                     rank
                 }
 
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var);
+                    rank = rank.max(adjust_rank(
+                        subs, young_mark, visit_mark, group_rank, ext_var,
+                    ));
+
+                    for var in tags.values().flatten() {
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    }
+
+                    rank
+                }
+
                 Boolean(b) => {
                     let mut rank = Rank::toplevel();
                     for var in b.variables() {
@@ -868,6 +919,24 @@ fn deep_copy_var_help(
                     }
 
                     TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let mut new_tags = MutMap::default();
+
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                            .collect();
+                        new_tags.insert(tag, new_vars);
+                    }
+
+                    RecursiveTagUnion(
+                        deep_copy_var_help(subs, max_rank, pools, rec_var),
+                        new_tags,
+                        deep_copy_var_help(subs, max_rank, pools, ext_var),
+                    )
                 }
 
                 Boolean(b) => {

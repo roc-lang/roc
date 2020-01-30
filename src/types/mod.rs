@@ -24,7 +24,8 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     Record(SendMap<Lowercase, Type>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
-    Alias(Symbol, Vec<(Lowercase, Variable)>, Box<Type>),
+    Alias(Symbol, Vec<(Lowercase, Type)>, Box<Type>),
+    RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(Symbol, Vec<Type>),
     /// Boolean type used in uniqueness inference
@@ -76,11 +77,11 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(symbol, args, _actual) => {
+            Type::Alias(symbol, args, actual) => {
                 write!(f, "Alias {:?}", symbol)?;
 
                 for (_, arg) in args {
-                    write!(f, " {:?}", arg)?;
+                    write!(f, " <{:?}>", arg)?;
                 }
 
                 Ok(())
@@ -170,6 +171,51 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::RecursiveTagUnion(rec, tags, ext) => {
+                write!(f, "[")?;
+
+                if !tags.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                let mut any_written_yet = false;
+
+                for (label, arguments) in tags {
+                    if any_written_yet {
+                        write!(f, ", ")?;
+                    } else {
+                        any_written_yet = true;
+                    }
+
+                    write!(f, "{:?}", label)?;
+
+                    for argument in arguments {
+                        write!(f, " {:?}", argument)?;
+                    }
+                }
+
+                if !tags.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                write!(f, "]")?;
+
+                match *ext.clone() {
+                    Type::EmptyTagUnion => {
+                        // This is a closed variant. We're done!
+                    }
+                    other => {
+                        // This is an open tag union, so print the variable
+                        // right after the ']'
+                        //
+                        // e.g. the "*" at the end of `[ Foo ]*`
+                        // or the "r" at the end of `[ DivByZero ]r`
+                        other.fmt(f)?;
+                    }
+                }
+
+                write!(f, " as <{:?}>", rec)
+            }
             Type::Boolean(b) => write!(f, "{:?}", b),
         }
     }
@@ -239,13 +285,21 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
+            RecursiveTagUnion(_, tags, ext) => {
+                for (_, args) in tags {
+                    for x in args {
+                        x.substitute(substitutions);
+                    }
+                }
+                ext.substitute(substitutions);
+            }
             Record(fields, ext) => {
                 for x in fields.iter_mut() {
                     x.substitute(substitutions);
                 }
                 ext.substitute(substitutions);
             }
-            Alias(_, _, actual_type) => {
+            Alias(_, zipped, actual_type) => {
                 actual_type.substitute(substitutions);
             }
             Apply(_, args) => {
@@ -270,7 +324,7 @@ impl Type {
                 }
                 ret.substitute_alias(rep_symbol, actual);
             }
-            TagUnion(tags, ext) => {
+            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
                         x.substitute_alias(rep_symbol, actual);
@@ -341,13 +395,25 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(ext, accum);
         }
-        Alias(_, args, actual) => {
-            variables_help(actual, accum);
-
-            // rigids bound by the alias don't need to be declared
-            for (_, var) in args {
-                accum.remove(&var);
+        RecursiveTagUnion(rec, tags, ext) => {
+            for (_, args) in tags {
+                for x in args {
+                    variables_help(x, accum);
+                }
             }
+            variables_help(ext, accum);
+
+            // just check that this is actually a recursive type
+            debug_assert!(accum.contains(rec));
+
+            // this rec var doesn't need to be in flex_vars or rigid_vars
+            accum.remove(rec);
+        }
+        Alias(_, args, actual) => {
+            for (_, x) in args {
+                variables_help(x, accum);
+            }
+            variables_help(actual, accum);
         }
         As(inner, variable) => {
             variables_help(inner, accum);
@@ -504,6 +570,7 @@ pub enum ErrorType {
     RigidVar(Lowercase),
     Record(SendMap<Lowercase, ErrorType>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
+    RecursiveTagUnion(Variable, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
     Boolean(boolean_algebra::Bool),

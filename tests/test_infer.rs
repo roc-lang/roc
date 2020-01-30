@@ -29,6 +29,7 @@ mod test_infer {
         } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
+        dbg!(&constraint);
         assert_correct_variable_usage(&constraint);
 
         for (var, name) in output.rigids {
@@ -1398,81 +1399,6 @@ mod test_infer {
     }
 
     #[test]
-    fn linked_list_empty() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                    empty : [ Cons a (List a), Nil ] as List a
-                    empty = Nil
-
-                    empty
-                       "#
-            ),
-            "List a",
-        );
-    }
-
-    #[test]
-    fn linked_list_singleton() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                    singleton : a -> [ Cons a (List a), Nil ] as List a
-                    singleton = \x -> Cons x Nil
-
-                    singleton
-                       "#
-            ),
-            "a -> List a",
-        );
-    }
-
-    // currently fails, cyclic type
-    #[test]
-    #[ignore]
-    fn peano_map() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                    map : [ S Peano, Z ] as Peano -> Peano
-                    map = \peano ->
-                        when peano is
-                            Z -> Z
-                            S v -> S (map v)
-
-                    map
-                       "#
-            ),
-            "Peano",
-        );
-    }
-
-    // currently fails, cyclic type
-    // ending in `List b` will currently give a rigid unification error
-    #[test]
-    #[ignore]
-    fn linked_list_map() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                    map : (a -> a), [ Cons a (List a), Nil ] as List a -> List a
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons x xs ->
-                                a = f x
-                                b = map f xs
-
-                                Cons a b
-
-                    map
-                       "#
-            ),
-            "Attr.Attr * Int",
-        );
-    }
-
-    #[test]
     fn use_alias_in_let() {
         infer_eq_without_problem(
             indoc!(
@@ -1520,6 +1446,119 @@ mod test_infer {
                 "#
             ),
             "Foo a -> Foo a",
+        );
+    }
+
+    #[test]
+    fn linked_list_empty() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    empty : [ Cons a (List a), Nil ] as List a
+                    empty = Nil
+
+                    empty
+                       "#
+            ),
+            "List a",
+        );
+    }
+
+    #[test]
+    fn linked_list_singleton() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    singleton : a -> [ Cons a (List a), Nil ] as List a
+                    singleton = \x -> Cons x Nil
+
+                    singleton
+                       "#
+            ),
+            "a -> List a",
+        );
+    }
+
+    #[test]
+    fn peano_length() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    Peano : [ S Peano, Z ]
+
+                    length : Peano -> Num.Num Int.Integer 
+                    length = \peano ->
+                        when peano is
+                            Z -> 0
+                            S v -> length v
+
+                    length
+                       "#
+            ),
+            "Peano -> Int",
+        );
+    }
+
+    #[test]
+    fn peano_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    map : [ S Peano, Z ] as Peano -> Peano
+                    map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S v -> S (map v)
+
+                    map
+                       "#
+            ),
+            "Peano -> Peano",
+        );
+    }
+
+    #[test]
+    fn infer_linked_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons x xs ->
+                                a = f x
+                                b = map f xs
+
+                                Cons a b
+
+                    map
+                       "#
+            ),
+            "(a -> b), [ Cons a c, Nil ]* as c -> [ Cons b d, Nil ]* as d",
+        );
+    }
+
+    #[test]
+    fn typecheck_linked_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List q : [ Cons q (List q), Nil ]
+
+                    map : (a -> b), List a -> List b 
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons x xs ->
+                                a = f x
+                                b = map f xs
+
+                                Cons a b
+
+                    map
+                       "#
+            ),
+            "(a -> b), List a -> List b",
         );
     }
 }

@@ -170,16 +170,29 @@ fn can_annotation_help(
                 if args.len() != ftv.len() {
                     panic!("TODO alias applied to incorrect number of type arguments");
                 }
-                let mut zipped_args: Vec<(Lowercase, Variable)> = Vec::with_capacity(args.len());
+                let mut zipped_args: Vec<(Lowercase, Type)> = Vec::with_capacity(args.len());
                 let mut substitution = ImMap::default();
 
                 for (loc_var, arg) in ftv.iter().zip(args.iter()) {
                     substitution.insert(loc_var.value.1, arg.clone());
-                    zipped_args.push(loc_var.value.clone());
+                    zipped_args.push((loc_var.value.0.clone(), arg.clone()));
+                }
+
+                let mut instantiated = actual.clone();
+                instantiated.substitute(&substitution);
+
+                if let Type::RecursiveTagUnion(rec, _, _) = &mut instantiated {
+                    let new_rec = var_store.fresh();
+                    let old = rec.clone();
+                    *rec = new_rec;
+
+                    let mut rec_substitution = ImMap::default();
+                    rec_substitution.insert(old, Type::Variable(new_rec));
+                    instantiated.substitute(&rec_substitution);
                 }
 
                 (
-                    Type::Alias(symbol, zipped_args, Box::new(actual.clone())),
+                    Type::Alias(symbol, zipped_args, Box::new(instantiated)),
                     references,
                 )
             } else {
@@ -233,12 +246,12 @@ fn can_annotation_help(
                             let var_name = Lowercase::from(ident);
 
                             if let Some(var) = rigids.get(&var_name) {
-                                vars.push((var_name, *var));
+                                vars.push((var_name, Type::Variable(*var)));
                             } else {
                                 let var = var_store.fresh();
 
                                 rigids.insert(var_name.clone(), var);
-                                vars.push((var_name, var));
+                                vars.push((var_name, Type::Variable(var)));
                             }
                         }
                         _ => {
@@ -252,7 +265,25 @@ fn can_annotation_help(
                     }
                 }
 
-                let alias = Type::Alias(symbol, vars, Box::new(inner_type));
+                let alias = if let Type::TagUnion(tags, ext) = inner_type {
+                    let rec_var = var_store.fresh();
+
+                    let mut new_tags = Vec::with_capacity(tags.len());
+                    for (tag_name, args) in tags {
+                        let mut new_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            let mut new_arg = arg.clone();
+                            new_arg.substitute_alias(symbol, &Type::Variable(rec_var));
+                            new_args.push(new_arg);
+                        }
+                        new_tags.push((tag_name.clone(), new_args));
+                    }
+                    let rec_tag_union = Type::RecursiveTagUnion(rec_var, new_tags, ext);
+
+                    Type::Alias(symbol, vars, Box::new(rec_tag_union))
+                } else {
+                    Type::Alias(symbol, vars, Box::new(inner_type))
+                };
 
                 local_aliases.push((symbol, alias.clone()));
 

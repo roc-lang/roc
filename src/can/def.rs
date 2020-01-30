@@ -7,7 +7,9 @@ use crate::can::expr::{
 };
 use crate::can::ident::{Ident, Lowercase};
 use crate::can::pattern::PatternType;
-use crate::can::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
+use crate::can::pattern::{
+    bindings_from_patterns, canonicalize_pattern, symbols_from_pattern, Pattern,
+};
 use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError;
 use crate::can::procedure::References;
@@ -579,7 +581,8 @@ fn group_to_declaration(
                     new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                 }
 
-                let is_recursive = successors(&symbol).contains(&symbol);
+                let succs = successors(&symbol);
+                let is_recursive = succs.contains(&symbol);
 
                 if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
                     if is_recursive {
@@ -587,8 +590,8 @@ fn group_to_declaration(
                     } else {
                         declarations.push(Declare(new_def.clone()));
                     }
+                    seen_pattern_regions.insert(new_def.loc_pattern.region);
                 }
-                seen_pattern_regions.insert(new_def.loc_pattern.region);
             }
         } else {
             let mut can_defs = Vec::new();
@@ -820,10 +823,14 @@ fn canonicalize_pending_def<'a>(
                 );
             }
 
+            let symbols_defined_here: ImSet<Symbol> = symbols_from_pattern(&loc_can_pattern.value)
+                .into_iter()
+                .collect();
+
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
             for (ident, (symbol, region)) in scope.idents() {
-                if original_scope.contains_ident(ident) {
+                if !symbols_defined_here.contains(&symbol) {
                     continue;
                 }
 
@@ -1150,41 +1157,56 @@ fn to_pending_def<'a>(
         ),
 
         Alias { name, vars, ann } => {
-            let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
-
-            let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
-            let mut can_rigids: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
-
-            for loc_var in vars.iter() {
-                match loc_var.value {
-                    ast::Pattern::Identifier(name)
-                        if name.chars().next().unwrap().is_lowercase() =>
-                    {
-                        let lowercase = Lowercase::from(name);
-                        if let Some(var) = can_ann.rigids.get(&lowercase) {
-                            // This is a valid lowercase rigid var for the alias.
-                            can_vars.push(Located {
-                                value: (lowercase.clone(), *var),
-                                region: loc_var.region,
-                            });
-                            can_rigids.push(Located {
-                                value: lowercase,
-                                region: loc_var.region,
-                            });
-                        } else {
-                            panic!("TODO handle phantom type variables, they are not allowed!");
-                        }
-                    }
-                    _ => {
-                        panic!("TODO gracefully handle an invalid pattern appearing where a type alias rigid var should be.");
-                    }
-                }
-            }
-
             let region = Region::span_across(&name.region, &ann.region);
             match scope.introduce(name.value.into(), &mut env.ident_ids, region) {
                 Ok(symbol) => {
-                    scope.add_alias(symbol, name.region, can_vars, can_ann.typ);
+                    let can_ann =
+                        canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
+
+                    let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
+                        Vec::with_capacity(vars.len());
+                    let mut can_rigids: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
+
+                    for loc_var in vars.iter() {
+                        match loc_var.value {
+                            ast::Pattern::Identifier(name)
+                                if name.chars().next().unwrap().is_lowercase() =>
+                            {
+                                let lowercase = Lowercase::from(name);
+                                if let Some(var) = can_ann.rigids.get(&lowercase) {
+                                    // This is a valid lowercase rigid var for the alias.
+                                    can_vars.push(Located {
+                                        value: (lowercase.clone(), *var),
+                                        region: loc_var.region,
+                                    });
+                                    can_rigids.push(Located {
+                                        value: lowercase,
+                                        region: loc_var.region,
+                                    });
+                                } else {
+                                    panic!(
+                                        "TODO handle phantom type variables, they are not allowed!"
+                                    );
+                                }
+                            }
+                            _ => {
+                                panic!("TODO gracefully handle an invalid pattern appearing where a type alias rigid var should be.");
+                            }
+                        }
+                    }
+
+                    scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
+
+                    // TODO better detection for recursion
+                    if let Type::TagUnion(tags, ext) = can_ann.typ {
+                        // the alias can be recursive, so with the alias in scope, do this all again
+                        let rec_var = var_store.fresh();
+                        let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
+                        rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
+
+                        scope.add_alias(symbol, name.region, can_vars, rec_type_union);
+                    }
+
                     PendingDef::Alias {
                         name: Located {
                             region: name.region,

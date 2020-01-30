@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::{fmt, u32};
 
 // TODO: benchmark this as { ident_id: u32, module_id: u32 } and see if perf stays the same
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Symbol(u64);
 
 /// In Debug builds only, Symbol has a name() method that lets

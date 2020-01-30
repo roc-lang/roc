@@ -137,6 +137,9 @@ fn layout_from_flat_type<'a>(
         TagUnion(_, _) => {
             panic!("TODO make Layout for non-empty Tag Union");
         }
+        RecursiveTagUnion(_, _, _) => {
+            panic!("TODO make Layout for non-empty Tag Union");
+        }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
         }
