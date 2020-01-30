@@ -17,8 +17,7 @@ impl ReferenceCount {
         use ReferenceCount::*;
         match (a, b) {
             // Shared
-            (Shared, _) => Shared,
-            (_, Shared) => Shared,
+            (Shared, _) | (_, Shared) => Shared,
 
             // Update
             (Update(_, _), Update(_, _)) => Shared,
@@ -27,8 +26,8 @@ impl ReferenceCount {
             (Unique, Update(_, _)) => Shared,
 
             (Access(fa1), Update(overwritten, fa2)) => correct_overwritten(fa1, overwritten, fa2),
-            (_, Update(overwritten, fa)) => Update(overwritten.clone(), fa.clone()),
-            (Update(overwritten, fa), _) => Update(overwritten.clone(), fa.clone()),
+            (Seen, Update(overwritten, fa)) => Update(overwritten.clone(), fa.clone()),
+            (Update(overwritten, fa), Seen) => Update(overwritten.clone(), fa.clone()),
 
             // Access
             (Access(fa1), Access(fa2)) => {
@@ -41,23 +40,42 @@ impl ReferenceCount {
                 // unique usage is like an update where no fields are overwritten
                 correct_overwritten(fa1, &ImSet::default(), &FieldAccess::default())
             }
-            (_, Access(fa)) => Access(fa.clone()),
-            (Access(fa), _) => Access(fa.clone()),
+            (Unique, Access(_)) => Shared,
+            (Seen, Access(fa)) | (Access(fa), Seen) => Access(fa.clone()),
 
             // Unique
             (Unique, Unique) => Shared,
-            (Seen, Unique) => Unique,
-            (Unique, Seen) => Unique,
+            (Seen, Unique) | (Unique, Seen) => Unique,
             (Seen, Seen) => Seen,
         }
     }
 
     pub fn or(a: &ReferenceCount, b: &ReferenceCount) -> Self {
+        use ReferenceCount::*;
         match (a, b) {
-            (Self::Seen, other) => other.clone(),
-            (other, Self::Seen) => other.clone(),
-            (Self::Unique, Self::Unique) => Self::Unique,
-            _ => Self::Shared,
+            (_, Shared) | (Shared, _) => Shared,
+
+            (Update(w1, fa1), Update(w2, fa2)) => {
+                let mut fa = fa1.clone();
+                fa.parallel_merge(&fa2.clone());
+                Update(w1.clone().intersection(w2.clone()), fa)
+            }
+            (Update(w, fa), Unique) | (Unique, Update(w, fa)) => Update(w.clone(), fa.clone()),
+            (Update(w, fa1), Access(fa2)) | (Access(fa2), Update(w, fa1)) => {
+                let mut fa = fa1.clone();
+                fa.parallel_merge(&fa2.clone());
+                Update(w.clone(), fa)
+            }
+
+            (Access(fa1), Access(fa2)) => {
+                let mut fa = fa1.clone();
+                fa.parallel_merge(&fa2.clone());
+                Access(fa)
+            }
+            (Access(fa), Unique) | (Unique, Access(fa)) => Access(fa.clone()),
+
+            (Unique, Unique) => Unique,
+            (Seen, other) | (other, Seen) => other.clone(),
         }
     }
 }
@@ -321,6 +339,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
             annotate_usage(&loc_expr.value, usage);
         }
         LetRec(defs, loc_expr, _) => {
+            // TODO test this with a practical example.
             if defs.len() == 1 {
                 // just like a letrec, but mark defined symbol as Shared
                 let def = &defs[0];

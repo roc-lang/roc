@@ -1805,6 +1805,58 @@ mod test_infer_uniq {
         );
     }
 
+    #[test]
+    fn usage_if_access() {
+        usage_eq(
+            indoc!(
+                r#"
+            r = { x : 42, y : 2020 } 
+
+            if True then r.x else r.y
+                   "#
+            ),
+            {
+                // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
+                let mut usage = VarUsage::default();
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                let fa = FieldAccess { fields: fields };
+                usage.register_with(&"Test.blah$r".into(), &ReferenceCount::Access(fa));
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn usage_if_update() {
+        usage_eq(
+            indoc!(
+                r#"
+            r = { x : 42, y : 2020 } 
+
+            if True then { r & y: r.x } else r
+                   "#
+            ),
+            {
+                // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
+                let mut usage = VarUsage::default();
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
+                let fa = FieldAccess { fields: fields };
+                usage.register_with(
+                    &"Test.blah$r".into(),
+                    &ReferenceCount::Update(hashset!["y".into()].into(), fa),
+                );
+
+                usage
+            },
+        );
+    }
+
     // TODO when symbols are unique, ensure each `val` is counted only once
     //    #[test]
     //    fn usage_closures_with_same_bound_name() {
