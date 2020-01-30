@@ -2,6 +2,7 @@ use crate::can::expr::Expr;
 use crate::can::ident::Lowercase;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet};
+use crate::region::Located;
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum ReferenceCount {
@@ -446,5 +447,51 @@ fn get_access_chain<'a>(expr: &'a Expr, chain: &mut Vec<Lowercase>) -> Option<&'
         } => Some(symbol_for_lookup),
 
         _ => None,
+    }
+}
+
+#[allow(dead_code)]
+const LIST_ELEMENTS_LABEL: &'static str = "list_elements";
+
+#[allow(dead_code)]
+fn special_case_builtins(usage: &mut VarUsage, _symbol: Symbol, loc_args: Vec<Located<Expr>>) {
+    use ReferenceCount::*;
+    match 0 {
+        // Symbol::LIST_GET => {
+        0 => {
+            // functions are always fully applied, so this is safe
+            let index = &loc_args[0];
+            let list = &loc_args[1];
+            // index is an integer, its uniqueness doesn't matter
+            annotate_usage(&index.value, usage);
+            if let Expr::Var {
+                symbol_for_lookup, ..
+            } = &list.value
+            {
+                let fa = FieldAccess::from_chain(vec![LIST_ELEMENTS_LABEL.into()]);
+                usage.register_with(&symbol_for_lookup, &Access(fa));
+            } else {
+                annotate_usage(&list.value, usage);
+            }
+        }
+        1 => {
+            let index = &loc_args[0];
+            let value = &loc_args[1];
+            let list = &loc_args[2];
+
+            annotate_usage(&index.value, usage);
+            annotate_usage(&value.value, usage);
+
+            if let Expr::Var {
+                symbol_for_lookup, ..
+            } = &list.value
+            {
+                let fa = FieldAccess::from_chain(vec![LIST_ELEMENTS_LABEL.into()]);
+                usage.register_with(&symbol_for_lookup, &Update(ImSet::default(), fa));
+            } else {
+                annotate_usage(&list.value, usage);
+            }
+        }
+        _ => {}
     }
 }
