@@ -23,20 +23,10 @@ impl ReferenceCount {
             // Update
             (Update(_, _), Update(_, _)) => Shared,
             (Update(_, _), Access(_)) => Shared,
-            (Access(fa1), Update(overwritten, fa2)) => {
-                let mut fa = fa1.clone();
-                fa.sequential_merge(fa2);
+            (Update(_, _), Unique) => Shared,
+            (Unique, Update(_, _)) => Shared,
 
-                // fields that are accessed, but not overwritten in the update, must be shared!
-                for (label, (_, inner)) in fa.fields.clone().iter() {
-                    if !overwritten.contains(&label.clone().into()) {
-                        fa.fields
-                            .insert(label.clone(), (ReferenceCount::Shared, inner.clone()));
-                    }
-                }
-
-                Update(overwritten.clone(), fa)
-            }
+            (Access(fa1), Update(overwritten, fa2)) => correct_overwritten(fa1, overwritten, fa2),
             (_, Update(overwritten, fa)) => Update(overwritten.clone(), fa.clone()),
             (Update(overwritten, fa), _) => Update(overwritten.clone(), fa.clone()),
 
@@ -47,14 +37,17 @@ impl ReferenceCount {
 
                 Access(fa)
             }
+            (Access(fa1), Unique) => {
+                // unique usage is like an update where no fields are overwritten
+                correct_overwritten(fa1, &ImSet::default(), &FieldAccess::default())
+            }
             (_, Access(fa)) => Access(fa.clone()),
             (Access(fa), _) => Access(fa.clone()),
 
             // Unique
             (Unique, Unique) => Shared,
-            (_, Unique) => Unique,
-            (Unique, _) => Unique,
-
+            (Seen, Unique) => Unique,
+            (Unique, Seen) => Unique,
             (Seen, Seen) => Seen,
         }
     }
@@ -66,6 +59,36 @@ impl ReferenceCount {
             (Self::Unique, Self::Unique) => Self::Unique,
             _ => Self::Shared,
         }
+    }
+}
+
+fn correct_overwritten(
+    fa1: &FieldAccess,
+    overwritten: &ImSet<Lowercase>,
+    fa2: &FieldAccess,
+) -> ReferenceCount {
+    use ReferenceCount::*;
+
+    let mut fa = fa1.clone();
+    fa.sequential_merge(fa2);
+
+    // fields that are accessed, but not overwritten in the update, must be shared!
+    for (label, (rc, nested)) in fa.fields.clone().keys().zip(fa.fields.iter_mut()) {
+        if !overwritten.contains(&label.clone().into()) {
+            make_subtree_shared(rc, nested);
+        }
+    }
+
+    Update(overwritten.clone(), fa)
+}
+
+fn make_subtree_shared(rc: &mut ReferenceCount, nested: &mut FieldAccess) {
+    if rc > &mut ReferenceCount::Seen {
+        *rc = ReferenceCount::Shared;
+    }
+
+    for (nested_rc, nested_nested) in nested.fields.iter_mut() {
+        make_subtree_shared(nested_rc, nested_nested);
     }
 }
 

@@ -14,7 +14,7 @@ mod helpers;
 mod test_infer_uniq {
     use crate::helpers::{assert_correct_variable_usage, can_expr, uniq_expr};
     use roc::can::ident::Lowercase;
-    use roc::collections::ImMap;
+    use roc::collections::{ImMap, ImSet};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -1232,7 +1232,7 @@ mod test_infer_uniq {
 
                         "#
                     ),
-                "Attr.Attr * (Attr.Attr ((c | a) | b) { x : (Attr.Attr a d), y : (Attr.Attr b e) }f -> Attr.Attr ((c | b) | a) { x : (Attr.Attr a d), y : (Attr.Attr b e) }f)",
+                "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared c) }d -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared c) }d)",
                 );
     }
 
@@ -1250,7 +1250,7 @@ mod test_infer_uniq {
                             p
                         "#
                     ),
-                "Attr.Attr * (Attr.Attr ((c | a) | b) { x : (Attr.Attr a d), y : (Attr.Attr b e) }f -> Attr.Attr ((c | a) | b) { x : (Attr.Attr a d), y : (Attr.Attr b e) }f)"
+                "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)"
                 );
     }
 
@@ -1294,7 +1294,7 @@ mod test_infer_uniq {
                     r
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (((b | a) | d) | c) { foo : (Attr.Attr ((d | b) | a) { bar : (Attr.Attr b f), baz : (Attr.Attr a e) }g) }h -> Attr.Attr (((c | a) | b) | d) { foo : (Attr.Attr ((d | a) | b) { bar : (Attr.Attr b f), baz : (Attr.Attr a e) }g) }h)"
+            "Attr.Attr * (Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f -> Attr.Attr (b | a) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f)"
         );
     }
 
@@ -1612,6 +1612,127 @@ mod test_infer_uniq {
     }
 
     #[test]
+    fn update_then_unique() {
+        usage_eq(
+            indoc!(
+                r#"
+            rec = { foo : 42, bar : "baz" } 
+            v = { rec & foo: 53 }
+
+            rec
+                   "#
+            ),
+            {
+                let mut usage = VarUsage::default();
+                usage.register_with(&"Test.blah$rec".into(), &ReferenceCount::Shared);
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn access_then_unique() {
+        usage_eq(
+            indoc!(
+                r#"
+            rec = { foo : 42, bar : "baz" } 
+            v = rec.foo
+
+            rec
+                   "#
+            ),
+            {
+                let mut usage = VarUsage::default();
+                let mut fields = ImMap::default();
+                fields.insert(
+                    "foo".into(),
+                    (ReferenceCount::Shared, FieldAccess::default()),
+                );
+                let fa = FieldAccess { fields: fields };
+                usage.register_with(
+                    &"Test.blah$rec".into(),
+                    &ReferenceCount::Update(ImSet::default(), fa),
+                );
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn access_then_alias() {
+        usage_eq(
+            indoc!(
+                r#"
+                        \r -> 
+                            v = r.x
+                            w = r.y
+
+                            p = r
+
+                            p
+                   "#
+            ),
+            {
+                let mut usage = VarUsage::default();
+                let mut fields = ImMap::default();
+                fields.insert(
+                    "foo".into(),
+                    (ReferenceCount::Shared, FieldAccess::default()),
+                );
+                let fa = FieldAccess { fields: fields };
+                usage.register_with(&"Test.blah$r".into(), &ReferenceCount::Shared);
+                usage.register_with(&"Test.blah$p".into(), &ReferenceCount::Unique);
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn access_nested_then_unique() {
+        usage_eq(
+            indoc!(
+                r#"
+                \r -> 
+                    v = r.foo.bar
+                    w = r.foo.baz
+
+                    r
+                   "#
+            ),
+            {
+                let mut usage = VarUsage::default();
+
+                let mut nested_fields = ImMap::default();
+                nested_fields.insert(
+                    "bar".into(),
+                    (ReferenceCount::Shared, FieldAccess::default()),
+                );
+                nested_fields.insert(
+                    "baz".into(),
+                    (ReferenceCount::Shared, FieldAccess::default()),
+                );
+                let nested_fa = FieldAccess {
+                    fields: nested_fields,
+                };
+
+                let mut fields = ImMap::default();
+                fields.insert("foo".into(), (ReferenceCount::Seen, nested_fa));
+
+                let fa = FieldAccess { fields: fields };
+                usage.register_with(
+                    &"Test.blah$r".into(),
+                    &ReferenceCount::Update(ImSet::default(), fa),
+                );
+
+                usage
+            },
+        );
+    }
+
+    #[test]
     fn usage_record_update_unique_not_overwritten() {
         usage_eq(
             indoc!(
@@ -1622,7 +1743,7 @@ mod test_infer_uniq {
             p = s.x
             q = s.y
 
-            s
+            42
                    "#
             ),
             {
@@ -1659,7 +1780,7 @@ mod test_infer_uniq {
             p = s.x
             q = s.y
 
-            s
+            42
                    "#
             ),
             {
