@@ -1,11 +1,10 @@
 use crate::can::def::{can_defs_with_return, Def};
 use crate::can::env::Env;
-use crate::can::ident::{Ident, Lowercase, TagName};
+use crate::can::ident::{Lowercase, TagName};
 use crate::can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
 };
-use crate::can::pattern::add_idents_to_scope;
 use crate::can::pattern::PatternType::*;
 use crate::can::pattern::{canonicalize_pattern, Pattern};
 use crate::can::problem::{Problem, RuntimeError};
@@ -18,7 +17,6 @@ use crate::parse;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
-use im_rc::Vector;
 use std::fmt::Debug;
 use std::i64;
 use std::ops::Neg;
@@ -374,16 +372,9 @@ pub fn canonicalize_expr<'a>(
 
             // The body expression gets a new scope for canonicalization.
             // Shadow `scope` to make sure we don't accidentally use the original one for the
-            // rest of this block.
-            let mut scope = scope.clone();
-
-            let arg_idents: Vector<(Ident, (Symbol, Region))> = add_idents_to_scope(
-                &mut env.ident_ids,
-                loc_arg_patterns.iter(),
-                &mut scope,
-                &mut env.problems,
-            );
-
+            // rest of this block, but keep the original around for later diffing.
+            let original_scope = scope;
+            let mut scope = original_scope.clone();
             let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
 
             for loc_pattern in loc_arg_patterns.into_iter() {
@@ -409,12 +400,12 @@ pub fn canonicalize_expr<'a>(
 
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
-            for (ident, (arg_symbol, region)) in arg_idents {
+            for (ident, (arg_symbol, region)) in scope.idents() {
                 if !output.references.has_lookup(&arg_symbol) {
                     // The body never referenced this argument we declared. It's an unused argument!
                     env.problem(Problem::UnusedArgument(Located {
-                        region,
-                        value: ident,
+                        region: region.clone(),
+                        value: ident.clone(),
                     }));
                 }
 
@@ -662,20 +653,11 @@ fn canonicalize_when_branch<'a>(
 ) -> (WhenPattern, Located<Expr>, References) {
     // Each case branch gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the
-    // rest of this block.
-    let mut scope = scope.clone();
+    // rest of this block, but keep the original around for later diffing.
+    let original_scope = scope;
+    let mut scope = original_scope.clone();
 
     let loc_pattern = loc_pattern_and_guard;
-
-    // Patterns introduce new idents to the scope!
-    // Add the defined identifiers to scope. If there's a collision, it means there
-    // was shadowing, which will be handled later.
-    let defined_idents: Vector<(Ident, (Symbol, Region))> = add_idents_to_scope(
-        &mut env.ident_ids,
-        std::iter::once(&loc_pattern.pattern),
-        &mut scope,
-        &mut env.problems,
-    );
 
     let (can_expr, branch_output) =
         canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
@@ -688,10 +670,10 @@ fn canonicalize_when_branch<'a>(
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
-    for (ident, (symbol, region)) in defined_idents {
+    for (ident, (symbol, region)) in scope.idents() {
         if !output.references.has_lookup(&symbol) {
             let loc_ident = Located {
-                region,
+                region: region.clone(),
                 value: ident.clone(),
             };
 
@@ -933,12 +915,16 @@ fn canonicalize_lookup<'a>(
 ) -> (Expr, Output) {
     use Expr::*;
 
-    let output = Output::default();
+    let mut output = Output::default();
     let can_expr = if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
         match scope.lookup(&(*ident).into(), region) {
-            Ok(symbol) => Var(symbol),
+            Ok(symbol) => {
+                output.references.lookups.insert(symbol);
+
+                Var(symbol)
+            }
             Err(problem) => {
                 env.problem(Problem::RuntimeError(problem.clone()));
 

@@ -7,7 +7,7 @@ use crate::can::expr::{
 };
 use crate::can::ident::{Ident, Lowercase};
 use crate::can::pattern::PatternType;
-use crate::can::pattern::{add_idents_to_scope, canonicalize_pattern, Pattern};
+use crate::can::pattern::{canonicalize_pattern, Pattern};
 use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError;
 use crate::can::procedure::References;
@@ -18,6 +18,7 @@ use crate::module::symbol::Symbol;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
+use crate::types::Type;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 
@@ -27,11 +28,13 @@ pub struct Def {
     pub loc_expr: Located<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
-    pub annotation: Option<Annotation>,
+    pub annotation: Option<(Type, SendMap<Variable, Lowercase>)>,
 }
 
 #[derive(Debug)]
 pub struct CanDefs {
+    // TODO don't store the Ident in here (lots of cloning!) - instead,
+    // make refs_by_symbol be something like MutMap<Symbol, (Region, References)>
     pub refs_by_symbol: MutMap<Symbol, (Located<Ident>, References)>,
     pub can_defs_by_symbol: MutMap<Symbol, Def>,
     pub idents_introduced: MutMap<Ident, (Symbol, Region)>,
@@ -89,7 +92,7 @@ pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     var_store: &VarStore,
-    scope: &mut Scope,
+    original_scope: &mut Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     pattern_type: PatternType,
 ) -> CanDefs {
@@ -114,7 +117,7 @@ pub fn canonicalize_defs<'a>(
 
     // Record both the original and final idents from the scope,
     // so we can diff them while detecting unused defs.
-    let original_scope = scope.clone();
+    let mut scope = original_scope.clone();
     let original_idents = {
         let mut set = HashSet::with_capacity_and_hasher(scope.num_idents(), default_hasher());
 
@@ -153,17 +156,17 @@ pub fn canonicalize_defs<'a>(
                                 annotation,
                                 body_expr,
                                 var_store,
-                                scope,
+                                &mut scope,
                                 pattern_type,
                             )
                         } else {
                             panic!("TODO gracefully handle the case where a type annotation appears immediately before a body def, but the patterns are different. This should be an error; put a newline or comment between them!");
                         }
                     }
-                    _ => to_pending_def(env, var_store, &loc_def.value, scope, pattern_type),
+                    _ => to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type),
                 }
             }
-            _ => to_pending_def(env, var_store, &loc_def.value, scope, pattern_type),
+            _ => to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type),
         };
 
         // Record the ast::Expr for later. We'll do another pass through these
@@ -180,11 +183,15 @@ pub fn canonicalize_defs<'a>(
             env,
             found_rigids,
             pending_def,
-            scope,
+            &original_scope,
+            &mut scope,
             &mut can_defs_by_symbol,
             var_store,
             &mut refs_by_symbol,
-        )
+        );
+
+        // TODO we should do something with these references; they include
+        // things like type annotations.
     }
 
     // Determine which idents we introduced in the course of this process.
@@ -590,6 +597,7 @@ fn canonicalize_pending_def<'a>(
     env: &mut Env<'a>,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     pending_def: PendingDef<'a>,
+    original_scope: &Scope,
     scope: &mut Scope,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &VarStore,
@@ -602,15 +610,19 @@ fn canonicalize_pending_def<'a>(
     let mut vars_by_symbol = SendMap::default();
 
     match pending_def {
-        AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann) => {
-            let (can_annotation, seen_rigids) = loc_ann.value;
+        AnnotationOnly(_, loc_can_pattern, loc_ann) => {
+            // TODO we have ann.references here, which includes information about
+            // which symbols were referenced in type annotations, but we never
+            // use them. We discard them!
+            let ann = loc_ann.value;
 
             // union seen rigids with already found ones
-            for (k, v) in seen_rigids {
+            for (k, v) in ann.ftv {
                 found_rigids.insert(k, v);
             }
 
-            let arity = can_annotation.arity();
+            let typ = ann.typ;
+            let arity = typ.arity();
 
             // Fabricate a body for this annotation, that will error at runtime
             let value = Expr::RuntimeError(RuntimeError::NoImplementation);
@@ -655,16 +667,16 @@ fn canonicalize_pending_def<'a>(
                 }
             };
 
-            for (_, (symbol, _)) in add_idents_to_scope(
-                &mut env.ident_ids,
-                std::iter::once(loc_pattern),
-                scope,
-                &mut env.problems,
-            ) {
+            for (ident, (symbol, _)) in scope.idents() {
+                // TODO Could we do this by symbol instead, to avoid cloning idents?
+                if original_scope.contains_ident(ident) {
+                    continue;
+                }
+
                 // We could potentially avoid some clones here by using Rc strategically,
                 // but the total amount of cloning going on here should typically be minimal.
                 can_defs_by_symbol.insert(
-                    symbol,
+                    *symbol,
                     Def {
                         expr_var,
                         // TODO try to remove this .clone()!
@@ -675,16 +687,20 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((can_annotation.clone(), found_rigids.clone())),
+                        annotation: Some((typ.clone(), found_rigids.clone())),
                     },
                 );
             }
         }
         TypedBody(loc_pattern, loc_can_pattern, loc_annotation, loc_expr) => {
-            let (can_annotation, seen_rigids) = loc_annotation.value;
+            // TODO we have ann.references here, which includes information about
+            // which symbols were referenced in type annotations, but we never
+            // use them. We discard them!
+            let ann = loc_annotation.value;
+            let typ = ann.typ;
 
             // union seen rigids with already found ones
-            for (k, v) in seen_rigids {
+            for (k, v) in ann.ftv {
                 found_rigids.insert(k, v);
             }
 
@@ -764,12 +780,11 @@ fn canonicalize_pending_def<'a>(
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
-            for (ident, (symbol, region)) in add_idents_to_scope(
-                &mut env.ident_ids,
-                std::iter::once(loc_pattern),
-                scope,
-                &mut env.problems,
-            ) {
+            for (ident, (symbol, region)) in scope.idents() {
+                if original_scope.contains_ident(ident) {
+                    continue;
+                }
+
                 let refs =
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
@@ -784,15 +799,15 @@ fn canonicalize_pending_def<'a>(
                     symbol.clone(),
                     (
                         Located {
-                            value: ident,
-                            region,
+                            value: ident.clone(),
+                            region: region.clone(),
                         },
                         refs,
                     ),
                 );
 
                 can_defs_by_symbol.insert(
-                    symbol,
+                    *symbol,
                     Def {
                         expr_var,
                         // TODO try to remove this .clone()!
@@ -803,7 +818,7 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((can_annotation.clone(), found_rigids.clone())),
+                        annotation: Some((typ.clone(), found_rigids.clone())),
                     },
                 );
             }
@@ -881,7 +896,6 @@ fn canonicalize_pending_def<'a>(
                         refs.lookups = refs.lookups.without(defined_symbol);
                     });
 
-                // renamed_closure_def = Some(&defined_symbol);
                 loc_can_expr.value = Closure(
                     fn_var,
                     symbol.clone(),
@@ -893,12 +907,11 @@ fn canonicalize_pending_def<'a>(
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
-            for (ident, (symbol, region)) in add_idents_to_scope(
-                &mut env.ident_ids,
-                std::iter::once(loc_pattern),
-                scope,
-                &mut env.problems,
-            ) {
+            for (ident, (symbol, region)) in scope.idents() {
+                if original_scope.contains_ident(ident) {
+                    continue;
+                }
+
                 let refs =
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
@@ -913,15 +926,15 @@ fn canonicalize_pending_def<'a>(
                     symbol.clone(),
                     (
                         Located {
-                            value: ident,
-                            region,
+                            value: ident.clone(),
+                            region: region.clone(),
                         },
                         refs,
                     ),
                 );
 
                 can_defs_by_symbol.insert(
-                    symbol,
+                    *symbol,
                     Def {
                         expr_var,
                         // TODO try to remove this .clone()!

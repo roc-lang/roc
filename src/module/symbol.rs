@@ -492,7 +492,8 @@ impl IdentIds {
     }
 
     #[cfg(not(debug_assertions))]
-    fn insert_debug_name(_ident_id: IdentId, _ident_name: &InlinableString) {
+    #[allow(clippy::boxed_local)]
+    fn insert_debug_name(_ident_id: IdentId, _ident_name: Box<str>) {
         // By design, this is a no-op in release builds!
     }
 

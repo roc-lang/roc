@@ -10,7 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_canonicalize {
-    use crate::helpers::{can_expr_with, test_home, with_larger_debug_stack};
+    use crate::helpers::{can_expr_with, test_home, with_larger_debug_stack, CanExprOut};
     use bumpalo::Bump;
     use roc::can::expr::Expr::{self, *};
     use roc::can::expr::Recursive;
@@ -20,16 +20,16 @@ mod test_canonicalize {
 
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _, _, _) = can_expr_with(&arena, test_home(), input);
+        let actual_out = can_expr_with(&arena, test_home(), input);
 
-        assert_eq!(actual.value, expected);
+        assert_eq!(actual_out.loc_expr.value, expected);
     }
 
     fn assert_can_float(input: &str, expected: f64) {
         let arena = Bump::new();
-        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, test_home(), input);
+        let actual_out = can_expr_with(&arena, test_home(), input);
 
-        match loc_actual.value {
+        match actual_out.loc_expr.value {
             Expr::Float(_, actual) => {
                 assert_eq!(expected, actual);
             }
@@ -40,9 +40,9 @@ mod test_canonicalize {
     }
     fn assert_can_int(input: &str, expected: i64) {
         let arena = Bump::new();
-        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, test_home(), input);
+        let actual_out = can_expr_with(&arena, test_home(), input);
 
-        match loc_actual.value {
+        match actual_out.loc_expr.value {
             Expr::Int(_, actual) => {
                 assert_eq!(expected, actual);
             }
@@ -251,7 +251,7 @@ mod test_canonicalize {
                 }
             }
             // Closure(_, recursion, _, _) if i == 0 => recursion.clone(),
-            _ => panic!("expression is not a Defs, but a {:?}", expr),
+            _ => panic!("expression is not a Defs, but rather {:?}", expr),
         }
     }
 
@@ -283,12 +283,15 @@ mod test_canonicalize {
         "#
             );
             let arena = Bump::new();
-            let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, test_home(), src);
+            let CanExprOut {
+                loc_expr, problems, ..
+            } = can_expr_with(&arena, test_home(), src);
+            assert_eq!(problems, Vec::new());
 
-            let detected0 = get_closure(&actual.value, 0);
-            let detected1 = get_closure(&actual.value, 1);
-            let detected2 = get_closure(&actual.value, 2);
+            let actual = loc_expr.value;
+            let detected0 = get_closure(&actual, 0);
+            let detected1 = get_closure(&actual, 1);
+            let detected2 = get_closure(&actual, 2);
 
             assert_eq!(detected0, Recursive::TailRecursive);
             assert_eq!(detected1, Recursive::NotRecursive);
@@ -310,10 +313,12 @@ mod test_canonicalize {
             "#
             );
             let arena = Bump::new();
-            let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, test_home(), src);
+            let CanExprOut {
+                loc_expr, problems, ..
+            } = can_expr_with(&arena, test_home(), src);
+            assert_eq!(problems, Vec::new());
 
-            let detected = get_closure(&actual.value, 0);
+            let detected = get_closure(&loc_expr.value, 0);
             assert_eq!(detected, Recursive::TailRecursive);
         });
     }
@@ -328,10 +333,14 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, test_home(), src);
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-        let detected = get_closure(&actual.value, 0);
+        assert_eq!(problems, Vec::new());
+
+        let detected = get_closure(&loc_expr.value, 0);
+
         assert_eq!(detected, Recursive::TailRecursive);
     }
 
@@ -347,10 +356,12 @@ mod test_canonicalize {
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, test_home(), src);
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-        let detected = get_closure(&actual.value, 0);
+        assert_eq!(problems, Vec::new());
+        let detected = get_closure(&loc_expr.value, 0);
         assert_eq!(detected, Recursive::Recursive);
     }
 
@@ -373,13 +384,16 @@ mod test_canonicalize {
         "#
             );
             let arena = Bump::new();
-            let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, test_home(), src);
+            let CanExprOut {
+                loc_expr, problems, ..
+            } = can_expr_with(&arena, test_home(), src);
+            assert_eq!(problems, Vec::new());
 
-            let detected = get_closure(&actual.value, 0);
+            let actual = loc_expr.value;
+            let detected = get_closure(&actual, 0);
             assert_eq!(detected, Recursive::Recursive);
 
-            let detected = get_closure(&actual.value, 1);
+            let detected = get_closure(&actual, 1);
             assert_eq!(detected, Recursive::Recursive);
         });
     }
@@ -395,11 +409,14 @@ mod test_canonicalize {
                 "#
             );
             let arena = Bump::new();
-            let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, test_home(), src);
+            let CanExprOut {
+                loc_expr, problems, ..
+            } = can_expr_with(&arena, test_home(), src);
+
+            assert_eq!(problems, Vec::new());
 
             let is_circular_def =
-                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
+                if let RuntimeError(RuntimeError::CircularDef(_, _)) = loc_expr.value {
                     true
                 } else {
                     false
@@ -420,11 +437,12 @@ mod test_canonicalize {
                 "#
             );
             let arena = Bump::new();
-            let (actual, _output, problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, test_home(), src);
+            let CanExprOut {
+                loc_expr, problems, ..
+            } = can_expr_with(&arena, test_home(), src);
 
             let is_circular_def =
-                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
+                if let RuntimeError(RuntimeError::CircularDef(_, _)) = loc_expr.value {
                     true
                 } else {
                     false
@@ -451,11 +469,12 @@ mod test_canonicalize {
                 "#
             );
             let arena = Bump::new();
-            let (actual, _output, problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, test_home(), src);
+            let CanExprOut {
+                loc_expr, problems, ..
+            } = can_expr_with(&arena, test_home(), src);
 
             let is_circular_def =
-                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
+                if let RuntimeError(RuntimeError::CircularDef(_, _)) = loc_expr.value {
                     true
                 } else {
                     false

@@ -3,12 +3,11 @@ use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::can::problem::{Problem, RuntimeError};
 use crate::can::scope::Scope;
-use crate::module::symbol::{IdentIds, Symbol};
+use crate::module::symbol::Symbol;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::VarStore;
 use crate::subs::Variable;
-use im_rc::Vector;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -284,122 +283,4 @@ fn unsupported_pattern<'a>(
     env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
-}
-
-pub fn add_idents_to_scope<'a, I>(
-    ident_ids: &mut IdentIds,
-    loc_patterns: I,
-    scope: &mut Scope,
-    problems: &mut Vec<Problem>,
-) -> Vector<(Ident, (Symbol, Region))>
-where
-    I: Iterator<Item = &'a Located<ast::Pattern<'a>>>,
-{
-    let mut answer = Vector::new();
-
-    for loc_pattern in loc_patterns {
-        add_idents_from_pattern(
-            ident_ids,
-            &loc_pattern.region,
-            &loc_pattern.value,
-            scope,
-            problems,
-            &mut answer,
-        );
-    }
-
-    answer
-}
-
-/// helper function for add_idents_to_scope
-fn add_idents_from_pattern<'a>(
-    ident_ids: &mut IdentIds,
-    region: &'a Region,
-    pattern: &'a ast::Pattern<'a>,
-    scope: &'a mut Scope,
-    problems: &mut Vec<Problem>,
-    answer: &'a mut Vector<(Ident, (Symbol, Region))>,
-) {
-    use crate::parse::ast::Pattern::*;
-
-    match pattern {
-        Identifier(ident) => match scope.introduce((*ident).into(), ident_ids, *region) {
-            Ok(symbol) => {
-                answer.push_back(((*ident).into(), (symbol, *region)));
-            }
-            Err((original_region, shadow)) => {
-                problems.push(Problem::RuntimeError(RuntimeError::Shadowing {
-                    original_region,
-                    shadow,
-                }));
-            }
-        },
-        QualifiedIdentifier { module_name, ident } => {
-            let qualified = format!("{}.{}", module_name, ident).into();
-
-            problems.push(Problem::RuntimeError(RuntimeError::QualifiedPatternIdent(
-                qualified,
-            )));
-        }
-        Apply(_tag, patterns) => {
-            for loc_pattern in *patterns {
-                add_idents_from_pattern(
-                    ident_ids,
-                    &loc_pattern.region,
-                    &loc_pattern.value,
-                    scope,
-                    problems,
-                    answer,
-                );
-            }
-        }
-
-        RecordDestructure(patterns) => {
-            for loc_pattern in patterns {
-                add_idents_from_pattern(
-                    ident_ids,
-                    &loc_pattern.region,
-                    &loc_pattern.value,
-                    scope,
-                    problems,
-                    answer,
-                );
-            }
-        }
-        RecordField(ident, loc_pattern) => {
-            match scope.introduce((*ident).into(), ident_ids, loc_pattern.region) {
-                Ok(symbol) => {
-                    answer.push_back(((*ident).into(), (symbol, *region)));
-                }
-                Err((original_region, shadow)) => {
-                    problems.push(Problem::RuntimeError(RuntimeError::Shadowing {
-                        original_region,
-                        shadow,
-                    }));
-                }
-            };
-
-            add_idents_from_pattern(
-                ident_ids,
-                &loc_pattern.region,
-                &loc_pattern.value,
-                scope,
-                problems,
-                answer,
-            );
-        }
-        SpaceBefore(pattern, _) | SpaceAfter(pattern, _) | Nested(pattern) => {
-            // Ignore the newline/comment info; it doesn't matter in canonicalization.
-            add_idents_from_pattern(ident_ids, region, pattern, scope, problems, answer)
-        }
-        GlobalTag(_)
-        | PrivateTag(_)
-        | IntLiteral(_)
-        | NonBase10Literal { .. }
-        | FloatLiteral(_)
-        | StrLiteral(_)
-        | BlockStrLiteral(_)
-        | Malformed(_)
-        | Underscore => (),
-    }
 }

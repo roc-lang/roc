@@ -10,7 +10,7 @@ use roc::can::problem::Problem;
 use roc::can::scope::Scope;
 use roc::collections::{ImMap, ImSet, MutMap, SendSet};
 use roc::constrain::expr::constrain_expr;
-use roc::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
+use roc::module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
@@ -87,7 +87,17 @@ pub fn can_expr(expr_str: &str) -> CanExprOut {
 }
 
 #[allow(dead_code)]
-pub fn uniq_expr(expr_str: &str) -> (Output, Vec<Problem>, Subs, Variable, Constraint) {
+pub fn uniq_expr(
+    expr_str: &str,
+) -> (
+    Output,
+    Vec<Problem>,
+    Subs,
+    Variable,
+    Constraint,
+    ModuleId,
+    Interns,
+) {
     let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
 
     uniq_expr_with(&Bump::new(), expr_str, declared_idents)
@@ -98,15 +108,30 @@ pub fn uniq_expr_with(
     arena: &Bump,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-) -> (Output, Vec<Problem>, Subs, Variable, Constraint) {
+) -> (
+    Output,
+    Vec<Problem>,
+    Subs,
+    Variable,
+    Constraint,
+    ModuleId,
+    Interns,
+) {
     let home = test_home();
-    let (loc_expr, output, problems, var_store1, variable, _) =
-        can_expr_with(arena, home, expr_str);
+    let CanExprOut {
+        loc_expr,
+        output,
+        problems,
+        var_store: var_store1,
+        var,
+        interns,
+        ..
+    } = can_expr_with(arena, home, expr_str);
 
     // double check
     let var_store2 = VarStore::new(var_store1.fresh());
 
-    let expected2 = Expected::NoExpectation(Type::Variable(variable));
+    let expected2 = Expected::NoExpectation(Type::Variable(var));
     let constraint2 = roc::uniqueness::constrain_declaration(
         home,
         &var_store2,
@@ -118,18 +143,18 @@ pub fn uniq_expr_with(
 
     let subs2 = Subs::new(var_store2.into());
 
-    (output, problems, subs2, variable, constraint2)
+    (output, problems, subs2, var, constraint2, home, interns)
 }
 
 pub struct CanExprOut {
-    loc_expr: Located<Expr>,
-    output: Output,
-    problems: Vec<Problem>,
-    home: ModuleId,
-    ident_ids: IdentIds,
-    var_store: VarStore,
-    var: Variable,
-    constraint: Constraint,
+    pub loc_expr: Located<Expr>,
+    pub output: Output,
+    pub problems: Vec<Problem>,
+    pub home: ModuleId,
+    pub interns: Interns,
+    pub var_store: VarStore,
+    pub var: Variable,
+    pub constraint: Constraint,
 }
 
 #[allow(dead_code)]
@@ -142,8 +167,8 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     });
 
     let var_store = VarStore::default();
-    let variable = var_store.fresh();
-    let expected = Expected::NoExpectation(Type::Variable(variable));
+    let var = var_store.fresh();
+    let expected = Expected::NoExpectation(Type::Variable(var));
     let module_ids = ModuleIds::default();
 
     // Desugar operators (convert them to Apply calls, taking into account
@@ -177,16 +202,25 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         expected,
     );
 
-    (
+    let mut all_ident_ids = MutMap::default();
+
+    all_ident_ids.insert(home, env.ident_ids);
+
+    let interns = Interns {
+        module_ids: env.module_ids.clone(),
+        all_ident_ids,
+    };
+
+    CanExprOut {
         loc_expr,
         output,
-        env.problems,
-        env.home,
-        env.ident_ids,
+        problems: env.problems,
+        home: env.home,
         var_store,
-        variable,
+        interns,
+        var,
         constraint,
-    )
+    }
 }
 
 #[allow(dead_code)]
@@ -294,7 +328,7 @@ pub fn variable_usage(con: &Constraint) -> (SeenVariables, Vec<Variable>) {
     let mut used = ImSet::default();
     variable_usage_help(con, &mut declared, &mut used);
 
-    used.remove(unsafe { &Variable::unsafe_debug_variable(1) });
+    used.remove(unsafe { &Variable::unsafe_test_debug_variable(1) });
 
     let mut used_vec: Vec<Variable> = used.into_iter().collect();
     used_vec.sort();

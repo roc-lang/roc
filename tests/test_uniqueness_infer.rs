@@ -17,7 +17,7 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_output, _problems, subs, variable, constraint) = uniq_expr(src);
+        let (_output, _problems, subs, variable, constraint, home, interns) = uniq_expr(src);
 
         assert_correct_variable_usage(&constraint);
 
@@ -27,7 +27,7 @@ mod test_infer_uniq {
 
         name_all_type_vars(variable, &mut subs);
 
-        let actual_str = content_to_string(content, &mut subs);
+        let actual_str = content_to_string(content, &mut subs, home, &interns);
 
         (unify_problems, actual_str)
     }

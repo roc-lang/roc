@@ -783,7 +783,7 @@ fn parse_and_constrain(
             declarations,
             exposed_imports,
             lookups,
-            ident_ids: _,
+            ..
         }) => {
             let constraint = constrain_module(module_id, &declarations, lookups);
 

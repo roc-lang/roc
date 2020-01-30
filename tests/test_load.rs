@@ -117,7 +117,8 @@ mod test_load {
 
                 name_all_type_vars(expr_var, &mut subs);
 
-                let actual_str = content_to_string(content, &mut subs);
+                let actual_str =
+                    content_to_string(content, &mut subs, home, &loaded_module.interns);
                 let expected_type = expected_types
                     .get(
                         symbol
@@ -169,6 +170,8 @@ mod test_load {
         let filename = src_dir.join("Defaults.roc");
 
         test_async(async {
+            let module_ids_to_load: Vec<ModuleId> =
+                subs_by_module.keys().map(|module_id| *module_id).collect();
             let loaded = load(src_dir, filename, subs_by_module).await;
             let loaded_module = loaded.expect("Test module failed to load");
             assert_eq!(loaded_module.problems, Vec::new());
@@ -187,9 +190,9 @@ mod test_load {
             assert_eq!(expected_name, &InlinableString::from("Defaults"));
             assert_eq!(def_count, 0);
 
-            let mut all_loaded_modules: Vec<InlinableString> = subs_by_module
-                .keys()
-                .map(|module_id| module_ids.get_name(*module_id).unwrap().clone())
+            let mut all_loaded_modules: Vec<InlinableString> = module_ids_to_load
+                .iter()
+                .map(|&module_id| module_ids.get_name(module_id).unwrap().clone())
                 .collect();
 
             let expected: Vec<InlinableString> =

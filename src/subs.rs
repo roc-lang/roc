@@ -150,7 +150,10 @@ impl Variable {
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(1);
 
-    pub unsafe fn unsafe_debug_variable(v: u32) -> Self {
+    /// # Safety
+    ///
+    /// This should only ever be called from tests!
+    pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
         Variable(v)
     }
 }

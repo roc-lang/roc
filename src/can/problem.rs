@@ -7,6 +7,7 @@ use inlinable_string::InlinableString;
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
+    // TODO use Symbol over Ident with these
     UnusedDef(Located<Ident>),
     UnusedArgument(Located<Ident>),
     PrecedenceProblem(PrecedenceProblem),

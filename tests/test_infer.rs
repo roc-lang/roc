@@ -10,7 +10,9 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use crate::helpers::{assert_correct_variable_usage, can_expr, with_larger_debug_stack};
+    use crate::helpers::{
+        assert_correct_variable_usage, can_expr, with_larger_debug_stack, CanExprOut,
+    };
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -18,7 +20,15 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_expr, output, _, var_store, variable, constraint) = can_expr(src);
+        let CanExprOut {
+            output,
+            var_store,
+            var,
+            constraint,
+            home,
+            interns,
+            ..
+        } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
         assert_correct_variable_usage(&constraint);
@@ -28,15 +38,16 @@ mod test_infer {
         }
 
         let mut unify_problems = Vec::new();
-        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
+        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
         let mut subs = solved.into_inner();
 
-        name_all_type_vars(variable, &mut subs);
+        name_all_type_vars(var, &mut subs);
 
-        let actual_str = content_to_string(content, &mut subs);
+        let actual_str = content_to_string(content, &mut subs, home, &interns);
 
         (unify_problems, actual_str)
     }
+
     fn infer_eq(src: &str, expected: &str) {
         let (_, actual) = infer_eq_help(src);
 
@@ -50,7 +61,6 @@ mod test_infer {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
             println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
-            dbg!(&problems);
             assert_eq!(0, 1);
         }
         assert_eq!(actual, expected.to_string());
