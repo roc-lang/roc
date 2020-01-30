@@ -451,7 +451,7 @@ fn get_access_chain<'a>(expr: &'a Expr, chain: &mut Vec<Lowercase>) -> Option<&'
 }
 
 #[allow(dead_code)]
-const LIST_ELEMENTS_LABEL: &'static str = "list_elements";
+const LIST_ELEMENTS_LABEL: &str = "list_elements";
 
 #[allow(dead_code)]
 fn special_case_builtins(usage: &mut VarUsage, _symbol: Symbol, loc_args: Vec<Located<Expr>>) {
