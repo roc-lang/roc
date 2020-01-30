@@ -1390,6 +1390,86 @@ mod test_infer_uniq {
         );
     }
 
+    #[test]
+    #[ignore]
+    fn quicksort_swap() {
+        infer_eq(
+            indoc!(
+                r#"
+                swap : Num.Num Int.Integer, Num.Num Int.Integer, List.List a -> List.List a
+                swap \i, j, list ->
+                    when Pair (List.get i list) (List.get j list) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+                        _ ->
+                            list
+
+                swap
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr Attr.Shared Int, Attr.Attr Attr.Shared Int, Attr.Attr a (List b) -> Attr.Attr a (List b))",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn quicksort() {
+        infer_eq(
+            indoc!(
+                r#"
+                swap : Int, Int, List a -> List a
+                swap \i, j, list ->
+                    when Pair (List.get i list) (List.get j list) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+                        _ ->
+                            list
+
+                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+                partition = \low, high, initialList ->
+                    when List.get high initialList is
+                        Ok pivot ->
+                    
+                            go \i, j, list = 
+                                if j < high then
+                                    when List.get j list is
+                                        Ok value ->
+                                            if value <= pivot then 
+                                                go (i + 1) (j + 1) (swap (i + 1) j list)
+                                            else
+                                                go i (j + 1) list
+
+                                        _ ->
+                                            Pair i list
+                                else
+                                    Pair i list
+
+                            Pair newI newList = go (low - 1) low initialList
+
+                            Pair (newI + 1) (swap (newI + 1) high newList)
+
+                        Err _ ->
+                            Pair (low - 1) initialList
+
+                quicksort : List Int, Int, Int -> List Int 
+                quicksort = \list, low, high ->
+                    Pair partitionIndex partitioned = partition low high list 
+
+                    arr
+                        |> quicksort low (partitionIndex - 1)
+                        |> quicksort (partitionIndex + 1) high
+
+                quicksort
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr Attr.Shared Int, Attr.Attr Attr.Shared Int, Attr.Attr a (List b) -> Attr.Attr a (List b))",
+        );
+    }
+
     fn field_access_seq(
         accesses: Vec<Vec<&str>>,
         expected: std::collections::HashMap<&str, ReferenceCount>,
