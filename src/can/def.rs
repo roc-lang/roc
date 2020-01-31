@@ -578,10 +578,9 @@ fn canonicalize_def<'a>(
                 found_rigids.insert(k, v);
             }
 
-            let arity = can_annotation.arity();
-
             // Fabricate a body for this annotation, that will error at runtime
             let value = Expr::RuntimeError(NoImplementation);
+            let arity = can_annotation.arity();
             let is_closure = arity > 0;
             let loc_can_expr = if !is_closure {
                 Located {
@@ -594,6 +593,7 @@ fn canonicalize_def<'a>(
                 // generate a fake pattern for each argument. this makes signatures
                 // that are functions only crash when they are applied.
                 let mut underscores = Vec::with_capacity(arity);
+
                 for _ in 0..arity {
                     let underscore: Located<Pattern> = Located {
                         value: Pattern::Underscore,
