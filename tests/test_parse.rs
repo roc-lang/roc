@@ -1350,6 +1350,42 @@ mod test_parse {
     }
 
     #[test]
+    fn parse_alias() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let loc_x = Located::new(0, 0, 23, 24, TypeAnnotation::BoundVariable("x"));
+        let loc_y = Located::new(0, 0, 25, 26, TypeAnnotation::BoundVariable("y"));
+        let loc_a = Located::new(0, 0, 5, 6, Pattern::Identifier("a"));
+        let loc_b = Located::new(0, 0, 7, 8, Pattern::Identifier("b"));
+        let applied_ann_args = bumpalo::vec![in &arena; loc_a, loc_b];
+        let applied_alias_args = bumpalo::vec![in &arena; loc_x, loc_y];
+        let applied_alias =
+            TypeAnnotation::Apply(&["Foo", "Bar"], "Baz", applied_alias_args.into_bump_slice());
+        let signature = Def::Alias {
+            name: Located::new(0, 0, 0, 4, "Blah"),
+            vars: applied_ann_args.into_bump_slice(),
+            ann: Located::new(0, 0, 11, 26, applied_alias),
+        };
+
+        let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 4, signature));
+        let defs = bumpalo::vec![in &arena; loc_ann];
+        let ret = Expr::SpaceBefore(arena.alloc(Int("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(2, 2, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                Blah a b : Foo.Bar.Baz x y
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
     fn type_signature_function_def() {
         use TypeAnnotation;
         let arena = Bump::new();
