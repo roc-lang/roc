@@ -532,7 +532,7 @@ fn annotation_or_alias<'a>(
         ) => Def::Alias {
             name: Located {
                 value: name,
-                region: region.clone(),
+                region: *region,
             },
             vars: loc_vars,
             ann: loc_ann,
@@ -1318,7 +1318,7 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                                                 region: loc_arg.region,
                                             });
                                         }
-                                        Err(_) => {
+                                        Err(_malformed) => {
                                             panic!("TODO early return malformed pattern");
                                         }
                                     }
