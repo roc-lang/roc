@@ -215,7 +215,7 @@ pub enum Def<'a> {
     /// Foo : Bar Baz
     Alias {
         name: Loc<&'a str>,
-        vars: &'a [Loc<&'a str>],
+        vars: &'a [Loc<Pattern<'a>>],
         ann: Loc<TypeAnnotation<'a>>,
     },
 

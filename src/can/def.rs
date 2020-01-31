@@ -644,10 +644,20 @@ fn canonicalize_def<'a>(
             let mut can_vars: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
 
             for loc_var in *vars {
-                can_vars.push(Located {
-                    value: loc_var.value.into(),
-                    region: loc_var.region,
-                });
+                match loc_var.value {
+                    ast::Pattern::Identifier(name)
+                        if name.chars().next().unwrap().is_lowercase() =>
+                    {
+                        // This is a valid lowercase rigid var for the alias.
+                        can_vars.push(Located {
+                            value: name.into(),
+                            region: loc_var.region,
+                        });
+                    }
+                    _ => {
+                        panic!("TODO gracefully handle an invalid pattern appearing where a type alias rigid var should be.");
+                    }
+                }
             }
 
             // aliases cannot introduce new rigids that are visible in other annotations
