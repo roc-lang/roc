@@ -202,6 +202,48 @@ pub fn build_expr<'a, B: Backend>(
             }
             None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
         },
+        Struct(fields) => {
+            // Todo list
+            // - [ ] Better naming for sorted_fields
+            // - [ ] Look into options to sort these fields
+            // - [ ] Handle integer conversions for stack_size and max index
+            // - [ ] Get rid of index_max var, it is not very clearly named
+            // - [ ] Panic if expression does not evaluate to i64 or f64 for now
+            // - [ ] Is loading the stack the appropriate return?
+            // - [ ] Compute layout of record, use type_from_layout and Layout::from_content()
+
+            // Sort the fields
+            let mut sorted_fields = Vec::with_capacity_in(fields.len(), env.arena);
+            for field in fields.iter() {
+                sorted_fields.push(field);
+            }
+            sorted_fields.sort_by_key(|k| &k.0);
+
+            // Get slot
+            let stack_size = (std::mem::size_of::<i64>() * fields.len()) as u32;
+            let index_max = fields.len() as i32;
+            let slot = builder
+                .create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, stack_size));
+
+            // Create instructions for storing each field's expression
+            sorted_fields
+                .iter()
+                .zip(0..index_max)
+                .for_each(|((_, ref inner_expr), index)| {
+                    let val = build_expr(env, &scope, module, builder, inner_expr, procs);
+                    builder.ins().stack_store(val, slot, Offset32::new(index));
+                });
+
+            // Placeholder: replace with call to type_from_layout
+            let ir_type = if fields.len() < 4 {
+                types::I64.by(4).unwrap()
+            } else {
+                panic!("TODO build record layout type properly");
+            };
+
+            // Not sure if this is the appropriate thing to return
+            builder.ins().stack_load(ir_type, slot, Offset32::new(0))
+        }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
         }

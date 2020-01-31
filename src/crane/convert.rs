@@ -93,8 +93,13 @@ pub fn type_from_layout(cfg: TargetFrontendConfig, layout: &Layout<'_>, _subs: &
 
     match layout {
         Pointer(_) | FunctionPointer(_, _) => cfg.pointer_type(),
-        Struct(_fields) => {
-            panic!("TODO layout_to_crane_type for Struct");
+        Struct(fields) => {
+            // Placeholder, TODO: Match on type and length to produce the correct ir vec type
+            if fields.len() < 4 {
+                types::I64.by(4).unwrap()
+            } else {
+                panic!("TODO layout_to_crane_type for Struct");
+            }
         }
         Builtin(builtin) => match builtin {
             Int64 => types::I64,
