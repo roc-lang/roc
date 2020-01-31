@@ -37,7 +37,7 @@ pub fn fmt_pattern<'a>(
 
             let mut is_first = true;
 
-            for loc_pattern in loc_patterns {
+            for loc_pattern in *loc_patterns {
                 if is_first {
                     is_first = false;
                 } else {

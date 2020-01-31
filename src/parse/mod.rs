@@ -298,7 +298,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
                 loc_patterns.push(Located { region, value });
             }
 
-            Ok(Pattern::RecordDestructure(loc_patterns))
+            Ok(Pattern::RecordDestructure(loc_patterns.into_bump_slice()))
         }
 
         Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
@@ -496,40 +496,101 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
         ),
         |arena: &'a Bump, (loc_pattern, expr_or_ann)| match expr_or_ann {
             Either::First(loc_expr) => Def::Body(arena.alloc(loc_pattern), arena.alloc(loc_expr)),
-            Either::Second(loc_ann) => {
-                match &loc_pattern.value {
-                    // Type aliases initially parse as either global tags
-                    // or applied global tags, because they are always uppercase
-                    Pattern::GlobalTag(name) => Def::Alias {
-                        name: Located {
-                            value: name,
-                            region: loc_pattern.region.clone(),
-                        },
-                        vars: &[],
-                        ann: loc_ann,
-                    },
-                    Pattern::Apply(
-                        Located {
-                            region,
-                            value: Pattern::GlobalTag(name),
-                        },
-                        loc_vars,
-                    ) => Def::Alias {
-                        name: Located {
-                            value: name,
-                            region: region.clone(),
-                        },
-                        vars: loc_vars,
-                        ann: loc_ann,
-                    },
-                    _ => {
-                        // This is a regular Annotation
-                        Def::Annotation(loc_pattern, loc_ann)
-                    }
-                }
-            }
+            Either::Second(loc_ann) =>
+                annotation_or_alias(arena, &loc_pattern.value, loc_pattern.region, loc_ann),
         }
     )
+}
+
+fn annotation_or_alias<'a>(
+    arena: &'a Bump,
+    pattern: &Pattern<'a>,
+    region: Region,
+    loc_ann: Located<TypeAnnotation<'a>>,
+) -> Def<'a> {
+    use crate::parse::ast::Pattern::*;
+
+    match pattern {
+        // Type aliases initially parse as either global tags
+        // or applied global tags, because they are always uppercase
+        GlobalTag(name) => Def::Alias {
+            name: Located {
+                value: name,
+                region,
+            },
+            vars: &[],
+            ann: loc_ann,
+        },
+        Apply(
+            Located {
+                region,
+                value: Pattern::GlobalTag(name),
+            },
+            loc_vars,
+        ) => Def::Alias {
+            name: Located {
+                value: name,
+                region: region.clone(),
+            },
+            vars: loc_vars,
+            ann: loc_ann,
+        },
+        Apply(_, _) => {
+            panic!("TODO gracefully handle invalid Apply in type annotation");
+        }
+        SpaceAfter(value, spaces_before) => Def::SpaceAfter(
+            arena.alloc(annotation_or_alias(arena, value, region, loc_ann)),
+            spaces_before,
+        ),
+        SpaceBefore(value, spaces_before) => Def::SpaceBefore(
+            arena.alloc(annotation_or_alias(arena, value, region, loc_ann)),
+            spaces_before,
+        ),
+        Nested(value) => annotation_or_alias(arena, value, region, loc_ann),
+
+        PrivateTag(_) => {
+            panic!("TODO gracefully handle trying to use a private tag as an annotation.");
+        }
+        QualifiedIdentifier(_) => {
+            panic!("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`");
+        }
+        IntLiteral(_)
+        | NonBase10Literal { .. }
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | BlockStrLiteral(_) => {
+            panic!("TODO gracefully handle trying to annotate a litera");
+        }
+        Underscore => {
+            panic!("TODO gracefully handle trying to give a type annotation to an undrscore");
+        }
+        Malformed(_) => {
+            panic!("TODO translate a malformed pattern into a malformed annotation");
+        }
+        Identifier(ident) => {
+            // This is a regular Annotation
+            Def::Annotation(
+                Located {
+                    region,
+                    value: Pattern::Identifier(ident),
+                },
+                loc_ann,
+            )
+        }
+        RecordDestructure(loc_patterns) => {
+            // This is a record destructure Annotation
+            Def::Annotation(
+                Located {
+                    region,
+                    value: Pattern::RecordDestructure(loc_patterns),
+                },
+                loc_ann,
+            )
+        }
+        RecordField(_, _) => {
+            unreachable!("This should only be possible inside a record destruture.");
+        }
+    }
 }
 
 fn parse_def_expr<'a>(
@@ -635,7 +696,7 @@ fn parse_def_signature<'a>(
             attempt!(
                 Attempting::Def,
                 and!(
-                    // Parse the body of the first def. It doesn't need any spaces
+                    // Parse the first annotation. It doesn't need any spaces
                     // around it parsed, because both the subsquent defs and the
                     // final body will have space1_before on them.
                     //
@@ -849,7 +910,10 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
                 }
             }
 
-            Ok((Pattern::RecordDestructure(patterns), state))
+            Ok((
+                Pattern::RecordDestructure(patterns.into_bump_slice()),
+                state,
+            ))
         },
     )
 }
@@ -1170,39 +1234,29 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     then(
         and!(
             loc!(ident()),
-            optional(either!(
+            and!(
                 // There may optionally be function args after this ident
-                loc_function_args(min_indent),
-                // If there aren't any args, there may be a '=' or ':' after it.
-                // (It's a syntax error to write e.g. `foo bar =` - so if there
-                // were any args, there is definitely no need to parse '=' or ':'!)
-                and!(
+                optional(loc_function_args(min_indent)),
+                // There may also be a '=' or ':' after it.
+                // The : might be because this is a type alias, e.g. (List a : ...`
+                // The = might be because someone is trying to use Elm or Haskell
+                // syntax for defining functions, e.g. `foo a b = ...` - so give a nice error!
+                optional(and!(
                     space0(min_indent),
                     either!(equals_with_indent(), colon_with_indent())
-                )
-            ))
+                ))
+            )
         ),
         move |arena, state, (loc_ident, opt_extras)| {
             // This appears to be a var, keyword, or function application.
             match opt_extras {
-                Some(Either::First(loc_args)) => {
-                    let loc_expr = Located {
-                        region: loc_ident.region,
-                        value: ident_to_expr(arena, loc_ident.value),
-                    };
-
-                    let mut allocated_args = Vec::with_capacity_in(loc_args.len(), arena);
-
-                    for loc_arg in loc_args {
-                        allocated_args.push(&*arena.alloc(loc_arg));
-                    }
-
-                    Ok((
-                        Expr::Apply(arena.alloc(loc_expr), allocated_args, CalledVia::Space),
-                        state,
-                    ))
+                (Some(_loc_args), Some((_spaces_before_equals, Either::First(_equals_indent)))) => {
+                    // We got args with an '=' after them, e.g. `foo a b = ...`
+                    // This is a syntax error!
+                    panic!("TODO gracefully handle parse error for defs like `foo a b = ...`");
                 }
-                Some(Either::Second((spaces_before_equals, Either::First(equals_indent)))) => {
+                (None, Some((spaces_before_equals, Either::First(equals_indent)))) => {
+                    // We got '=' with no args before it
                     let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
                     let value = if spaces_before_equals.is_empty() {
                         pattern
@@ -1223,8 +1277,64 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
                     Ok((answer, state))
                 }
-                Some(Either::Second((spaces_before_colon, Either::Second(colon_indent)))) => {
-                    let pattern: Pattern<'a> = Pattern::from_ident(arena, loc_ident.value);
+                (Some(loc_args), None) => {
+                    // We got args and nothing else
+                    let loc_expr = Located {
+                        region: loc_ident.region,
+                        value: ident_to_expr(arena, loc_ident.value),
+                    };
+
+                    let mut allocated_args = Vec::with_capacity_in(loc_args.len(), arena);
+
+                    for loc_arg in loc_args {
+                        allocated_args.push(&*arena.alloc(loc_arg));
+                    }
+
+                    Ok((
+                        Expr::Apply(arena.alloc(loc_expr), allocated_args, CalledVia::Space),
+                        state,
+                    ))
+                }
+                (opt_args, Some((spaces_before_colon, Either::Second(colon_indent)))) => {
+                    // We may have gotten args, but we definitely got a ':'
+                    // (meaning this is an annotation or alias;
+                    // parse_def_signature will translate it into one or the other.)
+                    let pattern: Pattern<'a> = {
+                        let pattern = Pattern::from_ident(arena, loc_ident.value);
+
+                        match opt_args {
+                            Some(loc_args) => {
+                                // Translate the loc_args Exprs into a Pattern::Apply
+                                // They are probably type alias variables (e.g. `List a : ...`)
+                                let mut arg_patterns = Vec::with_capacity_in(loc_args.len(), arena);
+
+                                for loc_arg in loc_args {
+                                    match expr_to_pattern(arena, &loc_arg.value) {
+                                        Ok(arg_pat) => {
+                                            arg_patterns.push(Located {
+                                                value: arg_pat,
+                                                region: loc_arg.region,
+                                            });
+                                        }
+                                        Err(_) => {
+                                            panic!("TODO early return malformed pattern");
+                                        }
+                                    }
+                                }
+
+                                let loc_pattern = Located {
+                                    region: loc_ident.region,
+                                    value: pattern,
+                                };
+
+                                Pattern::Apply(
+                                    arena.alloc(loc_pattern),
+                                    arg_patterns.into_bump_slice(),
+                                )
+                            }
+                            None => pattern,
+                        }
+                    };
                     let value = if spaces_before_colon.is_empty() {
                         pattern
                     } else {
@@ -1232,19 +1342,20 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     };
                     let region = loc_ident.region;
                     let loc_pattern = Located { region, value };
-                    let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
+                    let (spaces_after_colon, state) = space0(min_indent).parse(arena, state)?;
                     let (parsed_expr, state) =
                         parse_def_signature(min_indent, colon_indent, arena, state, loc_pattern)?;
 
-                    let answer = if spaces_after_equals.is_empty() {
+                    let answer = if spaces_after_colon.is_empty() {
                         parsed_expr
                     } else {
-                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
+                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_colon)
                     };
 
                     Ok((answer, state))
                 }
-                None => {
+                (None, None) => {
+                    // We got nothin'
                     let ident = loc_ident.value.clone();
 
                     Ok((ident_to_expr(arena, ident), state))
@@ -1434,7 +1545,7 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     }
                 }
 
-                let pattern = Pattern::RecordDestructure(loc_patterns);
+                let pattern = Pattern::RecordDestructure(loc_patterns.into_bump_slice());
                 let value = if spaces_before_equals.is_empty() {
                     pattern
                 } else {
@@ -1469,7 +1580,7 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     }
                 }
 
-                let pattern = Pattern::RecordDestructure(loc_patterns);
+                let pattern = Pattern::RecordDestructure(loc_patterns.into_bump_slice());
                 let value = if spaces_before_colon.is_empty() {
                     pattern
                 } else {

@@ -1237,7 +1237,13 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            arena.alloc(Located::new(1, 1, 1, 8, RecordDestructure(fields))),
+            arena.alloc(Located::new(
+                1,
+                1,
+                1,
+                8,
+                RecordDestructure(fields.into_bump_slice()),
+            )),
             arena.alloc(Located::new(1, 1, 11, 12, Int("5"))),
         );
         let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 8, def1));
@@ -1748,7 +1754,7 @@ mod test_parse {
         let newlines = bumpalo::vec![in &arena; Newline];
         let identifiers1 = bumpalo::vec![in &arena; Located::new(1, 1, 3, 4, Identifier("y")) ];
         let pattern1 = Pattern::SpaceBefore(
-            arena.alloc(RecordDestructure(identifiers1)),
+            arena.alloc(RecordDestructure(identifiers1.into_bump_slice())),
             newlines.into_bump_slice(),
         );
         let loc_pattern1 = Located::new(1, 1, 1, 6, pattern1);
@@ -1762,7 +1768,7 @@ mod test_parse {
         let newlines = bumpalo::vec![in &arena; Newline];
         let identifiers2 = bumpalo::vec![in &arena; Located::new(2, 2, 3, 4, Identifier("z")), Located::new(2, 2, 6, 7, Identifier("w"))  ];
         let pattern2 = Pattern::SpaceBefore(
-            arena.alloc(RecordDestructure(identifiers2)),
+            arena.alloc(RecordDestructure(identifiers2.into_bump_slice())),
             newlines.into_bump_slice(),
         );
         let loc_pattern2 = Located::new(2, 2, 1, 9, pattern2);
