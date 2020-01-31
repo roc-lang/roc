@@ -416,7 +416,7 @@ pub fn constrain_expr(
                         let branch_con = constrain_when_branch(
                             env,
                             region,
-                            &loc_when_pattern.pattern,
+                            &loc_when_pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -443,7 +443,7 @@ pub fn constrain_expr(
                         let branch_con = constrain_when_branch(
                             env,
                             region,
-                            &loc_when_pattern.pattern,
+                            &loc_when_pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
