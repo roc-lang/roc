@@ -11,7 +11,9 @@ pub mod string_literal;
 pub mod type_annotation;
 
 use crate::operator::{BinOp, CalledVia, UnaryOp};
-use crate::parse::ast::{AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable};
+use crate::parse::ast::{
+    AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable, TypeAnnotation,
+};
 use crate::parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
 };
@@ -721,12 +723,12 @@ fn parse_def_signature<'a>(
                 )
             ),
             move |arena, state, (loc_first_annotation, (mut defs, loc_ret))| {
-                let pat: Located<Pattern<'a>> = loc_first_pattern.clone();
-                let ann: Located<ast::TypeAnnotation<'a>> = loc_first_annotation;
-                let first_def: Def<'a> =
-                    // TODO is there some way to eliminate this .clone() here?
-                    Def::Annotation(pat, ann);
-
+                let first_def: Def<'a> = annotation_or_alias(
+                    arena,
+                    &loc_first_pattern.value,
+                    loc_first_pattern.region,
+                    loc_first_annotation,
+                );
                 let loc_first_def = Located {
                     value: first_def,
                     region: loc_first_pattern.region,
