@@ -63,7 +63,7 @@ impl References {
         self
     }
 
-    pub fn has_lookup(&self, symbol: &Symbol) -> bool {
-        self.lookups.contains(symbol)
+    pub fn has_lookup(&self, symbol: Symbol) -> bool {
+        self.lookups.contains(&symbol)
     }
 }

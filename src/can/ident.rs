@@ -40,7 +40,7 @@ pub enum TagName {
 }
 
 impl TagName {
-    pub fn to_string(self, interns: &Interns, home: ModuleId) -> InlinableString {
+    pub fn into_string(self, interns: &Interns, home: ModuleId) -> InlinableString {
         match self {
             TagName::Global(uppercase) => uppercase.as_inline_str().clone(),
             TagName::Private(symbol) => symbol.fully_qualified(interns, home),

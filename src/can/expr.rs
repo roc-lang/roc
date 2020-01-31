@@ -148,7 +148,7 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         ast::Expr::Int(string) => {
-            let answer = int_expr_from_result(var_store, finish_parsing_int((*string).into()), env);
+            let answer = int_expr_from_result(var_store, finish_parsing_int(*string), env);
 
             (answer, Output::default())
         }
@@ -334,9 +334,9 @@ pub fn canonicalize_expr<'a>(
         //                        value: ident,
         //                    };
 
-        //                    env.problem(Problem::UnrecognizedLookup(loc_ident.clone()));
+        //                    env.problem(Problem::LookupNotInScope(loc_ident.clone()));
 
-        //                    RuntimeError(UnrecognizedLookup(loc_ident))
+        //                    RuntimeError(LookupNotInScope(loc_ident))
         //                }
         //            };
 
@@ -400,19 +400,18 @@ pub fn canonicalize_expr<'a>(
 
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
-            for (ident, (arg_symbol, region)) in scope.idents() {
-                if !output.references.has_lookup(&arg_symbol) {
-                    // The body never referenced this argument we declared. It's an unused argument!
-                    env.problem(Problem::UnusedArgument(Located {
-                        region: region.clone(),
-                        value: ident.clone(),
-                    }));
-                }
+            for (symbol, region) in scope.symbols() {
+                if !original_scope.contains_symbol(*symbol) {
+                    if !output.references.has_lookup(*symbol) {
+                        // The body never referenced this argument we declared. It's an unused argument!
+                        env.problem(Problem::UnusedArgument(*symbol, *region));
+                    }
 
-                // We shouldn't ultimately count arguments as referenced locals. Otherwise,
-                // we end up with weird conclusions like the expression (\x -> x + 1)
-                // references the (nonexistant) local variable x!
-                output.references.lookups.remove(&arg_symbol);
+                    // We shouldn't ultimately count arguments as referenced locals. Otherwise,
+                    // we end up with weird conclusions like the expression (\x -> x + 1)
+                    // references the (nonexistant) local variable x!
+                    output.references.lookups.remove(symbol);
+                }
             }
 
             env.register_closure(symbol.clone(), output.references.clone());
@@ -670,14 +669,9 @@ fn canonicalize_when_branch<'a>(
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
-    for (ident, (symbol, region)) in scope.idents() {
-        if !output.references.has_lookup(&symbol) {
-            let loc_ident = Located {
-                region: region.clone(),
-                value: ident.clone(),
-            };
-
-            env.problem(Problem::UnusedDef(loc_ident));
+    for (symbol, region) in scope.symbols() {
+        if !output.references.has_lookup(*symbol) && !original_scope.contains_symbol(*symbol) {
+            env.problem(Problem::UnusedDef(*symbol, *region));
         }
     }
 
@@ -723,18 +717,18 @@ pub fn local_successors<'a>(
     let mut answer = im_rc::hashset::HashSet::clone(&references.lookups);
 
     for call_symbol in references.calls.iter() {
-        answer = answer.union(call_successors(call_symbol, closures));
+        answer = answer.union(call_successors(*call_symbol, closures));
     }
 
     answer
 }
 
 fn call_successors<'a>(
-    call_symbol: &'a Symbol,
+    call_symbol: Symbol,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
     // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 definitions reference each other; may need to track visited definitions!
-    match closures.get(call_symbol) {
+    match closures.get(&call_symbol) {
         Some(references) => {
             let mut answer = local_successors(&references, closures);
 
@@ -764,7 +758,7 @@ where
             for local in refs.lookups.iter() {
                 if !visited.contains(&local) {
                     let other_refs: References =
-                        references_from_local(local.clone(), visited, refs_by_def, closures);
+                        references_from_local(*local, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
@@ -774,8 +768,7 @@ where
 
             for call in refs.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs =
-                        references_from_call(call.clone(), visited, refs_by_def, closures);
+                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
@@ -806,12 +799,8 @@ where
 
             for closed_over_local in references.lookups.iter() {
                 if !visited.contains(&closed_over_local) {
-                    let other_refs = references_from_local(
-                        closed_over_local.clone(),
-                        visited,
-                        refs_by_def,
-                        closures,
-                    );
+                    let other_refs =
+                        references_from_local(*closed_over_local, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
@@ -821,13 +810,12 @@ where
 
             for call in references.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs =
-                        references_from_call(call.clone(), visited, refs_by_def, closures);
+                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
 
-                answer.calls.insert(call.clone());
+                answer.calls.insert(*call);
             }
 
             answer
@@ -906,7 +894,7 @@ fn canonicalize_field<'a>(
     }
 }
 
-fn canonicalize_lookup<'a>(
+fn canonicalize_lookup(
     env: &mut Env<'_>,
     scope: &mut Scope,
     module_name: &str,

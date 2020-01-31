@@ -31,11 +31,11 @@ impl Symbol {
         Symbol(bits)
     }
 
-    pub fn module_id(&self) -> ModuleId {
+    pub fn module_id(self) -> ModuleId {
         ModuleId(self.0 as u32)
     }
 
-    pub fn ident_id(&self) -> IdentId {
+    pub fn ident_id(self) -> IdentId {
         IdentId((self.0 >> 32) as u32)
     }
 
@@ -46,7 +46,7 @@ impl Symbol {
             .unwrap_or_else(|| panic!("Could not find IdentIds for {:?}", self.module_id()))
     }
 
-    pub fn ident_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
+    pub fn ident_string(self, interns: &Interns) -> &InlinableString {
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
@@ -61,7 +61,7 @@ impl Symbol {
         })
     }
 
-    pub fn fully_qualified<'a>(&self, interns: &'a Interns, home: ModuleId) -> InlinableString {
+    pub fn fully_qualified(self, interns: &Interns, home: ModuleId) -> InlinableString {
         let module_id = self.module_id();
 
         if module_id == home {
@@ -87,10 +87,10 @@ impl Symbol {
 ///
 /// ...instead display as this:
 ///
-/// 'Foo.bar'
+/// `Foo.bar`
 impl fmt::Debug for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "'{}'", self.0)
+        write!(f, "`{:?}.{:?}`", self.module_id(), self.ident_id())
     }
 }
 
@@ -110,7 +110,7 @@ lazy_static! {
     /// which displays not only the Module ID, but also the Module Name which
     /// corresponds to that ID.
     ///
-    pub static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<u32, Box<str>>> =
+    static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<u32, Box<str>>> =
         // This stores a u32 key instead of a ModuleId key so that if there's
         // a problem with ModuleId's Debug implementation, logging this for diagnostic
         // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
@@ -240,7 +240,7 @@ lazy_static! {
     /// This is used in Debug builds only, to let us have a Debug instance
     /// which displays not only the Ident ID, but also the name string which
     /// corresponds to that ID.
-    pub static ref DEBUG_IDENT_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<u32, Box<str>>> =
+    static ref DEBUG_IDENT_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<u32, Box<str>>> =
         // This stores a u32 key instead of a ModuleId key so that if there's
         // a problem with ModuleId's Debug implementation, logging this for diagnostic
         // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
@@ -265,7 +265,7 @@ impl fmt::Debug for IdentId {
     /// it does not have available, due to having never stored it in the mutexed intern table.)
     #[cfg(debug_assertions)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "({:?}, {})", self.name(), self.0)
+        write!(f, "{}", self.name())
     }
 
     /// In relese builds, all we have access to is the number, so only display that.

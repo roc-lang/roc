@@ -442,8 +442,8 @@ pub fn constrain_expr(
             }
         }
         Var(symbol) => {
-            var_usage.register(symbol);
-            let usage = var_usage.get_usage(symbol);
+            var_usage.register(*symbol);
+            let usage = var_usage.get_usage(*symbol);
 
             constrain_var(var_store, *symbol, usage, region, expected)
         }
@@ -505,7 +505,7 @@ pub fn constrain_expr(
             // makes e.g. `(\x -> x) (\x -> x)` count as unique in both cases
             for (_, pattern) in args {
                 for identifier in pattern::symbols_from_pattern(&pattern.value) {
-                    var_usage.unregister(&identifier);
+                    var_usage.unregister(identifier);
                 }
             }
 
@@ -706,7 +706,7 @@ pub fn constrain_expr(
                         // In this case the `x` in the second branch is used uniquely
                         for symbol in pattern::symbols_from_pattern(&loc_when_pattern.pattern.value)
                         {
-                            branch_var_usage.unregister(&symbol);
+                            branch_var_usage.unregister(symbol);
                         }
 
                         var_usage.or(&branch_var_usage);
@@ -753,7 +753,7 @@ pub fn constrain_expr(
                         // In this case the `x` in the second branch is used uniquely
                         for symbol in pattern::symbols_from_pattern(&loc_when_pattern.pattern.value)
                         {
-                            branch_var_usage.unregister(&symbol);
+                            branch_var_usage.unregister(symbol);
                         }
 
                         var_usage.or(&branch_var_usage);
@@ -781,7 +781,7 @@ pub fn constrain_expr(
             symbol,
             updates,
         } => {
-            var_usage.register(symbol);
+            var_usage.register(*symbol);
 
             let mut fields: SendMap<Lowercase, Type> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);

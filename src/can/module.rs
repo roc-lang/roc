@@ -94,7 +94,7 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let mut output = Output::default();
-    let defs = canonicalize_defs(
+    let (defs, _) = canonicalize_defs(
         &mut env,
         &mut output.rigids,
         var_store,

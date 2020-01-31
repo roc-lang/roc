@@ -355,12 +355,13 @@ impl<'a> Pattern<'a> {
                     // This is definitely malformed.
                     let mut buf =
                         String::with_capacity_in(module_name.len() + (2 * parts.len()), arena);
-                    let mut any_parts_printed = false;
-
-                    if !module_name.is_empty() {
+                    let mut any_parts_printed = if module_name.is_empty() {
+                        false
+                    } else {
                         buf.push_str(module_name);
-                        any_parts_printed = true;
-                    }
+
+                        true
+                    };
 
                     for part in parts.iter() {
                         if any_parts_printed {

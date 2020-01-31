@@ -76,7 +76,7 @@ pub fn canonicalize_pattern<'a>(
             Ok(symbol) => Pattern::Identifier(symbol),
             Err((original_region, shadow)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                    original_region: original_region.clone(),
+                    original_region,
                     shadow: shadow.clone(),
                 }));
 
@@ -207,7 +207,7 @@ pub fn canonicalize_pattern<'a>(
                             }
                             Err((original_region, shadow)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region: original_region.clone(),
+                                    original_region,
                                     shadow: shadow.clone(),
                                 }));
 
@@ -240,7 +240,7 @@ pub fn canonicalize_pattern<'a>(
                             }
                             Err((original_region, shadow)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region: original_region.clone(),
+                                    original_region,
                                     shadow: shadow.clone(),
                                 }));
 

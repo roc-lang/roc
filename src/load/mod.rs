@@ -448,7 +448,7 @@ fn load_module(
 ) -> Result<ModuleId, LoadingProblem> {
     let mut filename = PathBuf::new();
 
-    filename.push(env.src_dir.clone());
+    filename.push(env.src_dir);
 
     // Convert dots in module name to directories
     for part in module_name.as_str().split(MODULE_SEPARATOR) {
@@ -630,7 +630,7 @@ fn add_exposed_to_scope(
         let ident_id = ident_ids.add(ident.clone().into());
         let symbol = Symbol::new(module_id, ident_id);
 
-        scope.insert(ident, (symbol, region.clone()));
+        scope.insert(ident, (symbol, region));
     }
 }
 

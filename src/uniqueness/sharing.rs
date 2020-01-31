@@ -32,8 +32,8 @@ impl VarUsage {
         }
     }
 
-    pub fn register_with(&mut self, symbol: &Symbol, rc: &ReferenceCount) {
-        let value = match self.usage.get(symbol) {
+    pub fn register_with(&mut self, symbol: Symbol, rc: &ReferenceCount) {
+        let value = match self.usage.get(&symbol) {
             None => rc.clone(),
             Some(current) => ReferenceCount::add(current, rc),
         };
@@ -41,22 +41,22 @@ impl VarUsage {
         self.usage.insert(symbol.clone(), value);
     }
 
-    pub fn register(&mut self, symbol: &Symbol) {
+    pub fn register(&mut self, symbol: Symbol) {
         use self::ReferenceCount::*;
         self.register_with(symbol, &Unique);
     }
 
-    pub fn unregister(&mut self, symbol: &Symbol) {
-        self.usage.remove(symbol);
+    pub fn unregister(&mut self, symbol: Symbol) {
+        self.usage.remove(&symbol);
     }
 
-    pub fn get_usage(&self, symbol: &Symbol) -> Option<&ReferenceCount> {
-        self.usage.get(symbol)
+    pub fn get_usage(&self, symbol: Symbol) -> Option<&ReferenceCount> {
+        self.usage.get(&symbol)
     }
 
     pub fn add(&mut self, other: &Self) {
         for (symbol, v) in &other.usage {
-            self.register_with(symbol, v);
+            self.register_with(*symbol, v);
         }
     }
 

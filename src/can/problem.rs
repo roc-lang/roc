@@ -1,5 +1,6 @@
 use crate::can::ident::Ident;
 use crate::can::pattern::PatternType;
+use crate::module::symbol::Symbol;
 use crate::operator::BinOp;
 use crate::region::{Located, Region};
 use inlinable_string::InlinableString;
@@ -8,12 +9,11 @@ use inlinable_string::InlinableString;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
     // TODO use Symbol over Ident with these
-    UnusedDef(Located<Ident>),
-    UnusedArgument(Located<Ident>),
+    UnusedDef(Symbol, Region),
+    UnusedArgument(Symbol, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(PatternType, Region),
-    CircularDef(Vec<Located<Ident>>),
     RuntimeError(RuntimeError),
 }
 
@@ -29,7 +29,7 @@ pub enum RuntimeError {
         shadow: Located<Ident>,
     },
     UnrecognizedFunctionName(Located<InlinableString>),
-    UnrecognizedLookup(Located<InlinableString>),
+    LookupNotInScope(Located<InlinableString>),
     ValueNotExposed {
         module_name: InlinableString,
         ident: InlinableString,

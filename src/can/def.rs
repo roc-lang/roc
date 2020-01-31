@@ -19,7 +19,7 @@ use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use crate::types::Type;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,7 +37,7 @@ pub struct CanDefs {
     // make refs_by_symbol be something like MutMap<Symbol, (Region, References)>
     pub refs_by_symbol: MutMap<Symbol, (Located<Ident>, References)>,
     pub can_defs_by_symbol: MutMap<Symbol, Def>,
-    pub idents_introduced: MutMap<Ident, (Symbol, Region)>,
+    pub symbols_introduced: MutMap<Symbol, Region>,
 }
 /// A Def that has had patterns and type annnotations canonicalized,
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
@@ -92,10 +92,10 @@ pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     var_store: &VarStore,
-    original_scope: &mut Scope,
+    original_scope: &Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     pattern_type: PatternType,
-) -> CanDefs {
+) -> (CanDefs, Scope) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -118,15 +118,6 @@ pub fn canonicalize_defs<'a>(
     // Record both the original and final idents from the scope,
     // so we can diff them while detecting unused defs.
     let mut scope = original_scope.clone();
-    let original_idents = {
-        let mut set = HashSet::with_capacity_and_hasher(scope.num_idents(), default_hasher());
-
-        for (ident, _) in original_scope.idents() {
-            set.insert(ident);
-        }
-
-        set
-    };
     let num_defs = loc_defs.len();
     let mut refs_by_symbol = MutMap::default();
     let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
@@ -195,26 +186,32 @@ pub fn canonicalize_defs<'a>(
     }
 
     // Determine which idents we introduced in the course of this process.
-    let idents_introduced = {
-        let mut map = HashMap::with_capacity_and_hasher(
-            scope.num_idents() - original_idents.len(),
-            default_hasher(),
-        );
+    let mut symbols_introduced = MutMap::default();
 
-        for (ident, value) in scope.idents() {
-            if !original_idents.contains(ident) {
-                map.insert(ident.clone(), value.clone());
-            }
+    for (symbol, region) in scope.symbols() {
+        if !original_scope.contains_symbol(*symbol) {
+            symbols_introduced.insert(*symbol, *region);
         }
-
-        map
-    };
-
-    CanDefs {
-        idents_introduced,
-        refs_by_symbol,
-        can_defs_by_symbol,
     }
+
+    // This returns both the defs info as well as the new scope.
+    //
+    // We have to return the new scope because we added defs to it
+    // (and those lookups shouldn't fail later, e.g. when canonicalizing
+    // the return expr), but we didn't want to mutate the original scope
+    // directly because we wanted to keep a clone of it around to diff
+    // when looking for unused idents.
+    //
+    // We have to return the scope separately from the defs, because the
+    // defs need to get moved later.
+    (
+        CanDefs {
+            refs_by_symbol,
+            can_defs_by_symbol,
+            symbols_introduced,
+        },
+        scope,
+    )
 }
 
 #[inline(always)]
@@ -224,7 +221,7 @@ pub fn sort_can_defs(
     mut output: Output,
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
     let CanDefs {
-        idents_introduced,
+        symbols_introduced,
         refs_by_symbol,
         can_defs_by_symbol,
     } = defs;
@@ -268,14 +265,9 @@ pub fn sort_can_defs(
 
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
-    for (ident, (symbol, region)) in idents_introduced {
-        if !output.references.has_lookup(&symbol) {
-            let loc_ident = Located {
-                region,
-                value: ident.clone(),
-            };
-
-            env.problem(Problem::UnusedDef(loc_ident));
+    for (symbol, region) in symbols_introduced {
+        if !output.references.has_lookup(symbol) {
+            env.problem(Problem::UnusedDef(symbol, region));
         }
     }
 
@@ -451,8 +443,8 @@ pub fn sort_can_defs(
 
             for cycle in strongly_connected_components(&nodes_in_cycle, all_successors_without_self)
             {
-                // check whether the cycle is faulty, which is when has a direct successor in the
-                // current cycle. This catches things like:
+                // check whether the cycle is faulty, which is when it has
+                // a direct successor in the current cycle. This catches things like:
                 //
                 // x = x
                 //
@@ -460,18 +452,21 @@ pub fn sort_can_defs(
                 //
                 // p = q
                 // q = p
-                let is_invalid_cycle = cycle
-                    .get(0)
-                    .map(|symbol| {
+                let is_invalid_cycle = match cycle.get(0) {
+                    Some(symbol) => {
                         let mut succs = direct_successors(symbol);
+
                         succs.retain(|key| cycle.contains(key));
+
                         !succs.is_empty()
-                    })
-                    .unwrap_or(false);
+                    }
+                    None => false,
+                };
 
                 if is_invalid_cycle {
                     // We want to show the entire cycle in the error message, so expand it out.
                     let mut loc_idents_in_cycle: Vec<Located<Ident>> = Vec::new();
+
                     for symbol in cycle {
                         let refs = refs_by_symbol.get(&symbol).unwrap_or_else(|| {
                             panic!(
@@ -483,15 +478,18 @@ pub fn sort_can_defs(
                         loc_idents_in_cycle.push(refs.0.clone());
                     }
 
-                    // Sort them to make the report more helpful.
-                    loc_idents_in_cycle.sort();
-
-                    problems.push(Problem::CircularDef(loc_idents_in_cycle.clone()));
-
                     let mut regions = Vec::with_capacity(can_defs_by_symbol.len());
                     for def in can_defs_by_symbol.values() {
                         regions.push((def.loc_pattern.region, def.loc_expr.region));
                     }
+
+                    // Sort them to make the report more helpful.
+                    loc_idents_in_cycle.sort();
+
+                    problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
+                        loc_idents_in_cycle.clone(),
+                        regions.clone(),
+                    )));
 
                     declarations.push(Declaration::InvalidCycle(loc_idents_in_cycle, regions));
                 } else {
@@ -550,7 +548,7 @@ fn group_to_declaration(
                 if let Closure(fn_var, name, Recursive::NotRecursive, args, body) =
                     new_def.loc_expr.value
                 {
-                    let recursion = closure_recursivity(symbol.clone(), closures);
+                    let recursion = closure_recursivity(*symbol, closures);
 
                     new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                 }
@@ -577,7 +575,7 @@ fn group_to_declaration(
                     if let Closure(fn_var, name, Recursive::NotRecursive, args, body) =
                         new_def.loc_expr.value
                     {
-                        let recursion = closure_recursivity(symbol.clone(), closures);
+                        let recursion = closure_recursivity(symbol, closures);
 
                         new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                     }
@@ -706,10 +704,10 @@ fn canonicalize_pending_def<'a>(
 
             // bookkeeping for tail-call detection. If we're assigning to an
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
-            let outer_identifier = env.tailcallable_symbol.clone();
+            let outer_identifier = env.tailcallable_symbol;
 
-            if let &Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
-                env.tailcallable_symbol = Some(defined_symbol.clone());
+            if let Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
+                env.tailcallable_symbol = Some(*defined_symbol);
                 vars_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
 
@@ -771,7 +769,7 @@ fn canonicalize_pending_def<'a>(
                 // renamed_closure_def = Some(&defined_symbol);
                 loc_can_expr.value = Closure(
                     fn_var,
-                    symbol.clone(),
+                    *symbol,
                     is_recursive,
                     arguments.clone(),
                     body.clone(),
@@ -800,7 +798,7 @@ fn canonicalize_pending_def<'a>(
                     (
                         Located {
                             value: ident.clone(),
-                            region: region.clone(),
+                            region: *region,
                         },
                         refs,
                     ),
@@ -828,14 +826,14 @@ fn canonicalize_pending_def<'a>(
         Body(loc_pattern, loc_can_pattern, loc_expr) => {
             // bookkeeping for tail-call detection. If we're assigning to an
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
-            let outer_identifier = env.tailcallable_symbol.clone();
+            let outer_identifier = env.tailcallable_symbol;
 
             if let (
                 &ast::Pattern::Identifier(ref _name),
                 &Pattern::Identifier(ref defined_symbol),
             ) = (&loc_pattern.value, &loc_can_pattern.value)
             {
-                env.tailcallable_symbol = Some(defined_symbol.clone());
+                env.tailcallable_symbol = Some(*defined_symbol);
 
                 // TODO isn't types_by_symbol enough? Do we need vars_by_symbol too?
                 vars_by_symbol.insert(defined_symbol.clone(), expr_var);
@@ -898,7 +896,7 @@ fn canonicalize_pending_def<'a>(
 
                 loc_can_expr.value = Closure(
                     fn_var,
-                    symbol.clone(),
+                    *symbol,
                     is_recursive,
                     arguments.clone(),
                     body.clone(),
@@ -927,7 +925,7 @@ fn canonicalize_pending_def<'a>(
                     (
                         Located {
                             value: ident.clone(),
-                            region: region.clone(),
+                            region: *region,
                         },
                         refs,
                     ),
@@ -962,7 +960,8 @@ pub fn can_defs_with_return<'a>(
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output) {
     let mut found_rigids = SendMap::default();
-    let unsorted = canonicalize_defs(
+
+    let (unsorted, mut scope) = canonicalize_defs(
         env,
         &mut found_rigids,
         var_store,
@@ -975,7 +974,6 @@ pub fn can_defs_with_return<'a>(
     // Use its output as a starting point because its tail_call already has the right answer!
     let (ret_expr, output) =
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
-
     let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
 
     output.rigids = output.rigids.union(found_rigids);
@@ -1021,7 +1019,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
 
         // while there are symbols left to visit
         while let Some(nested_symbol) = stack.pop() {
-            if nested_symbol.clone() == symbol {
+            if nested_symbol == symbol {
                 return Recursive::Recursive;
             }
 
