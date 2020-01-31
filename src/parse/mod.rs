@@ -1292,20 +1292,7 @@ pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
         let mut iter = state.input.chars();
 
         match iter.next() {
-            Some(ch) if ch == ':' => {
-                match iter.peekable().peek() {
-                    // The ':' must not be followed by `=`
-                    Some(next_ch) if next_ch != &':' && next_ch != &'=' => {
-                        Ok((state.indent_col, state.advance_without_indenting(1)?))
-                    }
-                    Some(next_ch) => Err(unexpected(*next_ch, 0, state, Attempting::Def)),
-                    None => Err(unexpected_eof(
-                        1,
-                        Attempting::Def,
-                        state.advance_without_indenting(1)?,
-                    )),
-                }
-            }
+            Some(ch) if ch == ':' => Ok((state.indent_col, state.advance_without_indenting(1)?)),
             Some(ch) => Err(unexpected(ch, 0, state, Attempting::Def)),
             None => Err(unexpected_eof(0, Attempting::Def, state)),
         }
