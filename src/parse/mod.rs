@@ -496,7 +496,27 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
         ),
         |arena: &'a Bump, (loc_pattern, expr_or_ann)| match expr_or_ann {
             Either::First(loc_expr) => Def::Body(arena.alloc(loc_pattern), arena.alloc(loc_expr)),
-            Either::Second(loc_ann) => Def::Annotation(loc_pattern, loc_ann),
+            Either::Second(loc_ann) => {
+                match &loc_pattern.value {
+                    Pattern::Apply(Located { region, value: Pattern::Identifier(name) }, loc_vars)
+                        // Should be safe to unwrap here.
+                        // For this to have been parsed as an Identifier,
+                        // it must have had at least one char in it!
+                        if name.chars().next().unwrap().is_uppercase() =>
+                    {
+                        // This is capitalized, so it's a type alias!
+                        Def::Alias{
+                            name: Located { value: name, region: region.clone() },
+                            vars: loc_vars,
+                            ann: loc_ann,
+                        }
+                    }
+                    _ => {
+                        // This is a regular Annotation
+                        Def::Annotation(loc_pattern, loc_ann)
+                    }
+                }
+            }
         }
     )
 }
