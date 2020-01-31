@@ -208,6 +208,17 @@ pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
     Annotation(Loc<Pattern<'a>>, Loc<TypeAnnotation<'a>>),
+
+    /// A type alias. This is like a standalone annotation, except the pattern
+    /// must be a capitalized Identifier, e.g.
+    ///
+    /// Foo : Bar Baz
+    Alias {
+        name: Loc<&'a str>,
+        vars: &'a [Loc<&'a str>],
+        ann: Loc<TypeAnnotation<'a>>,
+    },
+
     // TODO in canonicalization, check to see if there are any newlines after the
     // annotation; if not, and if it's followed by a Body, then the annotation
     // applies to that expr! (TODO: verify that the pattern for both annotation and body match.)

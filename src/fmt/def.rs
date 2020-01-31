@@ -9,6 +9,7 @@ pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
 
     match def {
         Annotation(_, _) => panic!("TODO have format_def support Annotation"),
+        Alias { .. } => panic!("TODO have format_def support Alias"),
         Body(loc_pattern, loc_expr) => {
             fmt_pattern(buf, &loc_pattern.value, indent, true, false);
             buf.push_str(" =");
