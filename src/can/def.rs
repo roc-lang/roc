@@ -571,7 +571,7 @@ fn canonicalize_def<'a>(
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
             let (seen_rigids, can_annotation) =
-                canonicalize_annotation(env, &loc_annotation.value, var_store);
+                canonicalize_annotation(env, scope, &loc_annotation.value, var_store);
 
             // union seen rigids with already found ones
             for (k, v) in seen_rigids {
@@ -662,7 +662,7 @@ fn canonicalize_def<'a>(
 
             // aliases cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
-            let (seen_rigids, can_ann) = canonicalize_annotation(env, &ann.value, var_store);
+            let (seen_rigids, can_ann) = canonicalize_annotation(env, scope, &ann.value, var_store);
 
             // union seen rigids with already found ones
             for (k, v) in seen_rigids {
@@ -674,7 +674,7 @@ fn canonicalize_def<'a>(
 
         TypedDef(loc_pattern, loc_annotation, loc_expr) => {
             let (seen_rigids, can_annotation) =
-                canonicalize_annotation(env, &loc_annotation.value, var_store);
+                canonicalize_annotation(env, scope, &loc_annotation.value, var_store);
 
             // union seen rigids with already found ones
             for (k, v) in seen_rigids {
