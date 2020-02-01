@@ -89,8 +89,36 @@ impl Symbol {
 ///
 /// `Foo.bar`
 impl fmt::Debug for Symbol {
+    #[cfg(debug_assertions)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "`{:?}.{:?}`", self.module_id(), self.ident_id())
+        let module_id = self.module_id();
+        let ident_id = self.ident_id();
+        let names =
+        DEBUG_IDENT_IDS_BY_MODULE_ID
+            .lock()
+            .expect("Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked.");
+        let ident_ids = &names.get(&module_id.0).unwrap_or_else(|| {
+            panic!(
+                "Could not find module {:?} in DEBUG_IDENT_IDS_BY_MODULE_ID",
+                module_id
+            )
+        });
+        let ident_str = ident_ids.get_name(ident_id).unwrap_or_else(|| {
+            panic!(
+                "Could not find IdentID {:?} in DEBUG_IDENT_IDS_BY_MODULE_ID for module ID {:?}",
+                ident_id, module_id
+            )
+        });
+
+        write!(f, "`{:?}.{}`", module_id, ident_str)
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let module_id = self.module_id();
+        let ident_id = self.ident_id();
+
+        write!(f, "`{:?}.{:?}`", module_id, ident_id)
     }
 }
 
@@ -123,6 +151,19 @@ pub struct Interns {
     pub all_ident_ids: MutMap<ModuleId, IdentIds>,
 }
 
+#[cfg(debug_assertions)]
+lazy_static! {
+    /// This is used in Debug builds only, to let us have a Debug instance
+    /// which displays not only the Module ID, but also the Module Name which
+    /// corresponds to that ID.
+    static ref DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<crate::collections::MutMap<u32, IdentIds>> =
+        // This stores a u32 key instead of a ModuleId key so that if there's
+        // a problem with ModuleId's Debug implementation, logging this for diagnostic
+        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
+        // this out.
+        std::sync::Mutex::new(crate::collections::MutMap::default());
+}
+
 /// A globally unique ID that gets assigned to each module as it is loaded.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleId(u32);
@@ -151,6 +192,18 @@ impl ModuleId {
                 );
             }
         }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn register_debug_idents(self, ident_ids: &IdentIds) {
+        let mut all = DEBUG_IDENT_IDS_BY_MODULE_ID.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
+
+        all.insert(self.0, ident_ids.clone());
+    }
+
+    #[cfg(not(debug_assertions))]
+    pub fn register_debug_idents(self, _ident_ids: &IdentIds) {
+        // This is a no-op that should get DCE'd
     }
 
     pub fn to_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
@@ -425,9 +478,7 @@ macro_rules! define_builtins {
                 $(
                     debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
-                    exposed_idents_by_module.insert(
-                        ModuleId($module_id),
-                        Arc::new({
+                    let ident_ids = {
                             let by_id = vec! [
                                 $(
                                     $ident_name.into(),
@@ -451,12 +502,19 @@ macro_rules! define_builtins {
                                 by_id,
                                 next_generated_name: 0,
                             }
-                        })
-                    );
+                        };
 
                     if cfg!(debug_assertions) {
-                        ModuleIds::insert_debug_name(ModuleId($module_id), &$module_name.into());
+                        let module_id = ModuleId($module_id);
+
+                        ModuleIds::insert_debug_name(module_id, &$module_name.into());
+                        module_id.register_debug_idents(&ident_ids);
                     }
+
+                    exposed_idents_by_module.insert(
+                        ModuleId($module_id),
+                        Arc::new(ident_ids)
+                    );
                 )+
 
                 debug_assert!(exposed_idents_by_module.len() == $total, "Error setting up Builtins: `total:` is set to the wrong amount. It was set to {} but {} modules were set up.", $total, exposed_idents_by_module.len());

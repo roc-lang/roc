@@ -167,6 +167,10 @@ pub fn canonicalize_defs<'a>(
         pending.push(pending_def);
     }
 
+    if cfg!(debug_assertions) {
+        env.home.register_debug_idents(&env.ident_ids);
+    }
+
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
     for pending_def in pending.into_iter() {

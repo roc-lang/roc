@@ -624,6 +624,10 @@ pub fn canonicalize_expr<'a>(
         }
     };
 
+    if cfg!(debug_assertions) {
+        env.home.register_debug_idents(&env.ident_ids);
+    }
+
     // At the end, diff used_idents and defined_idents to see which were unused.
     // Add warnings for those!
 
