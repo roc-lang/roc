@@ -58,8 +58,7 @@ mod test_infer {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
-            assert_eq!(0, 1);
+            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());
     }
@@ -967,7 +966,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            { x, y } : { x : (Int -> custom) , y : Int }
+            { x, y } : { x : (Int -> custom), y : Int }
 
             x
             "#
