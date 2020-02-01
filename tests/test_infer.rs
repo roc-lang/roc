@@ -933,7 +933,7 @@ mod test_infer {
             foo 2
             "#
             ),
-            "Bool",
+            "Test.Bool",
         );
     }
 

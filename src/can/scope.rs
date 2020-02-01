@@ -9,7 +9,14 @@ use crate::types::Type;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
     pub idents: ImMap<Ident, (Symbol, Region)>,
-    pub aliases: ImMap<Uppercase, (Region, Vec<Located<Lowercase>>, Type)>,
+    pub aliases: ImMap<
+        Symbol,
+        (
+            Region,
+            Vec<Located<Lowercase>>,
+            crate::can::annotation::TypeAnnotation,
+        ),
+    >,
     pub module_name: ModuleName,
     symbol_prefix: Box<str>,
     next_unique_id: u64,
@@ -49,8 +56,9 @@ impl Scope {
         name: Uppercase,
         region: Region,
         vars: Vec<Located<Lowercase>>,
-        typ: Type,
+        typ: crate::can::annotation::TypeAnnotation,
     ) {
-        self.aliases.insert(name, (region, vars, typ));
+        let symbol = Symbol::new("", name.as_str());
+        self.aliases.insert(symbol, (region, vars, typ));
     }
 }

@@ -1,4 +1,4 @@
-use crate::can::annotation::canonicalize_annotation;
+use crate::can::annotation::{canonicalize_annotation, canonicalize_intermediate_annotation};
 use crate::can::env::Env;
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::{
@@ -662,7 +662,8 @@ fn canonicalize_def<'a>(
 
             // aliases cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
-            let (seen_rigids, can_ann) = canonicalize_annotation(env, scope, &ann.value, var_store);
+            let (seen_rigids, can_ann) =
+                canonicalize_intermediate_annotation(env, scope, &ann.value, var_store);
 
             // union seen rigids with already found ones
             for (k, v) in seen_rigids {
