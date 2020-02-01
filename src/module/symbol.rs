@@ -111,18 +111,20 @@ impl fmt::Debug for Symbol {
                     Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
                     None => {
                         println!(
-                            "Could not find IdentID {} in DEBUG_IDENT_IDS_BY_MODULE_ID for module ID {:?}",
+                            "DEBUG INFO: Could not find IdentID {} in DEBUG_IDENT_IDS_BY_MODULE_ID for module ID {:?}",
                             ident_id.0, module_id
                         );
-                        Err(fmt::Error)
+
+                        fallback_debug_fmt(self, f)
                     }
                 },
                 None => {
                     println!(
-                        "Could not find module {:?} in DEBUG_IDENT_IDS_BY_MODULE_ID",
+                        "DEBUG INFO: Could not find module {:?} in DEBUG_IDENT_IDS_BY_MODULE_ID",
                         module_id
                     );
-                    Err(fmt::Error)
+
+                    fallback_debug_fmt(self, f)
                 }
             },
             Err(err) => {
@@ -130,20 +132,24 @@ impl fmt::Debug for Symbol {
                 // might be used in a panic error message, and if we panick
                 // while we're already panicking it'll kill the process
                 // without printing any of the errors!
-                println!("ERROR: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
+                println!("DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
 
-                Err(fmt::Error)
+                fallback_debug_fmt(self, f)
             }
         }
     }
 
     #[cfg(not(debug_assertions))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let module_id = self.module_id();
-        let ident_id = self.ident_id();
-
-        write!(f, "`{:?}.{:?}`", module_id, ident_id)
+        fallback_debug_fmt(self, f)
     }
+}
+
+fn fallback_debug_fmt(symbol: &Symbol, f: &mut fmt::Formatter) -> fmt::Result {
+    let module_id = symbol.module_id();
+    let ident_id = symbol.ident_id();
+
+    write!(f, "`{:?}.{:?}`", module_id, ident_id)
 }
 
 // TODO this is only here to prevent clippy from complaining about an unused
