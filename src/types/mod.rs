@@ -1,6 +1,6 @@
 pub mod builtins;
 
-use crate::can::ident::{Lowercase, TagName};
+use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::Pattern;
 use crate::collections::{ImSet, MutSet, SendMap};
 use crate::module::symbol::Symbol;
@@ -441,6 +441,7 @@ pub enum Problem {
     Mismatch(Mismatch, ErrorType, ErrorType),
     CircularType(Symbol, ErrorType, Region),
     UnrecognizedIdent(InlinableString),
+    Shadowed(Region, Located<Ident>),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

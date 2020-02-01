@@ -1397,13 +1397,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo : Str.Str as Foo -> Test.Foo
-                foo = \x -> "foo"
+                    foo : Str.Str as Foo -> Foo
+                    foo = \x -> "foo"
 
-                foo
+                    foo
                 "#
             ),
-            "Test.Foo -> Test.Foo",
+            "Foo -> Foo",
         );
     }
 

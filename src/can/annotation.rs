@@ -1,3 +1,4 @@
+use crate::can;
 use crate::can::env::Env;
 use crate::can::ident::Ident;
 use crate::can::ident::{Lowercase, TagName};
@@ -182,35 +183,14 @@ fn can_annotation_help(
         }
         As(loc_inner, _spaces, loc_as) => match loc_as.value {
             TypeAnnotation::Apply(module_name, ident, loc_vars) if module_name.is_empty() => {
-                let symbol = if module_name.is_empty() {
-                    // Since module_name was empty, this is an unqualified type.
-                    // Look it up in scope!
-                    let ident: Ident = (*ident).into();
+                let symbol = match scope.introduce(ident.into(), &mut env.ident_ids, region) {
+                    Ok(symbol) => symbol,
 
-                    match scope.lookup(&ident, region) {
-                        Ok(symbol) => symbol,
-                        Err(problem) => {
-                            env.problem(crate::can::problem::Problem::RuntimeError(problem));
+                    Err((original_region, shadow)) => {
+                        let problem = Problem::Shadowed(original_region, shadow);
+                        env.problem(can::problem::Problem::ErroneousAnnotation(problem.clone()));
 
-                            return (
-                                Type::Erroneous(Problem::UnrecognizedIdent(ident.into())),
-                                MutSet::default(),
-                            );
-                        }
-                    }
-                } else {
-                    match env.qualified_lookup(module_name, ident, region) {
-                        Ok(symbol) => symbol,
-                        Err(problem) => {
-                            // Either the module wasn't imported, or
-                            // it was imported but it doesn't expose this ident.
-                            env.problem(crate::can::problem::Problem::RuntimeError(problem));
-
-                            return (
-                                Type::Erroneous(Problem::UnrecognizedIdent((*ident).into())),
-                                MutSet::default(),
-                            );
-                        }
+                        return (Type::Erroneous(problem), MutSet::default());
                     }
                 };
 

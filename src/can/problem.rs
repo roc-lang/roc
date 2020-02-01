@@ -3,6 +3,7 @@ use crate::can::pattern::PatternType;
 use crate::module::symbol::Symbol;
 use crate::operator::BinOp;
 use crate::region::{Located, Region};
+use crate::types;
 use inlinable_string::InlinableString;
 
 /// Problems that can occur in the course of canonicalization.
@@ -14,6 +15,7 @@ pub enum Problem {
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(PatternType, Region),
+    ErroneousAnnotation(types::Problem),
     RuntimeError(RuntimeError),
 }
 
