@@ -10,9 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use crate::helpers::{
-        assert_correct_variable_usage, can_expr, with_larger_debug_stack, CanExprOut,
-    };
+    use crate::helpers::{assert_correct_variable_usage, can_expr, CanExprOut};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -901,10 +899,9 @@ mod test_infer {
 
     #[test]
     fn record_with_bound_var() {
-        with_larger_debug_stack(|| {
-            infer_eq(
-                indoc!(
-                    r#"
+        infer_eq(
+            indoc!(
+                r#"
                 fn = \rec ->
                     x = rec.x
 
@@ -912,10 +909,9 @@ mod test_infer {
 
                 fn
             "#
-                ),
-                "{ x : a }b -> { x : a }b",
-            );
-        });
+            ),
+            "{ x : a }b -> { x : a }b",
+        );
     }
 
     #[test]
@@ -1111,20 +1107,18 @@ mod test_infer {
 
     #[test]
     fn record_extraction() {
-        with_larger_debug_stack(|| {
-            infer_eq(
-                indoc!(
-                    r#"
+        infer_eq(
+            indoc!(
+                r#"
                 f = \x ->
                     when x is
                         { a, b } -> a
 
                 f
                 "#
-                ),
-                "{ a : a, b : * }* -> a",
-            );
-        });
+            ),
+            "{ a : a, b : * }* -> a",
+        );
     }
 
     #[test]
@@ -1430,29 +1424,26 @@ mod test_infer {
 
     #[test]
     fn linked_list_singleton() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
+        infer_eq_without_problem(
+            indoc!(
+                r#"
                     singleton : a -> [ Cons a (Test.List a), Nil ] as List a
                     singleton = \x -> Cons x Nil
 
                     singleton
                        "#
-                ),
-                "a -> Test.List a",
-            );
-        });
+            ),
+            "a -> Test.List a",
+        );
     }
 
     // currently fails, cyclic type
     #[test]
     #[ignore]
     fn peano_map() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
+        infer_eq_without_problem(
+            indoc!(
+                r#"
                     map : [ S Test.Peano, Z ] as Peano -> Test.Peano
                     map = \peano ->
                         when peano is
@@ -1461,10 +1452,9 @@ mod test_infer {
 
                     map
                        "#
-                ),
-                "Test.Peano",
-            );
-        });
+            ),
+            "Test.Peano",
+        );
     }
 
     // currently fails, cyclic type
@@ -1472,10 +1462,9 @@ mod test_infer {
     #[test]
     #[ignore]
     fn linked_list_map() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
+        infer_eq_without_problem(
+            indoc!(
+                r#"
                     map : (a -> a), [ Cons a (Test.List a), Nil ] as List a -> Test.List a
                     map = \f, list ->
                         when list is
@@ -1488,9 +1477,8 @@ mod test_infer {
 
                     map
                        "#
-                ),
-                "Attr.Attr * Int",
-            );
-        });
+            ),
+            "Attr.Attr * Int",
+        );
     }
 }

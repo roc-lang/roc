@@ -204,6 +204,12 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     let mut all_ident_ids = MutMap::default();
 
+    // When pretty printing types, we may need the exposed builtins,
+    // so include them in the Interns we'll ultimately return.
+    for (module_id, arc_ident_ids) in IdentIds::exposed_builtins() {
+        all_ident_ids.insert(module_id, (*arc_ident_ids).clone());
+    }
+
     all_ident_ids.insert(home, env.ident_ids);
 
     let interns = Interns {

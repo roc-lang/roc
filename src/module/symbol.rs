@@ -43,14 +43,24 @@ impl Symbol {
         interns
             .module_ids
             .get_name(self.module_id())
-            .unwrap_or_else(|| panic!("Could not find IdentIds for {:?}", self.module_id()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "module_string could not find IdentIds for {:?}",
+                    self.module_id()
+                )
+            })
     }
 
     pub fn ident_string(self, interns: &Interns) -> &InlinableString {
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
-            .unwrap_or_else(|| panic!("Could not find IdentIds for {:?}", self.module_id()));
+            .unwrap_or_else(|| {
+                panic!(
+                    "ident_string could not find IdentIds for {:?}",
+                    self.module_id()
+                )
+            });
 
         ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
             panic!(
@@ -67,6 +77,7 @@ impl Symbol {
         if module_id == home {
             self.ident_string(interns).clone()
         } else {
+            // TODO do this without format! to avoid allocation for short strings
             format!(
                 "{}.{}",
                 self.module_string(interns),
@@ -146,6 +157,7 @@ lazy_static! {
         std::sync::Mutex::new(crate::collections::MutMap::default());
 }
 
+#[derive(Debug)]
 pub struct Interns {
     pub module_ids: ModuleIds,
     pub all_ident_ids: MutMap<ModuleId, IdentIds>,
