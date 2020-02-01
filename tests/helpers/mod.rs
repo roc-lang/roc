@@ -21,31 +21,6 @@ use roc::types::{Constraint, Expected, Type};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
-/// Used in the with_larger_debug_stack() function, for tests that otherwise
-/// run out of stack space in debug builds (but don't in --release builds)
-#[allow(dead_code)]
-const EXPANDED_STACK_SIZE: usize = 4 * 1024 * 1024;
-
-/// Without this, some tests pass in `cargo test --release` but fail without
-/// the --release flag because they run out of stack space. This increases
-/// stack size for debug builds only, while leaving the stack space at the default
-/// amount for release builds.
-#[allow(dead_code)]
-#[cfg(debug_assertions)]
-pub fn with_larger_debug_stack<F>(run_test: F)
-where
-    F: FnOnce() -> (),
-    F: Send,
-    F: 'static,
-{
-    std::thread::Builder::new()
-        .stack_size(EXPANDED_STACK_SIZE)
-        .spawn(run_test)
-        .expect("Error while spawning expanded dev stack size thread")
-        .join()
-        .expect("Error while joining expanded dev stack size thread")
-}
-
 pub fn test_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"Test".into())
 }
