@@ -64,8 +64,8 @@ impl Symbol {
 
         ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
             panic!(
-                "Could not find IdentIds for {:?} in module {:?}",
-                self.ident_id(),
+                "Could not find IdentIds for {} in module {:?}",
+                self.ident_id().0,
                 self.module_id()
             )
         })
@@ -116,8 +116,8 @@ impl fmt::Debug for Symbol {
         });
         let ident_str = ident_ids.get_name(ident_id).unwrap_or_else(|| {
             panic!(
-                "Could not find IdentID {:?} in DEBUG_IDENT_IDS_BY_MODULE_ID for module ID {:?}",
-                ident_id, module_id
+                "Could not find IdentID {} in DEBUG_IDENT_IDS_BY_MODULE_ID for module ID {:?}",
+                ident_id.0, module_id
             )
         });
 
@@ -300,78 +300,20 @@ impl ModuleIds {
     }
 }
 
-#[cfg(debug_assertions)]
-lazy_static! {
-    /// This is used in Debug builds only, to let us have a Debug instance
-    /// which displays not only the Ident ID, but also the name string which
-    /// corresponds to that ID.
-    static ref DEBUG_IDENT_ID_NAMES: std::sync::Mutex<crate::collections::MutMap<u32, Box<str>>> =
-        // This stores a u32 key instead of a ModuleId key so that if there's
-        // a problem with ModuleId's Debug implementation, logging this for diagnostic
-        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
-        // this out.
-        std::sync::Mutex::new(crate::collections::MutMap::default());
-}
-
 /// An ID that is assigned to interned string identifiers within a module.
 /// By turning these strings into numbers, post-canonicalization processes
 /// like unification and optimization can run a lot faster.
 ///
 /// This ID is unique within a given module, not globally - so to turn this back into
 /// a string, you would need a ModuleId, an IdentId, and a Map<ModuleId, Map<IdentId, String>>.
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IdentId(u32);
-
-impl fmt::Debug for IdentId {
-    /// In debug builds, whenever we create a new IdentId, we record is name in
-    /// a global interning table so that Debug can look it up later. That table
-    /// needs a global mutex, so we don't do this in release builds. This means
-    /// the Debug impl in release builds only shows the number, not the name (which
-    /// it does not have available, due to having never stored it in the mutexed intern table.)
-    #[cfg(debug_assertions)]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.name())
-    }
-
-    /// In relese builds, all we have access to is the number, so only display that.
-    #[cfg(not(debug_assertions))]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-/// In Debug builds only, IdentId has a name() method that lets
-/// you look up its name in a global intern table. This table is
-/// behind a mutex, so it is neither populated nor available in release builds.
-impl IdentId {
-    // NOTE: the define_builtins! macro adds a bunch of constants to this impl,
-    //
-    // e.g. pub const NUM_NUM: IdentId = …
-
-    #[cfg(debug_assertions)]
-    pub fn name(self) -> Box<str> {
-        let names =
-        DEBUG_IDENT_ID_NAMES
-            .lock()
-            .expect("Failed to acquire lock for Debug reading from DEBUG_IDENT_ID_NAMES, presumably because a thread panicked.");
-
-        match names.get(&self.0) {
-            Some(str_ref) => str_ref.clone(),
-            None => {
-                panic!(
-                    "Could not find a Debug name for ident ID {} in {:?}",
-                    self.0, names,
-                );
-            }
-        }
-    }
-}
 
 /// Stores a mapping between IdentId and InlinableString.
 ///
 /// Each module name is stored twice, for faster lookups.
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct IdentIds {
     by_ident: MutMap<InlinableString, IdentId>,
 
@@ -392,10 +334,6 @@ impl IdentIds {
     pub fn add(&mut self, ident_name: InlinableString) -> IdentId {
         let by_id = &mut self.by_id;
         let ident_id = IdentId(by_id.len() as u32);
-
-        if cfg!(debug_assertions) {
-            Self::insert_debug_name(ident_id, ident_name.to_string().into());
-        }
 
         self.by_ident.insert(ident_name.clone(), ident_id);
         by_id.push(ident_name);
@@ -422,10 +360,6 @@ impl IdentIds {
 
                 self.by_ident.insert(name.clone(), ident_id);
 
-                if cfg!(debug_assertions) {
-                    Self::insert_debug_name(ident_id, name.to_string().into());
-                }
-
                 ident_id
             }
         }
@@ -446,19 +380,6 @@ impl IdentIds {
         self.next_generated_name += 1;
 
         self.add(ident)
-    }
-
-    #[cfg(debug_assertions)]
-    fn insert_debug_name(ident_id: IdentId, ident_name: Box<str>) {
-        let mut names = DEBUG_IDENT_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_IDENT_ID_NAMES, presumably because a thread panicked.");
-
-        names.insert(ident_id.0, ident_name);
-    }
-
-    #[cfg(not(debug_assertions))]
-    #[allow(clippy::boxed_local)]
-    fn insert_debug_name(_ident_id: IdentId, _ident_name: Box<str>) {
-        // By design, this is a no-op in release builds!
     }
 
     pub fn get_id(&self, ident_name: &InlinableString) -> Option<&IdentId> {
@@ -503,10 +424,6 @@ macro_rules! define_builtins {
                                 debug_assert!(by_ident.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_ident.len(), $ident_id, $ident_name, by_ident.len(), $ident_name);
 
                                 by_ident.insert($ident_name.into(), IdentId($ident_id));
-
-                                if cfg!(debug_assertions) {
-                                   IdentIds::insert_debug_name(IdentId($ident_id), $ident_name.into());
-                                }
                             )+
 
                             IdentIds {
