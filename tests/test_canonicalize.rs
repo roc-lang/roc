@@ -393,7 +393,7 @@ mod test_canonicalize {
         } = can_expr_with(&arena, test_home(), src);
         assert_eq!(problems, Vec::new());
 
-        let actual = dbg!(loc_expr.value);
+        let actual = loc_expr.value;
         let detected = get_closure(&actual, 0);
         assert_eq!(detected, Recursive::Recursive);
 

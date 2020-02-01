@@ -18,7 +18,7 @@ pub enum Pattern {
     IntLiteral(i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
-    RecordDestructure(Variable, Vec<RecordDestruct>),
+    RecordDestructure(Variable, Vec<Located<RecordDestruct>>),
     Underscore,
 
     // Runtime Exceptions
@@ -198,11 +198,14 @@ pub fn canonicalize_pattern<'a>(
                     Identifier(label) => {
                         match scope.introduce(label.into(), &mut env.ident_ids, region) {
                             Ok(symbol) => {
-                                fields.push(RecordDestruct {
-                                    var: var_store.fresh(),
-                                    label: Lowercase::from(label),
-                                    symbol,
-                                    guard: None,
+                                fields.push(Located {
+                                    region: loc_pattern.region,
+                                    value: RecordDestruct {
+                                        var: var_store.fresh(),
+                                        label: Lowercase::from(label),
+                                        symbol,
+                                        guard: None,
+                                    },
                                 });
                             }
                             Err((original_region, shadow)) => {
@@ -231,11 +234,14 @@ pub fn canonicalize_pattern<'a>(
                                     loc_guard.region,
                                 );
 
-                                fields.push(RecordDestruct {
-                                    var: var_store.fresh(),
-                                    label: Lowercase::from(label),
-                                    symbol,
-                                    guard: Some((var_store.fresh(), can_guard)),
+                                fields.push(Located {
+                                    region: loc_pattern.region,
+                                    value: RecordDestruct {
+                                        var: var_store.fresh(),
+                                        label: Lowercase::from(label),
+                                        symbol,
+                                        guard: Some((var_store.fresh(), can_guard)),
+                                    },
                                 });
                             }
                             Err((original_region, shadow)) => {
@@ -283,4 +289,53 @@ fn unsupported_pattern<'a>(
     env.problem(Problem::UnsupportedPattern(pattern_type, region));
 
     Pattern::UnsupportedPattern(region)
+}
+
+pub fn bindings_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Symbol, Region)>
+where
+    I: Iterator<Item = &'a Located<Pattern>>,
+{
+    let mut answer = Vec::new();
+
+    for loc_pattern in loc_patterns {
+        add_bindings_from_patterns(&loc_pattern.region, &loc_pattern.value, scope, &mut answer);
+    }
+
+    answer
+}
+
+/// helper function for idents_from_patterns
+fn add_bindings_from_patterns(
+    region: &Region,
+    pattern: &Pattern,
+    scope: &Scope,
+    answer: &mut Vec<(Symbol, Region)>,
+) {
+    use Pattern::*;
+
+    match pattern {
+        Identifier(symbol) => {
+            answer.push((*symbol, *region));
+        }
+        AppliedTag(_, _, loc_args) => {
+            for (_, loc_arg) in loc_args {
+                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, scope, answer);
+            }
+        }
+        RecordDestructure(_, destructs) => {
+            for Located {
+                region,
+                value: RecordDestruct { symbol, .. },
+            } in destructs
+            {
+                answer.push((*symbol, *region));
+            }
+        }
+        IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | Shadowed(_, _)
+        | UnsupportedPattern(_) => (),
+    }
 }

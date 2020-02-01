@@ -7,7 +7,7 @@ use crate::can::expr::{
 };
 use crate::can::ident::{Ident, Lowercase};
 use crate::can::pattern::PatternType;
-use crate::can::pattern::{canonicalize_pattern, Pattern};
+use crate::can::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError;
 use crate::can::procedure::References;
@@ -529,22 +529,24 @@ fn group_to_declaration(
     // We want only successors in the current group, otherwise definitions get duplicated
     let filtered_successors = |symbol: &Symbol| -> ImSet<Symbol> {
         let mut result = successors(symbol);
+
         result.retain(|key| group.contains(key));
         result
     };
 
-    // patterns like
+    // Patterns like
     //
     // { x, y } = someDef
     //
-    // Can Bind multiple symbols, when not incorrectly recursive (which is guaranteed in this function)
+    // Can bind multiple symbols. When not incorrectly recursive (which is guaranteed in this function),
     // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
-    // for a definition, so every definition is only inserted (thus typechecked, code-gen'd) once
+    // for a definition, so every definition is only inserted (thus typechecked and emitted) once
     let mut seen_pattern_regions: ImSet<Region> = ImSet::default();
 
     for cycle in strongly_connected_components(&group, filtered_successors) {
         if cycle.len() == 1 {
             let symbol = &cycle[0];
+
             if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
                 let mut new_def = can_def.clone();
 
@@ -570,6 +572,7 @@ fn group_to_declaration(
             }
         } else {
             let mut can_defs = Vec::new();
+
             // Topological sort gives us the reverse of the sorting we want!
             for symbol in cycle.into_iter().rev() {
                 if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
@@ -587,9 +590,11 @@ fn group_to_declaration(
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
                         can_defs.push(new_def.clone());
                     }
+
                     seen_pattern_regions.insert(new_def.loc_pattern.region);
                 }
             }
+
             declarations.push(DeclareRec(can_defs));
         }
     }
@@ -909,11 +914,9 @@ fn canonicalize_pending_def<'a>(
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
-            for (ident, (symbol, region)) in scope.idents() {
-                if original_scope.contains_ident(ident) {
-                    continue;
-                }
-
+            for (symbol, region) in
+                bindings_from_patterns(std::iter::once(&loc_can_pattern), &scope)
+            {
                 let refs =
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
@@ -924,19 +927,26 @@ fn canonicalize_pending_def<'a>(
                         can_output.references.clone()
                     };
 
+                let ident = env
+                    .ident_ids
+                    .get_name(symbol.ident_id())
+                    .unwrap_or_else(|| {
+                        panic!("Could not find {:?} in env.ident_ids", symbol);
+                    });
+
                 refs_by_symbol.insert(
                     symbol.clone(),
                     (
                         Located {
-                            value: ident.clone(),
-                            region: *region,
+                            value: ident.clone().into(),
+                            region: region,
                         },
                         refs,
                     ),
                 );
 
                 can_defs_by_symbol.insert(
-                    *symbol,
+                    symbol,
                     Def {
                         expr_var,
                         // TODO try to remove this .clone()!

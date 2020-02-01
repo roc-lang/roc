@@ -67,11 +67,15 @@ pub fn constrain_pattern(
 
             let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
 
-            for RecordDestruct {
-                var,
-                label,
-                symbol,
-                guard,
+            for Located {
+                value:
+                    RecordDestruct {
+                        var,
+                        label,
+                        symbol,
+                        guard,
+                    },
+                ..
             } in patterns
             {
                 let pat_type = Type::Variable(*var);

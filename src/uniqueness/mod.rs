@@ -123,11 +123,15 @@ fn constrain_pattern(
             let ext_type = Type::Variable(*ext_var);
 
             let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
-            for RecordDestruct {
-                var,
-                label,
-                symbol,
-                guard,
+            for Located {
+                value:
+                    RecordDestruct {
+                        var,
+                        label,
+                        symbol,
+                        guard,
+                    },
+                ..
             } in patterns
             {
                 let pat_uniq_var = var_store.fresh();
