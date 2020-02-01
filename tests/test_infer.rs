@@ -1065,7 +1065,7 @@ mod test_infer {
                 r#"\@Foo -> 42
                 "#
             ),
-            "[ Test.@Foo ]* -> Int",
+            "[ @Foo ]* -> Int",
         );
     }
 
@@ -1101,7 +1101,7 @@ mod test_infer {
                 r#"@Foo "happy" 2020
                 "#
             ),
-            "[ Test.@Foo Str Int ]*",
+            "[ @Foo Str Int ]*",
         );
     }
 
