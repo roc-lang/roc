@@ -1,3 +1,4 @@
+use crate::can::ident::ModuleName;
 use crate::can::problem::Problem;
 use crate::can::procedure::References;
 use crate::can::symbol::Symbol;
@@ -7,7 +8,7 @@ use crate::collections::MutMap;
 pub struct Env {
     /// The module's path. Private tags and unqualified references to identifiers
     /// are assumed to be relative to this path.
-    pub home: Box<str>,
+    pub home: ModuleName,
 
     /// Problems we've encountered along the way, which will be reported to the user at the end.
     pub problems: Vec<Problem>,
@@ -20,7 +21,7 @@ pub struct Env {
 }
 
 impl Env {
-    pub fn new(home: Box<str>) -> Env {
+    pub fn new(home: ModuleName) -> Env {
         Env {
             home,
             problems: Vec::new(),

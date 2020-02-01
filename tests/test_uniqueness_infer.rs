@@ -17,12 +17,13 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_output, _problems, mut subs, variable, constraint) = uniq_expr(src);
+        let (_output, _problems, subs, variable, constraint) = uniq_expr(src);
 
         assert_correct_variable_usage(&constraint);
 
         let mut unify_problems = Vec::new();
-        let content = infer_expr(&mut subs, &mut unify_problems, &constraint, variable);
+        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
+        let mut subs = solved.into_inner();
 
         name_all_type_vars(variable, &mut subs);
 
@@ -42,7 +43,6 @@ mod test_infer_uniq {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            dbg!(problems);
             println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
             assert_eq!(0, 1);
         }
@@ -953,8 +953,8 @@ mod test_infer_uniq {
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
-                r#"\x -> 
-                    when x is 
+                r#"\x ->
+                    when x is
                         True -> 1
                         False -> 0
                 "#
@@ -1002,7 +1002,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \rec -> rec.left 
+                \rec -> rec.left
                 "#
             ),
             "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
@@ -1042,7 +1042,7 @@ mod test_infer_uniq {
                 \Foo x -> Foo x
                 "#
             ),
-            // NOTE: Foo loses the relation to the uniqueness attribute `a` 
+            // NOTE: Foo loses the relation to the uniqueness attribute `a`
             // That is fine. Whenever we try to extract from it, the relation will be enforced
             "Attr.Attr * (Attr.Attr a [ Foo (Attr.Attr a b) ]* -> Attr.Attr * [ Foo (Attr.Attr a b) ]*)",
         );
@@ -1072,7 +1072,7 @@ mod test_infer_uniq {
                         Foo x -> x
                 "#
             ),
-            "Attr.Attr a Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -1085,7 +1085,7 @@ mod test_infer_uniq {
                         @Foo x -> x
                 "#
             ),
-            "Attr.Attr a Int",
+            "Attr.Attr * Int",
         );
     }
 
@@ -1094,7 +1094,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                x : Int 
+                x : Int
                 x = 4
 
                 x
@@ -1121,7 +1121,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \{ x } -> x 
+                \{ x } -> x
                 "#
             ),
             "Attr.Attr * (Attr.Attr a { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
@@ -1148,8 +1148,8 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \r -> 
-                    x = r.x 
+                \r ->
+                    x = r.x
 
                     x
                 "#
@@ -1163,8 +1163,8 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \r -> 
-                    x = r.x 
+                \r ->
+                    x = r.x
 
                     x
                 "#
@@ -1195,7 +1195,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \r -> { r & x: r.x, y: r.y } 
+                \r -> { r & x: r.x, y: r.y }
                 "#
             ),
         "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)" ,
@@ -1207,7 +1207,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \r -> { r & x: r.x, y: r.x } 
+                \r -> { r & x: r.x, y: r.x }
                 "#
             ),
          "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared a) }b -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared a) }b)"
@@ -1229,6 +1229,43 @@ mod test_infer_uniq {
                    "#
             ),
             "Attr.Attr * Int",
+        );
+    }
+
+    // TODO add more realistic recursive example when able
+    #[test]
+    fn factorial_is_shared() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    factorial = \n ->
+                        when n is
+                            0 -> 1
+                            1 -> 1
+                            m -> factorial m
+
+                    factorial
+                   "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr * Int -> Attr.Attr * Int)",
+        );
+    }
+
+    // TODO add more realistic recursive example when able
+    #[test]
+    fn factorial_without_recursive_case_can_be_unique() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    factorial = \n ->
+                        when n is
+                            0 -> 1
+                            _ -> 1
+
+                    factorial
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr * Int -> Attr.Attr * Int)",
         );
     }
 }

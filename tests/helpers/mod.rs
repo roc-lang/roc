@@ -256,24 +256,23 @@ pub fn assert_correct_variable_usage(constraint: &Constraint) {
     // and variables actually used in constraints
     let (declared, used) = variable_usage(constraint);
 
-    if declared.flex_vars.len() + declared.rigid_vars.len() != used.len() {
-        dbg!(&constraint);
-        // dbg!(expr);
+    let used: ImSet<Variable> = used.clone().into();
+    let mut decl: ImSet<Variable> = declared.rigid_vars.clone().into();
+
+    for var in declared.flex_vars.clone() {
+        decl.insert(var);
+    }
+
+    let diff = used.clone().relative_complement(decl);
+
+    // NOTE: this checks whether we're using variables that are not declared. For recursive type
+    // definitions,  their rigid types are declared twice, which is correct!
+    if !diff.is_empty() {
         println!("VARIABLE USAGE PROBLEM");
-        println!("used variable count: {}\n", used.len());
 
         println!("used: {:?}", &used);
         println!("rigids: {:?}", &declared.rigid_vars);
         println!("flexs: {:?}", &declared.flex_vars);
-
-        let used: ImSet<Variable> = used.clone().into();
-        let mut decl: ImSet<Variable> = declared.rigid_vars.clone().into();
-
-        for var in declared.flex_vars.clone() {
-            decl.insert(var);
-        }
-
-        let diff = used.relative_complement(decl);
 
         println!("difference: {:?}", &diff);
 

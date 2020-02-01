@@ -2,6 +2,7 @@ use cranelift::prelude::AbiParam;
 use cranelift_codegen::ir::{types, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
 
+use crate::can::ident::ModuleName;
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs, Variable};
@@ -24,7 +25,7 @@ pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConf
                 let module_name = module_name.as_str();
                 let name = name.as_str();
 
-                if module_name == crate::types::MOD_NUM && name == crate::types::TYPE_NUM {
+                if module_name == ModuleName::NUM && name == crate::types::TYPE_NUM {
                     let arg = *args.iter().next().unwrap();
                     let arg_content = subs.get_without_compacting(arg).content;
 
@@ -54,13 +55,13 @@ fn num_to_crane_type(content: Content) -> Type {
                 let module_name = module_name.as_str();
                 let name = name.as_str();
 
-                if module_name == crate::types::MOD_FLOAT
+                if module_name == ModuleName::FLOAT
                     && name == crate::types::TYPE_FLOATINGPOINT
                     && args.is_empty()
                 {
                     debug_assert!(args.is_empty());
                     types::F64
-                } else if module_name == crate::types::MOD_INT
+                } else if module_name == ModuleName::INT
                     && name == crate::types::TYPE_INTEGER
                     && args.is_empty()
                 {

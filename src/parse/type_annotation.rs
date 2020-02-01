@@ -1,12 +1,13 @@
 use crate::collections::arena_join;
-use crate::parse::ast::{AssignedField, Attempting, Tag, TypeAnnotation};
-use crate::parse::blankspace::{space0_around, space0_before, space1_before};
+use crate::parse::ast::{AssignedField, Attempting, CommentOrNewline, Tag, TypeAnnotation};
+use crate::parse::blankspace::{space0_around, space0_before, space1, space1_before};
+use crate::parse::keyword;
 use crate::parse::parser::{
-    allocated, char, optional, string, unexpected, unexpected_eof, Either, ParseResult, Parser,
-    State,
+    allocated, char, not, optional, string, unexpected, unexpected_eof, Either, ParseResult,
+    Parser, State,
 };
 use crate::parse::{global_tag, private_tag};
-use crate::region::Located;
+use crate::region::{Located, Region};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -36,23 +37,74 @@ macro_rules! tag_union {
                 Option<&'a Located<TypeAnnotation<'a>>>,
             )| TypeAnnotation::TagUnion {
                 tags: tags.into_bump_slice(),
-                ext
+                ext,
             }
         )
     };
 }
 
+#[allow(clippy::type_complexity)]
 pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    one_of!(
-        // The `*` type variable, e.g. in (List *) Wildcard,
-        map!(loc!(char('*')), |loc_val: Located<()>| {
-            loc_val.map(|_| TypeAnnotation::Wildcard)
-        }),
-        loc_parenthetical_type(min_indent),
-        loc!(record_type(min_indent)),
-        loc!(tag_union!(min_indent)),
-        loc!(applied_type(min_indent)),
-        loc!(parse_type_variable)
+    map_with_arena!(
+        and!(
+            one_of!(
+                loc_wildcard(),
+                loc_parenthetical_type(min_indent),
+                loc!(record_type(min_indent)),
+                loc!(tag_union!(min_indent)),
+                loc!(applied_type(min_indent)),
+                loc!(parse_type_variable)
+            ),
+            optional(
+                // Inline type annotation, e.g. [ Nil, Cons a (List a) ] as List a
+                and!(
+                    space1(min_indent),
+                    skip_first!(
+                        string(keyword::AS),
+                        space1_before(term(min_indent), min_indent)
+                    )
+                )
+            )
+        ),
+        |arena: &'a Bump,
+         (loc_ann, opt_as): (
+            Located<TypeAnnotation<'a>>,
+            Option<(&'a [CommentOrNewline<'a>], Located<TypeAnnotation<'a>>)>
+        )| {
+            match opt_as {
+                Some((spaces, loc_as)) => {
+                    let region = Region::span_across(&loc_ann.region, &loc_as.region);
+                    let value =
+                        TypeAnnotation::As(arena.alloc(loc_ann), spaces, arena.alloc(loc_as));
+
+                    Located { value, region }
+                }
+
+                None => loc_ann,
+            }
+        }
+    )
+}
+
+/// The `*` type variable, e.g. in (List *) Wildcard,
+fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    map!(loc!(char('*')), |loc_val: Located<()>| {
+        loc_val.map(|_| TypeAnnotation::Wildcard)
+    })
+}
+
+pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
+    skip_first!(
+        // Once we hit an "as", stop parsing args
+        not(string(keyword::AS)),
+        one_of!(
+            loc_wildcard(),
+            loc_parenthetical_type(min_indent),
+            loc!(record_type(min_indent)),
+            loc!(tag_union!(min_indent)),
+            loc!(parse_concrete_type),
+            loc!(parse_type_variable)
+        )
     )
 }
 
@@ -77,7 +129,7 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>> {
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `ok err` in `Result ok err`
             zero_or_more!(space1_before(
-                move |arena, state| term(min_indent).parse(arena, state),
+                move |arena, state| loc_applied_arg(min_indent).parse(arena, state),
                 min_indent,
             ))
         ),
@@ -129,7 +181,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>> {
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
             zero_or_more!(space1_before(
-                move |arena, state| term(min_indent).parse(arena, state),
+                move |arena, state| loc_applied_arg(min_indent).parse(arena, state),
                 min_indent,
             ))
         ),

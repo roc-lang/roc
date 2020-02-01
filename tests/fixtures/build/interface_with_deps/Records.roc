@@ -2,7 +2,7 @@ interface Records
     exposes [ intVal ]
     imports []
 
-intVal = 
+intVal =
     foo = \{ x } -> x
 
-    foo  {} 
+    foo { x: 5 }

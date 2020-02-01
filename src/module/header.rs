@@ -1,6 +1,7 @@
 use crate::parse::ast::CommentOrNewline;
 use crate::region::Loc;
 use bumpalo::collections::Vec;
+use inlinable_string::InlinableString;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);
@@ -8,6 +9,12 @@ pub struct ModuleName<'a>(&'a str);
 impl<'a> Into<&'a str> for ModuleName<'a> {
     fn into(self) -> &'a str {
         self.0
+    }
+}
+
+impl<'a> Into<InlinableString> for ModuleName<'a> {
+    fn into(self) -> InlinableString {
+        self.0.into()
     }
 }
 

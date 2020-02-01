@@ -1,4 +1,4 @@
-use crate::module::ModuleName;
+use crate::module::header::ModuleName;
 use crate::operator::CalledVia;
 use crate::operator::{BinOp, UnaryOp};
 use crate::parse::ident::Ident;
@@ -28,6 +28,13 @@ pub struct InterfaceHeader<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct WhenBranch<'a> {
+    pub patterns: Vec<'a, Loc<Pattern<'a>>>,
+    pub value: Loc<Expr<'a>>,
+    pub guard: Option<Loc<Expr<'a>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
@@ -54,6 +61,17 @@ pub enum ImportsEntry<'a> {
     // Spaces
     SpaceBefore(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a ImportsEntry<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+impl<'a> ExposesEntry<'a> {
+    pub fn as_str(&'a self) -> &'a str {
+        use ExposesEntry::*;
+
+        match self {
+            Ident(string) => string,
+            SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => sub_entry.as_str(),
+        }
+    }
 }
 
 /// An optional qualifier (the `Foo.Bar` in `Foo.Bar.baz`).
@@ -157,8 +175,14 @@ pub enum Expr<'a> {
     // Conditionals
     If(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     When(
+        /// The condition
         &'a Loc<Expr<'a>>,
-        Vec<'a, &'a (Vec<'a, Loc<Pattern<'a>>>, Loc<Expr<'a>>)>,
+        /// A | B if bool -> expression
+        /// <Pattern 1> | <Pattern 2> if <Guard> -> <Expr>
+        /// Vec, because there may be many patterns, and the guard
+        /// is Option<Expr> because each branch may be preceded by
+        /// a guard (".. if ..").
+        Vec<'a, &'a WhenBranch<'a>>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
@@ -184,6 +208,17 @@ pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
     Annotation(Loc<Pattern<'a>>, Loc<TypeAnnotation<'a>>),
+
+    /// A type alias. This is like a standalone annotation, except the pattern
+    /// must be a capitalized Identifier, e.g.
+    ///
+    /// Foo : Bar Baz
+    Alias {
+        name: Loc<&'a str>,
+        vars: &'a [Loc<Pattern<'a>>],
+        ann: Loc<TypeAnnotation<'a>>,
+    },
+
     // TODO in canonicalization, check to see if there are any newlines after the
     // annotation; if not, and if it's followed by a Body, then the annotation
     // applies to that expr! (TODO: verify that the pattern for both annotation and body match.)
@@ -216,6 +251,13 @@ pub enum TypeAnnotation<'a> {
 
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
+
+    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    As(
+        &'a Loc<TypeAnnotation<'a>>,
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<TypeAnnotation<'a>>,
+    ),
 
     Record {
         fields: &'a [Loc<AssignedField<'a, TypeAnnotation<'a>>>],
@@ -307,7 +349,7 @@ pub enum Pattern<'a> {
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
-    RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
+    RecordDestructure(&'a [Loc<Pattern<'a>>]),
     /// A field pattern, e.g. { x: Just 0 } -> ...
     /// can only occur inside of a RecordDestructure
     RecordField(&'a str, &'a Loc<Pattern<'a>>),

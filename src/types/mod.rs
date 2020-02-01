@@ -1,4 +1,6 @@
-use crate::can::ident::{Lowercase, ModuleName, Uppercase};
+pub mod builtins;
+
+use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImSet, MutSet, SendMap};
@@ -9,17 +11,6 @@ use crate::region::Region;
 use crate::subs::Variable;
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
-
-// The standard modules
-pub const MOD_FLOAT: &str = "Float";
-pub const MOD_BOOL: &str = "Bool";
-pub const MOD_INT: &str = "Int";
-pub const MOD_STR: &str = "Str";
-pub const MOD_LIST: &str = "List";
-pub const MOD_MAP: &str = "Map";
-pub const MOD_SET: &str = "Set";
-pub const MOD_NUM: &str = "Num";
-pub const MOD_DEFAULT: &str = "Default";
 
 pub const TYPE_NUM: &str = "Num";
 pub const TYPE_INTEGER: &str = "Integer";
@@ -32,8 +23,8 @@ pub enum Type {
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
     Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
-    TagUnion(Vec<(Symbol, Vec<Type>)>, Box<Type>),
-    Alias(ModuleName, Uppercase, Vec<(Lowercase, Type)>, Box<Type>),
+    TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
+    Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply {
         module_name: ModuleName,
@@ -43,6 +34,8 @@ pub enum Type {
     /// Boolean type used in uniqueness inference
     Boolean(boolean_algebra::Bool),
     Variable(Variable),
+    /// recursive variants, e.g. [ Cons a r, Nil ] as r
+    As(Box<Type>, Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
@@ -101,9 +94,16 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(_, _, _, _) => {
-                panic!("TODO fmt type aliases");
+            Type::Alias(module_name, name, args, _actual) => {
+                write!(f, "Alias {}.{}", module_name.as_str(), name,)?;
+
+                for (_, arg) in args {
+                    write!(f, " {:?}", arg)?;
+                }
+
+                Ok(())
             }
+            Type::As(inner, variable) => write!(f, "({:?} as {:?})", inner, variable),
             Type::Record(fields, ext) => {
                 write!(f, "{{")?;
 
@@ -154,16 +154,16 @@ impl fmt::Debug for Type {
                 let mut any_written_yet = false;
 
                 for (label, arguments) in tags {
-                    write!(f, "{:?}", label)?;
-
-                    for argument in arguments {
-                        write!(f, " {:?}", argument)?;
-                    }
-
                     if any_written_yet {
                         write!(f, ", ")?;
                     } else {
                         any_written_yet = true;
+                    }
+
+                    write!(f, "{}", label.as_str())?;
+
+                    for argument in arguments {
+                        write!(f, " {:?}", argument)?;
                     }
                 }
 
@@ -196,7 +196,7 @@ impl fmt::Debug for Type {
 impl Type {
     pub fn num(args: Vec<Type>) -> Self {
         Type::Apply {
-            module_name: MOD_NUM.into(),
+            module_name: ModuleName::NUM.into(),
             name: TYPE_NUM.into(),
             args,
         }
@@ -204,7 +204,7 @@ impl Type {
 
     pub fn float() -> Self {
         let floating_point = Type::Apply {
-            module_name: MOD_FLOAT.into(),
+            module_name: ModuleName::FLOAT.into(),
             name: "FloatingPoint".into(),
             args: Vec::new(),
         };
@@ -214,7 +214,7 @@ impl Type {
 
     pub fn int() -> Self {
         let integer = Type::Apply {
-            module_name: MOD_INT.into(),
+            module_name: ModuleName::INT.into(),
             name: "Integer".into(),
             args: Vec::new(),
         };
@@ -224,7 +224,7 @@ impl Type {
 
     pub fn string() -> Self {
         Type::Apply {
-            module_name: MOD_STR.into(),
+            module_name: ModuleName::STR.into(),
             name: "Str".into(),
             args: Vec::new(),
         }
@@ -233,7 +233,7 @@ impl Type {
     /// This is needed to constrain `if` conditionals
     pub fn bool() -> Self {
         Type::Apply {
-            module_name: MOD_DEFAULT.into(),
+            module_name: ModuleName::BOOL.into(),
             name: "Bool".into(),
             args: Vec::new(),
         }
@@ -252,6 +252,61 @@ impl Type {
         variables_help(self, &mut result);
 
         result
+    }
+
+    // swap Apply with Alias if their module and tag match
+    pub fn substitute_alias(
+        &mut self,
+        rep_module_name: &ModuleName,
+        rep_name: &Uppercase,
+        actual: &Type,
+    ) {
+        use Type::*;
+
+        match self {
+            Function(args, ret) => {
+                for arg in args {
+                    arg.substitute_alias(rep_module_name, rep_name, actual);
+                }
+                ret.substitute_alias(rep_module_name, rep_name, actual);
+            }
+            TagUnion(tags, ext) => {
+                for (_, args) in tags {
+                    for x in args {
+                        x.substitute_alias(rep_module_name, rep_name, actual);
+                    }
+                }
+                ext.substitute_alias(rep_module_name, rep_name, actual);
+            }
+            Record(fields, ext) => {
+                for x in fields.iter_mut() {
+                    x.substitute_alias(rep_module_name, rep_name, actual);
+                }
+                ext.substitute_alias(rep_module_name, rep_name, actual);
+            }
+            Alias(_, _, _, actual_type) => {
+                actual_type.substitute_alias(rep_module_name, rep_name, actual);
+            }
+            Apply {
+                module_name, name, ..
+            } if module_name == rep_module_name && name == rep_name => {
+                *self = actual.clone();
+
+                if let Apply { args, .. } = self {
+                    for arg in args {
+                        arg.substitute_alias(rep_module_name, rep_name, actual);
+                    }
+                }
+            }
+            Apply { args, .. } => {
+                for arg in args {
+                    arg.substitute_alias(rep_module_name, rep_name, actual);
+                }
+            }
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
+
+            As(_, _) => unreachable!("As should be canonicalized away at this point"),
+        }
     }
 }
 
@@ -290,9 +345,14 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
         }
         Alias(_, _, args, actual) => {
             for (_, x) in args {
-                variables_help(x, accum);
+                accum.insert(*x);
             }
             variables_help(actual, accum);
+        }
+        As(inner, variable) => {
+            variables_help(inner, accum);
+            // the `inner` type should contain the bound variable
+            debug_assert!(accum.contains(variable));
         }
         Apply { args, .. } => {
             for x in args {
@@ -403,7 +463,7 @@ pub enum PatternCategory {
     List,
     Set,
     Map,
-    Ctor(Symbol),
+    Ctor(TagName),
     Int,
     Str,
     Float,
@@ -441,7 +501,7 @@ pub enum ErrorType {
     FlexVar(Lowercase),
     RigidVar(Lowercase),
     Record(SendMap<RecordFieldLabel, ErrorType>, TypeExt),
-    TagUnion(SendMap<Symbol, Vec<ErrorType>>, TypeExt),
+    TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(
         ModuleName,

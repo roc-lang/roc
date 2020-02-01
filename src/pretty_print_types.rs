@@ -115,8 +115,11 @@ fn find_names_needed(
             // We must not accidentally generate names that collide with them!
             names_taken.insert(name);
         }
-        Alias(_, _, _, _) => {
-            panic!("TODO find_names_needed Alias");
+        Alias(_, _, args, _actual) => {
+            // TODO should we also look in the actual variable?
+            for (_, var) in args {
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
         }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
@@ -188,8 +191,14 @@ fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Pa
         FlexVar(None) => buf.push_str(WILDCARD),
         RigidVar(name) => buf.push_str(name.as_str()),
         Structure(flat_type) => write_flat_type(flat_type, subs, buf, parens),
-        Alias(_, _, _, _) => {
-            panic!("TODO write_content Alias");
+        Alias(module_name, name, args, _actual) => {
+            buf.push_str(module_name.as_str());
+            buf.push('.');
+            buf.push_str(name.as_str());
+            for (_, var) in args {
+                buf.push(' ');
+                write_content(subs.get(var).content, subs, buf, parens);
+            }
         }
         Error => buf.push_str("<type mismatch>"),
     }
@@ -276,7 +285,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     sorted_fields.push((label.clone(), vars));
                 }
 
-                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+                sorted_fields.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
 
                 let mut any_written_yet = false;
 
@@ -386,7 +395,7 @@ fn write_apply(
     // Hardcoded type aliases
     if module_name == "Str" && type_name == "Str" {
         buf.push_str("Str");
-    } else if module_name == types::MOD_NUM && type_name == types::TYPE_NUM {
+    } else if module_name == ModuleName::NUM && type_name == types::TYPE_NUM {
         let arg = args
             .into_iter()
             .next()

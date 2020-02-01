@@ -1,7 +1,7 @@
-use crate::fmt::expr::fmt_expr;
+use crate::fmt::expr::{fmt_expr, is_multiline_expr};
 use crate::fmt::pattern::fmt_pattern;
-use crate::fmt::spaces::fmt_spaces;
-use crate::parse::ast::Def;
+use crate::fmt::spaces::{fmt_spaces, newline, INDENT};
+use crate::parse::ast::{Def, Expr};
 use bumpalo::collections::String;
 
 pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
@@ -9,10 +9,25 @@ pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
 
     match def {
         Annotation(_, _) => panic!("TODO have format_def support Annotation"),
+        Alias { .. } => panic!("TODO have format_def support Alias"),
         Body(loc_pattern, loc_expr) => {
-            fmt_pattern(buf, &loc_pattern.value, indent, true);
-            buf.push_str(" = ");
-            fmt_expr(buf, &loc_expr.value, indent, false, true);
+            fmt_pattern(buf, &loc_pattern.value, indent, true, false);
+            buf.push_str(" =");
+            if is_multiline_expr(&loc_expr.value) {
+                match &loc_expr.value {
+                    Expr::Record { .. } | Expr::List(_) => {
+                        newline(buf, indent + INDENT);
+                        fmt_expr(buf, &loc_expr.value, indent + INDENT, false, true);
+                    }
+                    _ => {
+                        buf.push(' ');
+                        fmt_expr(buf, &loc_expr.value, indent, false, true);
+                    }
+                }
+            } else {
+                buf.push(' ');
+                fmt_expr(buf, &loc_expr.value, indent, false, true);
+            }
         }
         TypedDef(_loc_pattern, _loc_annotation, _loc_expr) => {
             panic!("TODO support Annotation in TypedDef");

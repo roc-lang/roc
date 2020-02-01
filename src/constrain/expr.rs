@@ -2,7 +2,7 @@ use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::Field;
-use crate::can::ident::{Lowercase, ModuleName};
+use crate::can::ident::{Lowercase, ModuleName, TagName};
 use crate::can::pattern::Pattern;
 use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
@@ -311,7 +311,10 @@ pub fn constrain_expr(
         } => {
             // TODO use Bool alias here, so we don't allocate this type every time
             let bool_type = Type::TagUnion(
-                vec![("True".into(), vec![]), ("False".into(), vec![])],
+                vec![
+                    (TagName::Global("True".into()), vec![]),
+                    (TagName::Global("False".into()), vec![]),
+                ],
                 Box::new(Type::EmptyTagUnion),
             );
             let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);
@@ -409,11 +412,11 @@ pub fn constrain_expr(
                     let ast_con = Eq(Type::Variable(*expr_var), expected.clone(), region);
                     constraints.push(ast_con);
 
-                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, (loc_when_pattern, loc_expr)) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             env,
                             region,
-                            loc_pattern,
+                            &loc_when_pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -436,11 +439,11 @@ pub fn constrain_expr(
                     let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, (loc_when_pattern, loc_expr)) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             env,
                             region,
-                            loc_pattern,
+                            &loc_when_pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -882,6 +885,8 @@ pub fn rec_defs_help(
                 }));
 
                 rigid_info.vars.extend(&new_rigids);
+                // because of how in Roc headers point to variables, we must include the pattern var here
+                rigid_info.vars.extend(pattern_state.vars);
                 rigid_info.constraints.push(Let(Box::new(LetConstraint {
                     rigid_vars: new_rigids,
                     flex_vars: Vec::new(),         // no flex vars introduced

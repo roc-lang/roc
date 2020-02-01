@@ -243,9 +243,9 @@ fn absorptive(sop: Sop) -> Vec<Vec<Bool>> {
 }
 
 pub fn absorptive_vector(mut accum: Vec<Vec<Bool>>) -> Vec<Vec<Bool>> {
-    for product in accum.clone() {
+    for product in accum.clone().into_iter() {
         accum.retain(|v| !absorbs_vector(&product, v));
-        accum.insert(0, product.clone());
+        accum.insert(0, product);
     }
 
     accum

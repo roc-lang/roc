@@ -1,6 +1,5 @@
-use crate::can::ident::{Lowercase, ModuleName, Uppercase};
-use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, ImSet, MutSet, SendMap};
+use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
+use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::types;
 use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
@@ -219,7 +218,10 @@ impl Subs {
         let l_root = self.utable.get_root_key(left);
         let r_root = self.utable.get_root_key(right);
 
-        self.utable.unify_roots(l_root, r_root, desc)
+        // NOTE this swapping is intentional! most of our unifying commands are based on the elm
+        // source, but unify_roots is from `ena`, not the elm source. Turns out that they have
+        // different ideas of how the merge should go (l into r or the reverse), and this matters!
+        self.utable.unify_roots(r_root, l_root, desc)
     }
 
     pub fn get(&mut self, key: Variable) -> Descriptor {
@@ -442,7 +444,7 @@ impl Content {
         match &self {
             Content::Structure(FlatType::Apply {
                 module_name, name, ..
-            }) => module_name.as_str() == types::MOD_NUM && name.as_str() == types::TYPE_NUM,
+            }) => module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM,
             _ => false,
         }
     }
@@ -456,8 +458,8 @@ pub enum FlatType {
         args: Vec<Variable>,
     },
     Func(Vec<Variable>, Variable),
-    Record(ImMap<RecordFieldLabel, Variable>, Variable),
-    TagUnion(ImMap<Symbol, Vec<Variable>>, Variable),
+    Record(MutMap<RecordFieldLabel, Variable>, Variable),
+    TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,
@@ -832,7 +834,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             EmptyTagUnion => (),
 
             Record(fields, ext_var) => {
-                for (_, var) in fields {
+                for var in fields.values() {
                     subs.restore(*var);
                 }
 

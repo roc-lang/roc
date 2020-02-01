@@ -1,6 +1,6 @@
 use crate::can::def::{can_defs_with_return, Def};
 use crate::can::env::Env;
-use crate::can::ident::{Lowercase, ModuleName};
+use crate::can::ident::{Lowercase, ModuleName, TagName};
 use crate::can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
@@ -118,7 +118,7 @@ pub enum Expr {
     Tag {
         variant_var: Variable,
         ext_var: Variable,
-        name: Symbol,
+        name: TagName,
         arguments: Vec<(Variable, Located<Expr>)>,
     },
 
@@ -488,24 +488,26 @@ pub fn canonicalize_expr(
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
-            for (loc_pattern, loc_expr) in branches {
+            for branch in branches {
                 let mut shadowable_idents = scope.idents.clone();
 
-                remove_idents(&loc_pattern.first().unwrap().value, &mut shadowable_idents);
+                let loc_first_pattern = &branch.patterns.first().unwrap();
 
-                let (can_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
+                remove_idents(&loc_first_pattern.value, &mut shadowable_idents);
+
+                let (can_when_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
                     env,
                     var_store,
                     scope,
                     region,
-                    loc_pattern.first().unwrap(),
-                    loc_expr,
+                    branch.patterns.first().unwrap(),
+                    &branch.value,
                     &mut output,
                 );
 
                 output.references = output.references.union(branch_references);
 
-                can_branches.push((can_pattern, loc_can_expr));
+                can_branches.push((can_when_pattern, loc_can_expr));
             }
 
             // A "when" with no branches is a runtime error, but it will mess things up
@@ -558,7 +560,7 @@ pub fn canonicalize_expr(
 
             (
                 Tag {
-                    name: Symbol::from_global_tag(tag),
+                    name: TagName::Global((*tag).into()),
                     arguments: vec![],
                     variant_var,
                     ext_var,
@@ -572,7 +574,7 @@ pub fn canonicalize_expr(
 
             (
                 Tag {
-                    name: Symbol::from_private_tag(&env.home, tag),
+                    name: TagName::Private(Symbol::from_private_tag(env.home.as_str(), tag)),
                     arguments: vec![],
                     variant_var,
                     ext_var,
@@ -957,10 +959,10 @@ fn resolve_ident<'a>(
         match ident {
             Ident::Unqualified(name) => {
                 // Try again, this time using the current module as the path.
-                let qualified = Ident::Qualified(env.home.clone(), name.clone());
+                let qualified = Ident::Qualified(env.home.as_str().into(), name.clone());
 
                 if scope.idents.contains_key(&qualified) {
-                    let symbol = Symbol::new(&env.home, &name);
+                    let symbol = Symbol::new(env.home.as_str(), &name);
 
                     references.globals.insert(symbol.clone());
 

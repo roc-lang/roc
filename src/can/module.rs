@@ -1,22 +1,24 @@
 use crate::can::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::can::env::Env;
 use crate::can::expr::Output;
+use crate::can::ident::ModuleName;
 use crate::can::operator::desugar_def;
+use crate::can::problem::RuntimeError;
 use crate::can::scope::Scope;
 use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
-use crate::parse::ast::{self, ExposesEntry};
+use crate::module::symbol::ModuleId;
+use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
-use crate::types::Constraint;
 use bumpalo::Bump;
+use inlinable_string::InlinableString;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Module {
-    pub name: Option<Box<str>>,
+    pub module_id: ModuleId,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: SendMap<Symbol, Variable>,
-    pub constraint: Constraint,
 }
 
 pub struct ModuleOutput {
@@ -25,17 +27,14 @@ pub struct ModuleOutput {
     pub lookups: Vec<(Symbol, Variable, Region)>,
 }
 
-pub fn canonicalize_module_defs<'a, I>(
+pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
     loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
-    home: Box<str>,
-    _exposes: I,
+    home: ModuleName,
+    _exposes: Vec<InlinableString>,
     scope: &mut Scope,
     var_store: &VarStore,
-) -> ModuleOutput
-where
-    I: Iterator<Item = Located<ExposesEntry<'a>>>,
-{
+) -> Result<ModuleOutput, RuntimeError> {
     let mut exposed_imports = SendMap::default();
 
     // Desugar operators (convert them to Apply calls, taking into account
@@ -89,25 +88,22 @@ where
 
     let mut output = Output::default();
     let defs = canonicalize_defs(&mut env, &mut output.rigids, var_store, scope, &desugared);
-    let declarations = match sort_can_defs(&mut env, defs, Output::default()) {
-        (Ok(defs), _) => {
+
+    match sort_can_defs(&mut env, defs, Output::default()) {
+        (Ok(declarations), _) => {
             // TODO examine the patterns, extract toplevel identifiers from them,
             // and verify that everything in the `exposes` list is actually present in
             // that set of identifiers. You can't expose it if it wasn't defined!
 
-            defs
-        }
-        (Err(problem), _) => {
-            panic!("TODO problem canonicalizing module defs: {:?}", problem);
-        }
-    };
+            // TODO incorporate rigids into here (possibly by making this be a Let instead
+            // of an And)
 
-    // TODO incorporate rigids into here (possibly by making this be a Let instead
-    // of an And)
-
-    ModuleOutput {
-        declarations,
-        exposed_imports,
-        lookups,
+            Ok(ModuleOutput {
+                declarations,
+                exposed_imports,
+                lookups,
+            })
+        }
+        (Err(runtime_error), _) => Err(runtime_error),
     }
 }

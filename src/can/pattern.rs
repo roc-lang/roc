@@ -1,5 +1,5 @@
 use crate::can::env::Env;
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, TagName};
 use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::can::problem::Problem;
 use crate::can::scope::Scope;
@@ -17,7 +17,7 @@ use im_rc::Vector;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
-    AppliedTag(Variable, Symbol, Vec<(Variable, Located<Pattern>)>),
+    AppliedTag(Variable, TagName, Vec<(Variable, Located<Pattern>)>),
     IntLiteral(i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
@@ -84,13 +84,13 @@ pub fn canonicalize_pattern<'a>(
         }
         &GlobalTag(name) => {
             // Canonicalize the tag's name.
-            Pattern::AppliedTag(var_store.fresh(), Symbol::from_global_tag(name), vec![])
+            Pattern::AppliedTag(var_store.fresh(), TagName::Global((*name).into()), vec![])
         }
         &PrivateTag(name) => {
             // Canonicalize the tag's name.
             Pattern::AppliedTag(
                 var_store.fresh(),
-                Symbol::from_private_tag(&env.home, name),
+                TagName::Private(Symbol::from_private_tag(env.home.as_str(), name)),
                 vec![],
             )
         }
@@ -111,13 +111,15 @@ pub fn canonicalize_pattern<'a>(
                 ));
             }
 
-            let symbol = match tag.value {
-                GlobalTag(name) => Symbol::from_global_tag(name),
-                PrivateTag(name) => Symbol::from_private_tag(&env.home, name),
+            let tag_name = match tag.value {
+                GlobalTag(name) => TagName::Global(name.into()),
+                PrivateTag(name) => {
+                    TagName::Private(Symbol::from_private_tag(env.home.as_str(), name))
+                }
                 _ => unreachable!("Other patterns cannot be applied"),
             };
 
-            Pattern::AppliedTag(var_store.fresh(), symbol, can_patterns)
+            Pattern::AppliedTag(var_store.fresh(), tag_name, can_patterns)
         }
 
         &FloatLiteral(ref string) => match pattern_type {
@@ -191,9 +193,10 @@ pub fn canonicalize_pattern<'a>(
             )
         }
         &RecordDestructure(patterns) => {
+            let ext_var = var_store.fresh();
             let mut fields = Vec::with_capacity(patterns.len());
 
-            for loc_pattern in patterns {
+            for loc_pattern in *patterns {
                 match loc_pattern.value {
                     Identifier(label) => {
                         let symbol = match canonicalize_pattern_identifier(
@@ -263,7 +266,7 @@ pub fn canonicalize_pattern<'a>(
                 }
             }
 
-            Pattern::RecordDestructure(var_store.fresh(), fields)
+            Pattern::RecordDestructure(ext_var, fields)
         }
         &RecordField(_name, _loc_pattern) => {
             unreachable!("should be handled in RecordDestructure");
@@ -311,7 +314,8 @@ pub fn canonicalize_pattern_identifier<'a>(
         }
         None => {
             // Make sure we aren't shadowing something in the home module's scope.
-            let qualified_ident = Ident::Qualified(env.home.clone(), lowercase_ident.name());
+            let qualified_ident =
+                Ident::Qualified(env.home.as_str().into(), lowercase_ident.name());
 
             match scope.idents.get(&qualified_ident) {
                 Some((_, region)) => {
@@ -376,7 +380,7 @@ pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, 
             }
         }
         RecordDestructure(patterns) => {
-            for loc_pattern in patterns {
+            for loc_pattern in *patterns {
                 remove_idents(&loc_pattern.value, idents);
             }
         }
@@ -440,7 +444,7 @@ fn add_idents_from_pattern<'a>(
         }
 
         RecordDestructure(patterns) => {
-            for loc_pattern in patterns {
+            for loc_pattern in *patterns {
                 add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
             }
         }

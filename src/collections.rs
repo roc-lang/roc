@@ -48,7 +48,7 @@ where
     buf
 }
 
-pub fn insert_all<K, V, I>(map: &mut ImMap<K, V>, elems: I)
+pub fn insert_all<K, V, I>(map: &mut SendMap<K, V>, elems: I)
 where
     K: Clone + Eq + Hash,
     V: Clone,
@@ -57,4 +57,39 @@ where
     for (k, v) in elems {
         map.insert(k, v);
     }
+}
+
+/// Like im's relative_complement, but for MutMap and with references for arguments.
+pub fn relative_complement<K, V>(map: &MutMap<K, V>, other: &MutMap<K, V>) -> MutMap<K, V>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    let mut answer = MutMap::default();
+
+    for (key, value) in map {
+        // Drop any key that exists in the other map,
+        // by declining to insert it into the answer.
+        if !other.contains_key(key) {
+            answer.insert(key.clone(), value.clone());
+        }
+    }
+
+    answer
+}
+
+/// Like im's union, but for MutMap.
+pub fn union<K, V>(mut map: MutMap<K, V>, other: &MutMap<K, V>) -> MutMap<K, V>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    for (key, value) in other.iter() {
+        // If the key exists in both maps, keep the value in the owned one.
+        if !map.contains_key(key) {
+            map.insert(key.clone(), value.clone());
+        }
+    }
+
+    map
 }

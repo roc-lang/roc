@@ -144,30 +144,28 @@ pub fn fmt_expr<'a>(
             buf.push_str(" is\n");
 
             let mut it = branches.iter().peekable();
-            while let Some((patterns, expr)) = it.next() {
+            while let Some(branch) = it.next() {
+                let patterns = &branch.patterns;
+                let expr = &branch.value;
                 add_spaces(buf, indent + INDENT);
-                let (first, rest) = patterns.split_first().unwrap();
-
-                match first.value {
-                    Pattern::SpaceBefore(nested, spaces) => {
-                        fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                        fmt_pattern(buf, nested, indent + INDENT, false);
-                    }
-                    _ => {
-                        fmt_pattern(buf, &first.value, indent + INDENT, false);
+                let (first_pattern, rest) = patterns.split_first().unwrap();
+                let is_multiline = match rest.last() {
+                    None => false,
+                    Some(last_pattern) => {
+                        first_pattern.region.start_line != last_pattern.region.end_line
                     }
                 };
-                for pattern in rest {
-                    buf.push_str(" | ");
-                    match pattern.value {
-                        Pattern::SpaceBefore(nested, spaces) => {
-                            fmt_comments_only(buf, spaces.iter(), indent + INDENT);
-                            fmt_pattern(buf, nested, indent + INDENT, false);
-                        }
-                        _ => {
-                            fmt_pattern(buf, &pattern.value, indent + INDENT, false);
-                        }
+
+                fmt_pattern(buf, &first_pattern.value, indent + INDENT, false, true);
+                for when_pattern in rest {
+                    if is_multiline {
+                        buf.push_str("\n");
+                        add_spaces(buf, indent + INDENT);
+                        buf.push_str("| ");
+                    } else {
+                        buf.push_str(" | ");
                     }
+                    fmt_pattern(buf, &when_pattern.value, indent + INDENT, false, true);
                 }
 
                 buf.push_str(" ->\n");
@@ -584,7 +582,7 @@ pub fn fmt_closure<'a>(
             any_args_printed = true;
         }
 
-        fmt_pattern(buf, &loc_pattern.value, indent, false);
+        fmt_pattern(buf, &loc_pattern.value, indent, false, false);
     }
 
     if !arguments_are_multiline {
@@ -671,7 +669,7 @@ pub fn fmt_record<'a>(
     }
 
     if is_multiline {
-        buf.push('\n');
+        newline(buf, indent)
     } else if !loc_fields.is_empty() {
         buf.push(' ');
     }
