@@ -28,27 +28,27 @@ pub fn canonicalize_annotation<'a>(
     let mut rigids = ImMap::default();
 
     // TODO find annotation-local aliases first
-    let aliases = scope.aliases.clone();
+    let mut aliases = scope.aliases.clone();
 
-    let result = can_annotation_help(env, annotation, var_store, &mut rigids, &aliases);
+    let result = can_annotation_help(env, annotation, var_store, &mut rigids, &mut aliases);
 
+    let tipe = to_type(&result, var_store, &aliases, &rigids);
     let mut ftv = SendMap::default();
 
     for (k, v) in rigids {
-        ftv.insert(v, k);
+        if let Ok(var) = v {
+            ftv.insert(var, k.as_str().into());
+        }
     }
 
-    (
-        ftv,
-        to_type(&result, var_store, &aliases, &mut ImMap::default()),
-    )
+    (ftv, tipe)
 }
 
 fn to_type(
     type_annotation: &TypeAnnotation,
     var_store: &VarStore,
     aliases: &ImMap<Symbol, (Region, Vec<Located<Lowercase>>, TypeAnnotation)>,
-    rigids: &mut ImMap<Symbol, Result<Variable, TypeAnnotation>>,
+    rigids: &ImMap<Symbol, Result<Variable, TypeAnnotation>>,
 ) -> Type {
     use TypeAnnotation::*;
     match type_annotation {
@@ -78,12 +78,20 @@ fn to_type(
                         var.value.clone(),
                         to_type(&arg.value, var_store, aliases, rigids),
                     ));
-                    zipped_map.insert(Symbol::new("", var.value.as_str()), Err(arg.value.clone()));
+                    zipped_map.insert(
+                        Symbol::new("Test", var.value.as_str()),
+                        Err(arg.value.clone()),
+                    );
                 }
 
                 let body = to_type(actual, var_store, aliases, &mut zipped_map);
 
-                Type::Alias("".into(), symbol.as_str().into(), zipped, Box::new(body))
+                Type::Alias(
+                    "Test".into(),
+                    symbol.as_str().into(),
+                    zipped,
+                    Box::new(body),
+                )
             } else {
                 let mut new_args: Vec<Type> = Vec::with_capacity(args.len());
 
@@ -93,19 +101,19 @@ fn to_type(
 
                 let symbstr = symbol.as_str();
 
-                if symbstr == "NumNum" {
+                if symbstr == "NumNum" || symbstr == "Num.Num" {
                     Type::Apply {
                         module_name: "Num".into(),
                         name: "Num".into(),
                         args: new_args,
                     }
-                } else if symbstr == "IntInteger" {
+                } else if symbstr == "IntInteger" || symbstr == "Int.Integer" {
                     Type::Apply {
                         module_name: "Int".into(),
                         name: "Integer".into(),
                         args: new_args,
                     }
-                } else if symbstr == "StrStr" {
+                } else if symbstr == "StrStr" || symbstr == "Str.Str" {
                     Type::Apply {
                         module_name: "Str".into(),
                         name: "Str".into(),
@@ -159,7 +167,7 @@ fn to_type(
         TagUnion { tags, ext } => {
             let ext_type = match ext {
                 Some(loc_ann) => to_type(&loc_ann.value, var_store, aliases, rigids),
-                None => Type::EmptyRec,
+                None => Type::EmptyTagUnion,
             };
             let mut tags_map = Vec::new();
 
@@ -218,14 +226,16 @@ pub fn canonicalize_intermediate_annotation<'a>(
     let mut rigids = ImMap::default();
 
     // TODO find annotation-local aliases first
-    let aliases = scope.aliases.clone();
+    let mut aliases = scope.aliases.clone();
 
-    let result = can_annotation_help(env, annotation, var_store, &mut rigids, &aliases);
+    let result = can_annotation_help(env, annotation, var_store, &mut rigids, &mut aliases);
 
     let mut ftv = SendMap::default();
 
     for (k, v) in rigids {
-        ftv.insert(v, k);
+        if let Ok(var) = v {
+            ftv.insert(var, k.as_str().into());
+        }
     }
 
     (ftv, result)
@@ -286,8 +296,8 @@ fn can_annotation_help(
     env: &Env,
     annotation: &crate::parse::ast::TypeAnnotation,
     var_store: &VarStore,
-    rigids: &mut ImMap<Lowercase, Variable>,
-    aliases: &ImMap<Symbol, (Region, Vec<Located<Lowercase>>, TypeAnnotation)>,
+    rigids: &mut ImMap<Symbol, Result<Variable, TypeAnnotation>>,
+    aliases: &mut ImMap<Symbol, (Region, Vec<Located<Lowercase>>, TypeAnnotation)>,
 ) -> TypeAnnotation {
     use crate::parse::ast::TypeAnnotation::*;
 
@@ -355,6 +365,11 @@ fn can_annotation_help(
                 TypeAnnotation::Wildcard
             } else {
                 let name = Symbol::from(*v);
+
+                if !rigids.contains_key(&name) {
+                    rigids.insert(name.clone(), Ok(var_store.fresh()));
+                }
+
                 TypeAnnotation::Rigid(name)
             }
 
@@ -368,42 +383,49 @@ fn can_annotation_help(
             }
             */
         }
-        As(loc_inner, _spaces, loc_as) => panic!("TODO"),
-        //        match loc_as.value {
-        //            TypeTypeAnnotation::Apply(module_name, name, loc_vars) if module_name.is_empty() => {
-        //                let inner_type =
-        //                    can_annotation_help(env, &loc_inner.value, var_store, rigids, aliases);
-        //                let old_name = name.clone();
-        //                let name = Uppercase::from(name);
-        //                let mut loc_type_vars: Vec<Located<Lowercase>> = Vec::with_capacity(loc_vars.len());
-        //
-        //                for loc_var in loc_vars {
-        //                    match loc_var.value {
-        //                        BoundVariable(ident) => {
-        //                            let var_name = Lowercase::from(ident);
-        //                            let tvar = Located::at(loc_var.region, var_name);
-        //                            loc_type_vars.push(tvar);
-        //                        }
-        //                        _ => {
-        //                            // If anything other than a lowercase identifier
-        //                            // appears here, the whole annotation is invalid.
-        //                            return TypeAnnotation::Erroneous(Problem::CanonicalizationProblem);
-        //                        }
-        //                    }
-        //                }
-        //
-        //                aliases.push((env.home.clone(), name, loc_type_vars, inner_type));
-        //
-        //                // this Apply will later be resolved to the alias we just declared
-        //                let my_module_name: &[&str] = &(["Test"]);
-        //                let my_apply = TypeTypeAnnotation::Apply(my_module_name, old_name, loc_vars);
-        //                can_annotation_help(env, &my_apply, var_store, rigids, aliases)
-        //            }
-        //            _ => {
-        //                // This is a syntactically invalid type alias.
-        //                TypeAnnotation::Erroneous(Problem::CanonicalizationProblem)
-        //            }
-        //        },
+        As(loc_inner, _spaces, loc_as) => {
+            // add this alias to the list of aliases
+            // aliases: &mut ImMap<Symbol, (Region, Vec<Located<Lowercase>>, TypeAnnotation)>,
+
+            match loc_as.value {
+                Apply(module_name, name, loc_vars) if module_name.is_empty() => {
+                    let inner_type =
+                        can_annotation_help(env, &loc_inner.value, var_store, rigids, aliases);
+                    let old_name = name.clone();
+                    let name = Uppercase::from(name);
+                    let mut loc_type_vars: Vec<Located<Lowercase>> =
+                        Vec::with_capacity(loc_vars.len());
+
+                    for loc_var in loc_vars {
+                        match loc_var.value {
+                            BoundVariable(ident) => {
+                                let var_name = Lowercase::from(ident);
+                                let tvar = Located::at(loc_var.region, var_name);
+                                loc_type_vars.push(tvar);
+                            }
+                            _ => {
+                                // If anything other than a lowercase identifier
+                                // appears here, the whole annotation is invalid.
+                                // return TypeAnnotation::Erroneous(Problem::CanonicalizationProblem);
+                                panic!("problem");
+                            }
+                        }
+                    }
+
+                    let symbol = Symbol::new(env.home.clone().as_str(), name.as_str());
+
+                    aliases.insert(symbol, (Region::zero(), loc_type_vars, inner_type));
+
+                    let fake_apply = Apply(&["Test"], old_name, loc_vars.clone());
+                    can_annotation_help(env, &fake_apply, var_store, rigids, aliases)
+                }
+                _ => {
+                    // This is a syntactically invalid type alias.
+                    //TypeAnnotation::Erroneous(Problem::CanonicalizationProblem)
+                    panic!("problem");
+                }
+            }
+        }
         Record { fields, ext } => {
             let mut field_types = Vec::with_capacity(fields.len());
 
@@ -475,8 +497,8 @@ fn can_assigned_field<'a>(
     env: &Env,
     field: &ast::AssignedField<'a, ast::TypeAnnotation<'a>>,
     var_store: &VarStore,
-    rigids: &mut ImMap<Lowercase, Variable>,
-    aliases: &ImMap<Symbol, (Region, Vec<Located<Lowercase>>, TypeAnnotation)>,
+    rigids: &mut ImMap<Symbol, Result<Variable, TypeAnnotation>>,
+    aliases: &mut ImMap<Symbol, (Region, Vec<Located<Lowercase>>, TypeAnnotation)>,
 ) -> AssignedField<TypeAnnotation> {
     use crate::parse::ast::AssignedField::*;
 
@@ -519,8 +541,8 @@ fn can_tag<'a>(
     env: &Env,
     tag: &ast::Tag<'a>,
     var_store: &VarStore,
-    rigids: &mut ImMap<Lowercase, Variable>,
-    aliases: &ImMap<Symbol, (Region, Vec<Located<Lowercase>>, TypeAnnotation)>,
+    rigids: &mut ImMap<Symbol, Result<Variable, TypeAnnotation>>,
+    aliases: &mut ImMap<Symbol, (Region, Vec<Located<Lowercase>>, TypeAnnotation)>,
     tag_types: &mut Vec<Located<Tag>>,
 ) {
     match tag {
