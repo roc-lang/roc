@@ -480,7 +480,11 @@ mod test_canonicalize {
                 Located::at(Region::new(1, 1, 0, 1), "y".into()),
                 Located::at(Region::new(2, 2, 0, 1), "z".into()),
             ],
-            vec![], // TODO populate with correct regions
+            vec![
+                (Region::new(0, 0, 0, 1), Region::new(0, 0, 4, 5)),
+                (Region::new(1, 1, 0, 1), Region::new(1, 1, 4, 5)),
+                (Region::new(2, 2, 0, 1), Region::new(2, 2, 4, 5)),
+            ],
         ));
 
         assert_eq!(problems, vec![problem]);
