@@ -104,24 +104,37 @@ impl fmt::Debug for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let module_id = self.module_id();
         let ident_id = self.ident_id();
-        let names =
-        DEBUG_IDENT_IDS_BY_MODULE_ID
-            .lock()
-            .expect("Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked.");
-        let ident_ids = &names.get(&module_id.0).unwrap_or_else(|| {
-            panic!(
-                "Could not find module {:?} in DEBUG_IDENT_IDS_BY_MODULE_ID",
-                module_id
-            )
-        });
-        let ident_str = ident_ids.get_name(ident_id).unwrap_or_else(|| {
-            panic!(
-                "Could not find IdentID {} in DEBUG_IDENT_IDS_BY_MODULE_ID for module ID {:?}",
-                ident_id.0, module_id
-            )
-        });
 
-        write!(f, "`{:?}.{}`", module_id, ident_str)
+        match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
+            Ok(names) => match &names.get(&module_id.0) {
+                Some(ident_ids) => match ident_ids.get_name(ident_id) {
+                    Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
+                    None => {
+                        println!(
+                            "Could not find IdentID {} in DEBUG_IDENT_IDS_BY_MODULE_ID for module ID {:?}",
+                            ident_id.0, module_id
+                        );
+                        Err(fmt::Error)
+                    }
+                },
+                None => {
+                    println!(
+                        "Could not find module {:?} in DEBUG_IDENT_IDS_BY_MODULE_ID",
+                        module_id
+                    );
+                    Err(fmt::Error)
+                }
+            },
+            Err(err) => {
+                // Print and return Err rather than panicking, because this
+                // might be used in a panic error message, and if we panick
+                // while we're already panicking it'll kill the process
+                // without printing any of the errors!
+                println!("ERROR: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
+
+                Err(fmt::Error)
+            }
+        }
     }
 
     #[cfg(not(debug_assertions))]
