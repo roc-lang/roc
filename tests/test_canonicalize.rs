@@ -297,13 +297,15 @@ mod test_canonicalize {
         }));
 
         let actual = loc_expr.value;
-        let detected0 = get_closure(&actual, 0);
-        let detected1 = get_closure(&actual, 1);
-        let detected2 = get_closure(&actual, 2);
+        // NOTE: the indices associated with each of these can change!
+        // They come out of a hashmap, and are not sorted.
+        let g_detected = get_closure(&actual, 0);
+        let h_detected = get_closure(&actual, 2);
+        let p_detected = get_closure(&actual, 1);
 
-        assert_eq!(detected0, Recursive::TailRecursive);
-        assert_eq!(detected1, Recursive::NotRecursive);
-        assert_eq!(detected2, Recursive::TailRecursive);
+        assert_eq!(g_detected, Recursive::TailRecursive);
+        assert_eq!(h_detected, Recursive::NotRecursive);
+        assert_eq!(p_detected, Recursive::TailRecursive);
     }
 
     #[test]
