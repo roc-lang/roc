@@ -247,7 +247,7 @@ impl FieldAccess {
             if self.fields.contains_key(&field_name) {
                 if let Some((self_rc, self_nested)) = self.fields.get_mut(&field_name) {
                     *self_rc = ReferenceCount::add(self_rc, &other_rc);
-                    if &*self_rc > &ReferenceCount::Seen {
+                    if *self_rc > ReferenceCount::Seen {
                         // e.g. we access `rec.foo` and `rec.foo.bar`.
                         // Since a reference to `rec.foo` exists, there are at least two references to `foo.bar`
                         // (`foo.bar` itself and `.bar rec.foo`)
