@@ -166,7 +166,10 @@ fn can_annotation_help(
                 args.push(arg_ann);
             }
 
-            if let Some((_region, ftv, actual)) = scope.lookup_alias(symbol) {
+            if let Some(alias) = scope.lookup_alias(symbol) {
+                let ftv = &alias.vars;
+                let actual = &alias.typ;
+
                 if args.len() != ftv.len() {
                     panic!("TODO alias applied to incorrect number of type arguments");
                 }
@@ -183,7 +186,7 @@ fn can_annotation_help(
 
                 if let Type::RecursiveTagUnion(rec, _, _) = &mut instantiated {
                     let new_rec = var_store.fresh();
-                    let old = rec.clone();
+                    let old = *rec;
                     *rec = new_rec;
 
                     let mut rec_substitution = ImMap::default();
@@ -381,6 +384,8 @@ fn can_annotation_help(
     }
 }
 
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
 fn can_assigned_field<'a>(
     env: &mut Env,
     field: &AssignedField<'a, TypeAnnotation<'a>>,
@@ -441,6 +446,8 @@ fn can_assigned_field<'a>(
     }
 }
 
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
 fn can_tag<'a>(
     env: &mut Env,
     tag: &Tag<'a>,

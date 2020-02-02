@@ -299,7 +299,7 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
-            Alias(_, zipped, actual_type) => {
+            Alias(_, _zipped, actual_type) => {
                 actual_type.substitute(substitutions);
             }
             Apply(_, args) => {

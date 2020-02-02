@@ -7,6 +7,13 @@ use crate::subs::Variable;
 use crate::types::Type;
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Alias {
+    pub region: Region,
+    pub vars: Vec<Located<(Lowercase, Variable)>>,
+    pub typ: Type,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
     /// All the identifiers in scope, mapped to were they were defined and
     /// the Symbol they resolve to.
@@ -17,7 +24,7 @@ pub struct Scope {
     symbols: ImMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    aliases: ImMap<Symbol, (Region, Vec<Located<(Lowercase, Variable)>>, Type)>,
+    aliases: ImMap<Symbol, Alias>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -42,9 +49,7 @@ impl Scope {
         self.symbols.iter()
     }
 
-    pub fn aliases(
-        &self,
-    ) -> impl Iterator<Item = &(Symbol, (Region, Vec<Located<(Lowercase, Variable)>>, Type))> {
+    pub fn aliases(&self) -> impl Iterator<Item = &(Symbol, Alias)> {
         self.aliases.iter()
     }
 
@@ -70,10 +75,7 @@ impl Scope {
         }
     }
 
-    pub fn lookup_alias(
-        &self,
-        symbol: Symbol,
-    ) -> Option<&(Region, Vec<Located<(Lowercase, Variable)>>, Type)> {
+    pub fn lookup_alias(&self, symbol: Symbol) -> Option<&Alias> {
         self.aliases.get(&symbol)
     }
 
@@ -136,6 +138,6 @@ impl Scope {
         vars: Vec<Located<(Lowercase, Variable)>>,
         typ: Type,
     ) {
-        self.aliases.insert(name, (region, vars, typ));
+        self.aliases.insert(name, Alias { region, vars, typ });
     }
 }

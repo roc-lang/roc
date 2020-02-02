@@ -109,23 +109,9 @@ impl fmt::Debug for Symbol {
             Ok(names) => match &names.get(&module_id.0) {
                 Some(ident_ids) => match ident_ids.get_name(ident_id) {
                     Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
-                    None => {
-                        println!(
-                            "DEBUG INFO: Could not find IdentID {} in DEBUG_IDENT_IDS_BY_MODULE_ID for module ID {:?}",
-                            ident_id.0, module_id
-                        );
-
-                        fallback_debug_fmt(self, f)
-                    }
+                    None => fallback_debug_fmt(*self, f),
                 },
-                None => {
-                    println!(
-                        "DEBUG INFO: Could not find module {:?} in DEBUG_IDENT_IDS_BY_MODULE_ID",
-                        module_id
-                    );
-
-                    fallback_debug_fmt(self, f)
-                }
+                None => fallback_debug_fmt(*self, f),
             },
             Err(err) => {
                 // Print and return Err rather than panicking, because this
@@ -134,18 +120,18 @@ impl fmt::Debug for Symbol {
                 // without printing any of the errors!
                 println!("DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
 
-                fallback_debug_fmt(self, f)
+                fallback_debug_fmt(*self, f)
             }
         }
     }
 
     #[cfg(not(debug_assertions))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fallback_debug_fmt(self, f)
+        fallback_debug_fmt(*self, f)
     }
 }
 
-fn fallback_debug_fmt(symbol: &Symbol, f: &mut fmt::Formatter) -> fmt::Result {
+fn fallback_debug_fmt(symbol: Symbol, f: &mut fmt::Formatter) -> fmt::Result {
     let module_id = symbol.module_id();
     let ident_id = symbol.ident_id();
 

@@ -622,6 +622,8 @@ fn group_to_declaration(
     }
 }
 
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
 fn canonicalize_pending_def<'a>(
     env: &mut Env<'a>,
     found_rigids: &mut SendMap<Variable, Lowercase>,
@@ -980,7 +982,7 @@ fn canonicalize_pending_def<'a>(
                     (
                         Located {
                             value: ident.clone().into(),
-                            region: region,
+                            region,
                         },
                         refs,
                     ),
@@ -1010,7 +1012,7 @@ fn canonicalize_pending_def<'a>(
 pub fn can_defs_with_return<'a>(
     env: &mut Env<'a>,
     var_store: &VarStore,
-    mut scope: Scope,
+    scope: Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output) {
@@ -1020,7 +1022,7 @@ pub fn can_defs_with_return<'a>(
         env,
         &mut found_rigids,
         var_store,
-        &mut scope,
+        &scope,
         loc_defs,
         PatternType::DefExpr,
     );
@@ -1216,7 +1218,7 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err(_) => panic!("TODO shadowing of type alias"),
+                Err(_err) => panic!("TODO shadowing of type alias"),
             }
         }
 

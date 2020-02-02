@@ -98,7 +98,7 @@ pub fn canonicalize_module_defs<'a>(
         &mut env,
         &mut output.rigids,
         var_store,
-        &mut scope,
+        &scope,
         &desugared,
         PatternType::TopLevelDef,
     );
