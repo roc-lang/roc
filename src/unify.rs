@@ -1,8 +1,8 @@
-use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{relative_complement, union, ImMap, MutMap};
+use crate::module::symbol::Symbol;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
-use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
 use crate::uniqueness::boolean_algebra;
 use crate::uniqueness::boolean_algebra::Bool;
@@ -18,7 +18,7 @@ struct Context {
 }
 
 pub struct RecordStructure {
-    pub fields: MutMap<RecordFieldLabel, Variable>,
+    pub fields: MutMap<Lowercase, Variable>,
     pub ext: Variable,
 }
 
@@ -76,9 +76,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
-        Alias(home, name, args, real_var) => {
-            unify_alias(subs, pool, &ctx, home, name, args, *real_var)
-        }
+        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, args, *real_var),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
@@ -91,8 +89,7 @@ fn unify_alias(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    home: &ModuleName,
-    name: &Uppercase,
+    symbol: Symbol,
     args: &[(Lowercase, Variable)],
     real_var: Variable,
 ) -> Outcome {
@@ -101,15 +98,11 @@ fn unify_alias(
     match other_content {
         FlexVar(_) => {
             // Alias wins
-            merge(
-                subs,
-                &ctx,
-                Alias(home.clone(), name.clone(), args.to_owned(), real_var),
-            )
+            merge(subs, &ctx, Alias(symbol, args.to_owned(), real_var))
         }
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
-        Alias(other_home, other_name, other_args, other_real_var) => {
-            if name == other_name && home == other_home {
+        Alias(other_symbol, other_args, other_real_var) => {
+            if symbol == *other_symbol {
                 if args.len() == other_args.len() {
                     for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
                         unify_pool(subs, pool, *l_var, *r_var);
@@ -149,7 +142,7 @@ fn unify_structure(
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
+        Alias(_, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
         Error => merge(subs, ctx, Error),
     }
 }
@@ -251,8 +244,8 @@ fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: MutMap<RecordFieldLabel, (Variable, Variable)>,
-    other_fields: MutMap<RecordFieldLabel, Variable>,
+    shared_fields: MutMap<Lowercase, (Variable, Variable)>,
+    other_fields: MutMap<Lowercase, Variable>,
     ext: Variable,
 ) -> Outcome {
     let mut matching_fields = MutMap::default();
@@ -281,6 +274,7 @@ fn unify_tag_union(
     ctx: &Context,
     rec1: TagUnionStructure,
     rec2: TagUnionStructure,
+    recursion: (Option<Variable>, Option<Variable>),
 ) -> Outcome {
     let tags1 = rec1.tags;
     let tags2 = rec2.tags;
@@ -289,11 +283,27 @@ fn unify_tag_union(
     let unique_tags1 = relative_complement(&tags1, &tags2);
     let unique_tags2 = relative_complement(&tags2, &tags1);
 
+    let recursion_var = match recursion {
+        (None, None) => None,
+        (Some(v), None) | (None, Some(v)) => Some(v),
+        (Some(v1), Some(v2)) => {
+            unify_pool(subs, pool, v1, v2);
+            Some(v1)
+        }
+    };
+
     if unique_tags1.is_empty() {
         if unique_tags2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
-            let mut tag_problems =
-                unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), rec1.ext);
+            let mut tag_problems = unify_shared_tags(
+                subs,
+                pool,
+                ctx,
+                shared_tags,
+                MutMap::default(),
+                rec1.ext,
+                recursion_var,
+            );
 
             tag_problems.extend(ext_problems);
 
@@ -302,8 +312,15 @@ fn unify_tag_union(
             let flat_type = FlatType::TagUnion(unique_tags2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
-            let mut tag_problems =
-                unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), sub_record);
+            let mut tag_problems = unify_shared_tags(
+                subs,
+                pool,
+                ctx,
+                shared_tags,
+                MutMap::default(),
+                sub_record,
+                recursion_var,
+            );
 
             tag_problems.extend(ext_problems);
 
@@ -313,8 +330,15 @@ fn unify_tag_union(
         let flat_type = FlatType::TagUnion(unique_tags1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
-        let mut tag_problems =
-            unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), sub_record);
+        let mut tag_problems = unify_shared_tags(
+            subs,
+            pool,
+            ctx,
+            shared_tags,
+            MutMap::default(),
+            sub_record,
+            recursion_var,
+        );
 
         tag_problems.extend(ext_problems);
 
@@ -332,7 +356,8 @@ fn unify_tag_union(
         let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);
         let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
 
-        let mut tag_problems = unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext);
+        let mut tag_problems =
+            unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var);
 
         tag_problems.reserve(rec1_problems.len() + rec2_problems.len());
         tag_problems.extend(rec1_problems);
@@ -349,6 +374,7 @@ fn unify_shared_tags(
     shared_tags: MutMap<TagName, (Vec<Variable>, Vec<Variable>)>,
     other_tags: MutMap<TagName, Vec<Variable>>,
     ext: Variable,
+    recursion_var: Option<Variable>,
 ) -> Outcome {
     let mut matching_tags = MutMap::default();
     let num_shared_tags = shared_tags.len();
@@ -374,7 +400,11 @@ fn unify_shared_tags(
     }
 
     if num_shared_tags == matching_tags.len() {
-        let flat_type = FlatType::TagUnion(union(matching_tags, &other_tags), ext);
+        let flat_type = if let Some(rec) = recursion_var {
+            FlatType::RecursiveTagUnion(rec, union(matching_tags, &other_tags), ext)
+        } else {
+            FlatType::TagUnion(union(matching_tags, &other_tags), ext)
+        };
 
         merge(subs, ctx, Structure(flat_type))
     } else {
@@ -424,7 +454,21 @@ fn unify_flat_type(
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
-            unify_tag_union(subs, pool, ctx, union1, union2)
+            unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
+        }
+
+        (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+
+            unify_tag_union(
+                subs,
+                pool,
+                ctx,
+                union1,
+                union2,
+                (None, Some(*recursion_var)),
+            )
         }
 
         (Boolean(Bool::WithFree(free1, rest1)), Boolean(Bool::WithFree(free2, rest2))) => {
@@ -458,30 +502,11 @@ fn unify_flat_type(
 
         (Boolean(b1_raw), Boolean(b2_raw)) => unify_boolean(subs, b1_raw, b2_raw),
 
-        (
-            Apply {
-                module_name: l_module_name,
-                name: l_type_name,
-                args: l_args,
-            },
-            Apply {
-                module_name: r_module_name,
-                name: r_type_name,
-                args: r_args,
-            },
-        ) if l_module_name == r_module_name && l_type_name == r_type_name => {
+        (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
             let problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
 
             if problems.is_empty() {
-                merge(
-                    subs,
-                    ctx,
-                    Structure(Apply {
-                        module_name: (*r_module_name).clone(),
-                        name: (*r_type_name).clone(),
-                        args: (*r_args).clone(),
-                    }),
-                )
+                merge(subs, ctx, Structure(Apply(*r_symbol, (*r_args).clone())))
             } else {
                 problems
             }
@@ -585,7 +610,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
             // rigid names are the same.
             mismatch()
         }
-        Alias(_, _, _, _) => {
+        Alias(_, _, _) => {
             panic!("TODO unify_rigid Alias");
         }
         Error => {
@@ -607,7 +632,7 @@ fn unify_flex(
             // If both are flex, and only left has a name, keep the name around.
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
-        FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _, _) => {
+        FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _) => {
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
             merge(subs, ctx, other.clone())
@@ -619,7 +644,7 @@ fn unify_flex(
 
 pub fn gather_fields(
     subs: &mut Subs,
-    fields: MutMap<RecordFieldLabel, Variable>,
+    fields: MutMap<Lowercase, Variable>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::FlatType::*;
@@ -629,7 +654,7 @@ pub fn gather_fields(
             gather_fields(subs, union(fields, &sub_fields), sub_ext)
         }
 
-        Alias(_, _, _, var) => {
+        Alias(_, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
             gather_fields(subs, fields, var)
         }
@@ -650,7 +675,7 @@ fn gather_tags(
             gather_tags(subs, union(tags, &sub_tags), sub_ext)
         }
 
-        Alias(_, _, _, var) => {
+        Alias(_, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
             gather_tags(subs, tags, var)
         }

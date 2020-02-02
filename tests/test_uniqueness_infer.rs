@@ -13,12 +13,11 @@ mod test_infer_uniq {
     use crate::helpers::{assert_correct_variable_usage, uniq_expr};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
-    use roc::subs::Subs;
 
     // HELPERS
 
-    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, Subs, String) {
-        let (_output, _problems, subs, variable, constraint) = uniq_expr(src);
+    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+        let (_output, _problems, subs, variable, constraint, home, interns) = uniq_expr(src);
 
         assert_correct_variable_usage(&constraint);
 
@@ -28,28 +27,21 @@ mod test_infer_uniq {
 
         name_all_type_vars(variable, &mut subs);
 
-        dbg!(&content, &subs);
+        let actual_str = content_to_string(content, &mut subs, home, &interns);
 
-        let actual_str = content_to_string(content, &mut subs);
-
-        (unify_problems, subs, actual_str)
+        (unify_problems, actual_str)
     }
     fn infer_eq_ignore_problems(src: &str, expected: &str) {
-        let (_, _, actual) = infer_eq_help(src);
+        let (_, actual) = infer_eq_help(src);
 
         assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (problems, subs, actual) = infer_eq_help(src);
+        let (problems, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
-            dbg!(&problems);
-            dbg!(&subs);
-            // fail with an assert, but print the problems normally so rust doesn't try to diff
-            // an empty vec with the problems.
-            println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
-            assert_eq!(0, 1);
+            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());
     }
@@ -950,7 +942,7 @@ mod test_infer_uniq {
                 r#"\@Foo -> 42
                 "#
             ),
-            "Attr.Attr * (Attr.Attr * [ Test.@Foo ]* -> Attr.Attr * Int)",
+            "Attr.Attr * (Attr.Attr * [ @Foo ]* -> Attr.Attr * Int)",
         );
     }
 
@@ -986,7 +978,7 @@ mod test_infer_uniq {
                 r#"@Foo "happy" 2020
                 "#
             ),
-            "Attr.Attr * [ Test.@Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
+            "Attr.Attr * [ @Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
         );
     }
 
@@ -1064,7 +1056,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr.Attr * (Attr.Attr ((a | b) | *) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
+            "Attr.Attr * (Attr.Attr ((b | a) | *) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)",
         );
     }
 
@@ -1243,7 +1235,7 @@ mod test_infer_uniq {
                             p
                         "#
                     ),
-                "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)"
+                "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared c) }d -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared c) }d)"
                 );
     }
 
@@ -1287,7 +1279,7 @@ mod test_infer_uniq {
                     r
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f -> Attr.Attr (b | a) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f)"
+            "Attr.Attr * (Attr.Attr (b | a) { foo : (Attr.Attr b { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f -> Attr.Attr (a | b) { foo : (Attr.Attr b { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f)"
         );
     }
 

@@ -9,6 +9,7 @@ pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
 
     match def {
         Annotation(_, _) => panic!("TODO have format_def support Annotation"),
+        Alias { .. } => panic!("TODO have format_def support Alias"),
         Body(loc_pattern, loc_expr) => {
             fmt_pattern(buf, &loc_pattern.value, indent, true, false);
             buf.push_str(" =");
@@ -28,8 +29,8 @@ pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
                 fmt_expr(buf, &loc_expr.value, indent, false, true);
             }
         }
-        TypedDef(_loc_pattern, _loc_annotation, _loc_expr) => {
-            panic!("TODO support Annotation in TypedDef");
+        TypedBody(_loc_pattern, _loc_annotation, _loc_expr) => {
+            panic!("TODO support Annotation in TypedBody");
         }
         SpaceBefore(sub_def, spaces) => {
             fmt_spaces(buf, spaces.iter(), indent);

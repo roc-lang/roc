@@ -1,6 +1,7 @@
+use crate::can;
 use crate::can::pattern::Pattern;
-use crate::can::{self, ident::ModuleName};
 use crate::collections::MutMap;
+use crate::module::symbol::Symbol;
 use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
 use crate::subs::{Content, FlatType, Subs, Variable};
@@ -122,9 +123,7 @@ fn from_can<'a>(
         Int(_, val) => Expr::Int(val),
         Float(_, val) => Expr::Float(val),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
-        Var {
-            resolved_symbol, ..
-        } => Expr::Load(resolved_symbol.into()),
+        Var(symbol) => Expr::Load(symbol.emit()),
         LetNonRec(def, ret_expr, _) => {
             let arena = env.arena;
             let loc_pattern = def.loc_pattern;
@@ -144,11 +143,11 @@ fn from_can<'a>(
             //
             //     identity 5
             //
-            if let Identifier(name) = &loc_pattern.value {
+            if let Identifier(symbol) = &loc_pattern.value {
                 if let Closure(_, _, _, _, _) = &loc_expr.value {
                     // Extract Procs, but discard the resulting Expr::Load.
                     // That Load looks up the pointer, which we won't use here!
-                    from_can(env, loc_expr.value, procs, Some(name.clone().into()));
+                    from_can(env, loc_expr.value, procs, Some(symbol.emit()));
 
                     // Discard this LetNonRec by replacing it with its ret_expr.
                     return from_can(env, ret_expr.value, procs, None);
@@ -239,7 +238,7 @@ fn add_closure<'a>(
         };
 
         let arg_name: InlinableString = match &loc_arg.value {
-            Pattern::Identifier(name) => name.as_str().into(),
+            Pattern::Identifier(symbol) => symbol.emit(),
             _ => {
                 panic!("TODO determine arg_name for pattern {:?}", loc_arg.value);
             }
@@ -284,7 +283,9 @@ fn store_pattern<'a>(
     //     identity 5
     //
     match can_pat {
-        Identifier(name) => stored.push((name.into(), var, from_can(env, can_expr, procs, None))),
+        Identifier(symbol) => {
+            stored.push((symbol.emit(), var, from_can(env, can_expr, procs, None)))
+        }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
             stored.push(("_".into(), var, from_can(env, can_expr, procs, None)))
@@ -306,7 +307,7 @@ fn from_can_when<'a>(
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<can::expr::Expr>,
-    branches: std::vec::Vec<(can::expr::WhenPattern, Located<can::expr::Expr>)>,
+    branches: std::vec::Vec<(Located<can::pattern::Pattern>, Located<can::expr::Expr>)>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
     use crate::can::pattern::Pattern::*;
@@ -326,7 +327,7 @@ fn from_can_when<'a>(
 
             store_pattern(
                 env,
-                loc_when_pattern.pattern.value,
+                loc_when_pattern.value,
                 loc_cond.value,
                 cond_var,
                 procs,
@@ -344,7 +345,7 @@ fn from_can_when<'a>(
             let (loc_when_pat1, loc_then) = iter.next().unwrap();
             let (loc_when_pat2, loc_else) = iter.next().unwrap();
 
-            match (&loc_when_pat1.pattern.value, &loc_when_pat2.pattern.value) {
+            match (&loc_when_pat1.value, &loc_when_pat2.value) {
                 (IntLiteral(int), IntLiteral(_)) | (IntLiteral(int), Underscore) => {
                     let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
                     let cond_rhs = arena.alloc(Expr::Int(*int));
@@ -393,28 +394,13 @@ fn from_can_when<'a>(
             // TODO we can also Switch on record fields if we're pattern matching
             // on a record field that's also Switchable.
             let is_switchable = match &content {
-                Content::Structure(FlatType::Apply {
-                    module_name,
-                    name,
-                    args,
-                }) if module_name.as_str() == ModuleName::NUM
-                    && name.as_str() == crate::types::TYPE_NUM =>
-                {
+                Content::Structure(FlatType::Apply(Symbol::NUM_NUM, args)) => {
                     debug_assert!(args.len() == 1);
 
                     let arg = args.iter().next().unwrap();
 
                     match subs.get_without_compacting(*arg).content {
-                        Content::Structure(FlatType::Apply {
-                            module_name, name, ..
-                        }) if module_name.as_str() == ModuleName::INT => {
-                            // This check shouldn't be necessary; the only
-                            // type that fits the pattern of Num.Num Int._____
-                            // is an Int!
-                            debug_assert!(name.as_str() == crate::types::TYPE_INTEGER);
-
-                            true
-                        }
+                        Content::Structure(FlatType::Apply(Symbol::INT_INTEGER, _)) => true,
                         _ => false,
                     }
                 }
@@ -432,7 +418,7 @@ fn from_can_when<'a>(
                 for (loc_when_pat, loc_expr) in branches {
                     let mono_expr = from_can(env, loc_expr.value, procs, None);
 
-                    match &loc_when_pat.pattern.value {
+                    match &loc_when_pat.value {
                         IntLiteral(int) => {
                             // Switch only compares the condition to the
                             // alternatives based on their bit patterns,
@@ -459,7 +445,7 @@ fn from_can_when<'a>(
 
                             opt_default_branch = Some(arena.alloc(mono_expr));
                         }
-                        Shadowed(_loc_ident) => {
+                        Shadowed(_, _) => {
                             panic!("TODO runtime error for shadowing in a pattern");
                         }
                         // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!

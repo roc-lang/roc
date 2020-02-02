@@ -43,13 +43,13 @@ pub fn fmt_expr<'a>(
             buf.push_str(string);
             buf.push('"');
         }
-        Var(module_parts, name) => {
-            for part in module_parts.iter() {
-                buf.push_str(part);
+        Var { module_name, ident } => {
+            if !module_name.is_empty() {
+                buf.push_str(module_name);
                 buf.push('.');
             }
 
-            buf.push_str(name);
+            buf.push_str(ident);
         }
         Apply(loc_expr, loc_args, _) => {
             if apply_needs_parens {
@@ -144,24 +144,19 @@ pub fn fmt_expr<'a>(
             buf.push_str(" is\n");
 
             let mut it = branches.iter().peekable();
-            while let Some((patterns, expr)) = it.next() {
+            while let Some(branch) = it.next() {
+                let patterns = &branch.patterns;
+                let expr = &branch.value;
                 add_spaces(buf, indent + INDENT);
                 let (first_pattern, rest) = patterns.split_first().unwrap();
                 let is_multiline = match rest.last() {
                     None => false,
                     Some(last_pattern) => {
-                        first_pattern.pattern.region.start_line
-                            != last_pattern.pattern.region.end_line
+                        first_pattern.region.start_line != last_pattern.region.end_line
                     }
                 };
 
-                fmt_pattern(
-                    buf,
-                    &first_pattern.pattern.value,
-                    indent + INDENT,
-                    false,
-                    true,
-                );
+                fmt_pattern(buf, &first_pattern.value, indent + INDENT, false, true);
                 for when_pattern in rest {
                     if is_multiline {
                         buf.push_str("\n");
@@ -170,13 +165,7 @@ pub fn fmt_expr<'a>(
                     } else {
                         buf.push_str(" | ");
                     }
-                    fmt_pattern(
-                        buf,
-                        &when_pattern.pattern.value,
-                        indent + INDENT,
-                        false,
-                        true,
-                    );
+                    fmt_pattern(buf, &when_pattern.value, indent + INDENT, false, true);
                 }
 
                 buf.push_str(" ->\n");
@@ -380,7 +369,7 @@ pub fn is_multiline_pattern<'a>(pattern: &'a Pattern<'a>) -> bool {
         | Pattern::BlockStrLiteral(_)
         | Pattern::Underscore
         | Pattern::Malformed(_)
-        | Pattern::QualifiedIdentifier(_) => false,
+        | Pattern::QualifiedIdentifier { .. } => false,
     }
 }
 
@@ -402,7 +391,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         | Str(_)
         | Access(_, _)
         | AccessorFunction(_)
-        | Var(_, _)
+        | Var { .. }
         | MalformedIdent(_)
         | MalformedClosure
         | GlobalTag(_)

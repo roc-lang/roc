@@ -1,7 +1,7 @@
 use crate::can::expr::Expr;
 use crate::can::ident::Lowercase;
-use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, ImSet};
+use crate::module::symbol::Symbol;
 use crate::region::Located;
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
@@ -127,13 +127,12 @@ impl IntoIterator for VarUsage {
 
 impl VarUsage {
     pub fn default() -> VarUsage {
-        VarUsage {
-            usage: (ImMap::default()),
-        }
+        let empty: ImMap<Symbol, ReferenceCount> = ImMap::default();
+        VarUsage { usage: empty }
     }
 
-    pub fn register_with(&mut self, symbol: &Symbol, rc: &ReferenceCount) {
-        let value = match self.usage.get(symbol) {
+    pub fn register_with(&mut self, symbol: Symbol, rc: &ReferenceCount) {
+        let value = match self.usage.get(&symbol) {
             None => rc.clone(),
             Some(current) => ReferenceCount::add(current, rc),
         };
@@ -141,22 +140,22 @@ impl VarUsage {
         self.usage.insert(symbol.clone(), value);
     }
 
-    pub fn register(&mut self, symbol: &Symbol) {
+    pub fn register(&mut self, symbol: Symbol) {
         use self::ReferenceCount::*;
         self.register_with(symbol, &Unique);
     }
 
-    pub fn unregister(&mut self, symbol: &Symbol) {
-        self.usage.remove(symbol);
+    pub fn unregister(&mut self, symbol: Symbol) {
+        self.usage.remove(&symbol);
     }
 
-    pub fn get_usage(&self, symbol: &Symbol) -> Option<&ReferenceCount> {
-        self.usage.get(symbol)
+    pub fn get_usage(&self, symbol: Symbol) -> Option<&ReferenceCount> {
+        self.usage.get(&symbol)
     }
 
     pub fn add(&mut self, other: &Self) {
         for (symbol, v) in &other.usage {
-            self.register_with(symbol, v);
+            self.register_with(*symbol, v);
         }
     }
 
@@ -292,9 +291,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         | EmptyRecord
         | Accessor { .. } => {}
 
-        Var {
-            symbol_for_lookup, ..
-        } => usage.register(symbol_for_lookup),
+        Var(symbol) => usage.register(*symbol),
 
         If {
             loc_cond,
@@ -345,7 +342,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 // just like a letrec, but mark defined symbol as Shared
                 let def = &defs[0];
                 for (symbol, _) in def.pattern_vars.clone() {
-                    usage.register_with(&symbol, &Shared);
+                    usage.register_with(symbol, &Shared);
                 }
                 annotate_usage(&def.loc_expr.value, usage);
             } else {
@@ -355,7 +352,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 // a mutable update in f2
                 for def in defs {
                     for (symbol, _) in def.pattern_vars.clone() {
-                        usage.register_with(&symbol, &Shared);
+                        usage.register_with(symbol, &Shared);
                     }
 
                     let mut current_usage = VarUsage::default();
@@ -408,7 +405,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
             }
 
             usage.register_with(
-                symbol,
+                *symbol,
                 &ReferenceCount::Update(labels, FieldAccess::default()),
             );
         }
@@ -421,7 +418,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
 
                 let fa = FieldAccess::from_chain(chain);
 
-                usage.register_with(symbol, &ReferenceCount::Access(fa));
+                usage.register_with(*symbol, &ReferenceCount::Access(fa));
             } else {
                 annotate_usage(&loc_expr.value, usage);
             }
@@ -442,9 +439,7 @@ fn get_access_chain<'a>(expr: &'a Expr, chain: &mut Vec<Lowercase>) -> Option<&'
 
             Some(symbol)
         }
-        Var {
-            symbol_for_lookup, ..
-        } => Some(symbol_for_lookup),
+        Var(symbol) => Some(symbol),
 
         _ => None,
     }
@@ -464,12 +459,9 @@ fn special_case_builtins(usage: &mut VarUsage, _symbol: Symbol, loc_args: Vec<Lo
             let list = &loc_args[1];
             // index is an integer, its uniqueness doesn't matter
             annotate_usage(&index.value, usage);
-            if let Expr::Var {
-                symbol_for_lookup, ..
-            } = &list.value
-            {
+            if let Expr::Var(symbol) = &list.value {
                 let fa = FieldAccess::from_chain(vec![LIST_ELEMENTS_LABEL.into()]);
-                usage.register_with(&symbol_for_lookup, &Access(fa));
+                usage.register_with(*symbol, &Access(fa));
             } else {
                 annotate_usage(&list.value, usage);
             }
@@ -482,12 +474,10 @@ fn special_case_builtins(usage: &mut VarUsage, _symbol: Symbol, loc_args: Vec<Lo
             annotate_usage(&index.value, usage);
             annotate_usage(&value.value, usage);
 
-            if let Expr::Var {
-                symbol_for_lookup, ..
-            } = &list.value
-            {
+            if let Expr::Var(symbol) = &list.value {
                 let fa = FieldAccess::from_chain(vec![LIST_ELEMENTS_LABEL.into()]);
-                usage.register_with(&symbol_for_lookup, &Update(ImSet::default(), fa));
+                let overwritten: ImSet<Lowercase> = ImSet::default();
+                usage.register_with(*symbol, &Update(overwritten, fa));
             } else {
                 annotate_usage(&list.value, usage);
             }

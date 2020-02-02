@@ -28,6 +28,13 @@ pub struct InterfaceHeader<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct WhenBranch<'a> {
+    pub patterns: Vec<'a, Loc<Pattern<'a>>>,
+    pub value: Loc<Expr<'a>>,
+    pub guard: Option<Loc<Expr<'a>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
@@ -64,50 +71,6 @@ impl<'a> ExposesEntry<'a> {
             Ident(string) => string,
             SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => sub_entry.as_str(),
         }
-    }
-}
-
-/// An optional qualifier (the `Foo.Bar` in `Foo.Bar.baz`).
-/// If module_parts is empty, this is unqualified.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MaybeQualified<'a, Val> {
-    pub module_parts: &'a [&'a str],
-    pub value: Val,
-}
-
-impl<'a> MaybeQualified<'a, &'a str> {
-    pub fn len(&self) -> usize {
-        let mut answer = self.value.len();
-
-        for part in self.module_parts {
-            answer += part.len();
-        }
-
-        answer
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl<'a> MaybeQualified<'a, &'a [&'a str]> {
-    pub fn len(&self) -> usize {
-        let mut answer = 0;
-
-        for module_part in self.module_parts {
-            answer += module_part.len();
-        }
-
-        for value_part in self.module_parts {
-            answer += value_part.len();
-        }
-
-        answer
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 
@@ -153,7 +116,10 @@ pub enum Expr<'a> {
     },
 
     // Lookups
-    Var(&'a [&'a str], &'a str),
+    Var {
+        module_name: &'a str,
+        ident: &'a str,
+    },
 
     // Tags
     GlobalTag(&'a str),
@@ -179,9 +145,9 @@ pub enum Expr<'a> {
         /// A | B if bool -> expression
         /// <Pattern 1> | <Pattern 2> if <Guard> -> <Expr>
         /// Vec, because there may be many patterns, and the guard
-        /// is Option<Expr> because each pattern may have a guard
-        /// (".. if ..").
-        Vec<'a, &'a (Vec<'a, WhenPattern<'a>>, Loc<Expr<'a>>)>,
+        /// is Option<Expr> because each branch may be preceded by
+        /// a guard (".. if ..").
+        Vec<'a, &'a WhenBranch<'a>>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
@@ -207,13 +173,24 @@ pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
     Annotation(Loc<Pattern<'a>>, Loc<TypeAnnotation<'a>>),
+
+    /// A type alias. This is like a standalone annotation, except the pattern
+    /// must be a capitalized Identifier, e.g.
+    ///
+    /// Foo : Bar Baz
+    Alias {
+        name: Loc<&'a str>,
+        vars: &'a [Loc<Pattern<'a>>],
+        ann: Loc<TypeAnnotation<'a>>,
+    },
+
     // TODO in canonicalization, check to see if there are any newlines after the
     // annotation; if not, and if it's followed by a Body, then the annotation
     // applies to that expr! (TODO: verify that the pattern for both annotation and body match.)
     // No need to track that relationship in any data structure.
     Body(&'a Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
 
-    TypedDef(
+    TypedBody(
         &'a Loc<Pattern<'a>>,
         Loc<TypeAnnotation<'a>>,
         &'a Loc<Expr<'a>>,
@@ -235,7 +212,7 @@ pub enum TypeAnnotation<'a> {
     Function(&'a [Loc<TypeAnnotation<'a>>], &'a Loc<TypeAnnotation<'a>>),
 
     /// Applying a type to some arguments (e.g. Map.Map String Int)
-    Apply(&'a [&'a str], &'a str, &'a [Loc<TypeAnnotation<'a>>]),
+    Apply(&'a str, &'a str, &'a [Loc<TypeAnnotation<'a>>]),
 
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
@@ -337,7 +314,7 @@ pub enum Pattern<'a> {
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
-    RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
+    RecordDestructure(&'a [Loc<Pattern<'a>>]),
     /// A field pattern, e.g. { x: Just 0 } -> ...
     /// can only occur inside of a RecordDestructure
     RecordField(&'a str, &'a Loc<Pattern<'a>>),
@@ -364,7 +341,10 @@ pub enum Pattern<'a> {
 
     // Malformed
     Malformed(&'a str),
-    QualifiedIdentifier(MaybeQualified<'a, &'a str>),
+    QualifiedIdentifier {
+        module_name: &'a str,
+        ident: &'a str,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -379,29 +359,36 @@ impl<'a> Pattern<'a> {
         match ident {
             Ident::GlobalTag(string) => Pattern::GlobalTag(string),
             Ident::PrivateTag(string) => Pattern::PrivateTag(string),
-            Ident::Access(maybe_qualified) => {
-                if maybe_qualified.value.len() == 1 {
-                    Pattern::Identifier(maybe_qualified.value.iter().next().unwrap())
-                } else {
-                    let mut buf = String::with_capacity_in(
-                        maybe_qualified.module_parts.len() + maybe_qualified.value.len(),
-                        arena,
-                    );
+            Ident::Access { module_name, parts } => {
+                if parts.len() == 1 {
+                    // This is valid iff there is no module.
+                    let ident = parts.iter().next().unwrap();
 
-                    for part in maybe_qualified.module_parts.iter() {
-                        buf.push_str(part);
-                        buf.push('.');
+                    if module_name.is_empty() {
+                        Pattern::Identifier(ident)
+                    } else {
+                        Pattern::QualifiedIdentifier { module_name, ident }
                     }
+                } else {
+                    // This is definitely malformed.
+                    let mut buf =
+                        String::with_capacity_in(module_name.len() + (2 * parts.len()), arena);
+                    let mut any_parts_printed = if module_name.is_empty() {
+                        false
+                    } else {
+                        buf.push_str(module_name);
 
-                    let mut iter = maybe_qualified.value.iter().peekable();
+                        true
+                    };
 
-                    while let Some(part) = iter.next() {
-                        buf.push_str(part);
-
-                        // If there are more fields to come, add a "."
-                        if iter.peek().is_some() {
+                    for part in parts.iter() {
+                        if any_parts_printed {
                             buf.push('.');
+                        } else {
+                            any_parts_printed = true;
                         }
+
+                        buf.push_str(part);
                     }
 
                     Pattern::Malformed(buf.into_bump_str())
@@ -462,7 +449,16 @@ impl<'a> Pattern<'a> {
 
             // Malformed
             (Malformed(x), Malformed(y)) => x == y,
-            (QualifiedIdentifier(x), QualifiedIdentifier(y)) => x == y,
+            (
+                QualifiedIdentifier {
+                    module_name: a,
+                    ident: x,
+                },
+                QualifiedIdentifier {
+                    module_name: b,
+                    ident: y,
+                },
+            ) => (a == b) && (x == y),
 
             // Different constructors
             _ => false,

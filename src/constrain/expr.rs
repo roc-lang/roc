@@ -2,14 +2,14 @@ use crate::can::def::Declaration;
 use crate::can::def::Def;
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::Field;
-use crate::can::ident::{Lowercase, ModuleName, TagName};
+use crate::can::ident::{Lowercase, TagName};
 use crate::can::pattern::Pattern;
-use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::builtins::{
     empty_list_type, float_literal, int_literal, list_type, str_type,
 };
 use crate::constrain::pattern::{constrain_pattern, PatternState};
+use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::Variable;
 use crate::types::AnnotationSource::{self, *};
@@ -53,7 +53,7 @@ pub struct Env {
     /// for example `a` in the annotation `identity : a -> a`, we add it to this
     /// map so that expressions within that annotation can share these vars.
     pub rigids: ImMap<Lowercase, Type>,
-    pub module_name: ModuleName,
+    pub home: ModuleId,
 }
 
 pub fn constrain_expr(
@@ -111,9 +111,7 @@ pub fn constrain_expr(
         }
         Update {
             record_var,
-            module,
             ext_var,
-            ident,
             symbol,
             updates,
         } => {
@@ -139,10 +137,9 @@ pub fn constrain_expr(
             vars.push(*ext_var);
 
             let con = Lookup(
-                module.clone(),
-                symbol.clone(),
+                *symbol,
                 ForReason(
-                    Reason::RecordUpdateKeys(ident.clone(), fields),
+                    Reason::RecordUpdateKeys(*symbol, fields),
                     record_type,
                     region,
                 ),
@@ -241,11 +238,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Var {
-            symbol_for_lookup,
-            module,
-            ..
-        } => Lookup(module.clone(), symbol_for_lookup.clone(), expected, region),
+        Var(symbol) => Lookup(*symbol, expected, region),
         Closure(fn_var, _symbol, _recursive, args, boxed) => {
             let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
@@ -416,7 +409,7 @@ pub fn constrain_expr(
                         let branch_con = constrain_when_branch(
                             env,
                             region,
-                            &loc_when_pattern.pattern,
+                            &loc_when_pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -443,7 +436,7 @@ pub fn constrain_expr(
                         let branch_con = constrain_when_branch(
                             env,
                             region,
-                            &loc_when_pattern.pattern,
+                            &loc_when_pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -496,7 +489,7 @@ pub fn constrain_expr(
 
             let constraint = constrain_expr(
                 &Env {
-                    module_name: env.module_name.clone(),
+                    home: env.home,
                     rigids: ImMap::default(),
                 },
                 region,
@@ -650,7 +643,7 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 }
 
 #[inline(always)]
-pub fn constrain_decls(module_name: ModuleName, decls: &[Declaration]) -> Constraint {
+pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
@@ -658,7 +651,7 @@ pub fn constrain_decls(module_name: ModuleName, decls: &[Declaration]) -> Constr
             Declaration::Declare(def) => {
                 constraint = constrain_def(
                     &Env {
-                        module_name: module_name.clone(),
+                        home,
                         rigids: ImMap::default(),
                     },
                     def,
@@ -668,7 +661,7 @@ pub fn constrain_decls(module_name: ModuleName, decls: &[Declaration]) -> Constr
             Declaration::DeclareRec(defs) => {
                 constraint = constrain_recursive_defs(
                     &Env {
-                        module_name: module_name.clone(),
+                        home,
                         rigids: ImMap::default(),
                     },
                     defs,
@@ -744,7 +737,7 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
 
             constrain_expr(
                 &Env {
-                    module_name: env.module_name.clone(),
+                    home: env.home,
                     rigids: ftv,
                 },
                 def.loc_expr.region,
@@ -861,7 +854,7 @@ pub fn rec_defs_help(
                 let expr_con = constrain_expr(
                     &Env {
                         rigids: ftv,
-                        module_name: env.module_name.clone(),
+                        home: env.home,
                     },
                     def.loc_expr.region,
                     &def.loc_expr.value,

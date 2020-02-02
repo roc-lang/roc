@@ -1,6 +1,7 @@
 use crate::collections::arena_join;
 use crate::parse::ast::{AssignedField, Attempting, CommentOrNewline, Tag, TypeAnnotation};
 use crate::parse::blankspace::{space0_around, space0_before, space1, space1_before};
+use crate::parse::ident::join_module_parts;
 use crate::parse::keyword;
 use crate::parse::parser::{
     allocated, char, not, optional, string, unexpected, unexpected_eof, Either, ParseResult,
@@ -349,7 +350,11 @@ fn parse_concrete_type<'a>(
     }
 
     let state = state.advance_without_indenting(chars_parsed)?;
-    let answer = TypeAnnotation::Apply(parts.into_bump_slice(), part_buf.into_bump_str(), &[]);
+    let answer = TypeAnnotation::Apply(
+        join_module_parts(arena, parts.into_bump_slice()),
+        part_buf.into_bump_str(),
+        &[],
+    );
 
     Ok((answer, state))
 }
