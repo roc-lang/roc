@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_load {
-    use crate::helpers::{/*builtins_dir, */fixtures_dir};
+    use crate::helpers::fixtures_dir;
     use inlinable_string::InlinableString;
     use roc::can::def::Declaration::*;
     use roc::collections::MutMap;
@@ -119,14 +119,15 @@ mod test_load {
 
                 let actual_str =
                     content_to_string(content, &mut subs, home, &loaded_module.interns);
-                let expected_type = expected_types
-                    .get(
-                        symbol
-                            .fully_qualified(&loaded_module.interns, home)
-                            .to_string()
-                            .as_str(),
-                    )
-                    .unwrap_or_else(|| panic!("Defs included an unexpected symbol: {:?}", symbol));
+                let fully_qualified = symbol
+                    .fully_qualified(&loaded_module.interns, home)
+                    .to_string();
+                let expected_type =
+                    expected_types
+                        .get(fully_qualified.as_str())
+                        .unwrap_or_else(|| {
+                            panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                        });
 
                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
             }
@@ -261,14 +262,14 @@ mod test_load {
     //         expect_types(
     //             loaded_module,
     //             hashmap! {
-    //                 "WithBuiltins.floatTest" => "Float",
-    //                 "WithBuiltins.divisionFn" => "Float, Float -> Float",
-    //                 "WithBuiltins.divisionTest" => "Float",
-    //                 "WithBuiltins.intTest" => "Int",
-    //                 "WithBuiltins.x" => "Float",
-    //                 "WithBuiltins.constantInt" => "Int",
-    //                 "WithBuiltins.divDep1ByDep2" => "Float",
-    //                 "WithBuiltins.fromDep2" => "Float",
+    //                 "floatTest" => "Float",
+    //                 "divisionFn" => "Float, Float -> Float",
+    //                 "divisionTest" => "Float",
+    //                 "intTest" => "Int",
+    //                 "x" => "Float",
+    //                 "constantInt" => "Int",
+    //                 "divDep1ByDep2" => "Float",
+    //                 "fromDep2" => "Float",
     //             },
     //         );
     //     });
@@ -284,8 +285,8 @@ mod test_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "Principal.intVal" => "Int",
-                    "Principal.identity" => "a -> a",
+                    "intVal" => "Str",
+                    "identity" => "a -> a",
                 },
             );
         });
@@ -365,11 +366,11 @@ mod test_load {
     //         expect_types(
     //             loaded_module,
     //             hashmap! {
-    //                 "WithoutBuiltins.alwaysThreePointZero" => "* -> Float",
-    //                 "WithoutBuiltins.answer" => "Int",
-    //                 "WithoutBuiltins.fromDep2" => "Float",
-    //                 "WithoutBuiltins.identity" => "a -> a",
-    //                 "WithoutBuiltins.threePointZero" => "Float",
+    //                 "alwaysThreePointZero" => "* -> Float",
+    //                 "answer" => "Int",
+    //                 "fromDep2" => "Float",
+    //                 "identity" => "a -> a",
+    //                 "threePointZero" => "Float",
     //             },
     //         );
     //     });
