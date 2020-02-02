@@ -1468,4 +1468,38 @@ mod test_infer {
             "Attr.Attr * Int",
         );
     }
+
+    #[test]
+    fn use_alias_in_let() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo : Str.Str
+
+                foo : Foo -> Foo
+                foo = \x -> "foo"
+
+                foo
+                "#
+            ),
+            "Test.Foo -> Test.Foo",
+        );
+    }
+
+    #[test]
+    fn use_alias_with_argument_in_let() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo a : { foo : a }
+
+                v : Foo (Num.Num Int.Integer)
+                v = { foo: 42 }
+
+                v
+                "#
+            ),
+            "Test.Foo Int",
+        );
+    }
 }
