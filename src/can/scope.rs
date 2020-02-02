@@ -1,4 +1,4 @@
-use crate::can::ident::{Ident, Lowercase, Uppercase};
+use crate::can::ident::{Ident, Lowercase};
 use crate::can::problem::RuntimeError;
 use crate::collections::ImMap;
 use crate::module::symbol::{IdentIds, ModuleId, Symbol};
@@ -16,7 +16,7 @@ pub struct Scope {
     symbols: ImMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    aliases: ImMap<Uppercase, (Region, Vec<Located<Lowercase>>, Type)>,
+    aliases: ImMap<Symbol, (Region, Vec<Located<Lowercase>>, Type)>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -117,7 +117,7 @@ impl Scope {
 
     pub fn add_alias(
         &mut self,
-        name: Uppercase,
+        name: Symbol,
         region: Region,
         vars: Vec<Located<Lowercase>>,
         typ: Type,

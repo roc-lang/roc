@@ -720,7 +720,10 @@ fn canonicalize_pending_def<'a>(
                 found_rigids.insert(k, v);
             }
 
-            scope.add_alias(name.value.into(), name.region, vars, can_ann.typ);
+            let ident_id = env.ident_ids.get_or_insert(&name.value.as_str().into());
+            let symbol = Symbol::new(env.home, ident_id);
+
+            scope.add_alias(symbol, name.region, vars, can_ann.typ);
         }
 
         TypedBody(loc_pattern, loc_can_pattern, loc_annotation, loc_expr) => {
