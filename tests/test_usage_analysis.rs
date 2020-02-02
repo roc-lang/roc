@@ -321,8 +321,15 @@ mod test_usage_analysis {
                 let home = test_home();
                 let mut usage = VarUsage::default();
 
-                usage.register_with(interns.symbol(home, "r".into()), &ReferenceCount::Shared);
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
+                fields.insert("y".into(), (ReferenceCount::Shared, FieldAccess::default()));
+
                 usage.register_with(interns.symbol(home, "p".into()), &ReferenceCount::Unique);
+                usage.register_with(
+                    interns.symbol(home, "r".into()),
+                    &ReferenceCount::Update(ImSet::default(), FieldAccess { fields }),
+                );
 
                 usage
             },
