@@ -653,6 +653,15 @@ fn canonicalize_when_branch<'a>(
     let original_scope = scope;
     let mut scope = original_scope.clone();
 
+    let loc_can_pattern = canonicalize_pattern(
+        env,
+        var_store,
+        &mut scope,
+        WhenBranch,
+        &loc_pattern.value,
+        loc_pattern.region,
+    );
+
     let (can_expr, branch_output) =
         canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
 
@@ -669,15 +678,6 @@ fn canonicalize_when_branch<'a>(
             env.problem(Problem::UnusedDef(*symbol, *region));
         }
     }
-
-    let loc_can_pattern = canonicalize_pattern(
-        env,
-        var_store,
-        &mut scope,
-        WhenBranch,
-        &loc_pattern.value,
-        loc_pattern.region,
-    );
 
     (loc_can_pattern, can_expr, branch_output.references)
 }

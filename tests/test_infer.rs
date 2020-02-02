@@ -976,19 +976,6 @@ mod test_infer {
     }
 
     #[test]
-    fn record_pattern_match_infer() {
-        infer_eq(
-            indoc!(
-                r#"
-                when foo is
-                    { x: 4} -> x
-            "#
-            ),
-            "Num.Num Int.Integer",
-        );
-    }
-
-    #[test]
     fn empty_record_pattern() {
         infer_eq(
             indoc!(
@@ -1126,10 +1113,10 @@ mod test_infer {
             indoc!(
                 r#"
                     when foo is
-                        { x: 4} -> x
+                        { x: 4 } -> x
                 "#
             ),
-            "Num.Num Int.Integer",
+            "Int",
         );
     }
 
