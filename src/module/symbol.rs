@@ -64,7 +64,7 @@ impl Symbol {
 
         ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
             panic!(
-                "Could not find IdentIds for {} in module {:?}",
+                "ident_string's IdentIds did not contain an entry for {} in module {:?}",
                 self.ident_id().0,
                 self.module_id()
             )
