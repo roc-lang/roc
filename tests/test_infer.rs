@@ -58,7 +58,10 @@ mod test_infer {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
+            panic!(
+                "PROBLEMS\n{:?}\nexpected:\n{:?}\ninferred:\n{:?}",
+                problems, expected, actual
+            );
         }
         assert_eq!(actual, expected.to_string());
     }
@@ -1482,7 +1485,7 @@ mod test_infer {
                 foo
                 "#
             ),
-            "Test.Foo -> Test.Foo",
+            "Foo -> Foo",
         );
     }
 
@@ -1499,7 +1502,7 @@ mod test_infer {
                 v
                 "#
             ),
-            "Test.Foo Int",
+            "Foo Int",
         );
     }
 }

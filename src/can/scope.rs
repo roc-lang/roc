@@ -3,6 +3,7 @@ use crate::can::problem::RuntimeError;
 use crate::collections::ImMap;
 use crate::module::symbol::{IdentIds, ModuleId, Symbol};
 use crate::region::{Located, Region};
+use crate::subs::Variable;
 use crate::types::Type;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -16,7 +17,7 @@ pub struct Scope {
     symbols: ImMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    aliases: ImMap<Symbol, (Region, Vec<Located<Lowercase>>, Type)>,
+    aliases: ImMap<Symbol, (Region, Vec<Located<(Lowercase, Variable)>>, Type)>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -41,6 +42,12 @@ impl Scope {
         self.symbols.iter()
     }
 
+    pub fn aliases(
+        &self,
+    ) -> impl Iterator<Item = &(Symbol, (Region, Vec<Located<(Lowercase, Variable)>>, Type))> {
+        self.aliases.iter()
+    }
+
     pub fn contains_ident(&self, ident: &Ident) -> bool {
         self.idents.contains_key(ident)
     }
@@ -61,6 +68,13 @@ impl Scope {
                 value: ident.clone().into(),
             })),
         }
+    }
+
+    pub fn lookup_alias(
+        &self,
+        symbol: Symbol,
+    ) -> Option<&(Region, Vec<Located<(Lowercase, Variable)>>, Type)> {
+        self.aliases.get(&symbol)
     }
 
     /// Introduce a new ident to scope.
@@ -119,7 +133,7 @@ impl Scope {
         &mut self,
         name: Symbol,
         region: Region,
-        vars: Vec<Located<Lowercase>>,
+        vars: Vec<Located<(Lowercase, Variable)>>,
         typ: Type,
     ) {
         self.aliases.insert(name, (region, vars, typ));

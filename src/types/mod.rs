@@ -2,7 +2,7 @@ pub mod builtins;
 
 use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::Pattern;
-use crate::collections::{ImSet, MutSet, SendMap};
+use crate::collections::{ImMap, ImSet, MutSet, SendMap};
 use crate::module::symbol::Symbol;
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
@@ -218,6 +218,49 @@ impl Type {
         result
     }
 
+    pub fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
+        use Type::*;
+
+        match self {
+            Variable(v) => {
+                if let Some(replacement) = substitutions.get(&v) {
+                    *self = replacement.clone();
+                }
+            }
+            Function(args, ret) => {
+                for arg in args {
+                    arg.substitute(substitutions);
+                }
+                ret.substitute(substitutions);
+            }
+            TagUnion(tags, ext) => {
+                for (_, args) in tags {
+                    for x in args {
+                        x.substitute(substitutions);
+                    }
+                }
+                ext.substitute(substitutions);
+            }
+            Record(fields, ext) => {
+                for x in fields.iter_mut() {
+                    x.substitute(substitutions);
+                }
+                ext.substitute(substitutions);
+            }
+            Alias(_, _, actual_type) => {
+                actual_type.substitute(substitutions);
+            }
+            Apply(_, args) => {
+                for arg in args {
+                    arg.substitute(substitutions);
+                }
+            }
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => {}
+
+            As(_, _) => unreachable!("As should be canonicalized away at this point"),
+        }
+    }
+
     // swap Apply with Alias if their module and tag match
     pub fn substitute_alias(&mut self, rep_symbol: Symbol, actual: &Type) {
         use Type::*;
@@ -301,10 +344,12 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             variables_help(ext, accum);
         }
         Alias(_, args, actual) => {
-            for (_, x) in args {
-                accum.insert(*x);
-            }
             variables_help(actual, accum);
+
+            // rigids bound by the alias don't need to be declared
+            for (_, var) in args {
+                accum.remove(&var);
+            }
         }
         As(inner, variable) => {
             variables_help(inner, accum);

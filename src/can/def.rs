@@ -1150,18 +1150,30 @@ fn to_pending_def<'a>(
         ),
 
         Alias { name, vars, ann } => {
-            let mut can_vars: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
+            let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
+
+            let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
+            let mut can_rigids: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
 
             for loc_var in vars.iter() {
                 match loc_var.value {
                     ast::Pattern::Identifier(name)
                         if name.chars().next().unwrap().is_lowercase() =>
                     {
-                        // This is a valid lowercase rigid var for the alias.
-                        can_vars.push(Located {
-                            value: name.into(),
-                            region: loc_var.region,
-                        });
+                        let lowercase = Lowercase::from(name);
+                        if let Some(var) = can_ann.rigids.get(&lowercase) {
+                            // This is a valid lowercase rigid var for the alias.
+                            can_vars.push(Located {
+                                value: (lowercase.clone(), *var),
+                                region: loc_var.region,
+                            });
+                            can_rigids.push(Located {
+                                value: lowercase,
+                                region: loc_var.region,
+                            });
+                        } else {
+                            panic!("TODO handle phantom type variables, they are not allowed!");
+                        }
                     }
                     _ => {
                         panic!("TODO gracefully handle an invalid pattern appearing where a type alias rigid var should be.");
@@ -1169,18 +1181,16 @@ fn to_pending_def<'a>(
                 }
             }
 
-            let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
-
             let region = Region::span_across(&name.region, &ann.region);
             match scope.introduce(name.value.into(), &mut env.ident_ids, region) {
                 Ok(symbol) => {
-                    scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ);
+                    scope.add_alias(symbol, name.region, can_vars, can_ann.typ);
                     PendingDef::Alias {
                         name: Located {
                             region: name.region,
                             value: symbol,
                         },
-                        vars: can_vars,
+                        vars: can_rigids,
                         ann,
                     }
                 }

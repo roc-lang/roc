@@ -15,6 +15,7 @@ use std::collections::HashSet;
 pub struct Annotation {
     pub typ: Type,
     pub ftv: MutMap<Variable, Lowercase>,
+    pub rigids: ImMap<Lowercase, Variable>,
     pub references: MutSet<Symbol>,
 }
 
@@ -37,7 +38,7 @@ pub fn canonicalize_annotation(
     // `ftv : SendMap<Variable, Lowercase>`.
     let mut rigids = ImMap::default();
     let mut local_aliases = Vec::new();
-    let (mut typ, references) = can_annotation_help(
+    let (typ, references) = can_annotation_help(
         env,
         annotation,
         region,
@@ -47,13 +48,9 @@ pub fn canonicalize_annotation(
         &mut local_aliases,
     );
 
-    for (symbol, tipe) in local_aliases {
-        typ.substitute_alias(symbol, &tipe);
-    }
-
     let mut ftv = MutMap::default();
 
-    for (k, v) in rigids {
+    for (k, v) in rigids.clone() {
         ftv.insert(v, k);
     }
 
@@ -61,6 +58,7 @@ pub fn canonicalize_annotation(
         typ,
         ftv,
         references,
+        rigids,
     }
 }
 
@@ -164,7 +162,25 @@ fn can_annotation_help(
                 args.push(arg_ann);
             }
 
-            (Type::Apply(symbol, args), references)
+            if let Some((_region, ftv, actual)) = scope.lookup_alias(symbol) {
+                if args.len() != ftv.len() {
+                    panic!("TODO alias applied to incorrect number of type arguments");
+                }
+                let mut zipped_args: Vec<(Lowercase, Variable)> = Vec::with_capacity(args.len());
+                let mut substitution = ImMap::default();
+
+                for (loc_var, arg) in ftv.iter().zip(args.iter()) {
+                    substitution.insert(loc_var.value.1, arg.clone());
+                    zipped_args.push(loc_var.value.clone());
+                }
+
+                (
+                    Type::Alias(symbol, zipped_args, Box::new(actual.clone())),
+                    references,
+                )
+            } else {
+                (Type::Apply(symbol, args), references)
+            }
         }
         BoundVariable(v) => {
             let name = Lowercase::from(*v);
