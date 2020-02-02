@@ -4,7 +4,7 @@ Roc is a direct descendant of the [Elm programming language](https://elm-lang.or
 
 This is a guide to help Elm programmers learn what's different between Elm and Roc.
 
-> NOTE: As of 2019, only a subset of what's in this document has been implemented.
+> NOTE: As of 2020, only a subset of what's in this document has been implemented.
 
 ## Comments
 

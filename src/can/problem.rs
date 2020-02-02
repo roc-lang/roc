@@ -1,20 +1,21 @@
+use crate::can::ident::Ident;
 use crate::can::pattern::PatternType;
-use crate::ident::Ident;
+use crate::module::symbol::Symbol;
 use crate::operator::BinOp;
 use crate::region::{Located, Region};
+use crate::types;
+use inlinable_string::InlinableString;
 
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
-    Shadowing(Located<Ident>),
-    UnrecognizedFunctionName(Located<Ident>),
-    UnrecognizedConstant(Located<Ident>),
-    UnusedAssignment(Located<Ident>),
-    UnusedArgument(Located<Ident>),
+    // TODO use Symbol over Ident with these
+    UnusedDef(Symbol, Region),
+    UnusedArgument(Symbol, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(PatternType, Region),
-    CircularAssignment(Vec<Located<Ident>>),
+    ErroneousAnnotation(types::Problem),
     RuntimeError(RuntimeError),
 }
 
@@ -25,14 +26,29 @@ pub enum PrecedenceProblem {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeError {
+    Shadowing {
+        original_region: Region,
+        shadow: Located<Ident>,
+    },
+    UnrecognizedFunctionName(Located<InlinableString>),
+    LookupNotInScope(Located<InlinableString>),
+    ValueNotExposed {
+        module_name: InlinableString,
+        ident: InlinableString,
+        region: Region,
+    },
+    ModuleNotImported {
+        module_name: InlinableString,
+        ident: InlinableString,
+        region: Region,
+    },
     InvalidPrecedence(PrecedenceProblem, Region),
-    UnrecognizedFunctionName(Located<Ident>),
-    UnrecognizedConstant(Located<Ident>),
     FloatOutsideRange(Box<str>),
     IntOutsideRange(Box<str>),
     InvalidHex(std::num::ParseIntError, Box<str>),
     InvalidOctal(std::num::ParseIntError, Box<str>),
     InvalidBinary(std::num::ParseIntError, Box<str>),
+    QualifiedPatternIdent(InlinableString),
     CircularDef(
         Vec<Located<Ident>>,
         Vec<(Region /* pattern */, Region /* expr */)>,

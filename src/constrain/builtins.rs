@@ -1,15 +1,15 @@
-use crate::can::ident::ModuleName;
 use crate::collections::SendMap;
+use crate::module::symbol::Symbol;
 use crate::region::Region;
 use crate::subs::Variable;
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
 use crate::types::Type::{self, *};
-use crate::types::{self, LetConstraint, Reason};
+use crate::types::{LetConstraint, Reason};
 
 #[inline(always)]
 pub fn int_literal(var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
-    let typ = number_literal_type("Int", "Integer");
+    let typ = number_literal_type(Symbol::INT_INTEGER);
     let reason = Reason::IntLiteral;
 
     num_literal(var, typ, reason, expected, region)
@@ -17,7 +17,7 @@ pub fn int_literal(var: Variable, expected: Expected<Type>, region: Region) -> C
 
 #[inline(always)]
 pub fn float_literal(var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
-    let typ = number_literal_type("Float", "FloatingPoint");
+    let typ = number_literal_type(Symbol::FLOAT_FLOATINGPOINT);
     let reason = Reason::FloatLiteral;
 
     num_literal(var, typ, reason, expected, region)
@@ -55,21 +55,13 @@ fn num_literal(
 }
 
 #[inline(always)]
-fn number_literal_type(module_name: &str, type_name: &str) -> Type {
-    builtin_type(
-        ModuleName::NUM,
-        types::TYPE_NUM,
-        vec![builtin_type(module_name, type_name, Vec::new())],
-    )
+fn number_literal_type(symbol: Symbol) -> Type {
+    builtin_type(Symbol::NUM_NUM, vec![builtin_type(symbol, Vec::new())])
 }
 
 #[inline(always)]
-pub fn builtin_type(module_name: &str, type_name: &str, args: Vec<Type>) -> Type {
-    Type::Apply {
-        module_name: module_name.into(),
-        name: type_name.into(),
-        args,
-    }
+pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
+    Type::Apply(symbol, args)
 }
 
 #[inline(always)]
@@ -79,10 +71,10 @@ pub fn empty_list_type(var: Variable) -> Type {
 
 #[inline(always)]
 pub fn list_type(typ: Type) -> Type {
-    builtin_type("List", "List", vec![typ])
+    builtin_type(Symbol::LIST_LIST, vec![typ])
 }
 
 #[inline(always)]
 pub fn str_type() -> Type {
-    builtin_type("Str", "Str", Vec::new())
+    builtin_type(Symbol::STR_STR, Vec::new())
 }

@@ -10,10 +10,10 @@ pub mod problems;
 pub mod string_literal;
 pub mod type_annotation;
 
+use bumpalo::collections::string::String;
+
 use crate::operator::{BinOp, CalledVia, UnaryOp};
-use crate::parse::ast::{
-    AssignedField, Attempting, Def, Expr, MaybeQualified, Pattern, Spaceable, TypeAnnotation,
-};
+use crate::parse::ast::{AssignedField, Attempting, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
 };
@@ -245,14 +245,11 @@ pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Ex
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
 fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, Fail> {
     match expr {
-        Expr::Var(module_parts, value) => {
-            if module_parts.is_empty() {
-                Ok(Pattern::Identifier(value))
+        Expr::Var { module_name, ident } => {
+            if module_name.is_empty() {
+                Ok(Pattern::Identifier(ident))
             } else {
-                Ok(Pattern::QualifiedIdentifier(MaybeQualified {
-                    module_parts,
-                    value,
-                }))
+                Ok(Pattern::QualifiedIdentifier { module_name, ident })
             }
         }
         Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
@@ -553,7 +550,7 @@ fn annotation_or_alias<'a>(
         PrivateTag(_) => {
             panic!("TODO gracefully handle trying to use a private tag as an annotation.");
         }
-        QualifiedIdentifier(_) => {
+        QualifiedIdentifier { .. } => {
             panic!("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`");
         }
         IntLiteral(_)
@@ -1420,13 +1417,13 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::GlobalTag(string) => Expr::GlobalTag(string),
         Ident::PrivateTag(string) => Expr::PrivateTag(string),
-        Ident::Access(info) => {
-            let mut iter = info.value.iter();
+        Ident::Access { module_name, parts } => {
+            let mut iter = parts.iter();
 
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
-                Some(var) => Expr::Var(info.module_parts, var),
+                Some(ident) => Expr::Var { module_name, ident },
                 None => {
                     panic!("Parsed an Ident::Access with no parts");
                 }
@@ -1611,12 +1608,11 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 
 /// This is mainly for matching tags in closure params, e.g. \@Foo -> ...
 fn private_tag<'a>() -> impl Parser<'a, &'a str> {
-    // TODO should be refactored so the name is not allocated again.
     map_with_arena!(
         skip_first!(char('@'), global_tag()),
         |arena: &'a Bump, name: &'a str| {
-            use bumpalo::collections::string::String;
             let mut buf = String::with_capacity_in(1 + name.len(), arena);
+
             buf.push('@');
             buf.push_str(name);
             buf.into_bump_str()

@@ -1,56 +1,143 @@
-use crate::can::ident::ModuleName;
-use crate::can::ident::{Lowercase, Uppercase};
-use crate::can::symbol::Symbol;
+use crate::can::ident::{Ident, Lowercase};
+use crate::can::problem::RuntimeError;
 use crate::collections::ImMap;
-use crate::ident::Ident;
+use crate::module::symbol::{IdentIds, ModuleId, Symbol};
 use crate::region::{Located, Region};
+use crate::subs::Variable;
 use crate::types::Type;
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Alias {
+    pub region: Region,
+    pub vars: Vec<Located<(Lowercase, Variable)>>,
+    pub typ: Type,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
-    pub idents: ImMap<Ident, (Symbol, Region)>,
-    pub aliases: ImMap<Uppercase, (Region, Vec<Located<Lowercase>>, Type)>,
-    pub module_name: ModuleName,
-    symbol_prefix: Box<str>,
-    next_unique_id: u64,
+    /// All the identifiers in scope, mapped to were they were defined and
+    /// the Symbol they resolve to.
+    idents: ImMap<Ident, (Symbol, Region)>,
+
+    /// A cache of all the symbols in scope. This makes lookups much
+    /// faster when checking for unused defs and unused arguments.
+    symbols: ImMap<Symbol, Region>,
+
+    /// The type aliases currently in scope
+    aliases: ImMap<Symbol, Alias>,
+
+    /// The current module being processed. This will be used to turn
+    /// unqualified idents into Symbols.
+    home: ModuleId,
 }
 
 impl Scope {
-    pub fn new(
-        module_name: ModuleName,
-        symbol_prefix: Box<str>,
-        declared_idents: ImMap<Ident, (Symbol, Region)>,
-    ) -> Scope {
+    pub fn new(home: ModuleId) -> Scope {
         Scope {
-            symbol_prefix,
-            module_name,
-
-            // This is used to generate unique names for anonymous closures.
-            // It always begins at 0.
-            next_unique_id: 0,
-
+            home,
+            idents: ImMap::default(),
+            symbols: ImMap::default(),
             aliases: ImMap::default(),
-            idents: declared_idents,
         }
     }
 
-    pub fn symbol(&self, name: &str) -> Symbol {
-        Symbol::new(&self.symbol_prefix, name)
+    pub fn idents(&self) -> impl Iterator<Item = &(Ident, (Symbol, Region))> {
+        self.idents.iter()
     }
 
-    pub fn gen_unique_symbol(&mut self) -> Symbol {
-        self.next_unique_id += 1;
+    pub fn symbols(&self) -> impl Iterator<Item = &(Symbol, Region)> {
+        self.symbols.iter()
+    }
 
-        Symbol::new(&self.symbol_prefix, &self.next_unique_id.to_string())
+    pub fn aliases(&self) -> impl Iterator<Item = &(Symbol, Alias)> {
+        self.aliases.iter()
+    }
+
+    pub fn contains_ident(&self, ident: &Ident) -> bool {
+        self.idents.contains_key(ident)
+    }
+
+    pub fn contains_symbol(&self, symbol: Symbol) -> bool {
+        self.symbols.contains_key(&symbol)
+    }
+
+    pub fn num_idents(&self) -> usize {
+        self.idents.len()
+    }
+
+    pub fn lookup(&mut self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
+        match self.idents.get(ident) {
+            Some((symbol, _)) => Ok(*symbol),
+            None => Err(RuntimeError::LookupNotInScope(Located {
+                region,
+                value: ident.clone().into(),
+            })),
+        }
+    }
+
+    pub fn lookup_alias(&self, symbol: Symbol) -> Option<&Alias> {
+        self.aliases.get(&symbol)
+    }
+
+    /// Introduce a new ident to scope.
+    ///
+    /// Returns Err if this would shadow an existing ident, including the
+    /// Symbol and Region of the ident we already had in scope under that name.
+    pub fn introduce(
+        &mut self,
+        ident: Ident,
+        ident_ids: &mut IdentIds,
+        region: Region,
+    ) -> Result<Symbol, (Region, Located<Ident>)> {
+        match self.idents.get(&ident) {
+            Some((_, original_region)) => {
+                let shadow = Located {
+                    value: ident,
+                    region,
+                };
+
+                Err((*original_region, shadow))
+            }
+            None => {
+                let ident_id = ident_ids.add(ident.clone().into());
+                let symbol = Symbol::new(self.home, ident_id);
+
+                self.symbols.insert(symbol, region);
+                self.idents.insert(ident, (symbol, region));
+
+                Ok(symbol)
+            }
+        }
+    }
+
+    /// Import a Symbol from another module into this module's top-level scope.
+    ///
+    /// Returns Err if this would shadow an existing ident, including the
+    /// Symbol and Region of the ident we already had in scope under that name.
+    pub fn import(
+        &mut self,
+        ident: Ident,
+        symbol: Symbol,
+        region: Region,
+    ) -> Result<Symbol, (Symbol, Region)> {
+        match self.idents.get(&ident) {
+            Some(shadowed) => Err(*shadowed),
+            None => {
+                self.symbols.insert(symbol, region);
+                self.idents.insert(ident, (symbol, region));
+
+                Ok(symbol)
+            }
+        }
     }
 
     pub fn add_alias(
         &mut self,
-        name: Uppercase,
+        name: Symbol,
         region: Region,
-        vars: Vec<Located<Lowercase>>,
+        vars: Vec<Located<(Lowercase, Variable)>>,
         typ: Type,
     ) {
-        self.aliases.insert(name, (region, vars, typ));
+        self.aliases.insert(name, Alias { region, vars, typ });
     }
 }
