@@ -1,11 +1,11 @@
-use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
-use crate::types;
-use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
+use crate::module::symbol::Symbol;
+use crate::types::{name_type_var, ErrorType, Problem, TypeExt};
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -54,7 +54,7 @@ impl fmt::Debug for Subs {
 
 #[derive(Debug)]
 pub struct VarStore {
-    next: AtomicUsize,
+    next: AtomicU32,
 }
 
 impl Default for VarStore {
@@ -69,7 +69,7 @@ impl VarStore {
         debug_assert!(next_var.0 >= Variable::FIRST_USER_SPACE_VAR.0);
 
         VarStore {
-            next: AtomicUsize::new(next_var.0),
+            next: AtomicU32::new(next_var.0),
         }
     }
 
@@ -79,7 +79,7 @@ impl VarStore {
         // Since the counter starts at 0, this will return 0 on first invocation,
         // and var_store.into() will return the number of Variables distributed
         // (in this case, 1).
-        Variable(AtomicUsize::fetch_add(&self.next, 1, Ordering::Relaxed))
+        Variable(AtomicU32::fetch_add(&self.next, 1, Ordering::Relaxed))
     }
 }
 
@@ -90,7 +90,7 @@ impl Into<Variable> for VarStore {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct OptVariable(usize);
+pub struct OptVariable(u32);
 
 impl OptVariable {
     pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
@@ -136,18 +136,24 @@ impl Into<Option<Variable>> for OptVariable {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Variable(usize);
+pub struct Variable(u32);
 
 impl Variable {
     // Reserved for indicating the absence of a variable.
     // This lets us avoid using Option<Variable> for the Descriptor's
     // copy field, which is a relevant space savings because we make
     // a *ton* of Descriptors.
+    //
+    // Also relevant: because this has the value 0, Descriptors can 0-initialize
+    // to it in bulk - which is relevant, because Descriptors get initialized in bulk.
     const NULL: Variable = Variable(0);
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(1);
 
-    pub fn unsafe_debug_variable(v: usize) -> Self {
+    /// # Safety
+    ///
+    /// This should only ever be called from tests!
+    pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
         Variable(v)
     }
 }
@@ -167,11 +173,11 @@ impl fmt::Debug for Variable {
 impl UnifyKey for Variable {
     type Value = Descriptor;
 
-    fn index(&self) -> usize {
+    fn index(&self) -> u32 {
         self.0
     }
 
-    fn from_index(index: usize) -> Self {
+    fn from_index(index: u32) -> Self {
         Variable(index)
     }
 
@@ -286,7 +292,7 @@ impl Subs {
         self.utable.is_redirect(var)
     }
 
-    pub fn occurs(&mut self, var: Variable) -> bool {
+    pub fn occurs(&mut self, var: Variable) -> Option<Variable> {
         occurs(self, &ImSet::default(), var)
     }
 
@@ -434,7 +440,7 @@ pub enum Content {
     /// name given in a user-written annotation
     RigidVar(Lowercase),
     Structure(FlatType),
-    Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Variable),
+    Alias(Symbol, Vec<(Lowercase, Variable)>, Variable),
     Error,
 }
 
@@ -442,9 +448,7 @@ impl Content {
     #[inline(always)]
     pub fn is_number(&self) -> bool {
         match &self {
-            Content::Structure(FlatType::Apply {
-                module_name, name, ..
-            }) => module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM,
+            Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _)) => true,
             _ => false,
         }
     }
@@ -452,14 +456,11 @@ impl Content {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
-    Apply {
-        module_name: ModuleName,
-        name: Uppercase,
-        args: Vec<Variable>,
-    },
+    Apply(Symbol, Vec<Variable>),
     Func(Vec<Variable>, Variable),
-    Record(MutMap<RecordFieldLabel, Variable>, Variable),
+    Record(MutMap<Lowercase, Variable>, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
+    RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,
@@ -474,15 +475,15 @@ pub enum Builtin {
     EmptyRecord,
 }
 
-fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
+fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> Option<Variable> {
     use self::Content::*;
     use self::FlatType::*;
 
     if seen.contains(&var) {
-        true
+        Some(var)
     } else {
         match subs.get(var).content {
-            FlexVar(_) | RigidVar(_) | Error => false,
+            FlexVar(_) | RigidVar(_) | Error => None,
 
             Structure(flat_type) => {
                 let mut new_seen = seen.clone();
@@ -490,37 +491,90 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> bool {
                 new_seen.insert(var);
 
                 match flat_type {
-                    Apply { args, .. } => args.into_iter().any(|var| occurs(subs, &new_seen, var)),
+                    Apply(_, args) => {
+                        for var in args {
+                            if let Some(v) = occurs(subs, &new_seen, var) {
+                                return Some(v);
+                            }
+                        }
+
+                        None
+                    }
                     Func(arg_vars, ret_var) => {
-                        occurs(subs, &new_seen, ret_var)
-                            || arg_vars.into_iter().any(|var| occurs(subs, &new_seen, var))
+                        if let Some(v) = occurs(subs, &new_seen, ret_var) {
+                            Some(v)
+                        } else {
+                            for var in arg_vars {
+                                if let Some(v) = occurs(subs, &new_seen, var) {
+                                    return Some(v);
+                                }
+                            }
+
+                            None
+                        }
                     }
                     Record(vars_by_field, ext_var) => {
-                        occurs(subs, &new_seen, ext_var)
-                            || vars_by_field
-                                .into_iter()
-                                .any(|(_, var)| occurs(subs, &new_seen, var))
+                        if let Some(v) = occurs(subs, &new_seen, ext_var) {
+                            Some(v)
+                        } else {
+                            for var in vars_by_field.values() {
+                                if let Some(v) = occurs(subs, &new_seen, *var) {
+                                    return Some(v);
+                                }
+                            }
+
+                            None
+                        }
                     }
                     TagUnion(tags, ext_var) => {
-                        occurs(subs, &new_seen, ext_var)
-                            || tags
-                                .values()
-                                .any(|vars| vars.iter().any(|var| occurs(subs, &new_seen, *var)))
+                        if let Some(v) = occurs(subs, &new_seen, ext_var) {
+                            Some(v)
+                        } else {
+                            for var in tags.values().flatten() {
+                                if let Some(v) = occurs(subs, &new_seen, *var) {
+                                    return Some(v);
+                                }
+                            }
+
+                            None
+                        }
                     }
-                    Boolean(b) => b
-                        .variables()
-                        .iter()
-                        .any(|var| occurs(subs, &new_seen, *var)),
-                    EmptyRecord | EmptyTagUnion | Erroneous(_) => false,
+                    RecursiveTagUnion(_rec_var, tags, ext_var) => {
+                        // TODO rec_var is excluded here, verify that this is correct
+                        if let Some(v) = occurs(subs, &new_seen, ext_var) {
+                            Some(v)
+                        } else {
+                            for var in tags.values().flatten() {
+                                if let Some(v) = occurs(subs, &new_seen, *var) {
+                                    return Some(v);
+                                }
+                            }
+
+                            None
+                        }
+                    }
+                    Boolean(b) => {
+                        for var in b.variables().iter() {
+                            if let Some(v) = occurs(subs, &new_seen, *var) {
+                                return Some(v);
+                            }
+                        }
+
+                        None
+                    }
+                    EmptyRecord | EmptyTagUnion | Erroneous(_) => None,
                 }
             }
-            Alias(_, _, args, _) => {
+            Alias(_, args, _) => {
                 let mut new_seen = seen.clone();
-
                 new_seen.insert(var);
+                for var in args.into_iter().map(|(_, var)| var) {
+                    if let Some(v) = occurs(subs, &new_seen, var) {
+                        return Some(v);
+                    }
+                }
 
-                args.into_iter()
-                    .any(|(_, var)| occurs(subs, &new_seen, var))
+                None
             }
         }
     }
@@ -547,11 +601,11 @@ fn get_var_names(
 
             RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
 
-            Alias(_, _, args, _) => args.into_iter().fold(taken_names, |answer, (_, arg_var)| {
+            Alias(_, args, _) => args.into_iter().fold(taken_names, |answer, (_, arg_var)| {
                 get_var_names(subs, arg_var, answer)
             }),
             Structure(flat_type) => match flat_type {
-                FlatType::Apply { args, .. } => {
+                FlatType::Apply(_, args) => {
                     args.into_iter().fold(taken_names, |answer, arg_var| {
                         get_var_names(subs, arg_var, answer)
                     })
@@ -580,6 +634,19 @@ fn get_var_names(
                 }
                 FlatType::TagUnion(tags, ext_var) => {
                     let mut taken_names = get_var_names(subs, ext_var, taken_names);
+
+                    for vars in tags.values() {
+                        for arg_var in vars {
+                            taken_names = get_var_names(subs, *arg_var, taken_names)
+                        }
+                    }
+
+                    taken_names
+                }
+
+                FlatType::RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let taken_names = get_var_names(subs, ext_var, taken_names);
+                    let mut taken_names = get_var_names(subs, rec_var, taken_names);
 
                     for vars in tags.values() {
                         for arg_var in vars {
@@ -694,14 +761,14 @@ fn content_to_err_type(
 
         RigidVar(name) => ErrorType::RigidVar(name),
 
-        Alias(module_name, name, args, aliased_to) => {
+        Alias(symbol, args, aliased_to) => {
             let err_args = args
                 .into_iter()
                 .map(|(name, var)| (name, var_to_err_type(subs, state, var)))
                 .collect();
             let err_type = var_to_err_type(subs, state, aliased_to);
 
-            ErrorType::Alias(module_name, name, err_args, Box::new(err_type))
+            ErrorType::Alias(symbol, err_args, Box::new(err_type))
         }
 
         Error => ErrorType::Error,
@@ -712,17 +779,13 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
     use self::FlatType::*;
 
     match flat_type {
-        Apply {
-            module_name,
-            name,
-            args,
-        } => {
+        Apply(symbol, args) => {
             let arg_types = args
                 .into_iter()
                 .map(|var| var_to_err_type(subs, state, var))
                 .collect();
 
-            ErrorType::Type(module_name, name, arg_types)
+            ErrorType::Type(symbol, arg_types)
         }
 
         Func(arg_vars, ret_var) => {
@@ -794,6 +857,41 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
             }
         }
 
+        RecursiveTagUnion(rec_var, tags, ext_var) => {
+            let mut err_tags = SendMap::default();
+
+            for (tag, vars) in tags.into_iter() {
+                let mut err_vars = Vec::with_capacity(vars.len());
+
+                for var in vars {
+                    err_vars.push(var_to_err_type(subs, state, var));
+                }
+
+                err_tags.insert(tag, err_vars);
+            }
+
+            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+                ErrorType::RecursiveTagUnion(rec_var, sub_tags, sub_ext) => {
+                    ErrorType::RecursiveTagUnion(rec_var, sub_tags.union(err_tags), sub_ext)
+                }
+
+                ErrorType::TagUnion(sub_tags, sub_ext) => {
+                    ErrorType::RecursiveTagUnion(rec_var, sub_tags.union(err_tags), sub_ext)
+                }
+
+                ErrorType::FlexVar(var) => {
+                    ErrorType::RecursiveTagUnion(rec_var, err_tags, TypeExt::FlexOpen(var))
+                }
+
+                ErrorType::RigidVar(var) => {
+                    ErrorType::RecursiveTagUnion(rec_var, err_tags, TypeExt::RigidOpen(var))
+                }
+
+                other =>
+                    panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+            }
+        }
+
         Boolean(b) => ErrorType::Boolean(b),
 
         Erroneous(_) => ErrorType::Error,
@@ -816,7 +914,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
         FlexVar(_) | RigidVar(_) | Error => (),
 
         Structure(flat_type) => match flat_type {
-            Apply { args, .. } => {
+            Apply(_, args) => {
                 for &var in args {
                     subs.restore(var);
                 }
@@ -847,6 +945,16 @@ fn restore_content(subs: &mut Subs, content: &Content) {
 
                 subs.restore(*ext_var);
             }
+
+            RecursiveTagUnion(rec_var, tags, ext_var) => {
+                for var in tags.values().flatten() {
+                    subs.restore(*var);
+                }
+
+                subs.restore(*ext_var);
+                subs.restore(*rec_var);
+            }
+
             Boolean(b) => {
                 for var in b.variables() {
                     subs.restore(var);
@@ -854,7 +962,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             }
             Erroneous(_) => (),
         },
-        Alias(_, _, args, var) => {
+        Alias(_, args, var) => {
             for (_, arg_var) in args {
                 subs.restore(*arg_var);
             }

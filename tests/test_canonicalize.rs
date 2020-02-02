@@ -10,66 +10,26 @@ mod helpers;
 
 #[cfg(test)]
 mod test_canonicalize {
-    use crate::helpers::{can_expr_with, with_larger_debug_stack};
+    use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc::can::expr::Expr::{self, *};
-    use roc::can::expr::Output;
     use roc::can::expr::Recursive;
-    use roc::can::problem::Problem;
-    use roc::can::problem::RuntimeError;
-    use roc::can::procedure::References;
-    use roc::can::symbol::Symbol;
-    use roc::collections::{ImMap, ImSet, SendMap};
-    use roc::ident::Ident;
+    use roc::can::problem::{Problem, RuntimeError};
     use roc::region::{Located, Region};
     use std::{f64, i64};
 
-    fn sym(name: &str) -> Symbol {
-        Symbol::new("Test.Blah$", name)
-    }
-
-    struct Out<'a> {
-        locals: Vec<&'a str>,
-        globals: Vec<&'a str>,
-        calls: Vec<&'a str>,
-        tail_call: Option<&'a str>,
-    }
-
-    impl<'a> Into<Output> for Out<'a> {
-        fn into(self) -> Output {
-            let references = References {
-                locals: vec_to_set(self.locals),
-                globals: vec_to_set(self.globals),
-                calls: vec_to_set(self.calls),
-            };
-
-            let tail_call = self.tail_call.map(sym);
-            let rigids = SendMap::default();
-
-            Output {
-                references,
-                tail_call,
-                rigids,
-            }
-        }
-    }
-
-    fn vec_to_set<'a>(vec: Vec<&'a str>) -> ImSet<Symbol> {
-        ImSet::from(vec.into_iter().map(sym).collect::<Vec<_>>())
-    }
-
     fn assert_can(input: &str, expected: Expr) {
         let arena = Bump::new();
-        let (actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+        let actual_out = can_expr_with(&arena, test_home(), input);
 
-        assert_eq!(actual.value, expected);
+        assert_eq!(actual_out.loc_expr.value, expected);
     }
 
     fn assert_can_float(input: &str, expected: f64) {
         let arena = Bump::new();
-        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+        let actual_out = can_expr_with(&arena, test_home(), input);
 
-        match loc_actual.value {
+        match actual_out.loc_expr.value {
             Expr::Float(_, actual) => {
                 assert_eq!(expected, actual);
             }
@@ -80,9 +40,9 @@ mod test_canonicalize {
     }
     fn assert_can_int(input: &str, expected: i64) {
         let arena = Bump::new();
-        let (loc_actual, _, _, _, _, _) = can_expr_with(&arena, "Blah", input, &ImMap::default());
+        let actual_out = can_expr_with(&arena, test_home(), input);
 
-        match loc_actual.value {
+        match actual_out.loc_expr.value {
             Expr::Int(_, actual) => {
                 assert_eq!(expected, actual);
             }
@@ -201,64 +161,64 @@ mod test_canonicalize {
 
     // LOCALS
 
-    #[test]
-    fn closure_args_are_not_locals() {
-        // "arg" shouldn't make it into output.locals, because
-        // it only exists in the closure's arguments.
-        let arena = Bump::new();
-        let src = indoc!(
-            r#"
-            func = \arg -> arg
+    // TODO rewrite this test to check only for UnusedDef reports
+    // #[test]
+    // fn closure_args_are_not_locals() {
+    //     // "arg" shouldn't make it into output.locals, because
+    //     // it only exists in the closure's arguments.
+    //     let arena = Bump::new();
+    //     let src = indoc!(
+    //         r#"
+    //         func = \arg -> arg
 
-            func 2
-        "#
-        );
-        let (_actual, output, problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+    //         func 2
+    //     "#
+    //     );
+    //     let (_actual, output, problems, _var_store, _vars, _constraint) =
+    //         can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems, vec![]);
+    //     assert_eq!(problems, vec![]);
 
-        assert_eq!(
-            output,
-            Out {
-                locals: vec!["func"],
-                globals: vec![],
-                calls: vec!["func"],
-                tail_call: None
-            }
-            .into()
-        );
-    }
+    //     assert_eq!(
+    //         output,
+    //         Out {
+    //             lookups: vec!["func"],
+    //             calls: vec!["func"],
+    //             tail_call: None
+    //         }
+    //         .into_output(scope)
+    //     );
+    // }
 
-    #[test]
-    fn call_by_pointer_for_fn_args() {
-        // This function will get passed in as a pointer.
-        let src = indoc!(
-            r#"
-            apply = \f, x -> f x
+    // TODO rewrite this test to check only for UnusedDef reports
+    // #[test]
+    // fn call_by_pointer_for_fn_args() {
+    //     // This function will get passed in as a pointer.
+    //     let src = indoc!(
+    //         r#"
+    //         apply = \f, x -> f x
 
-            identity = \a -> a
+    //         identity = \a -> a
 
-            apply identity 5
-        "#
-        );
-        let arena = Bump::new();
-        let (_actual, output, problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+    //         apply identity 5
+    //     "#
+    //     );
+    //     let arena = Bump::new();
+    //     let (_actual, output, problems, _var_store, _vars, _constraint) =
+    //         can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems, vec![]);
+    //     assert_eq!(problems, vec![]);
 
-        assert_eq!(
-            output,
-            Out {
-                locals: vec!["identity", "apply"],
-                globals: vec![],
-                calls: vec!["f", "apply"],
-                tail_call: None
-            }
-            .into()
-        );
-    }
+    //     assert_eq!(
+    //         output,
+    //         Out {
+    //             lookups: vec!["identity", "apply"],
+    //             calls: vec!["f", "apply"],
+    //             tail_call: None
+    //         }
+    //         .into()
+    //     );
+    // }
 
     fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
@@ -291,87 +251,103 @@ mod test_canonicalize {
                 }
             }
             // Closure(_, recursion, _, _) if i == 0 => recursion.clone(),
-            _ => panic!("expression is not a Defs, but a {:?}", expr),
+            _ => panic!(
+                "expression is not a LetRec or a LetNonRec, but rather {:?}",
+                expr
+            ),
         }
     }
 
     #[test]
     fn recognize_tail_calls() {
-        with_larger_debug_stack(|| {
-            let src = indoc!(
-                r#"
-            g = \x ->
-                when x is
-                    0 -> 0
-                    _ -> g (x - 1)
+        let src = indoc!(
+            r#"
+                g = \x ->
+                    when x is
+                        0 -> 0
+                        _ -> g (x - 1)
 
-            h = \x ->
-                 when x is
-                     0 -> 0
-                     _ -> g (x - 1)
-             
-            p = \x ->
-                 when x is
-                     0 -> 0
-                     1 -> g (x - 1)
-                     _ -> p (x - 1)
+                h = \x ->
+                    when x is
+                        0 -> 0
+                        _ -> g (x - 1)
+
+                p = \x ->
+                    when x is
+                        0 -> 0
+                        1 -> g (x - 1)
+                        _ -> p (x - 1)
 
 
-            # variables must be (indirectly) referenced in the body for analysis to work
-            # { x: p, y: h }
-            g
-        "#
-            );
-            let arena = Bump::new();
-            let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+                # variables must be (indirectly) referenced in the body for analysis to work
+                # { x: p, y: h }
+                g
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-            let detected0 = get_closure(&actual.value, 0);
-            let detected1 = get_closure(&actual.value, 1);
-            let detected2 = get_closure(&actual.value, 2);
+        // There should be two UnusedDef problems: one for h, and one for p
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::UnusedDef(_, _) => true,
+            _ => false,
+        }));
 
-            assert_eq!(detected0, Recursive::TailRecursive);
-            assert_eq!(detected1, Recursive::NotRecursive);
-            assert_eq!(detected2, Recursive::TailRecursive);
-        });
+        let actual = loc_expr.value;
+        // NOTE: the indices associated with each of these can change!
+        // They come out of a hashmap, and are not sorted.
+        let g_detected = get_closure(&actual, 0);
+        let h_detected = get_closure(&actual, 2);
+        let p_detected = get_closure(&actual, 1);
+
+        assert_eq!(g_detected, Recursive::TailRecursive);
+        assert_eq!(h_detected, Recursive::NotRecursive);
+        assert_eq!(p_detected, Recursive::TailRecursive);
     }
 
     #[test]
     fn when_tail_call() {
-        with_larger_debug_stack(|| {
-            let src = indoc!(
-                r#"
+        let src = indoc!(
+            r#"
                 g = \x ->
                     when x is
                         0 -> 0
                         _ -> g (x + 1)
 
-                0
+                g 0
             "#
-            );
-            let arena = Bump::new();
-            let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+        assert_eq!(problems, Vec::new());
 
-            let detected = get_closure(&actual.value, 0);
-            assert_eq!(detected, Recursive::TailRecursive);
-        });
+        let detected = get_closure(&loc_expr.value, 0);
+        assert_eq!(detected, Recursive::TailRecursive);
     }
 
     #[test]
     fn immediate_tail_call() {
         let src = indoc!(
             r#"
-            f = \x -> f x
+                f = \x -> f x
 
-            0
-        "#
+                f 0
+            "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-        let detected = get_closure(&actual.value, 0);
+        assert_eq!(problems, Vec::new());
+
+        let detected = get_closure(&loc_expr.value, 0);
+
         assert_eq!(detected, Recursive::TailRecursive);
     }
 
@@ -383,135 +359,144 @@ mod test_canonicalize {
                     when q x is
                         _ -> 0
 
-            0
+            q 0
         "#
         );
         let arena = Bump::new();
-        let (actual, _output, _problems, _var_store, _vars, _constraint) =
-            can_expr_with(&arena, "Blah", src, &ImMap::default());
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-        let detected = get_closure(&actual.value, 0);
+        assert_eq!(problems, Vec::new());
+        let detected = get_closure(&loc_expr.value, 0);
         assert_eq!(detected, Recursive::Recursive);
     }
 
     #[test]
-    fn mutual_recursion() {
-        with_larger_debug_stack(|| {
-            let src = indoc!(
-                r#"
-            q = \x ->
-                    when x is
-                        0 -> 0
-                        _ -> p (x - 1)
+    fn good_mutual_recursion() {
+        let src = indoc!(
+            r#"
+                q = \x ->
+                        when x is
+                            0 -> 0
+                            _ -> p (x - 1)
 
-            p = \x ->
-                    when x is
-                        0 -> 0
-                        _ -> q (x - 1)
+                p = \x ->
+                        when x is
+                            0 -> 0
+                            _ -> q (x - 1)
 
-            p
-        "#
-            );
-            let arena = Bump::new();
-            let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+                q p
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+        assert_eq!(problems, Vec::new());
 
-            let detected = get_closure(&actual.value, 0);
-            assert_eq!(detected, Recursive::Recursive);
+        let actual = loc_expr.value;
+        let detected = get_closure(&actual, 0);
+        assert_eq!(detected, Recursive::Recursive);
 
-            let detected = get_closure(&actual.value, 1);
-            assert_eq!(detected, Recursive::Recursive);
-        });
+        let detected = get_closure(&actual, 1);
+        assert_eq!(detected, Recursive::Recursive);
     }
 
     #[test]
     fn valid_self_recursion() {
-        with_larger_debug_stack(|| {
-            let src = indoc!(
-                r#"
+        let src = indoc!(
+            r#"
                 boom = \_ -> boom {}
 
                 boom
-                "#
-            );
-            let arena = Bump::new();
-            let (actual, _output, _problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-            let is_circular_def =
-                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
-                    true
-                } else {
-                    false
-                };
+        assert_eq!(problems, Vec::new());
 
-            assert_eq!(is_circular_def, false);
-        });
+        let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_, _)) = loc_expr.value
+        {
+            true
+        } else {
+            false
+        };
+
+        assert_eq!(is_circular_def, false);
     }
 
     #[test]
     fn invalid_self_recursion() {
-        with_larger_debug_stack(|| {
-            let src = indoc!(
-                r#"
+        let src = indoc!(
+            r#"
                 x = x
 
                 x
-                "#
-            );
-            let arena = Bump::new();
-            let (actual, _output, problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+            "#
+        );
 
-            let is_circular_def =
-                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
-                    true
-                } else {
-                    false
-                };
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-            let problem = Problem::CircularAssignment(vec![Located::at(
-                Region::new(0, 0, 0, 1),
-                Ident::Unqualified("x".into()),
-            )]);
+        let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_, _)) = loc_expr.value
+        {
+            true
+        } else {
+            false
+        };
 
-            assert_eq!(is_circular_def, true);
-            assert_eq!(problems, vec![problem]);
-        });
+        let problem = Problem::RuntimeError(RuntimeError::CircularDef(
+            vec![Located::at(Region::new(0, 0, 0, 1), "x".into())],
+            vec![(Region::new(0, 0, 0, 1), Region::new(0, 0, 4, 5))],
+        ));
+
+        assert_eq!(is_circular_def, true);
+        assert_eq!(problems, vec![problem]);
     }
 
     #[test]
     fn invalid_mutual_recursion() {
-        with_larger_debug_stack(|| {
-            let src = indoc!(
-                r#"
+        let src = indoc!(
+            r#"
                 x = y
                 y = z
                 z = x
 
                 x
-                "#
-            );
-            let arena = Bump::new();
-            let (actual, _output, problems, _var_store, _vars, _constraint) =
-                can_expr_with(&arena, "Blah", src, &ImMap::default());
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-            let is_circular_def =
-                if let RuntimeError(RuntimeError::CircularDef(_, _)) = actual.value {
-                    true
-                } else {
-                    false
-                };
+        let problem = Problem::RuntimeError(RuntimeError::CircularDef(
+            vec![
+                Located::at(Region::new(0, 0, 0, 1), "x".into()),
+                Located::at(Region::new(1, 1, 0, 1), "y".into()),
+                Located::at(Region::new(2, 2, 0, 1), "z".into()),
+            ],
+            vec![
+                (Region::new(0, 0, 0, 1), Region::new(0, 0, 4, 5)),
+                (Region::new(1, 1, 0, 1), Region::new(1, 1, 4, 5)),
+                (Region::new(2, 2, 0, 1), Region::new(2, 2, 4, 5)),
+            ],
+        ));
 
-            let problem = Problem::CircularAssignment(vec![
-                Located::at(Region::new(0, 0, 0, 1), Ident::Unqualified("x".into())),
-                Located::at(Region::new(1, 1, 0, 1), Ident::Unqualified("y".into())),
-                Located::at(Region::new(2, 2, 0, 1), Ident::Unqualified("z".into())),
-            ]);
+        assert_eq!(problems, vec![problem]);
 
-            assert_eq!(is_circular_def, true);
-            assert_eq!(problems, vec![problem]);
-        });
+        match loc_expr.value {
+            RuntimeError(RuntimeError::CircularDef(_, _)) => (),
+            actual => {
+                panic!("Expected a CircularDef runtime error, but got {:?}", actual);
+            }
+        }
     }
 
     //#[test]
@@ -530,7 +515,7 @@ mod test_canonicalize {
 
     //    assert_eq!(
     //        problems,
-    //        vec![Problem::UnusedAssignment(loc(Ident::Unqualified(
+    //        vec![Problem::UnusedAssignment(loc((
     //            "unused".to_string()
     //        )))]
     //    );
@@ -538,8 +523,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["func", "local"],
-    //            globals: vec![],
+    //            lookups: vec!["func", "local"],
     //            calls: vec!["func"],
     //            tail_call: None
     //        }
@@ -563,16 +547,15 @@ mod test_canonicalize {
     //    assert_eq!(
     //        problems,
     //        vec![
-    //            Problem::UnusedAssignment(loc(Ident::Unqualified("unused".to_string()))),
-    //            Problem::UnusedAssignment(loc(Ident::Unqualified("func".to_string()))),
+    //            Problem::UnusedAssignment(loc(("unused".to_string()))),
+    //            Problem::UnusedAssignment(loc(("func".to_string()))),
     //        ]
     //    );
 
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["local"],
-    //            globals: vec![],
+    //            lookups: vec!["local"],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -580,39 +563,33 @@ mod test_canonicalize {
     //    );
     //}
 
-    //// UNRECOGNIZED
+    //     // UNRECOGNIZED
 
-    //#[test]
-    //fn basic_unrecognized_constant() {
-    //    let (expr, output, problems, _) = can_expr(indoc!(
-    //        r#"
-    //        x
-    //    "#
-    //    ));
+    //     #[test]
+    //     fn basic_unrecognized_constant() {
+    //         let (expr, output, problems, _) = can_expr(indoc!(
+    //             r#"
+    //             x
+    //         "#
+    //         ));
 
-    //    assert_eq!(
-    //        problems,
-    //        vec![Problem::UnrecognizedConstant(loc(Ident::Unqualified(
-    //            "x".to_string()
-    //        )))]
-    //    );
+    //         assert_eq!(
+    //             problems,
+    //             vec![Problem::LookupNotInScope(loc(("x".to_string())))]
+    //         );
 
-    //    assert_eq!(
-    //        expr,
-    //        UnrecognizedConstant(loc(Ident::Unqualified("x".to_string())))
-    //    );
+    //         assert_eq!(expr, LookupNotInScope(loc(("x".to_string()))));
 
-    //    assert_eq!(
-    //        output,
-    //        Out {
-    //            locals: vec![],
-    //            globals: vec![],
-    //            calls: vec![],
-    //            tail_call: None
-    //        }
-    //        .into()
-    //    );
-    //}
+    //         assert_eq!(
+    //             output,
+    //             Out {
+    //                 lookups: vec![],
+    //                 calls: vec![],
+    //                 tail_call: None
+    //             }
+    //             .into()
+    //         );
+    //     }
 
     //#[test]
     //fn complex_unrecognized_constant() {
@@ -627,7 +604,7 @@ mod test_canonicalize {
 
     //    assert_eq!(
     //        problems,
-    //        vec![Problem::UnrecognizedConstant(loc(Ident::Unqualified(
+    //        vec![Problem::LookupNotInScope(loc((
     //            "z".to_string()
     //        )))]
     //    );
@@ -635,8 +612,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["a", "b"],
-    //            globals: vec![],
+    //            lookups: vec!["a", "b"],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -665,8 +641,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["c"],
-    //            globals: vec![],
+    //            lookups: vec!["c"],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -693,8 +668,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["fibonacci"],
-    //            globals: vec![],
+    //            lookups: vec!["fibonacci"],
     //            calls: vec!["fibonacci"],
     //            tail_call: None
     //        }
@@ -727,8 +701,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["factorial", "factorialHelp"],
-    //            globals: vec![],
+    //            lookups: vec!["factorial", "factorialHelp"],
     //            calls: vec!["factorial", "factorialHelp"],
     //            tail_call: None
     //        }
@@ -754,8 +727,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["a", "b"],
-    //            globals: vec![],
+    //            lookups: vec!["a", "b"],
     //            calls: vec![],
     //            tail_call: None
     //        }
@@ -783,8 +755,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["increment", "x", "y", "z"],
-    //            globals: vec![],
+    //            lookups: vec!["increment", "x", "y", "z"],
     //            calls: vec!["increment"],
     //            tail_call: None
     //        }
@@ -823,8 +794,7 @@ mod test_canonicalize {
     //    assert_eq!(
     //        output,
     //        Out {
-    //            locals: vec!["func1", "func2", "x", "y", "z"],
-    //            globals: vec![],
+    //            lookups: vec!["func1", "func2", "x", "y", "z"],
     //            calls: vec!["func1", "func2"],
     //            tail_call: None
     //        }

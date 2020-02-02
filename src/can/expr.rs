@@ -1,26 +1,21 @@
 use crate::can::def::{can_defs_with_return, Def};
 use crate::can::env::Env;
-use crate::can::ident::{Lowercase, ModuleName, TagName};
+use crate::can::ident::{Lowercase, TagName};
 use crate::can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
 };
-use crate::can::pattern::idents_from_patterns;
 use crate::can::pattern::PatternType::*;
-use crate::can::pattern::{canonicalize_pattern, remove_idents, Pattern};
-use crate::can::problem::Problem;
-use crate::can::problem::RuntimeError;
-use crate::can::problem::RuntimeError::*;
+use crate::can::pattern::{canonicalize_pattern, Pattern};
+use crate::can::problem::{Problem, RuntimeError};
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
-use crate::can::symbol::Symbol;
-use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
-use crate::ident::Ident;
+use crate::collections::{ImSet, MutMap, MutSet, SendMap};
+use crate::module::symbol::Symbol;
 use crate::operator::CalledVia;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
-use im_rc::Vector;
 use std::fmt::Debug;
 use std::i64;
 use std::ops::Neg;
@@ -45,11 +40,7 @@ pub enum Expr {
     },
 
     // Lookups
-    Var {
-        module: ModuleName,
-        symbol_for_lookup: Symbol,
-        resolved_symbol: Symbol,
-    },
+    Var(Symbol),
     // Branching
     When {
         cond_var: Variable,
@@ -108,9 +99,7 @@ pub enum Expr {
     Update {
         record_var: Variable,
         ext_var: Variable,
-        module: ModuleName,
         symbol: Symbol,
-        ident: Ident,
         updates: SendMap<Lowercase, Field>,
     },
 
@@ -141,18 +130,18 @@ pub enum Recursive {
     NotRecursive,
 }
 
-pub fn canonicalize_expr(
-    env: &mut Env,
+pub fn canonicalize_expr<'a>(
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
     region: Region,
-    expr: &ast::Expr,
+    expr: &'a ast::Expr,
 ) -> (Located<Expr>, Output) {
-    use self::Expr::*;
+    use Expr::*;
 
     let (expr, output) = match expr {
         ast::Expr::Int(string) => {
-            let answer = int_expr_from_result(var_store, finish_parsing_int(string), env);
+            let answer = int_expr_from_result(var_store, finish_parsing_int(*string), env);
 
             (answer, Output::default())
         }
@@ -165,33 +154,17 @@ pub fn canonicalize_expr(
             fields,
             update: Some(loc_update),
         } => {
-            let ident = if let ast::Expr::Var(module_parts, name) = &loc_update.value {
-                Ident::new(module_parts, name)
-            } else {
-                panic!(
-                    "TODO canonicalize invalid record update (non-Var in update position)\n{:?}",
-                    &loc_update.value
-                );
-            };
-
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
-            if let Var {
-                resolved_symbol,
-                module,
-                ..
-            } = can_update.value
-            {
+            if let Var(symbol) = &can_update.value {
                 let (can_fields, mut output) = canonicalize_fields(env, var_store, scope, fields);
 
                 output.references = output.references.union(update_out.references);
 
                 let answer = Update {
-                    module,
                     record_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
-                    symbol: resolved_symbol,
-                    ident,
+                    symbol: *symbol,
                     updates: can_fields,
                 };
 
@@ -284,15 +257,12 @@ pub fn canonicalize_expr(
             output.tail_call = None;
 
             let expr = match fn_expr.value {
-                Var {
-                    ref resolved_symbol,
-                    ..
-                } => {
-                    output.references.calls.insert(resolved_symbol.clone());
+                Var(symbol) => {
+                    output.references.calls.insert(symbol);
 
                     // we're tail-calling a symbol by name, check if it's the tail-callable symbol
                     output.tail_call = match &env.tailcallable_symbol {
-                        Some(tc_sym) if tc_sym == resolved_symbol => Some(resolved_symbol.clone()),
+                        Some(tc_sym) if *tc_sym == symbol => Some(symbol),
                         Some(_) | None => None,
                     };
 
@@ -333,16 +303,8 @@ pub fn canonicalize_expr(
 
             (expr, output)
         }
-        ast::Expr::Var(module_parts, name) => {
-            let symbol = if module_parts.is_empty() {
-                scope.symbol(name)
-            } else {
-                Symbol::from_parts(module_parts, name)
-            };
-
-            let ident = Ident::new(module_parts, name);
-
-            canonicalize_lookup(env, scope, ident, symbol, region)
+        ast::Expr::Var { module_name, ident } => {
+            canonicalize_lookup(env, scope, module_name, ident, region)
         } //ast::Expr::InterpolatedStr(pairs, suffix) => {
         //    let mut output = Output::new();
         //    let can_pairs: Vec<(String, Located<Expr>)> = pairs
@@ -365,9 +327,9 @@ pub fn canonicalize_expr(
         //                        value: ident,
         //                    };
 
-        //                    env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
+        //                    env.problem(Problem::LookupNotInScope(loc_ident.clone()));
 
-        //                    RuntimeError(UnrecognizedConstant(loc_ident))
+        //                    RuntimeError(LookupNotInScope(loc_ident))
         //                }
         //            };
 
@@ -398,34 +360,17 @@ pub fn canonicalize_expr(
             // The globally unique symbol that will refer to this closure once it gets converted
             // into a top-level procedure for code gen.
             //
-            // The symbol includes the module name, the top-level declaration name, and the
-            // index (0-based) of the closure within that declaration.
-            //
-            // Example: "MyModule$main$3" if this is the 4th closure in MyModule.main.
-            //
-            // In the case of `foo = \x y -> ...`, the symbol is later changed to `foo`.
-            let symbol = scope.gen_unique_symbol();
+            // In the Foo module, this will look something like Foo.$1 or Foo.$2.
+            let symbol = env.gen_unique_symbol();
 
             // The body expression gets a new scope for canonicalization.
             // Shadow `scope` to make sure we don't accidentally use the original one for the
-            // rest of this block.
-            let mut scope = scope.clone();
-
-            let arg_idents: Vector<(Ident, (Symbol, Region))> =
-                idents_from_patterns(loc_arg_patterns.iter(), &scope);
-
-            // Add the arguments' idents to scope.idents. If there's a collision,
-            // it means there was shadowing, which will be handled later.
-            scope.idents = union_pairs(scope.idents, arg_idents.iter());
-
+            // rest of this block, but keep the original around for later diffing.
+            let original_scope = scope;
+            let mut scope = original_scope.clone();
             let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
 
             for loc_pattern in loc_arg_patterns.into_iter() {
-                // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-                // (However, still include it in scope, because you *can* recursively refer to yourself.)
-                let mut shadowable_idents = scope.idents.clone();
-                remove_idents(&loc_pattern.value, &mut shadowable_idents);
-
                 let can_arg = canonicalize_pattern(
                     env,
                     var_store,
@@ -433,7 +378,6 @@ pub fn canonicalize_expr(
                     FunctionArg,
                     &loc_pattern.value,
                     loc_pattern.region,
-                    &mut shadowable_idents,
                 );
 
                 can_args.push((var_store.fresh(), can_arg));
@@ -449,19 +393,18 @@ pub fn canonicalize_expr(
 
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
-            for (ident, (arg_symbol, region)) in arg_idents {
-                if !output.references.has_local(&arg_symbol) {
-                    // The body never referenced this argument we declared. It's an unused argument!
-                    env.problem(Problem::UnusedArgument(Located {
-                        region,
-                        value: ident,
-                    }));
-                }
+            for (symbol, region) in scope.symbols() {
+                if !original_scope.contains_symbol(*symbol) {
+                    if !output.references.has_lookup(*symbol) {
+                        // The body never referenced this argument we declared. It's an unused argument!
+                        env.problem(Problem::UnusedArgument(*symbol, *region));
+                    }
 
-                // We shouldn't ultimately count arguments as referenced locals. Otherwise,
-                // we end up with weird conclusions like the expression (\x -> x + 1)
-                // references the (nonexistant) local variable x!
-                output.references.locals.remove(&arg_symbol);
+                    // We shouldn't ultimately count arguments as referenced locals. Otherwise,
+                    // we end up with weird conclusions like the expression (\x -> x + 1)
+                    // references the (nonexistant) local variable x!
+                    output.references.lookups.remove(symbol);
+                }
             }
 
             env.register_closure(symbol.clone(), output.references.clone());
@@ -489,12 +432,6 @@ pub fn canonicalize_expr(
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches {
-                let mut shadowable_idents = scope.idents.clone();
-
-                let loc_first_pattern = &branch.patterns.first().unwrap();
-
-                remove_idents(&loc_first_pattern.value, &mut shadowable_idents);
-
                 let (can_when_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
                     env,
                     var_store,
@@ -571,10 +508,12 @@ pub fn canonicalize_expr(
         ast::Expr::PrivateTag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
+            let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
+            let symbol = Symbol::new(env.home, tag_ident);
 
             (
                 Tag {
-                    name: TagName::Private(Symbol::from_private_tag(env.home.as_str(), tag)),
+                    name: TagName::Private(symbol),
                     arguments: vec![],
                     variant_var,
                     ext_var,
@@ -678,6 +617,10 @@ pub fn canonicalize_expr(
         }
     };
 
+    if cfg!(debug_assertions) {
+        env.home.register_debug_idents(&env.ident_ids);
+    }
+
     // At the end, diff used_idents and defined_idents to see which were unused.
     // Add warnings for those!
 
@@ -695,64 +638,29 @@ pub fn canonicalize_expr(
 }
 
 #[inline(always)]
-fn canonicalize_lookup(
-    env: &mut Env,
-    scope: &Scope,
-    ident: Ident,
-    symbol_for_lookup: Symbol,
-    region: Region,
-) -> (Expr, Output) {
-    use self::Expr::*;
-
-    let mut output = Output::default();
-    let can_expr = match resolve_ident(&env, &scope, ident, &mut output.references) {
-        Ok((module, resolved_symbol)) => Var {
-            module,
-            symbol_for_lookup,
-            resolved_symbol,
-        },
-        Err(ident) => {
-            let loc_ident = Located {
-                region,
-                value: ident,
-            };
-
-            env.problem(Problem::UnrecognizedConstant(loc_ident.clone()));
-
-            RuntimeError(UnrecognizedConstant(loc_ident))
-        }
-    };
-
-    (can_expr, output)
-}
-
-#[inline(always)]
 fn canonicalize_when_branch<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &Scope,
     region: Region,
     loc_pattern: &Located<ast::Pattern<'a>>,
-    loc_expr: &Located<ast::Expr<'a>>,
+    loc_expr: &'a Located<ast::Expr<'a>>,
     output: &mut Output,
 ) -> (Located<Pattern>, Located<Expr>, References) {
     // Each case branch gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the
-    // rest of this block.
-    let mut scope = scope.clone();
+    // rest of this block, but keep the original around for later diffing.
+    let original_scope = scope;
+    let mut scope = original_scope.clone();
 
-    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-    // (However, still include it in scope, because you *can* recursively refer to yourself.)
-    let mut shadowable_idents = scope.idents.clone();
-    remove_idents(&loc_pattern.value, &mut shadowable_idents);
-
-    // Patterns introduce new idents to the scope!
-    // Add the defined identifiers to scope. If there's a collision, it means there
-    // was shadowing, which will be handled later.
-    let defined_idents: Vector<(Ident, (Symbol, Region))> =
-        idents_from_patterns(std::iter::once(loc_pattern), &scope);
-
-    scope.idents = union_pairs(scope.idents, defined_idents.iter());
+    let loc_can_pattern = canonicalize_pattern(
+        env,
+        var_store,
+        &mut scope,
+        WhenBranch,
+        &loc_pattern.value,
+        loc_pattern.region,
+    );
 
     let (can_expr, branch_output) =
         canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
@@ -765,64 +673,34 @@ fn canonicalize_when_branch<'a>(
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
-    for (ident, (symbol, region)) in defined_idents {
-        if !output.references.has_local(&symbol) {
-            let loc_ident = Located {
-                region,
-                value: ident.clone(),
-            };
-
-            env.problem(Problem::UnusedAssignment(loc_ident));
+    for (symbol, region) in scope.symbols() {
+        if !output.references.has_lookup(*symbol) && !original_scope.contains_symbol(*symbol) {
+            env.problem(Problem::UnusedDef(*symbol, *region));
         }
     }
 
-    let loc_can_pattern = canonicalize_pattern(
-        env,
-        var_store,
-        &mut scope,
-        WhenBranch,
-        &loc_pattern.value,
-        loc_pattern.region,
-        &mut shadowable_idents,
-    );
-
     (loc_can_pattern, can_expr, branch_output.references)
-}
-
-pub fn union_pairs<'a, K, V, I>(mut map: ImMap<K, V>, pairs: I) -> ImMap<K, V>
-where
-    I: Iterator<Item = &'a (K, V)>,
-    K: std::hash::Hash + std::cmp::Eq + Clone,
-    K: 'a,
-    V: Clone,
-    V: 'a,
-{
-    for (ref k, ref v) in pairs {
-        map.insert(k.clone(), v.clone());
-    }
-
-    map
 }
 
 pub fn local_successors<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
-    let mut answer = references.locals.clone();
+    let mut answer = im_rc::hashset::HashSet::clone(&references.lookups);
 
     for call_symbol in references.calls.iter() {
-        answer = answer.union(call_successors(call_symbol, closures));
+        answer = answer.union(call_successors(*call_symbol, closures));
     }
 
     answer
 }
 
 fn call_successors<'a>(
-    call_symbol: &'a Symbol,
+    call_symbol: Symbol,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
     // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 definitions reference each other; may need to track visited definitions!
-    match closures.get(call_symbol) {
+    match closures.get(&call_symbol) {
         Some(references) => {
             let mut answer = local_successors(&references, closures);
 
@@ -849,21 +727,20 @@ where
         Some((_, refs)) => {
             visited.insert(defined_symbol);
 
-            for local in refs.locals.iter() {
+            for local in refs.lookups.iter() {
                 if !visited.contains(&local) {
                     let other_refs: References =
-                        references_from_local(local.clone(), visited, refs_by_def, closures);
+                        references_from_local(*local, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
 
-                answer.locals.insert(local.clone());
+                answer.lookups.insert(local.clone());
             }
 
             for call in refs.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs =
-                        references_from_call(call.clone(), visited, refs_by_def, closures);
+                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
@@ -892,30 +769,25 @@ where
 
             visited.insert(call_symbol);
 
-            for closed_over_local in references.locals.iter() {
+            for closed_over_local in references.lookups.iter() {
                 if !visited.contains(&closed_over_local) {
-                    let other_refs = references_from_local(
-                        closed_over_local.clone(),
-                        visited,
-                        refs_by_def,
-                        closures,
-                    );
+                    let other_refs =
+                        references_from_local(*closed_over_local, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
 
-                answer.locals.insert(closed_over_local.clone());
+                answer.lookups.insert(closed_over_local.clone());
             }
 
             for call in references.calls.iter() {
                 if !visited.contains(&call) {
-                    let other_refs =
-                        references_from_call(call.clone(), visited, refs_by_def, closures);
+                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
                 }
 
-                answer.calls.insert(call.clone());
+                answer.calls.insert(*call);
             }
 
             answer
@@ -928,63 +800,8 @@ where
     }
 }
 
-/// If it could not be found, return it unchanged as an Err.
-#[inline(always)] // This is shared code between Var and InterpolatedStr; it was inlined when handwritten
-fn resolve_ident<'a>(
-    env: &'a Env,
-    scope: &Scope,
-    ident: Ident,
-    references: &mut References,
-) -> Result<(ModuleName, Symbol), Ident> {
-    if scope.idents.contains_key(&ident) {
-        let recognized = match ident {
-            Ident::Unqualified(name) => {
-                let symbol = scope.symbol(&name);
-
-                references.locals.insert(symbol.clone());
-
-                ("".into(), symbol)
-            }
-            Ident::Qualified(path, name) => {
-                let symbol = Symbol::new(&path, &name);
-
-                references.globals.insert(symbol.clone());
-
-                (ModuleName::from(path), symbol)
-            }
-        };
-
-        Ok(recognized)
-    } else {
-        match ident {
-            Ident::Unqualified(name) => {
-                // Try again, this time using the current module as the path.
-                let qualified = Ident::Qualified(env.home.as_str().into(), name.clone());
-
-                if scope.idents.contains_key(&qualified) {
-                    let symbol = Symbol::new(env.home.as_str(), &name);
-
-                    references.globals.insert(symbol.clone());
-
-                    Ok(("".into(), symbol))
-                } else {
-                    // We couldn't find the unqualified ident in scope. NAMING PROBLEM!
-                    Err(Ident::Unqualified(name))
-                }
-            }
-            Ident::Qualified(module_name, name) => {
-                let symbol = Symbol::from_qualified_ident(module_name.clone(), name);
-
-                references.globals.insert(symbol.clone());
-
-                Ok((ModuleName::from(module_name), symbol))
-            }
-        }
-    }
-}
-
 fn canonicalize_fields<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
     fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
@@ -1011,7 +828,7 @@ fn canonicalize_fields<'a>(
 }
 
 fn canonicalize_field<'a>(
-    env: &mut Env,
+    env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
@@ -1047,4 +864,49 @@ fn canonicalize_field<'a>(
             panic!("TODO canonicalize malformed record field");
         }
     }
+}
+
+fn canonicalize_lookup(
+    env: &mut Env<'_>,
+    scope: &mut Scope,
+    module_name: &str,
+    ident: &str,
+    region: Region,
+) -> (Expr, Output) {
+    use Expr::*;
+
+    let mut output = Output::default();
+    let can_expr = if module_name.is_empty() {
+        // Since module_name was empty, this is an unqualified var.
+        // Look it up in scope!
+        match scope.lookup(&(*ident).into(), region) {
+            Ok(symbol) => {
+                output.references.lookups.insert(symbol);
+
+                Var(symbol)
+            }
+            Err(problem) => {
+                env.problem(Problem::RuntimeError(problem.clone()));
+
+                RuntimeError(problem)
+            }
+        }
+    } else {
+        // Since module_name was nonempty, this is a qualified var.
+        // Look it up in the env!
+        match env.qualified_lookup(module_name, ident, region) {
+            Ok(symbol) => Var(symbol),
+            Err(problem) => {
+                // Either the module wasn't imported, or
+                // it was imported but it doesn't expose this ident.
+                env.problem(Problem::RuntimeError(problem.clone()));
+
+                RuntimeError(problem)
+            }
+        }
+    };
+
+    // If it's valid, this ident should be in scope already.
+
+    (can_expr, output)
 }

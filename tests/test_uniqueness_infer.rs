@@ -17,7 +17,7 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_output, _problems, subs, variable, constraint) = uniq_expr(src);
+        let (_output, _problems, subs, variable, constraint, home, interns) = uniq_expr(src);
 
         assert_correct_variable_usage(&constraint);
 
@@ -27,7 +27,7 @@ mod test_infer_uniq {
 
         name_all_type_vars(variable, &mut subs);
 
-        let actual_str = content_to_string(content, &mut subs);
+        let actual_str = content_to_string(content, &mut subs, home, &interns);
 
         (unify_problems, actual_str)
     }
@@ -41,10 +41,7 @@ mod test_infer_uniq {
         let (problems, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
-            // fail with an assert, but print the problems normally so rust doesn't try to diff
-            // an empty vec with the problems.
-            println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
-            assert_eq!(0, 1);
+            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());
     }
@@ -945,7 +942,7 @@ mod test_infer_uniq {
                 r#"\@Foo -> 42
                 "#
             ),
-            "Attr.Attr * (Attr.Attr * [ Test.@Foo ]* -> Attr.Attr * Int)",
+            "Attr.Attr * (Attr.Attr * [ @Foo ]* -> Attr.Attr * Int)",
         );
     }
 
@@ -981,7 +978,7 @@ mod test_infer_uniq {
                 r#"@Foo "happy" 2020
                 "#
             ),
-            "Attr.Attr * [ Test.@Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
+            "Attr.Attr * [ @Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
         );
     }
 
@@ -993,7 +990,7 @@ mod test_infer_uniq {
                 .left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | *) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1005,7 +1002,7 @@ mod test_infer_uniq {
                 \rec -> rec.left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (a | *) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1017,7 +1014,7 @@ mod test_infer_uniq {
                 \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (b | a) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
+            "Attr.Attr * (Attr.Attr (a | b) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
         );
     }
 
@@ -1059,7 +1056,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
+            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)"
         );
     }
 
@@ -1094,13 +1091,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                x : Int
+                x : Num.Num Int.Integer
                 x = 4
 
                 x
                 "#
             ),
-            "Attr.Attr a Int",
+            "Attr.Attr * Int",
         );
     }
 

@@ -1,14 +1,13 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
-use crate::can::ident::{Lowercase, ModuleName};
+use crate::can::ident::{Ident, Lowercase};
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
-use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::builtins;
 use crate::constrain::expr::{exists, Env, Info};
-use crate::ident::Ident;
+use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use crate::types::AnnotationSource::TypedWhenBranch;
@@ -18,7 +17,6 @@ use crate::types::LetConstraint;
 use crate::types::PExpected::{self};
 use crate::types::PReason::{self};
 use crate::types::Reason;
-use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::Bool;
 use crate::uniqueness::sharing::{ReferenceCount, VarUsage};
@@ -30,7 +28,7 @@ mod constrain;
 pub mod sharing;
 
 pub fn constrain_declaration(
-    module_name: ModuleName,
+    home: ModuleId,
     var_store: &VarStore,
     region: Region,
     loc_expr: Located<Expr>,
@@ -42,7 +40,7 @@ pub fn constrain_declaration(
     constrain_expr(
         &crate::constrain::expr::Env {
             rigids: ImMap::default(),
-            module_name,
+            home,
         },
         var_store,
         &mut var_usage,
@@ -123,12 +121,16 @@ fn constrain_pattern(
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
-            let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
-            for RecordDestruct {
-                var,
-                label,
-                symbol,
-                guard,
+            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            for Located {
+                value:
+                    RecordDestruct {
+                        var,
+                        label,
+                        symbol,
+                        guard,
+                    },
+                ..
             } in patterns
             {
                 let pat_uniq_var = var_store.fresh();
@@ -235,7 +237,7 @@ fn constrain_pattern(
             state.constraints.push(tag_con);
         }
 
-        Underscore | Shadowed(_) | UnsupportedPattern(_) => {
+        Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
             // no constraints
         }
     }
@@ -442,22 +444,11 @@ pub fn constrain_expr(
                 exists(vec![*entry_var, uniq_var], And(constraints))
             }
         }
-        Var {
-            symbol_for_lookup,
-            module,
-            ..
-        } => {
-            var_usage.register(symbol_for_lookup);
-            let usage = var_usage.get_usage(symbol_for_lookup);
+        Var(symbol) => {
+            var_usage.register(*symbol);
+            let usage = var_usage.get_usage(*symbol);
 
-            constrain_var(
-                var_store,
-                module.clone(),
-                symbol_for_lookup.clone(),
-                usage,
-                region,
-                expected,
-            )
+            constrain_var(var_store, *symbol, usage, region, expected)
         }
         Closure(fn_var, _symbol, recursion, args, boxed) => {
             use crate::can::expr::Recursive;
@@ -517,7 +508,7 @@ pub fn constrain_expr(
             // makes e.g. `(\x -> x) (\x -> x)` count as unique in both cases
             for (_, pattern) in args {
                 for identifier in pattern::symbols_from_pattern(&pattern.value) {
-                    var_usage.unregister(&identifier);
+                    var_usage.unregister(identifier);
                 }
             }
 
@@ -717,7 +708,7 @@ pub fn constrain_expr(
                         //
                         // In this case the `x` in the second branch is used uniquely
                         for symbol in pattern::symbols_from_pattern(&loc_when_pattern.value) {
-                            branch_var_usage.unregister(&symbol);
+                            branch_var_usage.unregister(symbol);
                         }
 
                         var_usage.or(&branch_var_usage);
@@ -763,7 +754,7 @@ pub fn constrain_expr(
                         //
                         // In this case the `x` in the second branch is used uniquely
                         for symbol in pattern::symbols_from_pattern(&loc_when_pattern.value) {
-                            branch_var_usage.unregister(&symbol);
+                            branch_var_usage.unregister(symbol);
                         }
 
                         var_usage.or(&branch_var_usage);
@@ -788,12 +779,10 @@ pub fn constrain_expr(
         Update {
             record_var,
             ext_var,
-            ident,
             symbol,
             updates,
-            module,
         } => {
-            var_usage.register(symbol);
+            var_usage.register(*symbol);
 
             let mut fields: SendMap<Lowercase, Type> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
@@ -834,10 +823,9 @@ pub fn constrain_expr(
             vars.push(*ext_var);
 
             let con = Lookup(
-                module.clone(),
-                symbol.clone(),
+                *symbol,
                 Expected::ForReason(
-                    Reason::RecordUpdateKeys(ident.clone(), fields),
+                    Reason::RecordUpdateKeys(*symbol, fields),
                     record_type,
                     region,
                 ),
@@ -937,7 +925,6 @@ pub fn constrain_expr(
 
 fn constrain_var(
     var_store: &VarStore,
-    module: ModuleName,
     symbol_for_lookup: Symbol,
     usage: Option<&ReferenceCount>,
     region: Region,
@@ -957,7 +944,7 @@ fn constrain_var(
             exists(
                 vec![val_var, uniq_var],
                 And(vec![
-                    Lookup(module, symbol_for_lookup, expected.clone(), region),
+                    Lookup(symbol_for_lookup, expected.clone(), region),
                     Eq(attr_type, expected, region),
                     Eq(
                         Type::Boolean(uniq_type),
@@ -969,7 +956,7 @@ fn constrain_var(
         }
         Some(sharing::ReferenceCount::Unique) => {
             // no additional constraints, keep uniqueness unbound
-            Lookup(module, symbol_for_lookup, expected, region)
+            Lookup(symbol_for_lookup, expected, region)
         }
         None => panic!("symbol not analyzed"),
     }
@@ -1037,7 +1024,6 @@ fn constrain_def_pattern(
 
 /// Turn e.g. `Int` into `Attr.Attr * Int`
 fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, Type) {
-    use crate::types;
     use crate::types::Type::*;
 
     match ann {
@@ -1067,34 +1053,23 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             )
         }
 
-        Apply {
-            module_name,
-            name,
-            args,
-        } => {
+        Apply(symbol, args) => {
             let uniq_var = var_store.fresh();
-            if module_name.as_str() == ModuleName::NUM && name.as_str() == types::TYPE_NUM {
+
+            if *symbol == Symbol::NUM_NUM {
                 let arg = args
                     .iter()
                     .next()
                     .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
 
                 match arg {
-                    Apply {
-                        module_name, name, ..
-                    } if module_name.as_str() == ModuleName::INT
-                        && name.as_str() == types::TYPE_INTEGER =>
-                    {
+                    Apply(symbol, _) if *symbol == Symbol::INT_INTEGER => {
                         return (
                             vec![uniq_var],
                             constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
                         )
                     }
-                    Apply {
-                        module_name, name, ..
-                    } if module_name.as_str() == ModuleName::FLOAT
-                        && name.as_str() == types::TYPE_FLOATINGPOINT =>
-                    {
+                    Apply(symbol, _) if *symbol == Symbol::FLOAT_FLOATINGPOINT => {
                         return (
                             vec![uniq_var],
                             constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
@@ -1109,14 +1084,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
 
             (
                 arg_vars,
-                constrain::attr_type(
-                    Bool::Variable(uniq_var),
-                    Type::Apply {
-                        module_name: module_name.clone(),
-                        name: name.clone(),
-                        args: args_lifted,
-                    },
-                ),
+                constrain::attr_type(Bool::Variable(uniq_var), Type::Apply(*symbol, args_lifted)),
             )
         }
 
@@ -1164,7 +1132,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             )
         }
 
-        Alias(module_name, uppercase, fields, actual) => {
+        Alias(symbol, fields, actual) => {
             let uniq_var = var_store.fresh();
 
             let (mut actual_vars, lifted_actual) = annotation_to_attr_type(var_store, actual);
@@ -1175,16 +1143,12 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                 actual_vars,
                 constrain::attr_type(
                     Bool::Variable(uniq_var),
-                    Type::Alias(
-                        module_name.clone(),
-                        uppercase.clone(),
-                        fields.clone(),
-                        Box::new(lifted_actual),
-                    ),
+                    Type::Alias(*symbol, fields.clone(), Box::new(lifted_actual)),
                 ),
             )
         }
         As(_, _) => panic!("TODO implement lifting for As"),
+        RecursiveTagUnion(_, _, _) => panic!("TODO implement lifting for RecursiveTagUnion"),
     }
 }
 
@@ -1252,7 +1216,7 @@ pub fn constrain_def(
             constrain_expr(
                 &Env {
                     rigids: ftv,
-                    module_name: env.module_name.clone(),
+                    home: env.home,
                 },
                 var_store,
                 var_usage,
@@ -1385,7 +1349,7 @@ pub fn rec_defs_help(
                 let expr_con = constrain_expr(
                     &Env {
                         rigids: ftv,
-                        module_name: env.module_name.clone(),
+                        home: env.home,
                     },
                     var_store,
                     var_usage,

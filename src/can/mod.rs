@@ -11,4 +11,3 @@ pub mod problem;
 pub mod procedure;
 pub mod scope;
 pub mod string;
-pub mod symbol;
