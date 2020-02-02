@@ -5,7 +5,7 @@ use crate::can::expr::{
     canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
     Recursive,
 };
-use crate::can::ident::{Ident, Lowercase, Uppercase};
+use crate::can::ident::{Ident, Lowercase};
 use crate::can::pattern::PatternType;
 use crate::can::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::can::problem::Problem;
@@ -66,7 +66,7 @@ enum PendingDef<'a> {
 
     /// A type alias, e.g. `Ints : List Int`
     Alias {
-        name: Located<Uppercase>,
+        name: Located<Symbol>,
         vars: Vec<Located<Lowercase>>,
         ann: &'a Located<ast::TypeAnnotation<'a>>,
     },
@@ -129,6 +129,19 @@ pub fn canonicalize_defs<'a>(
     let mut refs_by_symbol = MutMap::default();
     let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
     let mut pending = Vec::with_capacity(num_defs); // TODO bump allocate this!
+
+    use std::cmp::Ordering;
+
+    let aliases_first = |x: &&Located<ast::Def<'a>>, _: &&Located<ast::Def<'a>>| -> Ordering {
+        match x.value {
+            ast::Def::Alias { .. } | ast::Def::Nested(ast::Def::Alias { .. }) => Ordering::Less,
+            _ => Ordering::Greater,
+        }
+    };
+
+    let mut loc_defs = loc_defs.clone();
+    loc_defs.sort_by(aliases_first);
+
     let mut iter = loc_defs.iter().peekable();
 
     // Canonicalize all the patterns, record shadowing problems, and store
@@ -708,7 +721,7 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        Alias { name, vars, ann } => {
+        Alias { ann, .. } => {
             let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
 
             // TODO should probably incorporate can_ann.references here - possibly by
@@ -719,11 +732,6 @@ fn canonicalize_pending_def<'a>(
             for (k, v) in can_ann.ftv {
                 found_rigids.insert(k, v);
             }
-
-            let ident_id = env.ident_ids.get_or_insert(&name.value.as_str().into());
-            let symbol = Symbol::new(env.home, ident_id);
-
-            scope.add_alias(symbol, name.region, vars, can_ann.typ);
         }
 
         TypedBody(loc_pattern, loc_can_pattern, loc_annotation, loc_expr) => {
@@ -1161,13 +1169,23 @@ fn to_pending_def<'a>(
                 }
             }
 
-            PendingDef::Alias {
-                name: Located {
-                    region: name.region,
-                    value: (*name.value).into(),
-                },
-                vars: can_vars,
-                ann,
+            let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
+
+            let region = Region::span_across(&name.region, &ann.region);
+            match scope.introduce(name.value.into(), &mut env.ident_ids, region) {
+                Ok(symbol) => {
+                    scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ);
+                    PendingDef::Alias {
+                        name: Located {
+                            region: name.region,
+                            value: symbol,
+                        },
+                        vars: can_vars,
+                        ann,
+                    }
+                }
+
+                Err(_) => panic!("TODO shadowing of type alias"),
             }
         }
 
