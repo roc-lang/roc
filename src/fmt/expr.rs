@@ -136,6 +136,7 @@ pub fn fmt_expr<'a>(
             fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
         When(loc_condition, branches) => {
+
             buf.push_str(
                 "\
                  when ",

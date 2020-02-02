@@ -908,6 +908,7 @@ mod when {
 
             let ((loc_first_patterns, loc_first_guard), state) =
                 branch_alternatives(min_indent).parse(arena, state)?;
+
             let loc_first_pattern = loc_first_patterns.first().unwrap();
             let original_indent = loc_first_pattern.region.start_col;
             let indented_more = original_indent + 1;
@@ -970,11 +971,22 @@ mod when {
     ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>)> {
         one_of!(
             map!(
-                sep_by1(
-                    char('|'),
-                    space0_around(loc_pattern(min_indent), min_indent),
+                and!(
+                    skip_second!(
+                        sep_by1(
+                            char('|'),
+                            space0_around(loc_pattern(min_indent), min_indent),
+                        ),
+                        string(keyword::IF)
+                    ),
+                    space1_around(
+                        loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                        min_indent
+                    )
                 ),
-                |patterns| { (patterns, None) }
+                |(patterns, guard)| {
+                    (patterns, Some(guard))
+                }
             ),
             map!(
                 sep_by1(
