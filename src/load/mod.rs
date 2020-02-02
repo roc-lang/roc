@@ -553,9 +553,14 @@ fn send_interface_header<'a>(
 
             for (_, exposed, region) in imports.into_iter() {
                 if !exposed.is_empty() {
-                    let ident_ids = all_ident_ids.get_mut(&module_id).unwrap_or_else(|| {
-                        panic!("Could not find {:?} in all_ident_ids", module_id)
-                    });
+                    // Ensure all_ident_ids is present in the map.
+                    if !all_ident_ids.contains_key(&module_id) {
+                        all_ident_ids.insert(module_id, IdentIds::default());
+                    }
+
+                    // This can't possibly fail, because we just ensured it
+                    // has an entry with this key.
+                    let ident_ids = all_ident_ids.get_mut(&module_id).unwrap();
 
                     add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
                 }
@@ -573,9 +578,15 @@ fn send_interface_header<'a>(
                 deps_by_name.insert(module_name, module_id);
 
                 if !exposed.is_empty() {
-                    let ident_ids = all_ident_ids.get_mut(&module_id).unwrap_or_else(|| {
-                        panic!("Could not find {:?} in all_ident_ids", module_id)
-                    });
+                    // Ensure all_ident_ids is present in the map.
+                    if !all_ident_ids.contains_key(&module_id) {
+                        all_ident_ids.insert(module_id, IdentIds::default());
+                    }
+
+                    // This can't possibly fail, because we just ensured it
+                    // has an entry with this key.
+                    let ident_ids = all_ident_ids.get_mut(&module_id).unwrap();
+
 
                     add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
                 }
