@@ -559,7 +559,9 @@ fn send_interface_header<'a>(
             for (_, exposed, region) in imports.into_iter() {
                 if !exposed.is_empty() {
                     // Ensure exposed_ident_ids is present in the map.
-                    exposed_ident_ids.entry(module_id).or_insert_with( IdentIds::default);
+                    exposed_ident_ids
+                        .entry(module_id)
+                        .or_insert_with(IdentIds::default);
 
                     // This can't possibly fail, because we just ensured it
                     // has an entry with this key.
@@ -582,7 +584,9 @@ fn send_interface_header<'a>(
 
                 if !exposed.is_empty() {
                     // Ensure exposed_ident_ids is present in the map.
-                    exposed_ident_ids.entry(module_id).or_insert_with(IdentIds::default);
+                    exposed_ident_ids
+                        .entry(module_id)
+                        .or_insert_with(IdentIds::default);
 
                     // This can't possibly fail, because we just ensured it
                     // has an entry with this key.
