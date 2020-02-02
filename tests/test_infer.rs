@@ -933,12 +933,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            foo: Int -> Bool
+            foo: Str -> {}
 
-            foo 2
+            foo "hi"
             "#
             ),
-            "Bool",
+            "{}",
         );
     }
 
@@ -966,12 +966,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            { x, y } : { x : (Int -> custom), y : Int }
+            { x, y } : { x : ({} -> custom), y : {} }
 
             x
             "#
             ),
-            "Int -> custom",
+            "{} -> custom",
         );
     }
 
@@ -981,10 +981,10 @@ mod test_infer {
             indoc!(
                 r#"
                 when foo is
-                    { x: 4 }-> x
+                    { x: 4} -> x
             "#
             ),
-            "Int",
+            "Num.Num Int.Integer",
         );
     }
 
@@ -1126,10 +1126,10 @@ mod test_infer {
             indoc!(
                 r#"
                     when foo is
-                        { x: 4 } -> x
+                        { x: 4} -> x
                 "#
             ),
-            "Int",
+            "Num.Num Int.Integer",
         );
     }
 
@@ -1162,11 +1162,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                    when Foo 4 is
+                    when Foo "blah" is
                         Foo x -> x
                 "#
             ),
-            "Int",
+            "Str",
         );
     }
 
@@ -1175,11 +1175,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                    when @Foo 4 is
+                    when @Foo "blah" is
                         @Foo x -> x
                 "#
             ),
-            "Int",
+            "Str",
         );
     }
 
