@@ -942,7 +942,7 @@ mod test_infer_uniq {
                 r#"\@Foo -> 42
                 "#
             ),
-            "Attr.Attr * (Attr.Attr * [ Test.@Foo ]* -> Attr.Attr * Int)",
+            "Attr.Attr * (Attr.Attr * [ @Foo ]* -> Attr.Attr * Int)",
         );
     }
 
@@ -978,7 +978,7 @@ mod test_infer_uniq {
                 r#"@Foo "happy" 2020
                 "#
             ),
-            "Attr.Attr * [ Test.@Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
+            "Attr.Attr * [ @Foo (Attr.Attr * Str) (Attr.Attr * Int) ]*",
         );
     }
 
@@ -990,7 +990,7 @@ mod test_infer_uniq {
                 .left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | *) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1002,7 +1002,7 @@ mod test_infer_uniq {
                 \rec -> rec.left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (a | *) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1014,7 +1014,7 @@ mod test_infer_uniq {
                 \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (b | a) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
+            "Attr.Attr * (Attr.Attr (a | b) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
         );
     }
 
@@ -1056,7 +1056,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr a c) (Attr.Attr b *) ]* -> Attr.Attr * [ Foo (Attr.Attr a c) (Attr.Attr * Str) ]*)"
+            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)"
         );
     }
 
@@ -1091,13 +1091,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                x : Int
+                x : Num.Num Int.Integer
                 x = 4
 
                 x
                 "#
             ),
-            "Attr.Attr a Int",
+            "Attr.Attr * Int",
         );
     }
 
