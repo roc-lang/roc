@@ -1,7 +1,7 @@
 use crate::can::def::Def;
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
-use crate::can::ident::{Ident, Lowercase};
+use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern;
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::collections::{ImMap, SendMap};
@@ -651,7 +651,142 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        If { .. } => panic!("TODO constrain uniq if"),
+        If {
+            cond_var,
+            branch_var,
+            branches,
+            final_else,
+        } => {
+            use crate::types::AnnotationSource;
+            // TODO use Bool alias here, so we don't allocate this type every time
+            let bool_type = Type::TagUnion(
+                vec![
+                    (TagName::Global("True".into()), vec![]),
+                    (TagName::Global("False".into()), vec![]),
+                ],
+                Box::new(Type::EmptyTagUnion),
+            );
+
+            let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
+            let mut cond_uniq_vars = Vec::with_capacity(branches.len() + 2);
+
+            match expected {
+                Expected::FromAnnotation(name, arity, _, tipe) => {
+                    for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
+                        let cond_uniq_var = var_store.fresh();
+                        let expect_bool = Expected::ForReason(
+                            Reason::IfCondition,
+                            constrain::attr_type(Bool::Variable(cond_uniq_var), bool_type.clone()),
+                            region,
+                        );
+                        cond_uniq_vars.push(cond_uniq_var);
+
+                        let cond_con = Eq(
+                            Type::Variable(*cond_var),
+                            expect_bool.clone(),
+                            loc_cond.region,
+                        );
+                        let then_con = constrain_expr(
+                            env,
+                            var_store,
+                            var_usage,
+                            loc_body.region,
+                            &loc_body.value,
+                            Expected::FromAnnotation(
+                                name.clone(),
+                                arity,
+                                AnnotationSource::TypedIfBranch(index + 1),
+                                tipe.clone(),
+                            ),
+                        );
+
+                        branch_cons.push(cond_con);
+                        branch_cons.push(then_con);
+                    }
+                    let else_con = constrain_expr(
+                        env,
+                        var_store,
+                        var_usage,
+                        final_else.region,
+                        &final_else.value,
+                        Expected::FromAnnotation(
+                            name,
+                            arity,
+                            AnnotationSource::TypedIfBranch(branches.len() + 1),
+                            tipe.clone(),
+                        ),
+                    );
+
+                    let ast_con = Eq(
+                        Type::Variable(*branch_var),
+                        Expected::NoExpectation(tipe),
+                        region,
+                    );
+
+                    branch_cons.push(ast_con);
+                    branch_cons.push(else_con);
+
+                    cond_uniq_vars.push(*cond_var);
+                    cond_uniq_vars.push(*branch_var);
+
+                    exists(cond_uniq_vars, And(branch_cons))
+                }
+                _ => {
+                    for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
+                        let cond_uniq_var = var_store.fresh();
+                        let expect_bool = Expected::ForReason(
+                            Reason::IfCondition,
+                            constrain::attr_type(Bool::Variable(cond_uniq_var), bool_type.clone()),
+                            region,
+                        );
+                        cond_uniq_vars.push(cond_uniq_var);
+
+                        let cond_con = Eq(
+                            Type::Variable(*cond_var),
+                            expect_bool.clone(),
+                            loc_cond.region,
+                        );
+                        let then_con = constrain_expr(
+                            env,
+                            var_store,
+                            var_usage,
+                            loc_body.region,
+                            &loc_body.value,
+                            Expected::ForReason(
+                                Reason::IfBranch { index: index + 1 },
+                                Type::Variable(*branch_var),
+                                region,
+                            ),
+                        );
+
+                        branch_cons.push(cond_con);
+                        branch_cons.push(then_con);
+                    }
+                    let else_con = constrain_expr(
+                        env,
+                        var_store,
+                        var_usage,
+                        final_else.region,
+                        &final_else.value,
+                        Expected::ForReason(
+                            Reason::IfBranch {
+                                index: branches.len() + 1,
+                            },
+                            Type::Variable(*branch_var),
+                            region,
+                        ),
+                    );
+
+                    branch_cons.push(Eq(Type::Variable(*branch_var), expected, region));
+                    branch_cons.push(else_con);
+
+                    cond_uniq_vars.push(*cond_var);
+                    cond_uniq_vars.push(*branch_var);
+
+                    exists(cond_uniq_vars, And(branch_cons))
+                }
+            }
+        }
         When {
             cond_var,
             expr_var,
