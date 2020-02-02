@@ -1004,7 +1004,15 @@ mod when {
             // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
             let ((loc_first_patterns, loc_first_guard), state) =
-                branch_alternatives(min_indent).parse(arena, state)?;
+                match branch_alternatives(min_indent).parse(arena, state) {
+                    Ok(first_branch_and_state) => {
+                        first_branch_and_state
+                    },
+                    Err(error) => {
+                        dbg!(error);
+                        panic!("Branch Alternatives Failed");
+                    },
+                };
 
             let loc_first_pattern = loc_first_patterns.first().unwrap();
             let original_indent = loc_first_pattern.region.start_col;
