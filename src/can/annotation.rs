@@ -8,7 +8,7 @@ use crate::module::symbol::Symbol;
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::region::Region;
 use crate::subs::{VarStore, Variable};
-use crate::types::{Problem, RecordFieldLabel, Type};
+use crate::types::{Problem, Type};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -358,7 +358,7 @@ fn can_assigned_field<'a>(
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
     local_aliases: &mut Vec<(Symbol, Type)>,
-    field_types: &mut SendMap<RecordFieldLabel, Type>,
+    field_types: &mut SendMap<Lowercase, Type>,
 ) -> MutSet<Symbol> {
     use crate::parse::ast::AssignedField::*;
 

@@ -22,7 +22,7 @@ pub enum Type {
     EmptyTagUnion,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
+    Record(SendMap<Lowercase, Type>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     Alias(Symbol, Vec<(Lowercase, Variable)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
@@ -35,8 +35,6 @@ pub enum Type {
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
-
-pub type RecordFieldLabel = Lowercase;
 
 impl fmt::Debug for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -504,7 +502,7 @@ pub enum ErrorType {
     Type(Symbol, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    Record(SendMap<RecordFieldLabel, ErrorType>, TypeExt),
+    Record(SendMap<Lowercase, ErrorType>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),

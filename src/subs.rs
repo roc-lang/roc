@@ -2,7 +2,7 @@ use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
 use crate::module::symbol::Symbol;
-use crate::types::{name_type_var, ErrorType, Problem, RecordFieldLabel, TypeExt};
+use crate::types::{name_type_var, ErrorType, Problem, TypeExt};
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -458,7 +458,7 @@ impl Content {
 pub enum FlatType {
     Apply(Symbol, Vec<Variable>),
     Func(Vec<Variable>, Variable),
-    Record(MutMap<RecordFieldLabel, Variable>, Variable),
+    Record(MutMap<Lowercase, Variable>, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,

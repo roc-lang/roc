@@ -1,10 +1,11 @@
+use crate::can::ident::Lowercase;
 use crate::can::pattern::Pattern::{self, *};
 use crate::can::pattern::RecordDestruct;
 use crate::collections::SendMap;
 use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
 use crate::subs::Variable;
-use crate::types::{Constraint, Expected, PExpected, PatternCategory, RecordFieldLabel, Type};
+use crate::types::{Constraint, Expected, PExpected, PatternCategory, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
@@ -65,7 +66,7 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
-            let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
+            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
 
             for Located {
                 value:

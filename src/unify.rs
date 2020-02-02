@@ -3,7 +3,6 @@ use crate::collections::{relative_complement, union, ImMap, MutMap};
 use crate::module::symbol::Symbol;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
 use crate::uniqueness::boolean_algebra;
 use std::hash::Hash;
@@ -18,7 +17,7 @@ struct Context {
 }
 
 pub struct RecordStructure {
-    pub fields: MutMap<RecordFieldLabel, Variable>,
+    pub fields: MutMap<Lowercase, Variable>,
     pub ext: Variable,
 }
 
@@ -244,8 +243,8 @@ fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: MutMap<RecordFieldLabel, (Variable, Variable)>,
-    other_fields: MutMap<RecordFieldLabel, Variable>,
+    shared_fields: MutMap<Lowercase, (Variable, Variable)>,
+    other_fields: MutMap<Lowercase, Variable>,
     ext: Variable,
 ) -> Outcome {
     let mut matching_fields = MutMap::default();
@@ -533,7 +532,7 @@ fn unify_flex(
 
 pub fn gather_fields(
     subs: &mut Subs,
-    fields: MutMap<RecordFieldLabel, Variable>,
+    fields: MutMap<Lowercase, Variable>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::FlatType::*;

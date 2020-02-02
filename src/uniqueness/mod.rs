@@ -17,7 +17,6 @@ use crate::types::LetConstraint;
 use crate::types::PExpected::{self};
 use crate::types::PReason::{self};
 use crate::types::Reason;
-use crate::types::RecordFieldLabel;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::Bool;
 use crate::uniqueness::sharing::{ReferenceCount, VarUsage};
@@ -122,7 +121,7 @@ fn constrain_pattern(
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
-            let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
+            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
             for Located {
                 value:
                     RecordDestruct {
