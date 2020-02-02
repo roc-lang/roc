@@ -1,8 +1,9 @@
-use crate::can::ident::Ident;
+use crate::can::ident::{Ident, Lowercase, Uppercase};
 use crate::can::problem::RuntimeError;
 use crate::collections::ImMap;
 use crate::module::symbol::{IdentIds, ModuleId, Symbol};
 use crate::region::{Located, Region};
+use crate::types::Type;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
@@ -13,6 +14,9 @@ pub struct Scope {
     /// A cache of all the symbols in scope. This makes lookups much
     /// faster when checking for unused defs and unused arguments.
     symbols: ImMap<Symbol, Region>,
+
+    /// The type aliases currently in scope
+    aliases: ImMap<Uppercase, (Region, Vec<Located<Lowercase>>, Type)>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -25,6 +29,7 @@ impl Scope {
             home,
             idents: ImMap::default(),
             symbols: ImMap::default(),
+            aliases: ImMap::default(),
         }
     }
 
@@ -108,5 +113,15 @@ impl Scope {
                 Ok(symbol)
             }
         }
+    }
+
+    pub fn add_alias(
+        &mut self,
+        name: Uppercase,
+        region: Region,
+        vars: Vec<Located<Lowercase>>,
+        typ: Type,
+    ) {
+        self.aliases.insert(name, (region, vars, typ));
     }
 }

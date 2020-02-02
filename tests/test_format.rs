@@ -1534,6 +1534,20 @@ mod test_format {
         ));
     }
 
+    #[test]
+    fn when_guard() {
+        expr_formats_same(indoc!(
+            r#"
+            when maybeScore is
+                Just score if isTwentyOne score ->
+                    win
+
+                _ ->
+                    nextRound
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]

@@ -5,7 +5,7 @@ use crate::can::expr::{
     canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
     Recursive,
 };
-use crate::can::ident::{Ident, Lowercase};
+use crate::can::ident::{Ident, Lowercase, Uppercase};
 use crate::can::pattern::PatternType;
 use crate::can::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::can::problem::Problem;
@@ -63,6 +63,13 @@ enum PendingDef<'a> {
         Located<Annotation>,
         &'a Located<ast::Expr<'a>>,
     ),
+
+    /// A type alias, e.g. `Ints : List Int`
+    Alias {
+        name: Located<Uppercase>,
+        vars: Vec<Located<Lowercase>>,
+        ann: &'a Located<ast::TypeAnnotation<'a>>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -629,6 +636,7 @@ fn canonicalize_pending_def<'a>(
             }
 
             let typ = ann.typ;
+
             let arity = typ.arity();
 
             // Fabricate a body for this annotation, that will error at runtime
@@ -699,6 +707,22 @@ fn canonicalize_pending_def<'a>(
                 );
             }
         }
+
+        Alias { name, vars, ann } => {
+            let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
+
+            // TODO should probably incorporate can_ann.references here - possibly by
+            // inserting them into refs_by_symbol?
+
+            // aliases cannot introduce new rigids that are visible in other annotations
+            // but the rigids can show up in type error messages, so still register them
+            for (k, v) in can_ann.ftv {
+                found_rigids.insert(k, v);
+            }
+
+            scope.add_alias(name.value.into(), name.region, vars, can_ann.typ);
+        }
+
         TypedBody(loc_pattern, loc_can_pattern, loc_annotation, loc_expr) => {
             // TODO we have ann.references here, which includes information about
             // which symbols were referenced in type annotations, but we never
@@ -1113,6 +1137,36 @@ fn to_pending_def<'a>(
             scope,
             pattern_type,
         ),
+
+        Alias { name, vars, ann } => {
+            let mut can_vars: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
+
+            for loc_var in vars.iter() {
+                match loc_var.value {
+                    ast::Pattern::Identifier(name)
+                        if name.chars().next().unwrap().is_lowercase() =>
+                    {
+                        // This is a valid lowercase rigid var for the alias.
+                        can_vars.push(Located {
+                            value: name.into(),
+                            region: loc_var.region,
+                        });
+                    }
+                    _ => {
+                        panic!("TODO gracefully handle an invalid pattern appearing where a type alias rigid var should be.");
+                    }
+                }
+            }
+
+            PendingDef::Alias {
+                name: Located {
+                    region: name.region,
+                    value: (*name.value).into(),
+                },
+                vars: can_vars,
+                ann,
+            }
+        }
 
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) | Nested(sub_def) => {
             to_pending_def(env, var_store, sub_def, scope, pattern_type)

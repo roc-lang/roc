@@ -13,7 +13,6 @@ use crate::can::scope::Scope;
 use crate::collections::{ImSet, MutMap, MutSet, SendMap};
 use crate::module::symbol::Symbol;
 use crate::operator::CalledVia;
-use crate::parse;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
@@ -26,12 +25,6 @@ pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
     pub rigids: SendMap<Variable, Lowercase>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct WhenPattern {
-    pub pattern: Located<Pattern>,
-    pub guard: Option<Located<Expr>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,7 +46,7 @@ pub enum Expr {
         cond_var: Variable,
         expr_var: Variable,
         loc_cond: Box<Located<Expr>>,
-        branches: Vec<(WhenPattern, Located<Expr>)>,
+        branches: Vec<(Located<Pattern>, Located<Expr>)>,
     },
     If {
         cond_var: Variable,
@@ -438,14 +431,14 @@ pub fn canonicalize_expr<'a>(
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
-            for (loc_branch, loc_expr) in branches {
+            for branch in branches {
                 let (can_when_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
                     env,
                     var_store,
                     scope,
                     region,
-                    loc_branch.first().unwrap(),
-                    loc_expr,
+                    branch.patterns.first().unwrap(),
+                    &branch.value,
                     &mut output,
                 );
 
@@ -650,17 +643,15 @@ fn canonicalize_when_branch<'a>(
     var_store: &VarStore,
     scope: &Scope,
     region: Region,
-    loc_pattern_and_guard: &'a parse::ast::WhenPattern,
+    loc_pattern: &Located<ast::Pattern<'a>>,
     loc_expr: &'a Located<ast::Expr<'a>>,
     output: &mut Output,
-) -> (WhenPattern, Located<Expr>, References) {
+) -> (Located<Pattern>, Located<Expr>, References) {
     // Each case branch gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the
     // rest of this block, but keep the original around for later diffing.
     let original_scope = scope;
     let mut scope = original_scope.clone();
-
-    let loc_pattern = loc_pattern_and_guard;
 
     let (can_expr, branch_output) =
         canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
@@ -684,34 +675,11 @@ fn canonicalize_when_branch<'a>(
         var_store,
         &mut scope,
         WhenBranch,
-        &loc_pattern.pattern.value,
-        loc_pattern.pattern.region,
+        &loc_pattern.value,
+        loc_pattern.region,
     );
 
-    match &loc_pattern.guard {
-        Some(guard) => {
-            let (can_guard, guard_out) =
-                canonicalize_expr(env, var_store, &mut scope, region, &guard.value);
-
-            (
-                WhenPattern {
-                    pattern: loc_can_pattern,
-                    guard: Some(can_guard),
-                },
-                can_expr,
-                branch_output.references.union(guard_out.references),
-            )
-        }
-
-        None => (
-            WhenPattern {
-                pattern: loc_can_pattern,
-                guard: None,
-            },
-            can_expr,
-            branch_output.references,
-        ),
-    }
+    (loc_can_pattern, can_expr, branch_output.references)
 }
 
 pub fn local_successors<'a>(

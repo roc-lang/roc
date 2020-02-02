@@ -193,7 +193,7 @@ pub fn canonicalize_pattern<'a>(
             let mut fields = Vec::with_capacity(patterns.len());
             let mut opt_erroneous = None;
 
-            for loc_pattern in patterns {
+            for loc_pattern in *patterns {
                 match loc_pattern.value {
                     Identifier(label) => {
                         match scope.introduce(label.into(), &mut env.ident_ids, region) {

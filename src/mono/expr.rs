@@ -307,7 +307,7 @@ fn from_can_when<'a>(
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<can::expr::Expr>,
-    branches: std::vec::Vec<(can::expr::WhenPattern, Located<can::expr::Expr>)>,
+    branches: std::vec::Vec<(Located<can::pattern::Pattern>, Located<can::expr::Expr>)>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
     use crate::can::pattern::Pattern::*;
@@ -327,7 +327,7 @@ fn from_can_when<'a>(
 
             store_pattern(
                 env,
-                loc_when_pattern.pattern.value,
+                loc_when_pattern.value,
                 loc_cond.value,
                 cond_var,
                 procs,
@@ -345,7 +345,7 @@ fn from_can_when<'a>(
             let (loc_when_pat1, loc_then) = iter.next().unwrap();
             let (loc_when_pat2, loc_else) = iter.next().unwrap();
 
-            match (&loc_when_pat1.pattern.value, &loc_when_pat2.pattern.value) {
+            match (&loc_when_pat1.value, &loc_when_pat2.value) {
                 (IntLiteral(int), IntLiteral(_)) | (IntLiteral(int), Underscore) => {
                     let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
                     let cond_rhs = arena.alloc(Expr::Int(*int));
@@ -418,7 +418,7 @@ fn from_can_when<'a>(
                 for (loc_when_pat, loc_expr) in branches {
                     let mono_expr = from_can(env, loc_expr.value, procs, None);
 
-                    match &loc_when_pat.pattern.value {
+                    match &loc_when_pat.value {
                         IntLiteral(int) => {
                             // Switch only compares the condition to the
                             // alternatives based on their bit patterns,

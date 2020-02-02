@@ -686,7 +686,7 @@ pub fn constrain_expr(
                             &mut branch_var_usage,
                             env,
                             region,
-                            &loc_when_pattern.pattern,
+                            &loc_when_pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -708,8 +708,7 @@ pub fn constrain_expr(
                         //      Bar x -> x
                         //
                         // In this case the `x` in the second branch is used uniquely
-                        for symbol in pattern::symbols_from_pattern(&loc_when_pattern.pattern.value)
-                        {
+                        for symbol in pattern::symbols_from_pattern(&loc_when_pattern.value) {
                             branch_var_usage.unregister(symbol);
                         }
 
@@ -734,7 +733,7 @@ pub fn constrain_expr(
                             &mut branch_var_usage,
                             env,
                             region,
-                            &loc_when_pattern.pattern,
+                            &loc_when_pattern,
                             loc_expr,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -755,8 +754,7 @@ pub fn constrain_expr(
                         //      Bar x -> x
                         //
                         // In this case the `x` in the second branch is used uniquely
-                        for symbol in pattern::symbols_from_pattern(&loc_when_pattern.pattern.value)
-                        {
+                        for symbol in pattern::symbols_from_pattern(&loc_when_pattern.value) {
                             branch_var_usage.unregister(symbol);
                         }
 
