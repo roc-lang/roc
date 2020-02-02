@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_load {
-    use crate::helpers::{/*builtins_dir, */fixtures_dir, test_home};
+    use crate::helpers::{/*builtins_dir, */fixtures_dir};
     use inlinable_string::InlinableString;
     use roc::can::def::Declaration::*;
     use roc::collections::MutMap;
@@ -92,7 +92,7 @@ mod test_load {
     // }
 
     fn expect_types(loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
-        let home = test_home();
+        let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
 
         assert_eq!(loaded_module.problems, Vec::new());
