@@ -38,7 +38,7 @@ pub fn canonicalize_annotation(
     // `ftv : SendMap<Variable, Lowercase>`.
     let mut rigids = ImMap::default();
     let mut local_aliases = Vec::new();
-    let (typ, references) = can_annotation_help(
+    let (mut typ, references) = can_annotation_help(
         env,
         annotation,
         region,
@@ -47,6 +47,10 @@ pub fn canonicalize_annotation(
         &mut rigids,
         &mut local_aliases,
     );
+
+    for (symbol, tipe) in local_aliases {
+        typ.substitute_alias(symbol, &tipe);
+    }
 
     let mut ftv = MutMap::default();
 

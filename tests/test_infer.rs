@@ -58,6 +58,7 @@ mod test_infer {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
+            dbg!(&problems);
             panic!(
                 "PROBLEMS\n{:?}\nexpected:\n{:?}\ninferred:\n{:?}",
                 problems, expected, actual
@@ -1503,6 +1504,23 @@ mod test_infer {
                 "#
             ),
             "Foo Int",
+        );
+    }
+
+    #[test]
+    fn identity_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo a : { foo : a }
+
+                id : Foo a -> Foo a
+                id = \x -> x
+
+                id
+                "#
+            ),
+            "Foo a -> Foo a",
         );
     }
 }
