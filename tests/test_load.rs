@@ -159,7 +159,7 @@ mod test_load {
                 .expect("Test ModuleID not found in module_ids");
 
             assert_eq!(expected_name, &InlinableString::from("Primary"));
-            assert_eq!(def_count, 6);
+            assert_eq!(def_count, 5);
         });
     }
 
