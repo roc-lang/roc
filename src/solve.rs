@@ -549,7 +549,8 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    if let Some(recursive) = subs.occurs(var) {
+    while let Some(recursive) = subs.occurs(var) {
+        // try to make a tag union recursive, see if that helps
         if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
             let rec_var = subs.fresh_unnamed_flex_var();
 

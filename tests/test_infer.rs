@@ -29,7 +29,6 @@ mod test_infer {
         } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
-        dbg!(&constraint);
         assert_correct_variable_usage(&constraint);
 
         for (var, name) in output.rigids {
@@ -1486,7 +1485,7 @@ mod test_infer {
                 r#"
                     Peano : [ S Peano, Z ]
 
-                    length : Peano -> Num.Num Int.Integer 
+                    length : Peano -> Num.Num Int.Integer
                     length = \peano ->
                         when peano is
                             Z -> 0
@@ -1545,7 +1544,7 @@ mod test_infer {
                 r#"
                     List q : [ Cons q (List q), Nil ]
 
-                    map : (a -> b), List a -> List b 
+                    map : (a -> b), List a -> List b
                     map = \f, list ->
                         when list is
                             Nil -> Nil

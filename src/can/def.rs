@@ -581,8 +581,7 @@ fn group_to_declaration(
                     new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
                 }
 
-                let succs = successors(&symbol);
-                let is_recursive = succs.contains(&symbol);
+                let is_recursive = successors(&symbol).contains(&symbol);
 
                 if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
                     if is_recursive {

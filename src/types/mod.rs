@@ -77,11 +77,11 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(symbol, args, actual) => {
+            Type::Alias(symbol, args, _actual) => {
                 write!(f, "Alias {:?}", symbol)?;
 
                 for (_, arg) in args {
-                    write!(f, " <{:?}>", arg)?;
+                    write!(f, " {:?}", arg)?;
                 }
 
                 Ok(())

@@ -62,7 +62,7 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    if let Some(recursive) = subs.occurs(variable) {
+    while let Some(recursive) = subs.occurs(variable) {
         if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
             let rec_var = subs.fresh_unnamed_flex_var();
 
@@ -80,6 +80,8 @@ fn find_names_needed(
 
             let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
             subs.set_content(recursive, Content::Structure(flat_type));
+        } else {
+            panic!("unfixable recursive type in pretty_print_types")
         }
     }
 
@@ -133,7 +135,6 @@ fn find_names_needed(
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            println!("{:?}", (rec_var, &tags, ext_var));
             for var in tags.values().flatten() {
                 find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }

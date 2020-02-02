@@ -282,7 +282,7 @@ fn unify_tag_union(
     let unique_tags1 = relative_complement(&tags1, &tags2);
     let unique_tags2 = relative_complement(&tags2, &tags1);
 
-    let rec_var = match recursion {
+    let recursion_var = match recursion {
         (None, None) => None,
         (Some(v), None) | (None, Some(v)) => Some(v),
         (Some(v1), Some(v2)) => {
@@ -301,7 +301,7 @@ fn unify_tag_union(
                 shared_tags,
                 MutMap::default(),
                 rec1.ext,
-                rec_var,
+                recursion_var,
             );
 
             tag_problems.extend(ext_problems);
@@ -318,7 +318,7 @@ fn unify_tag_union(
                 shared_tags,
                 MutMap::default(),
                 sub_record,
-                rec_var,
+                recursion_var,
             );
 
             tag_problems.extend(ext_problems);
@@ -336,7 +336,7 @@ fn unify_tag_union(
             shared_tags,
             MutMap::default(),
             sub_record,
-            rec_var,
+            recursion_var,
         );
 
         tag_problems.extend(ext_problems);
@@ -356,7 +356,7 @@ fn unify_tag_union(
         let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
 
         let mut tag_problems =
-            unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext, rec_var);
+            unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var);
 
         tag_problems.reserve(rec1_problems.len() + rec2_problems.len());
         tag_problems.extend(rec1_problems);
@@ -373,7 +373,7 @@ fn unify_shared_tags(
     shared_tags: MutMap<TagName, (Vec<Variable>, Vec<Variable>)>,
     other_tags: MutMap<TagName, Vec<Variable>>,
     ext: Variable,
-    rec_var: Option<Variable>,
+    recursion_var: Option<Variable>,
 ) -> Outcome {
     let mut matching_tags = MutMap::default();
     let num_shared_tags = shared_tags.len();
@@ -399,7 +399,7 @@ fn unify_shared_tags(
     }
 
     if num_shared_tags == matching_tags.len() {
-        let flat_type = if let Some(rec) = rec_var {
+        let flat_type = if let Some(rec) = recursion_var {
             FlatType::RecursiveTagUnion(rec, union(matching_tags, &other_tags), ext)
         } else {
             FlatType::TagUnion(union(matching_tags, &other_tags), ext)
@@ -456,11 +456,18 @@ fn unify_flat_type(
             unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
         }
 
-        (TagUnion(tags1, ext1), RecursiveTagUnion(rec_var, tags2, ext2)) => {
+        (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
-            unify_tag_union(subs, pool, ctx, union1, union2, (None, Some(*rec_var)))
+            unify_tag_union(
+                subs,
+                pool,
+                ctx,
+                union1,
+                union2,
+                (None, Some(*recursion_var)),
+            )
         }
 
         (Boolean(b1_raw), Boolean(b2_raw)) => {
