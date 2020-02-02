@@ -128,6 +128,7 @@ impl IntoIterator for VarUsage {
 impl VarUsage {
     pub fn default() -> VarUsage {
         let empty: ImMap<Symbol, ReferenceCount> = ImMap::default();
+
         VarUsage { usage: empty }
     }
 

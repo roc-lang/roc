@@ -12,9 +12,10 @@ mod helpers;
 
 #[cfg(test)]
 mod test_usage_analysis {
-    use crate::helpers::can_expr;
+    use crate::helpers::{can_expr, test_home, CanExprOut};
     use roc::can::ident::Lowercase;
     use roc::collections::{ImMap, ImSet};
+    use roc::module::symbol::Interns;
     use roc::uniqueness::sharing::FieldAccess;
     use roc::uniqueness::sharing::ReferenceCount::{self, *};
     use roc::uniqueness::sharing::VarUsage;
@@ -158,16 +159,21 @@ mod test_usage_analysis {
             ],
         );
     }
-    fn usage_eq(src: &str, expected: VarUsage) {
-        let (expr, _, _problems, _subs, _variable, _constraint) = can_expr(src);
+    fn usage_eq<F>(src: &str, get_expected: F)
+    where
+        F: FnOnce(Interns) -> VarUsage,
+    {
+        let CanExprOut {
+            loc_expr, interns, ..
+        } = can_expr(src);
 
         use roc::uniqueness::sharing::annotate_usage;
         let mut usage = VarUsage::default();
-        annotate_usage(&expr, &mut usage);
+        annotate_usage(&loc_expr.value, &mut usage);
 
         dbg!(&usage);
 
-        assert_eq!(usage, expected)
+        assert_eq!(usage, get_expected(interns))
     }
 
     #[test]
@@ -182,14 +188,15 @@ mod test_usage_analysis {
                             m -> factorial m
 
                     factorial
-                   "#
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 let mut usage = VarUsage::default();
 
-                usage.register_with(&"Test.blah$m".into(), &Unique);
-                usage.register_with(&"Test.blah$n".into(), &Unique);
-                usage.register_with(&"Test.blah$factorial".into(), &Shared);
+                usage.register_with(interns.symbol(home, "m".into()), &Unique);
+                usage.register_with(interns.symbol(home, "n".into()), &Unique);
+                usage.register_with(interns.symbol(home, "factorial".into()), &Shared);
 
                 usage
             },
@@ -201,15 +208,19 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-            rec = { foo : 42, bar : "baz" } 
-            rec.foo
-                   "#
+                    rec = { foo : 42, bar : "baz" }
+                    rec.foo
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 let mut usage = VarUsage::default();
                 let fa = FieldAccess::from_chain(vec!["foo".into()]);
 
-                usage.register_with(&"Test.blah$rec".into(), &ReferenceCount::Access(fa));
+                usage.register_with(
+                    interns.symbol(home, "rec".into()),
+                    &ReferenceCount::Access(fa),
+                );
 
                 usage
             },
@@ -221,17 +232,18 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-            rec = { foo : 42, bar : "baz" } 
-            { rec & foo: rec.foo } 
-                   "#
+                    rec = { foo : 42, bar : "baz" }
+                    { rec & foo: rec.foo }
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 let mut usage = VarUsage::default();
                 let fa = FieldAccess::from_chain(vec!["foo".into()]);
 
                 let overwritten = hashset!["foo".into()].into();
                 usage.register_with(
-                    &"Test.blah$rec".into(),
+                    interns.symbol(home, "rec".into()),
                     &ReferenceCount::Update(overwritten, fa),
                 );
 
@@ -245,15 +257,16 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-            rec = { foo : 42, bar : "baz" } 
-            v = { rec & foo: 53 }
+                    rec = { foo : 42, bar : "baz" }
+                    v = { rec & foo: 53 }
 
-            rec
-                   "#
+                    rec
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 let mut usage = VarUsage::default();
-                usage.register_with(&"Test.blah$rec".into(), &ReferenceCount::Shared);
+                usage.register_with(interns.symbol(home, "rec".into()), &ReferenceCount::Shared);
 
                 usage
             },
@@ -265,13 +278,14 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-            rec = { foo : 42, bar : "baz" } 
-            v = rec.foo
+                    rec = { foo : 42, bar : "baz" }
+                    v = rec.foo
 
-            rec
-                   "#
+                    rec
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 let mut usage = VarUsage::default();
                 let mut fields = ImMap::default();
                 fields.insert(
@@ -280,7 +294,7 @@ mod test_usage_analysis {
                 );
                 let fa = FieldAccess { fields: fields };
                 usage.register_with(
-                    &"Test.blah$rec".into(),
+                    interns.symbol(home, "rec".into()),
                     &ReferenceCount::Update(ImSet::default(), fa),
                 );
 
@@ -294,19 +308,21 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-                        \r -> 
-                            v = r.x
-                            w = r.y
+                    \r ->
+                        v = r.x
+                        w = r.y
 
-                            p = r
+                        p = r
 
-                            p
-                   "#
+                        p
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 let mut usage = VarUsage::default();
-                usage.register_with(&"Test.blah$r".into(), &ReferenceCount::Shared);
-                usage.register_with(&"Test.blah$p".into(), &ReferenceCount::Unique);
+
+                usage.register_with(interns.symbol(home, "r".into()), &ReferenceCount::Shared);
+                usage.register_with(interns.symbol(home, "p".into()), &ReferenceCount::Unique);
 
                 usage
             },
@@ -318,14 +334,15 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-                \r -> 
-                    v = r.foo.bar
-                    w = r.foo.baz
+                    \r ->
+                        v = r.foo.bar
+                        w = r.foo.baz
 
-                    r
-                   "#
+                        r
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 let mut usage = VarUsage::default();
 
                 let mut nested_fields = ImMap::default();
@@ -346,7 +363,7 @@ mod test_usage_analysis {
 
                 let fa = FieldAccess { fields: fields };
                 usage.register_with(
-                    &"Test.blah$r".into(),
+                    interns.symbol(home, "r".into()),
                     &ReferenceCount::Update(ImSet::default(), fa),
                 );
 
@@ -360,16 +377,17 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-            r = { x : 42, y : 2020 }
-            s = { r & y: r.x }
+                    r = { x : 42, y : 2020 }
+                    s = { r & y: r.x }
 
-            p = s.x
-            q = s.y
+                    p = s.x
+                    q = s.y
 
-            42
-                   "#
+                    42
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 let mut usage = VarUsage::default();
 
                 let mut fields = ImMap::default();
@@ -377,7 +395,7 @@ mod test_usage_analysis {
                 let fa = FieldAccess { fields: fields };
                 let overwritten = hashset!["y".into()].into();
                 usage.register_with(
-                    &"Test.blah$r".into(),
+                    interns.symbol(home, "r".into()),
                     &ReferenceCount::Update(overwritten, fa),
                 );
 
@@ -385,7 +403,10 @@ mod test_usage_analysis {
                 fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
                 fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
                 let fa = FieldAccess { fields: fields };
-                usage.register_with(&"Test.blah$s".into(), &ReferenceCount::Access(fa));
+                usage.register_with(
+                    interns.symbol(home, "s".into()),
+                    &ReferenceCount::Access(fa),
+                );
 
                 usage
             },
@@ -397,23 +418,24 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-            r = { x : 42, y : 2020 } 
-            s = { r & x: 0, y: r.x }
+                    r = { x : 42, y : 2020 }
+                    s = { r & x: 0, y: r.x }
 
-            p = s.x
-            q = s.y
+                    p = s.x
+                    q = s.y
 
-            42
-                   "#
+                    42
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
                 let mut usage = VarUsage::default();
 
                 let fa = FieldAccess::from_chain(vec!["x".into()]);
                 let overwritten = hashset!["x".into(), "y".into()].into();
                 usage.register_with(
-                    &"Test.blah$r".into(),
+                    interns.symbol(home, "r".into()),
                     &ReferenceCount::Update(overwritten, fa),
                 );
 
@@ -421,7 +443,10 @@ mod test_usage_analysis {
                 fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
                 fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
                 let fa = FieldAccess { fields: fields };
-                usage.register_with(&"Test.blah$s".into(), &ReferenceCount::Access(fa));
+                usage.register_with(
+                    interns.symbol(home, "s".into()),
+                    &ReferenceCount::Access(fa),
+                );
 
                 usage
             },
@@ -433,12 +458,13 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-            r = { x : 42, y : 2020 } 
+                    r = { x : 42, y : 2020 }
 
-            if True then r.x else r.y
-                   "#
+                    if True then r.x else r.y
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
                 let mut usage = VarUsage::default();
 
@@ -446,7 +472,10 @@ mod test_usage_analysis {
                 fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
                 fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
                 let fa = FieldAccess { fields: fields };
-                usage.register_with(&"Test.blah$r".into(), &ReferenceCount::Access(fa));
+                usage.register_with(
+                    interns.symbol(home, "r".into()),
+                    &ReferenceCount::Access(fa),
+                );
 
                 usage
             },
@@ -458,12 +487,13 @@ mod test_usage_analysis {
         usage_eq(
             indoc!(
                 r#"
-            r = { x : 42, y : 2020 } 
+                    r = { x : 42, y : 2020 }
 
-            if True then { r & y: r.x } else r
-                   "#
+                    if True then { r & y: r.x } else r
+                "#
             ),
-            {
+            |interns| {
+                let home = test_home();
                 // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
                 let mut usage = VarUsage::default();
 
@@ -471,7 +501,7 @@ mod test_usage_analysis {
                 fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
                 let fa = FieldAccess { fields: fields };
                 usage.register_with(
-                    &"Test.blah$r".into(),
+                    interns.symbol(home, "r".into()),
                     &ReferenceCount::Update(hashset!["y".into()].into(), fa),
                 );
 

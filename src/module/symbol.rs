@@ -168,6 +168,25 @@ pub struct Interns {
     pub all_ident_ids: MutMap<ModuleId, IdentIds>,
 }
 
+impl Interns {
+    pub fn symbol(&self, module_id: ModuleId, ident: InlinableString) -> Symbol {
+        match self.all_ident_ids.get(&module_id) {
+            Some(ident_ids) => match ident_ids.get_id(&ident) {
+                Some(ident_id) => Symbol::new(module_id, *ident_id),
+                None => {
+                    panic!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
+                }
+            },
+            None => {
+                panic!(
+                    "Interns::symbol could not find entry for module {:?} in Interns {:?}",
+                    module_id, self
+                );
+            }
+        }
+    }
+}
+
 #[cfg(debug_assertions)]
 lazy_static! {
     /// This is used in Debug builds only, to let us have a Debug instance
