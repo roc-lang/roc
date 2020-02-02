@@ -654,9 +654,8 @@ pub fn constrain_expr(
         If {
             cond_var,
             branch_var,
-            loc_cond,
-            loc_then,
-            loc_else,
+            branches,
+            final_else,
         } => {
             // TODO use Bool alias here, so we don't allocate this type every time
             let bool_type = Type::TagUnion(
@@ -666,35 +665,53 @@ pub fn constrain_expr(
                 ],
                 Box::new(Type::EmptyTagUnion),
             );
-            let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);
 
-            let cond_con = Eq(Type::Variable(*cond_var), expect_bool, loc_cond.region);
+            let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
+            let mut cond_uniq_vars = Vec::with_capacity(branches.len() + 2);
 
             match expected {
                 Expected::FromAnnotation(name, arity, _, tipe) => {
-                    let then_con = constrain_expr(
-                        env,
-                        var_store,
-                        var_usage,
-                        loc_then.region,
-                        &loc_then.value,
-                        Expected::FromAnnotation(
-                            name.clone(),
-                            arity,
-                            AnnotationSource::TypedIfBranch(0),
-                            tipe.clone(),
-                        ),
-                    );
+                    for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
+                        let cond_uniq_var = var_store.fresh();
+                        let expect_bool = Expected::ForReason(
+                            Reason::IfCondition,
+                            constrain::attr_type(Bool::Variable(cond_uniq_var), bool_type.clone()),
+                            region,
+                        );
+                        cond_uniq_vars.push(cond_uniq_var);
+
+                        let cond_con = Eq(
+                            Type::Variable(*cond_var),
+                            expect_bool.clone(),
+                            loc_cond.region,
+                        );
+                        let then_con = constrain_expr(
+                            env,
+                            var_store,
+                            var_usage,
+                            loc_body.region,
+                            &loc_body.value,
+                            Expected::FromAnnotation(
+                                name.clone(),
+                                arity,
+                                AnnotationSource::TypedIfBranch(index + 1),
+                                tipe.clone(),
+                            ),
+                        );
+
+                        branch_cons.push(cond_con);
+                        branch_cons.push(then_con);
+                    }
                     let else_con = constrain_expr(
                         env,
                         var_store,
                         var_usage,
-                        loc_else.region,
-                        &loc_else.value,
+                        final_else.region,
+                        &final_else.value,
                         Expected::FromAnnotation(
                             name,
                             arity,
-                            AnnotationSource::TypedIfBranch(1),
+                            AnnotationSource::TypedIfBranch(branches.len() + 1),
                             tipe.clone(),
                         ),
                     );
@@ -705,46 +722,67 @@ pub fn constrain_expr(
                         region,
                     );
 
-                    exists(
-                        vec![*cond_var, *branch_var],
-                        And(vec![cond_con, then_con, else_con, ast_con]),
-                    )
+                    branch_cons.push(ast_con);
+                    branch_cons.push(else_con);
+
+                    cond_uniq_vars.push(*cond_var);
+                    cond_uniq_vars.push(*branch_var);
+
+                    exists(cond_uniq_vars, And(branch_cons))
                 }
                 _ => {
-                    let then_con = constrain_expr(
-                        env,
-                        var_store,
-                        var_usage,
-                        loc_then.region,
-                        &loc_then.value,
-                        Expected::ForReason(
-                            Reason::IfBranch { index: 0 },
-                            Type::Variable(*branch_var),
+                    for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
+                        let cond_uniq_var = var_store.fresh();
+                        let expect_bool = Expected::ForReason(
+                            Reason::IfCondition,
+                            constrain::attr_type(Bool::Variable(cond_uniq_var), bool_type.clone()),
                             region,
-                        ),
-                    );
+                        );
+                        cond_uniq_vars.push(cond_uniq_var);
+
+                        let cond_con = Eq(
+                            Type::Variable(*cond_var),
+                            expect_bool.clone(),
+                            loc_cond.region,
+                        );
+                        let then_con = constrain_expr(
+                            env,
+                            var_store,
+                            var_usage,
+                            loc_body.region,
+                            &loc_body.value,
+                            Expected::ForReason(
+                                Reason::IfBranch { index: index + 1 },
+                                Type::Variable(*branch_var),
+                                region,
+                            ),
+                        );
+
+                        branch_cons.push(cond_con);
+                        branch_cons.push(then_con);
+                    }
                     let else_con = constrain_expr(
                         env,
                         var_store,
                         var_usage,
-                        loc_else.region,
-                        &loc_else.value,
+                        final_else.region,
+                        &final_else.value,
                         Expected::ForReason(
-                            Reason::IfBranch { index: 1 },
+                            Reason::IfBranch {
+                                index: branches.len() + 1,
+                            },
                             Type::Variable(*branch_var),
                             region,
                         ),
                     );
 
-                    exists(
-                        vec![*cond_var, *branch_var],
-                        And(vec![
-                            cond_con,
-                            then_con,
-                            else_con,
-                            Eq(Type::Variable(*branch_var), expected, region),
-                        ]),
-                    )
+                    branch_cons.push(Eq(Type::Variable(*branch_var), expected, region));
+                    branch_cons.push(else_con);
+
+                    cond_uniq_vars.push(*cond_var);
+                    cond_uniq_vars.push(*branch_var);
+
+                    exists(cond_uniq_vars, And(branch_cons))
                 }
             }
         }
