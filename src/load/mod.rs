@@ -637,7 +637,8 @@ fn add_exposed_to_scope(
 ) {
     for ident in exposed {
         // Since this value is exposed, add it to our module's default scope.
-        debug_assert!(ident_ids.get_id(ident.clone().as_inline_str()).is_none());
+        debug_assert!(!scope.contains_key(&ident.clone()));
+
         let ident_id = ident_ids.add(ident.clone().into());
         let symbol = Symbol::new(module_id, ident_id);
 
