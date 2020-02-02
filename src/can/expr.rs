@@ -51,9 +51,8 @@ pub enum Expr {
     If {
         cond_var: Variable,
         branch_var: Variable,
-        loc_cond: Box<Located<Expr>>,
-        loc_then: Box<Located<Expr>>,
-        loc_else: Box<Located<Expr>>,
+        branches: Vec<(Located<Expr>, Located<Expr>)>,
+        final_else: Box<Located<Expr>>,
     },
 
     // Let
@@ -546,9 +545,8 @@ pub fn canonicalize_expr<'a>(
                 If {
                     cond_var: var_store.fresh(),
                     branch_var: var_store.fresh(),
-                    loc_cond: Box::new(loc_cond),
-                    loc_then: Box::new(loc_then),
-                    loc_else: Box::new(loc_else),
+                    branches: vec![(loc_cond, loc_then)],
+                    final_else: Box::new(loc_else),
                 },
                 output,
             )
