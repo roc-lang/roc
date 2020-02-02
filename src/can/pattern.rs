@@ -196,7 +196,7 @@ pub fn canonicalize_pattern<'a>(
             let ext_var = var_store.fresh();
             let mut fields = Vec::with_capacity(patterns.len());
 
-            for loc_pattern in patterns {
+            for loc_pattern in *patterns {
                 match loc_pattern.value {
                     Identifier(label) => {
                         let symbol = match canonicalize_pattern_identifier(
@@ -380,7 +380,7 @@ pub fn remove_idents(pattern: &ast::Pattern, idents: &mut ImMap<Ident, (Symbol, 
             }
         }
         RecordDestructure(patterns) => {
-            for loc_pattern in patterns {
+            for loc_pattern in *patterns {
                 remove_idents(&loc_pattern.value, idents);
             }
         }
@@ -444,7 +444,7 @@ fn add_idents_from_pattern<'a>(
         }
 
         RecordDestructure(patterns) => {
-            for loc_pattern in patterns {
+            for loc_pattern in *patterns {
                 add_idents_from_pattern(&loc_pattern.region, &loc_pattern.value, scope, answer);
             }
         }

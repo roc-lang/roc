@@ -49,6 +49,8 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         | Nested(SpaceBefore(def, _))
         | Nested(SpaceAfter(def, _)) => desugar_def(arena, def),
         Nested(Nested(def)) => desugar_def(arena, def),
+        alias @ Alias { .. } => Nested(alias),
+        Nested(alias @ Alias { .. }) => Nested(alias),
         ann @ Annotation(_, _) => Nested(ann),
         Nested(ann @ Annotation(_, _)) => Nested(ann),
     }

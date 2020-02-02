@@ -208,6 +208,17 @@ pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
     Annotation(Loc<Pattern<'a>>, Loc<TypeAnnotation<'a>>),
+
+    /// A type alias. This is like a standalone annotation, except the pattern
+    /// must be a capitalized Identifier, e.g.
+    ///
+    /// Foo : Bar Baz
+    Alias {
+        name: Loc<&'a str>,
+        vars: &'a [Loc<Pattern<'a>>],
+        ann: Loc<TypeAnnotation<'a>>,
+    },
+
     // TODO in canonicalization, check to see if there are any newlines after the
     // annotation; if not, and if it's followed by a Body, then the annotation
     // applies to that expr! (TODO: verify that the pattern for both annotation and body match.)
@@ -338,7 +349,7 @@ pub enum Pattern<'a> {
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
-    RecordDestructure(Vec<'a, Loc<Pattern<'a>>>),
+    RecordDestructure(&'a [Loc<Pattern<'a>>]),
     /// A field pattern, e.g. { x: Just 0 } -> ...
     /// can only occur inside of a RecordDestructure
     RecordField(&'a str, &'a Loc<Pattern<'a>>),

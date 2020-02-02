@@ -578,10 +578,9 @@ fn canonicalize_def<'a>(
                 found_rigids.insert(k, v);
             }
 
-            let arity = can_annotation.arity();
-
             // Fabricate a body for this annotation, that will error at runtime
             let value = Expr::RuntimeError(NoImplementation);
+            let arity = can_annotation.arity();
             let is_closure = arity > 0;
             let loc_can_expr = if !is_closure {
                 Located {
@@ -594,6 +593,7 @@ fn canonicalize_def<'a>(
                 // generate a fake pattern for each argument. this makes signatures
                 // that are functions only crash when they are applied.
                 let mut underscores = Vec::with_capacity(arity);
+
                 for _ in 0..arity {
                     let underscore: Located<Pattern> = Located {
                         value: Pattern::Underscore,
@@ -639,6 +639,37 @@ fn canonicalize_def<'a>(
                     },
                 );
             }
+        }
+        Alias { name, vars, ann } => {
+            let mut can_vars: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
+
+            for loc_var in *vars {
+                match loc_var.value {
+                    ast::Pattern::Identifier(name)
+                        if name.chars().next().unwrap().is_lowercase() =>
+                    {
+                        // This is a valid lowercase rigid var for the alias.
+                        can_vars.push(Located {
+                            value: name.into(),
+                            region: loc_var.region,
+                        });
+                    }
+                    _ => {
+                        panic!("TODO gracefully handle an invalid pattern appearing where a type alias rigid var should be.");
+                    }
+                }
+            }
+
+            // aliases cannot introduce new rigids that are visible in other annotations
+            // but the rigids can show up in type error messages, so still register them
+            let (seen_rigids, can_ann) = canonicalize_annotation(env, &ann.value, var_store);
+
+            // union seen rigids with already found ones
+            for (k, v) in seen_rigids {
+                found_rigids.insert(k, v);
+            }
+
+            scope.add_alias(name.value.into(), name.region, can_vars, can_ann);
         }
 
         TypedDef(loc_pattern, loc_annotation, loc_expr) => {
@@ -974,6 +1005,7 @@ fn pattern_from_def<'a>(def: &'a ast::Def<'a>) -> Option<&'a Located<ast::Patter
 
     match def {
         Annotation(ref loc_pattern, _) => Some(loc_pattern),
+        Alias { name: _name, .. } => None, // TODO if we end up with pattern_from_def (instead of deleting it), use something like: Some(&Located { region: name.region, value: ast::Pattern::Identifier(name.value), }),
         Body(ref loc_pattern, _) => Some(loc_pattern),
         TypedDef(ref loc_pattern, _, _) => Some(loc_pattern),
         SpaceBefore(def, _) | SpaceAfter(def, _) | Nested(def) => pattern_from_def(def),
