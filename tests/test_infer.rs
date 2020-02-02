@@ -1418,7 +1418,7 @@ mod test_infer {
                     empty
                        "#
             ),
-            "Test.List a",
+            "List a",
         );
     }
 
@@ -1427,13 +1427,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    singleton : a -> [ Cons a (Test.List a), Nil ] as List a
+                    singleton : a -> [ Cons a (List a), Nil ] as List a
                     singleton = \x -> Cons x Nil
 
                     singleton
                        "#
             ),
-            "a -> Test.List a",
+            "a -> List a",
         );
     }
 
@@ -1444,7 +1444,7 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    map : [ S Test.Peano, Z ] as Peano -> Test.Peano
+                    map : [ S Peano, Z ] as Peano -> Peano
                     map = \peano ->
                         when peano is
                             Z -> Z
@@ -1453,7 +1453,7 @@ mod test_infer {
                     map
                        "#
             ),
-            "Test.Peano",
+            "Peano",
         );
     }
 
@@ -1465,7 +1465,7 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    map : (a -> a), [ Cons a (Test.List a), Nil ] as List a -> Test.List a
+                    map : (a -> a), [ Cons a (List a), Nil ] as List a -> List a
                     map = \f, list ->
                         when list is
                             Nil -> Nil
