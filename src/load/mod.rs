@@ -67,6 +67,7 @@ enum Msg {
     Constrained {
         module: Module,
         constraint: Constraint,
+        ident_ids: IdentIds,
         next_var: Variable,
     },
     Solved {
@@ -133,18 +134,24 @@ pub async fn load<'a>(
 
     let (msg_tx, mut msg_rx): (MsgSender, MsgReceiver) = mpsc::channel(1024);
     let mut module_ids = ModuleIds::default();
-    let mut all_ident_ids = MutMap::default();
+    let mut exposed_ident_ids = MutMap::default();
+
+    // This is the "final" list of IdentIds, after canonicalization and constraint gen
+    // have completed for a given module.
+    let mut constrained_ident_ids = MutMap::default();
 
     // Load the root module synchronously; we can't proceed until we have its id.
     let root_id = load_filename(
         filename,
         msg_tx.clone(),
-        Unique(&mut module_ids, &mut all_ident_ids),
+        Unique(&mut module_ids, &mut exposed_ident_ids),
     )?;
+
+    exposed_ident_ids.insert(root_id, IdentIds::default());
 
     // From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     let arc_modules = Arc::new(Mutex::new(module_ids));
-    let arc_idents = Arc::new(Mutex::new(all_ident_ids));
+    let arc_idents = Arc::new(Mutex::new(exposed_ident_ids));
 
     // All the dependent modules we've already begun loading -
     // meaning we should never kick off another load_module on them!
@@ -292,6 +299,7 @@ pub async fn load<'a>(
             }
             Constrained {
                 module,
+                ident_ids,
                 constraint,
                 next_var,
             } => {
@@ -302,6 +310,10 @@ pub async fn load<'a>(
                         module_id
                     )
                 });
+
+                // Record the final IdentIds
+                debug_assert!(!constrained_ident_ids.contains_key(&module_id));
+                constrained_ident_ids.insert(module_id, ident_ids);
 
                 // It's possible that some modules have been solved since
                 // we began waiting for them. Remove those from waiting_for,
@@ -354,13 +366,6 @@ pub async fn load<'a>(
                         .into_inner()
                         .expect("Unwrapping mutex for module_ids");
 
-                    let all_ident_ids = Arc::try_unwrap(arc_idents)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to all_ident_ids")
-                        })
-                        .into_inner()
-                        .expect("Unwrapping mutex for all_ident_ids");
-
                     let solved = Arc::try_unwrap(subs).unwrap_or_else(|_| {
                         panic!("There were still outstanding Arc references to Solved<Subs>")
                     });
@@ -371,7 +376,7 @@ pub async fn load<'a>(
 
                     let interns = Interns {
                         module_ids,
-                        all_ident_ids,
+                        all_ident_ids: constrained_ident_ids,
                     };
 
                     return Ok(LoadedModule {
@@ -538,10 +543,10 @@ fn send_interface_header<'a>(
     let module_id: ModuleId;
 
     match shared_modules {
-        Shared(arc_module_ids, arc_all_ident_ids) => {
+        Shared(arc_module_ids, arc_exposed_ident_ids) => {
             // Lock just long enough to perform the minimal operations necessary.
             let mut module_ids = (*arc_module_ids).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
-            let mut all_ident_ids = (*arc_all_ident_ids).lock().expect("Failed to acquire lock for interning ident IDs, presumably because a thread panicked.");
+            let mut exposed_ident_ids = (*arc_exposed_ident_ids).lock().expect("Failed to acquire lock for interning ident IDs, presumably because a thread panicked.");
 
             module_id = module_ids.get_or_insert(&declared_name.as_inline_str());
 
@@ -553,20 +558,20 @@ fn send_interface_header<'a>(
 
             for (_, exposed, region) in imports.into_iter() {
                 if !exposed.is_empty() {
-                    // Ensure all_ident_ids is present in the map.
-                    if !all_ident_ids.contains_key(&module_id) {
-                        all_ident_ids.insert(module_id, IdentIds::default());
+                    // Ensure exposed_ident_ids is present in the map.
+                    if !exposed_ident_ids.contains_key(&module_id) {
+                        exposed_ident_ids.insert(module_id, IdentIds::default());
                     }
 
                     // This can't possibly fail, because we just ensured it
                     // has an entry with this key.
-                    let ident_ids = all_ident_ids.get_mut(&module_id).unwrap();
+                    let ident_ids = exposed_ident_ids.get_mut(&module_id).unwrap();
 
                     add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
                 }
             }
         }
-        Unique(module_ids, all_ident_ids) => {
+        Unique(module_ids, exposed_ident_ids) => {
             // If this is the original file the user loaded,
             // then we already have a mutable reference,
             // and won't need to pay locking costs.
@@ -578,15 +583,14 @@ fn send_interface_header<'a>(
                 deps_by_name.insert(module_name, module_id);
 
                 if !exposed.is_empty() {
-                    // Ensure all_ident_ids is present in the map.
-                    if !all_ident_ids.contains_key(&module_id) {
-                        all_ident_ids.insert(module_id, IdentIds::default());
+                    // Ensure exposed_ident_ids is present in the map.
+                    if !exposed_ident_ids.contains_key(&module_id) {
+                        exposed_ident_ids.insert(module_id, IdentIds::default());
                     }
 
                     // This can't possibly fail, because we just ensured it
                     // has an entry with this key.
-                    let ident_ids = all_ident_ids.get_mut(&module_id).unwrap();
-
+                    let ident_ids = exposed_ident_ids.get_mut(&module_id).unwrap();
 
                     add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
                 }
@@ -783,7 +787,7 @@ fn parse_and_constrain(
     let module_ids = (*arc_module_ids).lock().expect(
         "Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.",
     );
-    let (declarations, exposed_imports, constraint) = match canonicalize_module_defs(
+    let (module, ident_ids, constraint) = match canonicalize_module_defs(
         &arena,
         parsed_defs,
         module_id,
@@ -796,11 +800,18 @@ fn parse_and_constrain(
             declarations,
             exposed_imports,
             lookups,
+            ident_ids,
             ..
         }) => {
             let constraint = constrain_module(module_id, &declarations, lookups);
 
-            (declarations, exposed_imports, constraint)
+            let module = Module {
+                module_id,
+                declarations,
+                exposed_imports,
+            };
+
+            (module, ident_ids, constraint)
         }
         Err(_runtime_error) => {
             panic!("TODO gracefully handle module canonicalization error");
@@ -808,11 +819,6 @@ fn parse_and_constrain(
     };
 
     let next_var = var_store.into();
-    let module = Module {
-        module_id,
-        declarations,
-        exposed_imports,
-    };
 
     tokio::spawn(async move {
         let mut tx = msg_tx;
@@ -820,6 +826,7 @@ fn parse_and_constrain(
         // Send the constraint to the main thread for processing.
         tx.send(Msg::Constrained {
             module,
+            ident_ids,
             constraint,
             next_var,
         })
