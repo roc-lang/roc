@@ -1,5 +1,5 @@
 use crate::can::ident::Lowercase;
-use crate::collections::{MutMap, MutSet};
+use crate::collections::{ImSet, MutMap, MutSet};
 use crate::module::symbol::{Interns, ModuleId, Symbol};
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::name_type_var;
@@ -434,13 +434,6 @@ fn write_flat_type(
 }
 
 fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    let is_atom = boolean.is_var() || boolean == Bool::Zero || boolean == Bool::One;
-    let write_parens = parens == Parens::InTypeParam && !is_atom;
-
-    if write_parens {
-        buf.push_str("(");
-    }
-
     match boolean {
         Bool::Variable(var) => write_content(env, subs.get(var).content, subs, buf, parens),
         Bool::Or(p, q) => {
@@ -464,17 +457,34 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, pa
             buf.push_str("Attr.Unique");
         }
         Bool::WithFree(var, rest) => {
-            write_content(env, subs.get(var).content, subs, buf, parens);
-            buf.push_str(" | ");
-            for b in rest {
-                write_boolean(env, b, subs, buf, Parens::InTypeParam);
+            let mut variables: Vec<Variable> =
+                rest.iter().map(|v| v.variables()).flatten().collect();
+            variables.push(var);
+
+            let mut buffers_set = ImSet::default();
+
+            for v in variables {
+                let mut inner_buf: String = "".to_string();
+                write_content(env, subs.get(v).content, subs, &mut inner_buf, parens);
+                buffers_set.insert(inner_buf);
+            }
+
+            let mut buffers: Vec<String> = buffers_set.into_iter().collect();
+            buffers.sort();
+
+            let combined = buffers.join(" | ");
+
+            let write_parens = buffers.len() > 1;
+
+            if write_parens {
+                buf.push_str("(");
+            }
+            buf.push_str(&combined);
+            if write_parens {
+                buf.push_str(")");
             }
         }
     };
-
-    if write_parens {
-        buf.push_str(")");
-    }
 }
 
 fn fully_simplify(subs: &mut Subs, mut term: Bool) -> Bool {
@@ -506,8 +516,7 @@ fn fully_simplify(subs: &mut Subs, mut term: Bool) -> Bool {
         }
 
         made_change = !global_substitution.is_empty();
-
-        term = boolean_algebra::simplify(term.substitute(&global_substitution));
+        term = term.substitute(&global_substitution)
     }
 
     term
