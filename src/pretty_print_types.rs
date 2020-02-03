@@ -466,7 +466,9 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, pa
         Bool::WithFree(var, rest) => {
             write_content(env, subs.get(var).content, subs, buf, parens);
             buf.push_str(" | ");
-            write_boolean(env, *rest, subs, buf, Parens::InTypeParam);
+            for b in rest {
+                write_boolean(env, b, subs, buf, Parens::InTypeParam);
+            }
         }
     };
 

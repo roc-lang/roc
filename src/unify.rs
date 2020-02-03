@@ -481,8 +481,13 @@ fn unify_flat_type(
             // * the `rest` is the union of the two rests
             let new = subs.fresh_unnamed_flex_var();
 
-            let combined =
-                Bool::WithFree(*free1, Box::new(Bool::or(*rest1.clone(), *rest2.clone())));
+            let combined_rest: Vec<Bool> = rest1
+                .clone()
+                .into_iter()
+                .chain(rest2.clone().into_iter())
+                .collect::<Vec<Bool>>();
+
+            let combined = Bool::WithFree(*free1, combined_rest);
 
             let content = Content::Structure(FlatType::Boolean(combined));
 

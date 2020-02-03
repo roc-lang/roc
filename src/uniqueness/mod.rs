@@ -173,9 +173,7 @@ fn constrain_pattern(
                 state.vars.extend(pattern_uniq_vars.clone());
                 Bool::WithFree(
                     empty_var,
-                    Box::new(boolean_algebra::any(
-                        pattern_uniq_vars.into_iter().map(Bool::Variable),
-                    )),
+                    pattern_uniq_vars.into_iter().map(Bool::Variable).collect(),
                 )
             };
 
@@ -220,9 +218,7 @@ fn constrain_pattern(
                 state.vars.extend(pattern_uniq_vars.clone());
                 Bool::WithFree(
                     empty_var,
-                    Box::new(boolean_algebra::any(
-                        pattern_uniq_vars.into_iter().map(Bool::Variable),
-                    )),
+                    pattern_uniq_vars.into_iter().map(Bool::Variable).collect(),
                 )
             };
             let union_type = constrain::attr_type(
@@ -993,7 +989,7 @@ pub fn constrain_expr(
 
             let record_uniq_var = var_store.fresh();
             let record_uniq_type =
-                Bool::WithFree(record_uniq_var, Box::new(Bool::Variable(field_uniq_var)));
+                Bool::WithFree(record_uniq_var, vec![Bool::Variable(field_uniq_var)]);
             let record_type = constrain::attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
@@ -1031,7 +1027,7 @@ pub fn constrain_expr(
 
             let record_uniq_var = var_store.fresh();
             let record_uniq_type =
-                Bool::WithFree(record_uniq_var, Box::new(Bool::Variable(field_uniq_var)));
+                Bool::WithFree(record_uniq_var, vec![Bool::Variable(field_uniq_var)]);
             let record_type = constrain::attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
@@ -1105,7 +1101,7 @@ fn constrain_var(
                     constrain_field_access(var_store, &field_access, &mut variables);
 
                 let record_type =
-                    constrain::attr_type(Bool::WithFree(free, Box::new(rest)), inner_type);
+                    constrain::attr_type(Bool::WithFree(free, vec![rest]), inner_type);
 
                 // NOTE breaking the expectation up like this REALLY matters!
                 let new_expected = Expected::NoExpectation(record_type.clone());
@@ -1162,7 +1158,7 @@ fn constrain_field_access(
             } else {
                 uniq_vars.push(Bool::Variable(inner_free));
                 uniq_vars.push(inner_rest.clone());
-                attr_type(Bool::WithFree(inner_free, Box::new(inner_rest)), inner_type)
+                attr_type(Bool::WithFree(inner_free, vec![inner_rest]), inner_type)
             }
         };
         field_types.insert(field.into(), field_type);

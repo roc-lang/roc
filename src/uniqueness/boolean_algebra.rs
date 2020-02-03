@@ -21,8 +21,14 @@ fn bool_to_expr(b: Bool) -> Expr<Variable> {
         Or(a, b) => Expr::Or(Box::new(bool_to_expr(*a)), Box::new(bool_to_expr(*b))),
         Not(a) => Expr::Not(Box::new(bool_to_expr(*a))),
         Variable(v) => Expr::Terminal(v),
-        WithFree(var, expr) => {
-            Expr::Or(Box::new(Expr::Terminal(var)), Box::new(bool_to_expr(*expr)))
+        WithFree(var, term) => {
+            let mut expr = Expr::Terminal(var);
+
+            for b in term.clone().into_iter() {
+                expr = Expr::Or(Box::new(expr), Box::new(bool_to_expr(b)));
+            }
+
+            expr
         }
     }
 }
@@ -49,7 +55,7 @@ pub enum Bool {
 
     // the left variable is meant to be "free"
     // e.g. `a` in Attr (a | b) { x : Attr b c }d
-    WithFree(Variable, Box<Bool>),
+    WithFree(Variable, Vec<Bool>),
 }
 
 #[inline(always)]
@@ -120,7 +126,9 @@ impl Bool {
             }
             WithFree(free, bound) => {
                 vars.insert(*free);
-                bound.variables_help(vars);
+                for b in bound {
+                    b.variables_help(vars);
+                }
             }
         };
     }
@@ -136,7 +144,14 @@ impl Bool {
             Or(left, right) => or(left.map_variables(f), right.map_variables(f)),
             Not(nested) => not(nested.map_variables(f)),
             Variable(current) => Variable(f(*current)),
-            WithFree(free, bound) => WithFree(f(*free), Box::new(bound.map_variables(f))),
+            WithFree(free, bound) => {
+                let mut new_bound = Vec::with_capacity(bound.len());
+
+                for b in bound {
+                    new_bound.push(b.map_variables(f));
+                }
+                WithFree(f(*free), new_bound)
+            }
         }
     }
 
@@ -157,11 +172,18 @@ impl Bool {
                 Some(new) => new.clone(),
                 None => Variable(*current),
             },
-            WithFree(free, bound) => match substitutions.get(free) {
-                Some(Variable(new)) => WithFree(*new, Box::new(bound.substitute(substitutions))),
-                Some(new) => or(new.clone(), bound.substitute(substitutions)),
-                None => WithFree(*free, Box::new(bound.substitute(substitutions))),
-            },
+            WithFree(free, bound) => {
+                let mut new_bound = Vec::with_capacity(bound.len());
+
+                for b in bound {
+                    new_bound.push(b.substitute(substitutions));
+                }
+                match substitutions.get(free) {
+                    Some(Variable(new)) => WithFree(*new, new_bound),
+                    Some(new) => or(new.clone(), any(new_bound)),
+                    None => WithFree(*free, new_bound),
+                }
+            }
         }
     }
 
