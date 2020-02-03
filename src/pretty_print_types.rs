@@ -3,7 +3,7 @@ use crate::collections::{ImSet, MutMap, MutSet};
 use crate::module::symbol::{Interns, ModuleId, Symbol};
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::name_type_var;
-use crate::uniqueness::boolean_algebra::Bool;
+use crate::uniqueness::boolean_algebra::{Atom, Bool};
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -425,7 +425,7 @@ fn write_flat_type(
             write_content(env, subs.get(rec_var).content, subs, buf, parens)
         }
         Boolean(b) => {
-            write_boolean(env, fully_simplify(subs, b), subs, buf, Parens::InTypeParam);
+            write_boolean(env, b, subs, buf, Parens::InTypeParam);
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
@@ -434,33 +434,9 @@ fn write_flat_type(
 }
 
 fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    match boolean {
-        Bool::Variable(var) => write_content(env, subs.get(var).content, subs, buf, parens),
-        Bool::Or(p, q) => {
-            write_boolean(env, *p, subs, buf, Parens::InTypeParam);
-            buf.push_str(" | ");
-            write_boolean(env, *q, subs, buf, Parens::InTypeParam);
-        }
-        Bool::And(p, q) => {
-            write_boolean(env, *p, subs, buf, Parens::InTypeParam);
-            buf.push_str(" & ");
-            write_boolean(env, *q, subs, buf, Parens::InTypeParam);
-        }
-        Bool::Not(p) => {
-            buf.push_str("!");
-            write_boolean(env, *p, subs, buf, Parens::InTypeParam);
-        }
-        Bool::Zero => {
-            buf.push_str("Attr.Shared");
-        }
-        Bool::One => {
-            buf.push_str("Attr.Unique");
-        }
-        Bool::WithFree(var, rest) => {
-            let mut variables: Vec<Variable> =
-                rest.iter().map(|v| v.variables()).flatten().collect();
-            variables.push(var);
-
+    match boolean.simplify(&*subs) {
+        Err(atom) => write_boolean_atom(env, atom, subs, buf, parens),
+        Ok(variables) => {
             let mut buffers_set = ImSet::default();
 
             for v in variables {
@@ -484,42 +460,19 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, pa
                 buf.push_str(")");
             }
         }
-    };
+    }
 }
 
-fn fully_simplify(subs: &mut Subs, mut term: Bool) -> Bool {
-    use crate::collections::ImMap;
-    use crate::subs::Content::Structure;
-    use crate::subs::FlatType::*;
-    use crate::uniqueness::boolean_algebra;
-    let mut made_change = true;
-
-    let mut i = 0;
-
-    while made_change && i < 100 {
-        i += 1;
-        // push global substitutions into the boolean
-        let mut global_substitution = ImMap::default();
-
-        for v in term.variables() {
-            match subs.get(v).content {
-                Structure(Boolean(replacement)) if !replacement.variables().contains(&v) => {
-                    global_substitution.insert(v, replacement);
-                }
-                _ => {
-                    let root = subs.get_root_key(v);
-                    if root != v {
-                        global_substitution.insert(v, boolean_algebra::Bool::Variable(root));
-                    }
-                }
-            }
+fn write_boolean_atom(env: &Env, atom: Atom, subs: &mut Subs, buf: &mut String, parens: Parens) {
+    match atom {
+        Atom::Variable(var) => write_content(env, subs.get(var).content, subs, buf, parens),
+        Atom::Zero => {
+            buf.push_str("Attr.Shared");
         }
-
-        made_change = !global_substitution.is_empty();
-        term = term.substitute(&global_substitution)
+        Atom::One => {
+            buf.push_str("Attr.Unique");
+        }
     }
-
-    term
 }
 
 fn write_apply(

@@ -17,7 +17,7 @@ use crate::types::PExpected::{self};
 use crate::types::PReason::{self};
 use crate::types::Reason;
 use crate::types::Type::{self, *};
-use crate::uniqueness::boolean_algebra::Bool;
+use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use crate::uniqueness::sharing::{FieldAccess, ReferenceCount, VarUsage};
 
 pub use crate::can::expr::Expr::*;
@@ -88,7 +88,7 @@ fn constrain_pattern(
                 Constraint::Pattern(
                     pattern.region,
                     PatternCategory::Int,
-                    constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
+                    constrain::attr_type(Bool::variable(uniq_var), Type::int()),
                     expected,
                 ),
             ));
@@ -100,7 +100,7 @@ fn constrain_pattern(
                 Constraint::Pattern(
                     pattern.region,
                     PatternCategory::Float,
-                    constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                    constrain::attr_type(Bool::variable(uniq_var), Type::float()),
                     expected,
                 ),
             ));
@@ -113,7 +113,7 @@ fn constrain_pattern(
                 Constraint::Pattern(
                     pattern.region,
                     PatternCategory::Str,
-                    constrain::attr_type(Bool::Variable(uniq_var), Type::string()),
+                    constrain::attr_type(Bool::variable(uniq_var), Type::string()),
                     expected,
                 ),
             ));
@@ -142,7 +142,7 @@ fn constrain_pattern(
                 pattern_uniq_vars.push(pat_uniq_var);
 
                 let pat_type =
-                    constrain::attr_type(Bool::Variable(pat_uniq_var), Type::Variable(*var));
+                    constrain::attr_type(Bool::variable(pat_uniq_var), Type::Variable(*var));
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
                 if !state.headers.contains_key(&symbol) {
@@ -171,9 +171,9 @@ fn constrain_pattern(
                 let empty_var = var_store.fresh();
                 state.vars.push(empty_var);
                 state.vars.extend(pattern_uniq_vars.clone());
-                Bool::WithFree(
+                Bool::with_free(
                     empty_var,
-                    pattern_uniq_vars.into_iter().map(Bool::Variable).collect(),
+                    pattern_uniq_vars.into_iter().map(Atom::Variable).collect(),
                 )
             };
 
@@ -203,7 +203,7 @@ fn constrain_pattern(
                 pattern_uniq_vars.push(pat_uniq_var);
 
                 let pattern_type = constrain::attr_type(
-                    Bool::Variable(pat_uniq_var),
+                    Bool::variable(pat_uniq_var),
                     Type::Variable(*pattern_var),
                 );
                 argument_types.push(pattern_type.clone());
@@ -216,9 +216,9 @@ fn constrain_pattern(
                 let empty_var = var_store.fresh();
                 state.vars.push(empty_var);
                 state.vars.extend(pattern_uniq_vars.clone());
-                Bool::WithFree(
+                Bool::with_free(
                     empty_var,
-                    pattern_uniq_vars.into_iter().map(Bool::Variable).collect(),
+                    pattern_uniq_vars.into_iter().map(Atom::Variable).collect(),
                 )
             };
             let union_type = constrain::attr_type(
@@ -260,7 +260,7 @@ pub fn constrain_expr(
     match expr {
         Int(var, _) => {
             let uniq_var = var_store.fresh();
-            let bvar = Bool::Variable(uniq_var);
+            let bvar = Bool::variable(uniq_var);
 
             exists(
                 vec![*var, uniq_var],
@@ -287,7 +287,7 @@ pub fn constrain_expr(
                         Type::Variable(*var),
                         Expected::ForReason(
                             Reason::FloatLiteral,
-                            constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                            constrain::attr_type(Bool::variable(uniq_var), Type::float()),
                             region,
                         ),
                         region,
@@ -298,7 +298,7 @@ pub fn constrain_expr(
         }
         BlockStr(_) | Str(_) => {
             let uniq_type = var_store.fresh();
-            let inferred = constrain::attr_type(Bool::Variable(uniq_type), Type::string());
+            let inferred = constrain::attr_type(Bool::variable(uniq_type), Type::string());
 
             exists(vec![uniq_type], Eq(inferred, expected, region))
         }
@@ -308,7 +308,7 @@ pub fn constrain_expr(
             exists(
                 vec![uniq_type],
                 Eq(
-                    constrain::attr_type(Bool::Variable(uniq_type), EmptyRec),
+                    constrain::attr_type(Bool::variable(uniq_type), EmptyRec),
                     expected,
                     region,
                 ),
@@ -348,7 +348,7 @@ pub fn constrain_expr(
             let record_uniq_var = var_store.fresh();
             field_vars.push(record_uniq_var);
             let record_type = constrain::attr_type(
-                Bool::Variable(record_uniq_var),
+                Bool::variable(record_uniq_var),
                 Type::Record(
                     field_types,
                     // TODO can we avoid doing Box::new on every single one of these?
@@ -394,7 +394,7 @@ pub fn constrain_expr(
             let uniq_var = var_store.fresh();
 
             let union_type = constrain::attr_type(
-                Bool::Variable(uniq_var),
+                Bool::variable(uniq_var),
                 Type::TagUnion(
                     vec![(name.clone(), types)],
                     Box::new(Type::Variable(*ext_var)),
@@ -419,7 +419,7 @@ pub fn constrain_expr(
             let uniq_var = var_store.fresh();
             if loc_elems.is_empty() {
                 let inferred = constrain::attr_type(
-                    Bool::Variable(uniq_var),
+                    Bool::variable(uniq_var),
                     builtins::empty_list_type(*entry_var),
                 );
                 exists(vec![*entry_var, uniq_var], Eq(inferred, expected, region))
@@ -445,7 +445,7 @@ pub fn constrain_expr(
                 }
 
                 let inferred =
-                    constrain::attr_type(Bool::Variable(uniq_var), builtins::list_type(entry_type));
+                    constrain::attr_type(Bool::variable(uniq_var), builtins::list_type(entry_type));
                 constraints.push(Eq(inferred, expected, region));
 
                 exists(vec![*entry_var, uniq_var], And(constraints))
@@ -495,10 +495,10 @@ pub fn constrain_expr(
             if let Recursive::NotRecursive = recursion {
                 let fn_uniq_var = var_store.fresh();
                 vars.push(fn_uniq_var);
-                fn_uniq_type = Bool::Variable(fn_uniq_var);
+                fn_uniq_type = Bool::variable(fn_uniq_var);
             } else {
                 // recursive definitions MUST be Shared
-                fn_uniq_type = Bool::Zero
+                fn_uniq_type = Bool::shared()
             }
 
             let fn_type = constrain::attr_type(
@@ -600,7 +600,7 @@ pub fn constrain_expr(
             let expected_fn_type = Expected::ForReason(
                 fn_reason,
                 constrain::attr_type(
-                    Bool::Variable(expected_uniq_type),
+                    Bool::variable(expected_uniq_type),
                     Function(arg_types, Box::new(ret_type.clone())),
                 ),
                 region,
@@ -699,7 +699,7 @@ pub fn constrain_expr(
                         let cond_uniq_var = var_store.fresh();
                         let expect_bool = Expected::ForReason(
                             Reason::IfCondition,
-                            constrain::attr_type(Bool::Variable(cond_uniq_var), bool_type.clone()),
+                            constrain::attr_type(Bool::variable(cond_uniq_var), bool_type.clone()),
                             region,
                         );
                         cond_uniq_vars.push(cond_uniq_var);
@@ -761,7 +761,7 @@ pub fn constrain_expr(
                         let cond_uniq_var = var_store.fresh();
                         let expect_bool = Expected::ForReason(
                             Reason::IfCondition,
-                            constrain::attr_type(Bool::Variable(cond_uniq_var), bool_type.clone()),
+                            constrain::attr_type(Bool::variable(cond_uniq_var), bool_type.clone()),
                             region,
                         );
                         cond_uniq_vars.push(cond_uniq_var);
@@ -940,7 +940,7 @@ pub fn constrain_expr(
             vars.push(uniq_var);
 
             let fields_type = constrain::attr_type(
-                Bool::Variable(uniq_var),
+                Bool::variable(uniq_var),
                 Type::Record(fields.clone(), Box::new(Type::Variable(*ext_var))),
             );
             let record_type = Type::Variable(*record_var);
@@ -982,14 +982,14 @@ pub fn constrain_expr(
             let mut field_types = SendMap::default();
 
             let field_uniq_var = var_store.fresh();
-            let field_uniq_type = Bool::Variable(field_uniq_var);
+            let field_uniq_type = Bool::variable(field_uniq_var);
             let field_type = constrain::attr_type(field_uniq_type, Type::Variable(*field_var));
 
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
             let record_uniq_type =
-                Bool::WithFree(record_uniq_var, vec![Bool::Variable(field_uniq_var)]);
+                Bool::with_free(record_uniq_var, vec![Atom::Variable(field_uniq_var)]);
             let record_type = constrain::attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
@@ -1020,14 +1020,14 @@ pub fn constrain_expr(
             let mut field_types = SendMap::default();
 
             let field_uniq_var = var_store.fresh();
-            let field_uniq_type = Bool::Variable(field_uniq_var);
+            let field_uniq_type = Bool::variable(field_uniq_var);
             let field_type = constrain::attr_type(field_uniq_type, Type::Variable(*field_var));
 
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
             let record_uniq_type =
-                Bool::WithFree(record_uniq_var, vec![Bool::Variable(field_uniq_var)]);
+                Bool::with_free(record_uniq_var, vec![Atom::Variable(field_uniq_var)]);
             let record_type = constrain::attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
@@ -1035,7 +1035,7 @@ pub fn constrain_expr(
 
             let fn_uniq_var = var_store.fresh();
             let fn_type = constrain::attr_type(
-                Bool::Variable(fn_uniq_var),
+                Bool::variable(fn_uniq_var),
                 Type::Function(vec![record_type], Box::new(field_type)),
             );
 
@@ -1070,7 +1070,7 @@ fn constrain_var(
             let uniq_var = var_store.fresh();
 
             let val_type = Variable(val_var);
-            let uniq_type = Bool::Variable(uniq_var);
+            let uniq_type = Bool::variable(uniq_var);
 
             let attr_type = constrain::attr_type(uniq_type.clone(), val_type);
 
@@ -1081,7 +1081,7 @@ fn constrain_var(
                     Eq(attr_type, expected, region),
                     Eq(
                         Type::Boolean(uniq_type),
-                        Expected::NoExpectation(Type::Boolean(constrain::shared_type())),
+                        Expected::NoExpectation(Type::Boolean(Bool::shared())),
                         region,
                     ),
                 ]),
@@ -1100,8 +1100,7 @@ fn constrain_var(
                 let (free, rest, inner_type) =
                     constrain_field_access(var_store, &field_access, &mut variables);
 
-                let record_type =
-                    constrain::attr_type(Bool::WithFree(free, vec![rest]), inner_type);
+                let record_type = constrain::attr_type(Bool::with_free(free, rest), inner_type);
 
                 // NOTE breaking the expectation up like this REALLY matters!
                 let new_expected = Expected::NoExpectation(record_type.clone());
@@ -1126,7 +1125,7 @@ fn constrain_field_access(
     var_store: &VarStore,
     field_access: &FieldAccess,
     field_vars: &mut Vec<Variable>,
-) -> (Variable, Bool, Type) {
+) -> (Variable, Vec<Atom>, Type) {
     use constrain::attr_type;
     use sharing::ReferenceCount::Shared;
 
@@ -1141,24 +1140,24 @@ fn constrain_field_access(
             field_vars.push(field_var);
 
             if rc == Shared {
-                attr_type(Bool::Zero, Variable(field_var))
+                attr_type(Bool::shared(), Variable(field_var))
             } else {
                 // TODO don't generate constraint when field is possible unique?
                 let uniq_var = var_store.fresh();
                 field_vars.push(uniq_var);
-                uniq_vars.push(Bool::Variable(uniq_var));
-                attr_type(Bool::Variable(uniq_var), Variable(field_var))
+                uniq_vars.push(Atom::Variable(uniq_var));
+                attr_type(Bool::variable(uniq_var), Variable(field_var))
             }
         } else {
             let (inner_free, inner_rest, inner_type) =
                 constrain_field_access(var_store, &nested, field_vars);
 
             if rc == Shared {
-                attr_type(Bool::Zero, inner_type)
+                attr_type(Bool::shared(), inner_type)
             } else {
-                uniq_vars.push(Bool::Variable(inner_free));
-                uniq_vars.push(inner_rest.clone());
-                attr_type(Bool::WithFree(inner_free, vec![inner_rest]), inner_type)
+                uniq_vars.push(Atom::Variable(inner_free));
+                uniq_vars.extend(inner_rest.clone());
+                attr_type(Bool::with_free(inner_free, inner_rest), inner_type)
             }
         };
         field_types.insert(field.into(), field_type);
@@ -1171,7 +1170,7 @@ fn constrain_field_access(
 
     (
         record_uniq_var,
-        boolean_algebra::any(uniq_vars),
+        uniq_vars,
         Type::Record(
             field_types,
             // TODO can we avoid doing Box::new on every single one of these?
@@ -1254,7 +1253,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             let uniq_var = var_store.fresh();
             (
                 vec![uniq_var],
-                constrain::attr_type(Bool::Variable(uniq_var), ann.clone()),
+                constrain::attr_type(Bool::variable(uniq_var), ann.clone()),
             )
         }
 
@@ -1269,7 +1268,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             (
                 arg_vars,
                 constrain::attr_type(
-                    Bool::Variable(uniq_var),
+                    Bool::variable(uniq_var),
                     Type::Function(args_lifted, Box::new(result_lifted)),
                 ),
             )
@@ -1288,13 +1287,13 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                     Apply(symbol, _) if *symbol == Symbol::INT_INTEGER => {
                         return (
                             vec![uniq_var],
-                            constrain::attr_type(Bool::Variable(uniq_var), Type::int()),
+                            constrain::attr_type(Bool::variable(uniq_var), Type::int()),
                         )
                     }
                     Apply(symbol, _) if *symbol == Symbol::FLOAT_FLOATINGPOINT => {
                         return (
                             vec![uniq_var],
-                            constrain::attr_type(Bool::Variable(uniq_var), Type::float()),
+                            constrain::attr_type(Bool::variable(uniq_var), Type::float()),
                         )
                     }
                     _ => {}
@@ -1306,7 +1305,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
 
             (
                 arg_vars,
-                constrain::attr_type(Bool::Variable(uniq_var), Type::Apply(*symbol, args_lifted)),
+                constrain::attr_type(Bool::variable(uniq_var), Type::Apply(*symbol, args_lifted)),
             )
         }
 
@@ -1326,7 +1325,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             (
                 vars,
                 constrain::attr_type(
-                    Bool::Variable(uniq_var),
+                    Bool::variable(uniq_var),
                     Type::Record(lifted_fields, ext_type.clone()),
                 ),
             )
@@ -1348,7 +1347,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             (
                 vars,
                 constrain::attr_type(
-                    Bool::Variable(uniq_var),
+                    Bool::variable(uniq_var),
                     Type::TagUnion(lifted_tags, ext_type.clone()),
                 ),
             )
@@ -1364,7 +1363,7 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             (
                 actual_vars,
                 constrain::attr_type(
-                    Bool::Variable(uniq_var),
+                    Bool::variable(uniq_var),
                     Type::Alias(*symbol, fields.clone(), Box::new(lifted_actual)),
                 ),
             )

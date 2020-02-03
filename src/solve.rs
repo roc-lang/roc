@@ -7,7 +7,7 @@ use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
-use crate::uniqueness::boolean_algebra;
+use crate::uniqueness::boolean_algebra::{self, Atom};
 use std::sync::Arc;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -445,8 +445,9 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
+
         // This case is important so e.g. `Bool::Variable(v) ~ Attr.Shared`
-        Boolean(boolean_algebra::Bool::Variable(var)) => *var,
+        Boolean(boolean_algebra::Bool(Atom::Variable(var), rest)) if rest.is_empty() => *var,
         Boolean(b) => {
             let content = Content::Structure(FlatType::Boolean(b.clone()));
 
