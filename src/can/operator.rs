@@ -237,61 +237,18 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 }),
             )
         }
-        If((condition, then_branch, else_branch))
-        | Nested(If((condition, then_branch, else_branch))) => {
-            // desugar if into case, meaning that
-            //
-            //      if b then x else y
-            //
-            // becomes
-            //
-            //      when b is
-            //          False -> y
-            //          _ -> x
-            //
-            // False compiles to 0, and the number zero is special;
-            // processors often have special-cased instructions that work on 0
-            // rather than having to load a nonzero value into another register.
-            // Case in point: the jz ("jump if zero") instruction.
-            // So by making our two comparisons be "0 and else",
-            // LLVM will compile this to a jz instruction,
-            // whereas if we made it be "1 and else" it couldn't do that.
-            let mut branches = Vec::with_capacity_in(2, arena);
+        If(condition, then_branch, else_branch)
+        | Nested(If(condition, then_branch, else_branch)) => {
+            // If does not get desugared yet so we can give more targetted error messages during
+            // type checking.
+            let desugared_cond = &*arena.alloc(desugar_expr(arena, &condition));
+            let desugared_then = &*arena.alloc(desugar_expr(arena, &then_branch));
+            let desugared_else = &*arena.alloc(desugar_expr(arena, &else_branch));
 
-            // no type errors will occur here so using this region should be fine
-            let pattern_region = condition.region;
-
-            branches.push(&*arena.alloc(WhenBranch {
-                patterns: bumpalo::vec![in arena; Located {
-                    value: Pattern::GlobalTag("False"),
-                    region: pattern_region,
-                }],
-                value: Located {
-                    value: Nested(&else_branch.value),
-                    region: else_branch.region,
-                },
-                guard: None,
-            }));
-
-            branches.push(&*arena.alloc(WhenBranch {
-                patterns: bumpalo::vec![in arena; Located {
-                    value: Pattern::Underscore,
-                    region: pattern_region,
-                }],
-                value: Located {
-                    value: Nested(&then_branch.value),
-                    region: then_branch.region,
-                },
-                guard: None,
-            }));
-
-            desugar_expr(
-                arena,
-                arena.alloc(Located {
-                    value: When(condition, branches),
-                    region: loc_expr.region,
-                }),
-            )
+            arena.alloc(Located {
+                value: If(desugared_cond, desugared_then, desugared_else),
+                region: loc_expr.region,
+            })
         }
     }
 }

@@ -516,6 +516,35 @@ mod test_usage_analysis {
             },
         );
     }
+
+    #[test]
+    fn usage_nested_if_access() {
+        usage_eq(
+            indoc!(
+                r#"
+                    r = { x : 42, y : 2020 }
+
+                    if True then r.x else if False then r.x else r.y
+                "#
+            ),
+            |interns| {
+                let home = test_home();
+                // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
+                let mut usage = VarUsage::default();
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                let fa = FieldAccess { fields: fields };
+                usage.register_with(
+                    interns.symbol(home, "r".into()),
+                    &ReferenceCount::Access(fa),
+                );
+
+                usage
+            },
+        );
+    }
 }
 // TODO when symbols are unique, ensure each `val` is counted only once
 //    #[test]

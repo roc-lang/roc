@@ -295,21 +295,26 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         Var(symbol) => usage.register(*symbol),
 
         If {
-            loc_cond,
-            loc_then,
-            loc_else,
+            branches,
+            final_else,
             ..
         } => {
-            annotate_usage(&loc_cond.value, usage);
+            let mut branch_usage = VarUsage::default();
+            for (loc_cond, loc_then) in branches {
+                annotate_usage(&loc_cond.value, usage);
 
-            let mut then_usage = VarUsage::default();
+                let mut then_usage = VarUsage::default();
+
+                annotate_usage(&loc_then.value, &mut then_usage);
+
+                branch_usage.or(&then_usage);
+            }
+
             let mut else_usage = VarUsage::default();
+            annotate_usage(&final_else.value, &mut else_usage);
 
-            annotate_usage(&loc_then.value, &mut then_usage);
-            annotate_usage(&loc_else.value, &mut else_usage);
-
-            then_usage.or(&else_usage);
-            usage.add(&then_usage);
+            branch_usage.or(&else_usage);
+            usage.add(&branch_usage);
         }
         When {
             loc_cond, branches, ..
