@@ -1321,6 +1321,23 @@ mod test_infer_uniq {
     }
 
     #[test]
+    fn triple_nested_record() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r ->
+                    if True then
+                        r.foo.bar.baz
+                    else
+                        r.tic.tac.toe
+
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (* | a | b | c | d | e) { foo : (Attr.Attr (a | c | e) { bar : (Attr.Attr (a | c) { baz : (Attr.Attr c f) }*) }*), tic : (Attr.Attr (b | c | d) { tac : (Attr.Attr (b | c) { toe : (Attr.Attr c f) }*) }*) }* -> Attr.Attr c f)"
+        );
+    }
+
+    #[test]
     fn when_with_annotation() {
         infer_eq(
             indoc!(
@@ -1354,24 +1371,6 @@ mod test_infer_uniq {
                    "#
             ),
             "Attr.Attr Attr.Shared (Attr.Attr * Int -> Attr.Attr * Int)",
-        );
-    }
-
-    // TODO add more realistic recursive example when able
-    #[test]
-    fn factorial_without_recursive_case_can_be_unique() {
-        infer_eq(
-            indoc!(
-                r#"
-                    factorial = \n ->
-                        when n is
-                            0 -> 1
-                            _ -> 1
-
-                    factorial
-                   "#
-            ),
-            "Attr.Attr * (Attr.Attr * Int -> Attr.Attr * Int)",
         );
     }
 
