@@ -545,24 +545,24 @@ mod test_usage_analysis {
             },
         );
     }
+
+    #[test]
+    fn usage_closures_with_same_bound_name() {
+        usage_eq(
+            indoc!(
+                r#"
+                   (\val -> val) (\val -> val)
+               "#
+            ),
+            |_interns| {
+                let home = test_home();
+                let mut usage = VarUsage::default();
+
+                usage.register_with(Interns::from_index(home, 1), &ReferenceCount::Unique);
+                usage.register_with(Interns::from_index(home, 3), &ReferenceCount::Unique);
+
+                usage
+            },
+        );
+    }
 }
-// TODO when symbols are unique, ensure each `val` is counted only once
-//    #[test]
-//    fn usage_closures_with_same_bound_name() {
-//        usage_eq(
-//            indoc!(
-//                r#"
-//                    (\val -> val) (\val -> val)
-//                "#
-//            ),
-//            {
-//                let mut usage = VarUsage::default();
-//                let fa = FieldAccess::from_chain(vec!["foo".into()]);
-//
-//                usage.register_with(&"Test.blah$rec".into(), &ReferenceCount::Update(fa));
-//
-//                usage
-//            },
-//        );
-//    }
-//

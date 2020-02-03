@@ -185,6 +185,10 @@ impl Interns {
             }
         }
     }
+
+    pub fn from_index(module_id: ModuleId, ident_id: u32) -> Symbol {
+        Symbol::new(module_id, IdentId(ident_id))
+    }
 }
 
 #[cfg(debug_assertions)]
