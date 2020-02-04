@@ -6,7 +6,7 @@ use crate::can::operator::desugar_def;
 use crate::can::pattern::PatternType;
 use crate::can::problem::RuntimeError;
 use crate::can::scope::Scope;
-use crate::collections::MutMap;
+use crate::collections::{MutMap, MutSet};
 use crate::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use crate::parse::ast;
 use crate::region::{Located, Region};
@@ -20,6 +20,7 @@ pub struct ModuleOutput {
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub ident_ids: IdentIds,
+    pub references: MutSet<Symbol>,
 }
 
 pub fn canonicalize_module_defs<'a>(
@@ -104,7 +105,7 @@ pub fn canonicalize_module_defs<'a>(
     );
 
     match sort_can_defs(&mut env, defs, Output::default()) {
-        (Ok(declarations), _) => {
+        (Ok(declarations), output) => {
             // TODO examine the patterns, extract toplevel identifiers from them,
             // and verify that everything in the `exposes` list is actually present in
             // that set of identifiers. You can't expose it if it wasn't defined!
@@ -112,8 +113,17 @@ pub fn canonicalize_module_defs<'a>(
             // TODO incorporate rigids into here (possibly by making this be a Let instead
             // of an And)
 
+            let mut references = MutSet::default();
+
+            // TODO instead of doing this conversion, store References as a MutMap
+            // and replace .union() behavior with in-place mutation
+            for reference in output.references.lookups {
+                references.insert(reference);
+            }
+
             Ok(ModuleOutput {
                 declarations,
+                references,
                 exposed_imports: can_exposed_imports,
                 lookups,
                 ident_ids: env.ident_ids,
