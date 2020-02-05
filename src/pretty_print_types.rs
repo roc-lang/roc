@@ -434,7 +434,7 @@ fn write_flat_type(
 }
 
 fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    match boolean.simplify(&*subs) {
+    match boolean.simplify(subs) {
         Err(atom) => write_boolean_atom(env, atom, subs, buf, parens),
         Ok(variables) => {
             let mut buffers_set = ImSet::default();
