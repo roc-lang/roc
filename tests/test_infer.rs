@@ -1560,4 +1560,81 @@ mod test_infer {
             "(a -> b), List a -> List b",
         );
     }
+
+    #[test]
+    fn mismatch_in_alias_args_gets_reported() {
+        infer_eq(
+            indoc!(
+                r#"
+                Foo a : a
+
+                r : Foo {}
+                r = {}
+
+                s : Foo Str.Str
+                s = "bar"
+
+                when {} is
+                    _ -> s
+                    _ -> r
+                "#
+            ),
+            "<type mismatch>",
+        );
+    }
+
+    #[test]
+    fn mismatch_in_apply_gets_reported() {
+        infer_eq(
+            indoc!(
+                r#"
+                r : { x : (Num.Num Int.Integer) }
+                r = { x : 1 }
+
+                s : { left : { x : Num.Num Float.FloatingPoint } }
+                s = { left: { x : 3.14 } }
+
+                when 0 is
+                    1 -> s.left
+                    0 -> r
+                   "#
+            ),
+            "<type mismatch>",
+        );
+    }
+    #[test]
+    fn mismatch_in_tag_gets_reported() {
+        infer_eq(
+            indoc!(
+                r#"
+                r : [ Ok Str.Str ]
+                r = Ok 1
+
+                s : { left: [ Ok {} ] }
+                s = { left: Ok 3.14  }
+
+                when 0 is
+                    1 -> s.left
+                    0 -> r
+                   "#
+            ),
+            "<type mismatch>",
+        );
+    }
+    // doesn't currently print the error, but does report a problem
+    //    #[test]
+    //    fn nums() {
+    //        infer_eq_without_problem(
+    //            indoc!(
+    //                r#"
+    //                s : Num.Num a
+    //                s = 3.1
+    //
+    //                s
+    //                "#
+    //            ),
+    //            "<type mismatch>",
+    //        );
+    //    }
+    //
 }
