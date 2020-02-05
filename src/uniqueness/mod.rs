@@ -1092,27 +1092,23 @@ fn constrain_var(
         }
         Some(ReferenceCount::Access(field_access))
         | Some(ReferenceCount::Update(_, field_access)) => {
-            if !applied_usage_constraint.contains(&symbol_for_lookup) {
-                applied_usage_constraint.insert(symbol_for_lookup.clone());
+            applied_usage_constraint.insert(symbol_for_lookup.clone());
 
-                let mut variables = Vec::new();
-                let (free, rest, inner_type) =
-                    constrain_field_access(var_store, &field_access, &mut variables);
+            let mut variables = Vec::new();
+            let (free, rest, inner_type) =
+                constrain_field_access(var_store, &field_access, &mut variables);
 
-                let record_type = attr_type(Bool::with_free(free, rest), inner_type);
+            let record_type = attr_type(Bool::with_free(free, rest), inner_type);
 
-                // NOTE breaking the expectation up like this REALLY matters!
-                let new_expected = Expected::NoExpectation(record_type.clone());
-                exists(
-                    variables,
-                    And(vec![
-                        Lookup(symbol_for_lookup, new_expected, region),
-                        Eq(record_type, expected, region),
-                    ]),
-                )
-            } else {
-                Lookup(symbol_for_lookup, expected, region)
-            }
+            // NOTE breaking the expectation up like this REALLY matters!
+            let new_expected = Expected::NoExpectation(record_type.clone());
+            exists(
+                variables,
+                And(vec![
+                    Lookup(symbol_for_lookup, new_expected, region),
+                    Eq(record_type, expected, region),
+                ]),
+            )
         }
 
         Some(other) => panic!("some other rc value: {:?}", other),

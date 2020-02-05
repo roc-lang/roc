@@ -1279,7 +1279,7 @@ mod test_infer_uniq {
                     r
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | b) { foo : (Attr.Attr b { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f -> Attr.Attr (a | b) { foo : (Attr.Attr b { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f)"
+            "Attr.Attr * (Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f -> Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f)"
         );
     }
 
@@ -1333,7 +1333,7 @@ mod test_infer_uniq {
 
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (* | a | b | c | d | e) { foo : (Attr.Attr (a | c | e) { bar : (Attr.Attr (a | c) { baz : (Attr.Attr c f) }*) }*), tic : (Attr.Attr (b | c | d) { tac : (Attr.Attr (b | c) { toe : (Attr.Attr c f) }*) }*) }* -> Attr.Attr c f)"
+            "Attr.Attr * (Attr.Attr (* | a | b | c | d | e) { foo : (Attr.Attr (a | c | d) { bar : (Attr.Attr (c | d) { baz : (Attr.Attr d f) }*) }*), tic : (Attr.Attr (b | d | e) { tac : (Attr.Attr (b | d) { toe : (Attr.Attr d f) }*) }*) }* -> Attr.Attr d f)"
         );
     }
 
@@ -1494,35 +1494,56 @@ mod test_infer_uniq {
         );
     }
 
-    //    #[test]
-    //    fn shared_branch_unique_branch() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                    r = "foo"
-    //                    s = { left : "foo" }
-    //
-    //                    when 0 is
-    //                        1 -> { x: s.left, y: s.left }
-    //                        0 -> { x: s.left, y: r }
-    //                        )
-    //                "#
-    //            ),
-    //            "Attr.Attr * { x : (Attr.Attr Attr.Shared Str), y : (Attr.Attr Attr.Shared Str) }",
-    //        );
-    //    }
-    //
-    //    #[test]
-    //    fn shared_branch_unique_branch4() {
-    //        infer_eq(
-    //                indoc!(
-    //                    r#"
-    //                    s = { left: 20, right: 20 }
-    //
-    //                    { left: s, right: s }
-    //                    "#
-    //                ),
-    //                "Attr.Attr * { left : (Attr.Attr Attr.Shared Int), right : (Attr.Attr Attr.Shared Int) }",
-    //            );
-    //    }
+    #[test]
+    fn shared_branch_unique_branch_current() {
+        infer_eq(
+            indoc!(
+                r#"
+                       r = "foo"
+                       s = { left : "foo" }
+
+                       when 0 is
+                           1 -> { x: s.left, y: s.left }
+                           0 -> { x: s.left, y: r }
+                           )
+                   "#
+            ),
+            "Attr.Attr * { x : (Attr.Attr Attr.Shared Str), y : (Attr.Attr Attr.Shared Str) }",
+        );
+    }
+
+    #[test]
+    fn shared_branch_unique_branch_curr() {
+        infer_eq(
+            indoc!(
+                r#"
+                       r = "foo"
+                       s = { left : "foo" }
+
+                       v = s.left
+
+                       when 0 is
+                           1 -> { x: v, y: v }
+                           0 -> { x: v, y: r }
+                           )
+                   "#
+            ),
+            "Attr.Attr * { x : (Attr.Attr Attr.Shared Str), y : (Attr.Attr Attr.Shared Str) }",
+        );
+    }
+
+    #[test]
+    fn duplicated_record() {
+        infer_eq(
+                   indoc!(
+                       r#"
+                       s = { left: 20, right: 20 }
+
+                       { left: s, right: s }
+                       "#
+                   ),
+                   // it's fine that the inner fields are not shared: only shared extraction is possible
+                   "Attr.Attr * { left : (Attr.Attr Attr.Shared { left : (Attr.Attr * Int), right : (Attr.Attr * Int) }), right : (Attr.Attr Attr.Shared { left : (Attr.Attr * Int), right : (Attr.Attr * Int) }) }",
+               );
+    }
 }

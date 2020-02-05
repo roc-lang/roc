@@ -70,7 +70,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
     match &ctx.first_desc.content {
-        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
+        FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
@@ -134,8 +134,15 @@ fn unify_structure(
     match other {
         FlexVar(_) => {
             // TODO special-case boolean here
-            // If the other is flex, Structure wins!
-            merge(subs, ctx, Structure(flat_type.clone()))
+            match flat_type {
+                FlatType::Boolean(Bool(Atom::Variable(var), _rest)) => {
+                    unify_pool(subs, pool, *var, ctx.second)
+                }
+                _ => {
+                    // If the other is flex, Structure wins!
+                    merge(subs, ctx, Structure(flat_type.clone()))
+                }
+            }
         }
         RigidVar(_) => {
             // Type mismatch! Rigid can only unify with flex.
@@ -607,6 +614,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
 #[inline(always)]
 fn unify_flex(
     subs: &mut Subs,
+    pool: &mut Pool,
     ctx: &Context,
     opt_name: &Option<Lowercase>,
     other: &Content,
@@ -617,8 +625,8 @@ fn unify_flex(
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
 
-        Structure(FlatType::Boolean(Bool(Atom::Zero, rest))) if rest.is_empty() => {
-            merge(subs, ctx, other.clone())
+        Structure(FlatType::Boolean(Bool(Atom::Variable(var), _rest))) => {
+            unify_pool(subs, pool, ctx.first, *var)
         }
 
         FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _) => {
