@@ -1331,7 +1331,7 @@ mod test_infer {
     }
 
     #[test]
-    fn result_map() {
+    fn result_map_explicit() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -1345,6 +1345,26 @@ mod test_infer {
                        "#
             ),
             "(a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]",
+        );
+    }
+
+    #[test]
+    fn result_map_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    Result e a : [ Ok a, Err e ]
+
+                    map : (a -> b), Result e a -> Result e b
+                    map = \f, result ->
+                        when result is
+                            Ok v -> Ok (f v)
+                            Err e -> Err e
+
+                    map
+                       "#
+            ),
+            "(a -> b), Result e a -> Result e b",
         );
     }
 
