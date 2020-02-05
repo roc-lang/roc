@@ -1198,14 +1198,18 @@ fn to_pending_def<'a>(
 
                     scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
 
-                    // TODO better detection for recursion
-                    if let Type::TagUnion(tags, ext) = can_ann.typ {
-                        // the alias can be recursive, so with the alias in scope, do this all again
-                        let rec_var = var_store.fresh();
-                        let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
-                        rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
+                    if can_ann.typ.contains_symbol(symbol) {
+                        // the alias is recursive. If it's a tag union, we attempt to fix this
+                        if let Type::TagUnion(tags, ext) = can_ann.typ {
+                            // re-canonicalize the alias with the alias already in scope
+                            let rec_var = var_store.fresh();
+                            let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
+                            rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
 
-                        scope.add_alias(symbol, name.region, can_vars, rec_type_union);
+                            scope.add_alias(symbol, name.region, can_vars, rec_type_union);
+                        } else {
+                            panic!("recursion in type alias that is not behind a Tag");
+                        }
                     }
 
                     PendingDef::Alias {

@@ -360,6 +360,47 @@ impl Type {
             As(_, _) => unreachable!("As should be canonicalized away at this point"),
         }
     }
+
+    pub fn contains_symbol(&self, rep_symbol: Symbol) -> bool {
+        use Type::*;
+
+        let mut result = false;
+        match self {
+            Function(args, ret) => {
+                for arg in args {
+                    result = result || arg.contains_symbol(rep_symbol);
+                }
+                result || ret.contains_symbol(rep_symbol)
+            }
+            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+                for (_, args) in tags {
+                    for x in args {
+                        result = result || x.contains_symbol(rep_symbol);
+                    }
+                }
+                result || ext.contains_symbol(rep_symbol)
+            }
+            Record(fields, ext) => {
+                for x in fields.values() {
+                    result = result || x.contains_symbol(rep_symbol);
+                }
+                result || ext.contains_symbol(rep_symbol)
+            }
+            Alias(alias_symbol, _, actual_type) => {
+                alias_symbol == &rep_symbol || actual_type.contains_symbol(rep_symbol)
+            }
+            Apply(symbol, _) if *symbol == rep_symbol => true,
+            Apply(_, args) => {
+                for arg in args {
+                    result = result || arg.contains_symbol(rep_symbol);
+                }
+                result
+            }
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => false,
+
+            As(_, _) => unreachable!("As should be canonicalized away at this point"),
+        }
+    }
 }
 
 fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
