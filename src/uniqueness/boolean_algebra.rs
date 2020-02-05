@@ -22,7 +22,7 @@ impl Atom {
                     *self = atom;
                 }
                 _ => {
-                    Atom::Variable(subs.get_root_key(*v));
+                    *self = Atom::Variable(subs.get_root_key(*v));
                 }
             },
         }
@@ -117,7 +117,7 @@ impl Bool {
         let new_free = if let Variable(v) = self.0 {
             Variable(f(v))
         } else {
-            self.0.clone()
+            self.0
         };
 
         for atom in &self.1 {
