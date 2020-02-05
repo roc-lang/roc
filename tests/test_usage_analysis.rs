@@ -565,4 +565,79 @@ mod test_usage_analysis {
             },
         );
     }
+
+    #[test]
+    fn shared_branch_unique_branch() {
+        usage_eq(
+            indoc!(
+                r#"
+                r = { x: 20, y: 20 }
+                s = { x: 20, y: 20 }
+
+                if True then
+                    { x: s.x, y: r.y }
+                else
+                    { x: s.x, y: s.x }
+                "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let mut fields = ImMap::default();
+                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                let fa_r = FieldAccess { fields: fields };
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
+                let fa_s = FieldAccess { fields: fields };
+
+                let r = interns.symbol(home, "r".into());
+                let s = interns.symbol(home, "s".into());
+
+                usage.register_with(r, &ReferenceCount::Access(fa_r));
+                usage.register_with(s, &ReferenceCount::Access(fa_s));
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn shared_branch_unique_branch_access() {
+        usage_eq(
+            indoc!(
+                r#"
+                r = { x: 20 }
+                s = { x: 20 }
+
+                if True then
+                    { y: r.x }
+                else
+                    v = s.x
+                    { y: s.x }
+                "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
+                let fa_r = FieldAccess { fields: fields };
+
+                let mut fields = ImMap::default();
+                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
+                let fa_s = FieldAccess { fields: fields };
+
+                let r = interns.symbol(home, "r".into());
+                let s = interns.symbol(home, "s".into());
+
+                usage.register_with(r, &ReferenceCount::Access(fa_r));
+                usage.register_with(s, &ReferenceCount::Access(fa_s));
+
+                usage
+            },
+        );
+    }
 }
