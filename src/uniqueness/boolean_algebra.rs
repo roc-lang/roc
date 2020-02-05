@@ -5,11 +5,28 @@ use crate::subs::{Content, FlatType, Subs, Variable};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Bool(pub Atom, pub SendSet<Atom>);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 pub enum Atom {
     Zero,
     One,
     Variable(Variable),
+}
+
+impl Atom {
+    pub fn apply_subs(&mut self, subs: &mut Subs) {
+        match self {
+            Atom::Zero | Atom::One => {}
+            Atom::Variable(v) => match subs.get(*v).content {
+                Content::Structure(FlatType::Boolean(Bool(mut atom, rest))) if rest.is_empty() => {
+                    atom.apply_subs(subs);
+                    *self = atom;
+                }
+                _ => {
+                    Atom::Variable(subs.get_root_key(*v));
+                }
+            },
+        }
+    }
 }
 
 impl Bool {
@@ -46,7 +63,15 @@ impl Bool {
         result
     }
 
-    pub fn simplify(&self, subs: &Subs) -> Result<ImSet<Variable>, Atom> {
+    pub fn apply_subs(&mut self, subs: &mut Subs) {
+        self.0.apply_subs(subs);
+
+        for atom in self.1.iter_mut() {
+            atom.apply_subs(subs);
+        }
+    }
+
+    pub fn simplify(&self, subs: &mut Subs) -> Result<ImSet<Variable>, Atom> {
         match self.0 {
             Atom::Zero => Err(Atom::Zero),
             Atom::One => Err(Atom::One),
@@ -58,7 +83,7 @@ impl Bool {
                     match atom {
                         Atom::Zero => {}
                         Atom::One => return Err(Atom::One),
-                        Atom::Variable(v) => match subs.get_without_compacting(*v).content {
+                        Atom::Variable(v) => match subs.get(*v).content {
                             Content::Structure(FlatType::Boolean(nested)) => {
                                 match nested.simplify(subs) {
                                     Ok(variables) => {
@@ -71,11 +96,9 @@ impl Bool {
                                     Err(Atom::Variable(_)) => panic!("TODO nested variable"),
                                 }
                             }
-                            Content::FlexVar(_) => {
+                            _ => {
                                 result.insert(*v);
                             }
-
-                            other => panic!("got {:?}", other),
                         },
                     }
                 }
