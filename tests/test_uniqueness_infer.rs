@@ -1192,7 +1192,7 @@ mod test_infer_uniq {
         infer_eq(
                     indoc!(
                         r#"
-                        \r -> 
+                        \r ->
                             v = r.x
                             w = r.x
 
@@ -1209,7 +1209,7 @@ mod test_infer_uniq {
         infer_eq(
                     indoc!(
                         r#"
-                        \r -> 
+                        \r ->
                             v = r.x
                             w = r.y
 
@@ -1226,7 +1226,7 @@ mod test_infer_uniq {
         infer_eq(
                     indoc!(
                         r#"
-                        \r -> 
+                        \r ->
                             v = r.x
                             w = r.y
 
@@ -1272,7 +1272,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \r -> 
+                \r ->
                     v = r.foo.bar
                     w = r.foo.baz
 
@@ -1288,7 +1288,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \r -> 
+                \r ->
                     v = r.foo.bar
 
                     x = v
@@ -1417,12 +1417,12 @@ mod test_infer_uniq {
                 partition = \low, high, initialList ->
                     when List.get high initialList is
                         Ok pivot ->
-                    
-                            go \i, j, list = 
+
+                            go \i, j, list =
                                 if j < high then
                                     when List.get j list is
                                         Ok value ->
-                                            if value <= pivot then 
+                                            if value <= pivot then
                                                 go (i + 1) (j + 1) (swap (i + 1) j list)
                                             else
                                                 go i (j + 1) list
@@ -1439,9 +1439,9 @@ mod test_infer_uniq {
                         Err _ ->
                             Pair (low - 1) initialList
 
-                quicksort : List Int, Int, Int -> List Int 
+                quicksort : List Int, Int, Int -> List Int
                 quicksort = \list, low, high ->
-                    Pair partitionIndex partitioned = partition low high list 
+                    Pair partitionIndex partitioned = partition low high list
 
                     arr
                         |> quicksort low (partitionIndex - 1)
@@ -1453,4 +1453,76 @@ mod test_infer_uniq {
             "Attr.Attr * (Attr.Attr Attr.Shared Int, Attr.Attr Attr.Shared Int, Attr.Attr a (List b) -> Attr.Attr a (List b))",
         );
     }
+
+    #[test]
+    fn shared_branch_unique_branch_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                    r = { left: 20 }
+                    s = { left: 20 }
+
+                    if True then
+                        r.left
+                    else
+                        v = s.left
+                        s.left
+
+                    "#
+            ),
+            "Attr.Attr Attr.Shared Int",
+        );
+    }
+
+    #[test]
+    fn shared_branch_unique_branch_nested_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                    r = { left: 20 }
+                    s = { left: 20 }
+
+                    if True then
+                        { y: r.left }
+                    else
+                        v = s.left
+                        { y: s.left }
+
+                    "#
+            ),
+            "Attr.Attr * { y : (Attr.Attr Attr.Shared Int) }",
+        );
+    }
+
+    //    #[test]
+    //    fn shared_branch_unique_branch() {
+    //        infer_eq(
+    //            indoc!(
+    //                r#"
+    //                    r = "foo"
+    //                    s = { left : "foo" }
+    //
+    //                    when 0 is
+    //                        1 -> { x: s.left, y: s.left }
+    //                        0 -> { x: s.left, y: r }
+    //                        )
+    //                "#
+    //            ),
+    //            "Attr.Attr * { x : (Attr.Attr Attr.Shared Str), y : (Attr.Attr Attr.Shared Str) }",
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn shared_branch_unique_branch4() {
+    //        infer_eq(
+    //                indoc!(
+    //                    r#"
+    //                    s = { left: 20, right: 20 }
+    //
+    //                    { left: s, right: s }
+    //                    "#
+    //                ),
+    //                "Attr.Attr * { left : (Attr.Attr Attr.Shared Int), right : (Attr.Attr Attr.Shared Int) }",
+    //            );
+    //    }
 }
