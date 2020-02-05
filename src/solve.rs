@@ -446,7 +446,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
 
-        // This case is important so e.g. `Bool::Variable(v) ~ Attr.Shared`
+        // This case is important for the rank of boolean variables
         Boolean(boolean_algebra::Bool(Atom::Variable(var), rest)) if rest.is_empty() => *var,
         Boolean(b) => {
             let content = Content::Structure(FlatType::Boolean(b.clone()));
