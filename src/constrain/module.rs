@@ -17,13 +17,13 @@ pub fn constrain_module(
     constrain_decls(home, &decls)
 }
 
-pub struct Import {
+pub struct Import<'a> {
     pub loc_symbol: Located<Symbol>,
-    pub solved_type: SolvedType,
+    pub solved_type: &'a SolvedType,
 }
 
 pub fn constrain_imported_values(
-    imports: Vec<Import>,
+    imports: Vec<Import<'_>>,
     mut body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
@@ -38,13 +38,13 @@ pub fn constrain_imported_values(
     body_con
 }
 
-fn to_type(solved_type: SolvedType, free_vars: &mut Vec<Variable>, var_store: &VarStore) -> Type {
+fn to_type(solved_type: &SolvedType, free_vars: &mut Vec<Variable>, var_store: &VarStore) -> Type {
     panic!("TODO implement to_type");
 }
 
 fn constrain_imported_value(
     loc_symbol: Located<Symbol>,
-    solved_type: SolvedType,
+    solved_type: &SolvedType,
     body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {

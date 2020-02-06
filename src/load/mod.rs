@@ -674,8 +674,7 @@ fn solve_module(
 
             match exposed_types.get(&module_id) {
                 Some(ExposedModuleTypes::Valid(solved_types)) => {
-                    // TODO instead of cloning solved_type, we could store it behind an Arc
-                    let solved_type = solved_types.get(&loc_symbol.value).unwrap().clone();
+                    let solved_type = solved_types.get(&loc_symbol.value).unwrap();
 
                     imports.push(Import {
                         loc_symbol,
@@ -687,7 +686,7 @@ fn solve_module(
                     // for everything imported from it.
                     imports.push(Import {
                         loc_symbol,
-                        solved_type: SolvedType::Erroneous
+                        solved_type: &SolvedType::Erroneous
                     });
                 }
                 None => {
