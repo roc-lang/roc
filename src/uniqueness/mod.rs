@@ -1348,19 +1348,26 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
         }
 
         Alias(symbol, fields, actual) => {
-            let uniq_var = var_store.fresh();
+            let (actual_vars, lifted_actual) = annotation_to_attr_type(var_store, actual);
 
-            let (mut actual_vars, lifted_actual) = annotation_to_attr_type(var_store, actual);
+            if let Type::Apply(attr_symbol, args) = lifted_actual {
+                debug_assert!(attr_symbol == Symbol::ATTR_ATTR);
 
-            actual_vars.push(uniq_var);
+                let uniq_type = args[0].clone();
+                let actual_type = args[1].clone();
 
-            (
-                actual_vars,
-                attr_type(
-                    Bool::variable(uniq_var),
-                    Type::Alias(*symbol, fields.clone(), Box::new(lifted_actual)),
-                ),
-            )
+                let alias = Type::Alias(*symbol, fields.clone(), Box::new(actual_type));
+
+                (
+                    actual_vars,
+                    crate::constrain::builtins::builtin_type(
+                        Symbol::ATTR_ATTR,
+                        vec![uniq_type, alias],
+                    ),
+                )
+            } else {
+                panic!("lifted type is not Attr")
+            }
         }
         As(_, _) => panic!("TODO implement lifting for As"),
         RecursiveTagUnion(_, _, _) => panic!("TODO implement lifting for RecursiveTagUnion"),

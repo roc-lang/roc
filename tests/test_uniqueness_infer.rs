@@ -1546,4 +1546,36 @@ mod test_infer_uniq {
                    "Attr.Attr * { left : (Attr.Attr Attr.Shared { left : (Attr.Attr * Int), right : (Attr.Attr * Int) }), right : (Attr.Attr Attr.Shared { left : (Attr.Attr * Int), right : (Attr.Attr * Int) }) }",
                );
     }
+
+    #[test]
+    fn result_succeed_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                       Result e a : [ Err e, Ok a ]
+
+                       succeed : q -> Result p q
+                       succeed = \x -> Ok x
+
+                       succeed
+                       "#
+            ),
+            "Attr.Attr * (a -> Attr.Attr * (Result * a))",
+        );
+    }
+
+    #[test]
+    fn result_succeed() {
+        infer_eq(
+            indoc!(
+                r#"
+                       succeed : a -> [ Err e, Ok a ]
+                       succeed = \x -> Ok x
+
+                       succeed
+                       "#
+            ),
+            "Attr.Attr * (a -> Attr.Attr * [ Err *, Ok a ])",
+        );
+    }
 }

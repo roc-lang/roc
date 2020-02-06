@@ -7,6 +7,20 @@ use crate::types::{Mismatch, Problem};
 use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use std::hash::Hash;
 
+macro_rules! mismatch {
+    () => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        vec![Mismatch::TypeMismatch]
+    }};
+}
+
 type Pool = Vec<Variable>;
 
 struct Context {
@@ -112,7 +126,7 @@ fn unify_alias(
 
                     problems
                 } else {
-                    mismatch()
+                    mismatch!()
                 }
             } else {
                 unify_pool(subs, pool, real_var, *other_real_var)
@@ -146,7 +160,7 @@ fn unify_structure(
         }
         RigidVar(_) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch()
+            mismatch!()
         }
 
         Structure(ref other_flat_type) => {
@@ -275,7 +289,7 @@ fn unify_shared_fields(
 
         merge(subs, ctx, Structure(flat_type))
     } else {
-        mismatch()
+        mismatch!()
     }
 }
 
@@ -419,7 +433,7 @@ fn unify_shared_tags(
 
         merge(subs, ctx, Structure(flat_type))
     } else {
-        mismatch()
+        mismatch!()
     }
 }
 
@@ -535,7 +549,7 @@ fn unify_flat_type(
                 problems
             }
         }
-        _ => mismatch(),
+        _ => mismatch!(),
     }
 }
 
@@ -599,7 +613,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
         RigidVar(_) | Structure(_) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
-            mismatch()
+            mismatch!()
         }
         Alias(_, _, _) => {
             panic!("TODO unify_rigid Alias");
@@ -715,9 +729,4 @@ fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> V
         },
         pool,
     )
-}
-
-#[inline(always)]
-fn mismatch() -> Outcome {
-    vec![Mismatch::TypeMismatch]
 }
