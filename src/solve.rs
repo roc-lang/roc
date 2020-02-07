@@ -1,4 +1,4 @@
-use crate::can::ident::{Lowercase, Uppercase};
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::Located;
@@ -25,59 +25,29 @@ pub enum ExposedModuleTypes {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
-    Function(Vec<Located<SolvedType>>, Box<Located<SolvedType>>),
+    Function(Vec<SolvedType>, Box<SolvedType>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
-    Apply(Symbol, Vec<Located<SolvedType>>),
+    Apply(Symbol, Vec<SolvedType>),
     /// A bound type variable, e.g. `a` in `(a -> a)`
     Rigid(Symbol),
     /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
-    As(Box<Located<SolvedType>>, Box<Located<SolvedType>>),
     Record {
-        fields: Vec<Located<AssignedField<SolvedType>>>,
+        fields: Vec<(Lowercase, SolvedType)>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
-        ext: Option<Box<Located<SolvedType>>>,
+        ext: Box<SolvedType>,
     },
-    /// A tag union, e.g. `[
-    TagUnion {
-        tags: Vec<Located<Tag>>,
-        /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
-        /// This is None if it's a closed tag union like `[ Foo, Bar]`.
-        ext: Option<Box<Located<SolvedType>>>,
-    },
+    TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
-    /// A malformed type annotation, which will code gen to a runtime error
-    Malformed(Box<str>),
     /// A type from an Invalid module
-    Erroneous,
+    Erroneous(Problem),
 }
 
 impl SolvedType {
     pub fn new(subs: &Solved<Subs>, var: Variable) -> Self {
         panic!("TODO implement SolvedType::new");
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AssignedField<Val> {
-    // Both a label and a value, e.g. `{ name: "blah" }`
-    LabeledValue(Located<Lowercase>, Located<Val>), // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-    LabelOnly(Located<Lowercase>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Tag {
-    Global {
-        name: Located<Uppercase>,
-        args: Vec<Located<SolvedType>>,
-    },
-    Private {
-        name: Located<Uppercase>,
-        args: Vec<Located<SolvedType>>,
-    },
-    /// A malformed tag, which will code gen to a runtime error
-    Malformed(Box<str>),
 }
 
 type Env = SendMap<Symbol, Variable>;

@@ -569,6 +569,7 @@ pub enum Problem {
     CircularType(Symbol, ErrorType, Region),
     UnrecognizedIdent(InlinableString),
     Shadowed(Region, Located<Ident>),
+    InvalidModule,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

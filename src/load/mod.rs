@@ -8,7 +8,7 @@ use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceH
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
-use crate::solve::{self, ExposedModuleTypes, SolvedType, SubsByModule, Solved};
+use crate::solve::{self, ExposedModuleTypes, Solved, SolvedType, SubsByModule};
 use crate::subs::{Subs, VarStore, Variable};
 use crate::types::{Constraint, Problem};
 use bumpalo::Bump;
@@ -69,7 +69,7 @@ enum Msg {
         module: Module,
         constraint: Constraint,
         ident_ids: IdentIds,
-        var_store: VarStore
+        var_store: VarStore,
     },
     Solved {
         module_id: ModuleId,
@@ -686,7 +686,7 @@ fn solve_module(
                     // for everything imported from it.
                     imports.push(Import {
                         loc_symbol,
-                        solved_type: &SolvedType::Erroneous
+                        solved_type: &SolvedType::Erroneous(Problem::InvalidModule),
                     });
                 }
                 None => {
@@ -741,12 +741,8 @@ fn solve_module(
         let mut problems = Vec::new();
 
         // Run the solver to populate Subs.
-        let (solved_subs, new_vars_by_symbol) = solve::run(
-            &vars_by_symbol,
-            &mut problems,
-            subs,
-            &constraint,
-        );
+        let (solved_subs, new_vars_by_symbol) =
+            solve::run(&vars_by_symbol, &mut problems, subs, &constraint);
 
         let mut solved_types = MutMap::default();
 
