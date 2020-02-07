@@ -736,6 +736,24 @@ mod test_parse {
     }
 
     #[test]
+    fn apply_parenthetical_global_tag_args() {
+        let arena = Bump::new();
+        let int1 = ParensAround(arena.alloc(Int("12")));
+        let int2 = ParensAround(arena.alloc(Int("34")));
+        let arg1 = arena.alloc(Located::new(0, 0, 6, 8, int1));
+        let arg2 = arena.alloc(Located::new(0, 0, 11, 13, int2));
+        let args = bumpalo::vec![in &arena; &*arg1, &*arg2];
+        let expected = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 0, 4, Expr::GlobalTag("Whee"))),
+            args,
+            CalledVia::Space,
+        );
+        let actual = parse_with(&arena, "Whee (12) (34)");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn qualified_global_tag() {
         let arena = Bump::new();
         let expected = Expr::MalformedIdent("One.Two.Whee");
