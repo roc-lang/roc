@@ -197,6 +197,18 @@ pub struct Fail {
     pub reason: FailReason,
 }
 
+pub fn fail<'a, T>() -> impl Parser<'a, T> {
+    move |_arena, state: State<'a>| {
+        Err((
+            Fail {
+                attempting: state.attempting,
+                reason: FailReason::ConditionFailed,
+            },
+            state,
+        ))
+    }
+}
+
 pub trait Parser<'a, Output> {
     fn parse(&self, _: &'a Bump, _: State<'a>) -> ParseResult<'a, Output>;
 }

@@ -31,8 +31,6 @@ pub enum Type {
     /// Boolean type used in uniqueness inference
     Boolean(boolean_algebra::Bool),
     Variable(Variable),
-    /// recursive variants, e.g. [ Cons a r, Nil ] as r
-    As(Box<Type>, Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
@@ -86,7 +84,6 @@ impl fmt::Debug for Type {
 
                 Ok(())
             }
-            Type::As(inner, variable) => write!(f, "({:?} as {:?})", inner, variable),
             Type::Record(fields, ext) => {
                 write!(f, "{{")?;
 
@@ -308,8 +305,6 @@ impl Type {
                 }
             }
             EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => {}
-
-            As(_, _) => unreachable!("As should be canonicalized away at this point"),
         }
     }
 
@@ -356,8 +351,6 @@ impl Type {
                 }
             }
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
-
-            As(_, _) => unreachable!("As should be canonicalized away at this point"),
         }
     }
 
@@ -388,8 +381,6 @@ impl Type {
             Apply(symbol, _) if *symbol == rep_symbol => true,
             Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => false,
-
-            As(_, _) => unreachable!("As should be canonicalized away at this point"),
         }
     }
 }
@@ -446,11 +437,6 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(x, accum);
             }
             variables_help(actual, accum);
-        }
-        As(inner, variable) => {
-            variables_help(inner, accum);
-            // the `inner` type should contain the bound variable
-            debug_assert!(accum.contains(variable));
         }
         Apply(_, args) => {
             for x in args {
