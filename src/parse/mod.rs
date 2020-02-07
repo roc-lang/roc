@@ -121,25 +121,33 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
     expr_parser.parse(arena, state)
 }
 
+/// Use this when parsing an expression that is a function arg,
+/// and use loc_parenthetical_expr when parsing an expression that isn't a function arg.
+pub fn loc_parenthetical_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
+    between!(
+        char('('),
+        map_with_arena!(
+            space0_around(
+                loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                min_indent,
+            ),
+            |arena: &'a Bump, loc_expr: Located<Expr<'a>>| {
+                Located {
+                    region: loc_expr.region,
+                    value: Expr::ParensAround(arena.alloc(loc_expr.value)),
+                }
+            }
+        ),
+        char(')')
+    )
+}
+
+/// Use this when parsing an expression that is *not* a function arg,
+/// and use loc_parenthetical_arg when parsing an expression that is a function arg.
 pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
     then(
         loc!(and!(
-            between!(
-                char('('),
-                map_with_arena!(
-                    space0_around(
-                        loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                        min_indent,
-                    ),
-                    |arena: &'a Bump, loc_expr: Located<Expr<'a>>| {
-                        Located {
-                            region: loc_expr.region,
-                            value: Expr::ParensAround(arena.alloc(loc_expr.value)),
-                        }
-                    }
-                ),
-                char(')')
-            ),
+            loc_parenthetical_arg(min_indent),
             optional(either!(
                 // There may optionally be function args after the ')'
                 // e.g. ((foo bar) baz)
@@ -759,7 +767,7 @@ fn loc_parse_function_arg<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
     one_of!(
-        loc_parenthetical_expr(min_indent),
+        loc_parenthetical_arg(min_indent),
         loc!(string_literal()),
         loc!(number_literal()),
         loc!(closure(min_indent)),
