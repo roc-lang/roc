@@ -31,13 +31,13 @@ mod test_infer_uniq {
 
         (unify_problems, actual_str)
     }
-    fn infer_eq(src: &str, expected: &str) {
+    fn infer_eq_ignore_problems(src: &str, expected: &str) {
         let (_, actual) = infer_eq_help(src);
 
         assert_eq!(actual, expected.to_string());
     }
 
-    fn infer_eq_without_problem(src: &str, expected: &str) {
+    fn infer_eq(src: &str, expected: &str) {
         let (problems, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
@@ -268,7 +268,7 @@ mod test_infer_uniq {
 
     #[test]
     fn mismatch_heterogeneous_list() {
-        infer_eq(
+        infer_eq_ignore_problems(
             indoc!(
                 r#"
                 [ "foo", 5 ]
@@ -280,7 +280,7 @@ mod test_infer_uniq {
 
     #[test]
     fn mismatch_heterogeneous_nested_list() {
-        infer_eq(
+        infer_eq_ignore_problems(
             indoc!(
                 r#"
                 [ [ "foo", 5 ] ]
@@ -292,7 +292,7 @@ mod test_infer_uniq {
 
     #[test]
     fn mismatch_heterogeneous_nested_empty_list() {
-        infer_eq(
+        infer_eq_ignore_problems(
             indoc!(
                 r#"
                 [ [ 1 ], [ [] ] ]
@@ -523,8 +523,7 @@ mod test_infer_uniq {
                     identity
                     "#
             ),
-            // TODO investigate why not shared?
-            "Attr.Attr * (a -> a)",
+            "Attr.Attr Attr.Shared (a -> a)",
         );
     }
 
@@ -626,17 +625,18 @@ mod test_infer_uniq {
         );
     }
 
-    #[test]
-    fn identity_of_identity() {
-        infer_eq(
-            indoc!(
-                r#"
-                    (\val -> val) (\val -> val)
-                "#
-            ),
-            "Attr.Attr * (a -> a)",
-        );
-    }
+    // TODO when symbols are unique, this should work again
+    //    #[test]
+    //    fn identity_of_identity() {
+    //        infer_eq(
+    //            indoc!(
+    //                r#"
+    //                    (\val -> val) (\val -> val)
+    //                "#
+    //            ),
+    //            "Attr.Attr * (a -> a)",
+    //        );
+    //    }
 
     #[test]
     fn recursive_identity() {
@@ -995,14 +995,14 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn record_field_access() {
+    fn record_field_access_syntax() {
         infer_eq(
             indoc!(
                 r#"
                 \rec -> rec.left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | *) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1014,7 +1014,7 @@ mod test_infer_uniq {
                 \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | b) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
+            "Attr.Attr * (Attr.Attr (* | a | b) { left : (Attr.Attr a c), right : (Attr.Attr b d) }* -> Attr.Attr * { left : (Attr.Attr a c), right : (Attr.Attr b d) })",
         );
     }
 
@@ -1041,7 +1041,7 @@ mod test_infer_uniq {
             ),
             // NOTE: Foo loses the relation to the uniqueness attribute `a`
             // That is fine. Whenever we try to extract from it, the relation will be enforced
-            "Attr.Attr * (Attr.Attr a [ Foo (Attr.Attr a b) ]* -> Attr.Attr * [ Foo (Attr.Attr a b) ]*)",
+            "Attr.Attr * (Attr.Attr (* | a) [ Foo (Attr.Attr a b) ]* -> Attr.Attr * [ Foo (Attr.Attr a b) ]*)",
         );
     }
 
@@ -1056,7 +1056,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr.Attr * (Attr.Attr (b | a) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)"
+            "Attr.Attr * (Attr.Attr (* | a | b) [ Foo (Attr.Attr b c) (Attr.Attr a *) ]* -> Attr.Attr * [ Foo (Attr.Attr b c) (Attr.Attr * Str) ]*)",
         );
     }
 
@@ -1109,7 +1109,7 @@ mod test_infer_uniq {
                 \{ left } -> left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr a { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1118,16 +1118,16 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \{ x } -> x
+                \{ left } -> left
                 "#
             ),
-            "Attr.Attr * (Attr.Attr a { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
     #[test]
     fn num_identity_def() {
-        infer_eq_without_problem(
+        infer_eq(
             indoc!(
                 r#"
                    numIdentity : Num.Num a -> Num.Num a
@@ -1146,12 +1146,12 @@ mod test_infer_uniq {
             indoc!(
                 r#"
                 \r ->
-                    x = r.x
+                    x = r.left
 
                     x
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | *) { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
@@ -1161,18 +1161,18 @@ mod test_infer_uniq {
             indoc!(
                 r#"
                 \r ->
-                    x = r.x
+                    x = r.left
 
                     x
                 "#
             ),
-            "Attr.Attr * (Attr.Attr (a | *) { x : (Attr.Attr a b) }* -> Attr.Attr a b)",
+            "Attr.Attr * (Attr.Attr (* | a) { left : (Attr.Attr a b) }* -> Attr.Attr a b)",
         );
     }
 
     #[test]
     fn num_identity_applied() {
-        infer_eq_without_problem(
+        infer_eq(
             indoc!(
                 r#"
                    numIdentity : Num.Num b -> Num.Num b
@@ -1183,19 +1183,75 @@ mod test_infer_uniq {
 
                    { numIdentity, p, q }
                    "#
-            ), "Attr.Attr * { numIdentity : (Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
+            ), "Attr.Attr * { numIdentity : (Attr.Attr Attr.Shared (Attr.Attr a (Num b) -> Attr.Attr a (Num b))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
         );
     }
 
     #[test]
-    fn sharing_analysis_record_update_use_twice_access() {
+    fn sharing_analysis_record_twice_access() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        \r ->
+                            v = r.x
+                            w = r.x
+
+                            r
+
+                        "#
+                    ),
+                "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b) }c)" ,
+                );
+    }
+
+    #[test]
+    fn sharing_analysis_record_access_two_fields() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        \r ->
+                            v = r.x
+                            w = r.y
+
+                            r
+
+                        "#
+                    ),
+                "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared c) }d -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared c) }d)",
+                );
+    }
+
+    #[test]
+    fn sharing_analysis_record_alias() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        \r ->
+                            v = r.x
+                            w = r.y
+
+                            p = r
+
+                            p
+                        "#
+                    ),
+                "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared c) }d -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared c) }d)"
+                );
+    }
+
+    #[test]
+    fn sharing_analysis_record_access_field_twice() {
         infer_eq(
             indoc!(
                 r#"
-                \r -> { r & x: r.x, y: r.y }
-                "#
+                \r ->
+                    n = r.x
+                    m = r.x
+
+                    r
+                        "#
             ),
-        "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared b) }c)" ,
+            "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b) }c)",
         );
     }
 
@@ -1207,13 +1263,83 @@ mod test_infer_uniq {
                 \r -> { r & x: r.x, y: r.x }
                 "#
             ),
-         "Attr.Attr * (Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared a) }b -> Attr.Attr Attr.Shared { x : (Attr.Attr Attr.Shared a), y : (Attr.Attr Attr.Shared a) }b)"
+         "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c)"
+        );
+    }
+
+    #[test]
+    fn record_access_nested_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r ->
+                    v = r.foo.bar
+                    w = r.foo.baz
+
+                    r
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f -> Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared d), baz : (Attr.Attr Attr.Shared c) }e) }f)"
+        );
+    }
+
+    #[test]
+    fn record_access_nested_field_is_safe() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r ->
+                    v = r.foo.bar
+
+                    x = v
+                    y = v
+
+                    r
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared c) }d) }e -> Attr.Attr (a | b) { foo : (Attr.Attr a { bar : (Attr.Attr Attr.Shared c) }d) }e)"
+        );
+    }
+
+    #[test]
+    fn record_update_is_safe() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r ->
+
+                    s = { r & y: r.x }
+
+                    p = s.x
+                    q = s.y
+
+                    s
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c -> Attr.Attr a { x : (Attr.Attr Attr.Shared b), y : (Attr.Attr Attr.Shared b) }c)",
+        );
+    }
+
+    #[test]
+    fn triple_nested_record() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r ->
+                    if True then
+                        r.foo.bar.baz
+                    else
+                        r.tic.tac.toe
+
+                "#
+            ),
+            "Attr.Attr * (Attr.Attr (* | a | b | c | d | e) { foo : (Attr.Attr (a | c | d) { bar : (Attr.Attr (c | d) { baz : (Attr.Attr d f) }*) }*), tic : (Attr.Attr (b | d | e) { tac : (Attr.Attr (b | d) { toe : (Attr.Attr d f) }*) }*) }* -> Attr.Attr d f)"
         );
     }
 
     #[test]
     fn when_with_annotation() {
-        infer_eq_without_problem(
+        infer_eq(
             indoc!(
                 r#"
                     x : Num.Num Int.Integer
@@ -1232,7 +1358,7 @@ mod test_infer_uniq {
     // TODO add more realistic recursive example when able
     #[test]
     fn factorial_is_shared() {
-        infer_eq_without_problem(
+        infer_eq(
             indoc!(
                 r#"
                     factorial = \n ->
@@ -1248,21 +1374,176 @@ mod test_infer_uniq {
         );
     }
 
-    // TODO add more realistic recursive example when able
     #[test]
-    fn factorial_without_recursive_case_can_be_unique() {
-        infer_eq_without_problem(
+    #[ignore]
+    fn quicksort_swap() {
+        infer_eq(
             indoc!(
                 r#"
-                    factorial = \n ->
-                        when n is
-                            0 -> 1
-                            _ -> 1
+                swap : Num.Num Int.Integer, Num.Num Int.Integer, List.List a -> List.List a
+                swap \i, j, list ->
+                    when Pair (List.get i list) (List.get j list) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+                        _ ->
+                            list
 
-                    factorial
+                swap
                    "#
             ),
-            "Attr.Attr * (Attr.Attr * Int -> Attr.Attr * Int)",
+            "Attr.Attr * (Attr.Attr Attr.Shared Int, Attr.Attr Attr.Shared Int, Attr.Attr a (List b) -> Attr.Attr a (List b))",
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn quicksort() {
+        infer_eq(
+            indoc!(
+                r#"
+                swap : Int, Int, List a -> List a
+                swap \i, j, list ->
+                    when Pair (List.get i list) (List.get j list) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+                        _ ->
+                            list
+
+                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+                partition = \low, high, initialList ->
+                    when List.get high initialList is
+                        Ok pivot ->
+
+                            go \i, j, list =
+                                if j < high then
+                                    when List.get j list is
+                                        Ok value ->
+                                            if value <= pivot then
+                                                go (i + 1) (j + 1) (swap (i + 1) j list)
+                                            else
+                                                go i (j + 1) list
+
+                                        _ ->
+                                            Pair i list
+                                else
+                                    Pair i list
+
+                            Pair newI newList = go (low - 1) low initialList
+
+                            Pair (newI + 1) (swap (newI + 1) high newList)
+
+                        Err _ ->
+                            Pair (low - 1) initialList
+
+                quicksort : List Int, Int, Int -> List Int
+                quicksort = \list, low, high ->
+                    Pair partitionIndex partitioned = partition low high list
+
+                    arr
+                        |> quicksort low (partitionIndex - 1)
+                        |> quicksort (partitionIndex + 1) high
+
+                quicksort
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr Attr.Shared Int, Attr.Attr Attr.Shared Int, Attr.Attr a (List b) -> Attr.Attr a (List b))",
+        );
+    }
+
+    #[test]
+    fn shared_branch_unique_branch_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                    r = { left: 20 }
+                    s = { left: 20 }
+
+                    if True then
+                        r.left
+                    else
+                        v = s.left
+                        s.left
+
+                    "#
+            ),
+            "Attr.Attr Attr.Shared Int",
+        );
+    }
+
+    #[test]
+    fn shared_branch_unique_branch_nested_access() {
+        infer_eq(
+            indoc!(
+                r#"
+                    r = { left: 20 }
+                    s = { left: 20 }
+
+                    if True then
+                        { y: r.left }
+                    else
+                        v = s.left
+                        { y: s.left }
+
+                    "#
+            ),
+            "Attr.Attr * { y : (Attr.Attr Attr.Shared Int) }",
+        );
+    }
+
+    #[test]
+    fn shared_branch_unique_branch_current() {
+        infer_eq(
+            indoc!(
+                r#"
+                       r = "foo"
+                       s = { left : "foo" }
+
+                       when 0 is
+                           1 -> { x: s.left, y: s.left }
+                           0 -> { x: s.left, y: r }
+                           )
+                   "#
+            ),
+            "Attr.Attr * { x : (Attr.Attr Attr.Shared Str), y : (Attr.Attr Attr.Shared Str) }",
+        );
+    }
+
+    #[test]
+    fn shared_branch_unique_branch_curr() {
+        infer_eq(
+            indoc!(
+                r#"
+                       r = "foo"
+                       s = { left : "foo" }
+
+                       v = s.left
+
+                       when 0 is
+                           1 -> { x: v, y: v }
+                           0 -> { x: v, y: r }
+                           )
+                   "#
+            ),
+            "Attr.Attr * { x : (Attr.Attr Attr.Shared Str), y : (Attr.Attr Attr.Shared Str) }",
+        );
+    }
+
+    #[test]
+    fn duplicated_record() {
+        infer_eq(
+                   indoc!(
+                       r#"
+                       s = { left: 20, right: 20 }
+
+                       { left: s, right: s }
+                       "#
+                   ),
+                   // it's fine that the inner fields are not shared: only shared extraction is possible
+                   "Attr.Attr * { left : (Attr.Attr Attr.Shared { left : (Attr.Attr * Int), right : (Attr.Attr * Int) }), right : (Attr.Attr Attr.Shared { left : (Attr.Attr * Int), right : (Attr.Attr * Int) }) }",
+               );
     }
 }

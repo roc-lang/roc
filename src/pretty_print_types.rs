@@ -1,9 +1,9 @@
 use crate::can::ident::Lowercase;
-use crate::collections::{MutMap, MutSet};
+use crate::collections::{ImSet, MutMap, MutSet};
 use crate::module::symbol::{Interns, ModuleId, Symbol};
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::name_type_var;
-use crate::uniqueness::boolean_algebra::Bool;
+use crate::uniqueness::boolean_algebra::{Atom, Bool};
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -253,10 +253,7 @@ fn write_flat_type(
     buf: &mut String,
     parens: Parens,
 ) {
-    use crate::collections::ImMap;
-    use crate::subs::Content::Structure;
     use crate::subs::FlatType::*;
-    use crate::uniqueness::boolean_algebra;
 
     match flat_type {
         Apply(symbol, args) => write_apply(env, symbol, args, subs, buf, parens),
@@ -428,22 +425,7 @@ fn write_flat_type(
             write_content(env, subs.get(rec_var).content, subs, buf, parens)
         }
         Boolean(b) => {
-            // push global substitutions into the boolean
-            let mut global_substitution = ImMap::default();
-
-            for v in b.variables() {
-                if let Structure(Boolean(replacement)) = subs.get(v).content {
-                    global_substitution.insert(v, replacement);
-                }
-            }
-
-            write_boolean(
-                env,
-                boolean_algebra::simplify(b.substitute(&global_substitution)),
-                subs,
-                buf,
-                Parens::InTypeParam,
-            );
+            write_boolean(env, b, subs, buf, Parens::InTypeParam);
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
@@ -452,39 +434,44 @@ fn write_flat_type(
 }
 
 fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    let is_atom = boolean.is_var() || boolean == Bool::Zero || boolean == Bool::One;
-    let write_parens = parens == Parens::InTypeParam && !is_atom;
+    match boolean.simplify(subs) {
+        Err(atom) => write_boolean_atom(env, atom, subs, buf, parens),
+        Ok(variables) => {
+            let mut buffers_set = ImSet::default();
 
-    if write_parens {
-        buf.push_str("(");
+            for v in variables {
+                let mut inner_buf: String = "".to_string();
+                write_content(env, subs.get(v).content, subs, &mut inner_buf, parens);
+                buffers_set.insert(inner_buf);
+            }
+
+            let mut buffers: Vec<String> = buffers_set.into_iter().collect();
+            buffers.sort();
+
+            let combined = buffers.join(" | ");
+
+            let write_parens = buffers.len() > 1;
+
+            if write_parens {
+                buf.push_str("(");
+            }
+            buf.push_str(&combined);
+            if write_parens {
+                buf.push_str(")");
+            }
+        }
     }
+}
 
-    match boolean {
-        Bool::Variable(var) => write_content(env, subs.get(var).content, subs, buf, parens),
-        Bool::Or(p, q) => {
-            write_boolean(env, *p, subs, buf, Parens::InTypeParam);
-            buf.push_str(" | ");
-            write_boolean(env, *q, subs, buf, Parens::InTypeParam);
-        }
-        Bool::And(p, q) => {
-            write_boolean(env, *p, subs, buf, Parens::InTypeParam);
-            buf.push_str(" & ");
-            write_boolean(env, *q, subs, buf, Parens::InTypeParam);
-        }
-        Bool::Not(p) => {
-            buf.push_str("!");
-            write_boolean(env, *p, subs, buf, Parens::InTypeParam);
-        }
-        Bool::Zero => {
+fn write_boolean_atom(env: &Env, atom: Atom, subs: &mut Subs, buf: &mut String, parens: Parens) {
+    match atom {
+        Atom::Variable(var) => write_content(env, subs.get(var).content, subs, buf, parens),
+        Atom::Zero => {
             buf.push_str("Attr.Shared");
         }
-        Bool::One => {
+        Atom::One => {
             buf.push_str("Attr.Unique");
         }
-    };
-
-    if write_parens {
-        buf.push_str(")");
     }
 }
 

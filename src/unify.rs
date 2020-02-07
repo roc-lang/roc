@@ -1,10 +1,10 @@
 use crate::can::ident::{Lowercase, TagName};
-use crate::collections::{relative_complement, union, ImMap, MutMap};
+use crate::collections::{relative_complement, union, MutMap, SendSet};
 use crate::module::symbol::Symbol;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use crate::types::{Mismatch, Problem};
-use crate::uniqueness::boolean_algebra;
+use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use std::hash::Hash;
 
 type Pool = Vec<Variable>;
@@ -70,7 +70,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
     match &ctx.first_desc.content {
-        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
+        FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
@@ -103,11 +103,14 @@ fn unify_alias(
         Alias(other_symbol, other_args, other_real_var) => {
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
+                    let mut problems = Vec::new();
                     for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
-                        unify_pool(subs, pool, *l_var, *r_var);
+                        problems.extend(unify_pool(subs, pool, *l_var, *r_var));
                     }
 
-                    merge(subs, &ctx, other_content.clone())
+                    problems.extend(merge(subs, &ctx, other_content.clone()));
+
+                    problems
                 } else {
                     mismatch()
                 }
@@ -130,13 +133,22 @@ fn unify_structure(
 ) -> Outcome {
     match other {
         FlexVar(_) => {
-            // If the other is flex, Structure wins!
-            merge(subs, ctx, Structure(flat_type.clone()))
+            // TODO special-case boolean here
+            match flat_type {
+                FlatType::Boolean(Bool(Atom::Variable(var), _rest)) => {
+                    unify_pool(subs, pool, *var, ctx.second)
+                }
+                _ => {
+                    // If the other is flex, Structure wins!
+                    merge(subs, ctx, Structure(flat_type.clone()))
+                }
+            }
         }
         RigidVar(_) => {
             // Type mismatch! Rigid can only unify with flex.
             mismatch()
         }
+
         Structure(ref other_flat_type) => {
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
@@ -470,32 +482,34 @@ fn unify_flat_type(
             )
         }
 
-        (Boolean(b1_raw), Boolean(b2_raw)) => {
-            // first propagate Subs substitiutions into the booleans
-            let mut global_substitution = ImMap::default();
+        (Boolean(Bool(free1, rest1)), Boolean(Bool(free2, rest2))) => {
+            // unify the free variables
+            let (new_free, mut free_var_problems) = unify_free_atoms(subs, pool, *free1, *free2);
 
-            for v in b1_raw
-                .variables()
+            let combined_rest: SendSet<Atom> = rest1
+                .clone()
                 .into_iter()
-                .chain(b2_raw.variables().into_iter())
-            {
-                if let Structure(Boolean(replacement)) = subs.get(v).content {
-                    global_substitution.insert(v, replacement);
+                .chain(rest2.clone().into_iter())
+                .collect::<SendSet<Atom>>();
+
+            let mut combined = if let Err(false) = chase_atom(subs, new_free) {
+                // if the container is shared, all elements must be shared too
+                for atom in combined_rest {
+                    let (_, atom_problems) = unify_free_atoms(subs, pool, atom, Atom::Zero);
+                    free_var_problems.extend(atom_problems);
                 }
-            }
-
-            let b1 = boolean_algebra::simplify(b1_raw.substitute(&global_substitution));
-            let b2 = boolean_algebra::simplify(b2_raw.substitute(&global_substitution));
-
-            if let Some(substitution) = boolean_algebra::try_unify(b1, b2) {
-                for (var, replacement) in substitution {
-                    subs.set_content(var, Structure(FlatType::Boolean(replacement)));
-                }
-
-                vec![]
+                Bool(Atom::Zero, SendSet::default())
             } else {
-                mismatch()
-            }
+                Bool(new_free, combined_rest)
+            };
+
+            combined.apply_subs(subs);
+
+            // force first and second to equal this new variable
+            let content = Content::Structure(FlatType::Boolean(combined));
+            merge(subs, ctx, content);
+
+            free_var_problems
         }
 
         (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
@@ -525,13 +539,50 @@ fn unify_flat_type(
     }
 }
 
+fn chase_atom(subs: &mut Subs, atom: Atom) -> Result<Variable, bool> {
+    match atom {
+        Atom::Zero => Err(false),
+        Atom::One => Err(true),
+        Atom::Variable(var) => match subs.get(var).content {
+            Content::Structure(FlatType::Boolean(Bool(first, rest))) => {
+                debug_assert!(rest.is_empty());
+                chase_atom(subs, first)
+            }
+            _ => Ok(var),
+        },
+    }
+}
+
+fn unify_free_atoms(subs: &mut Subs, pool: &mut Pool, b1: Atom, b2: Atom) -> (Atom, Vec<Mismatch>) {
+    match (b1, b2) {
+        (Atom::Variable(v1), Atom::Variable(v2)) => {
+            (Atom::Variable(v1), unify_pool(subs, pool, v1, v2))
+        }
+        (Atom::Variable(var), other) | (other, Atom::Variable(var)) => {
+            subs.set_content(
+                var,
+                Content::Structure(FlatType::Boolean(Bool(other, SendSet::default()))),
+            );
+
+            (other, vec![])
+        }
+        (Atom::Zero, Atom::Zero) => (Atom::Zero, vec![]),
+        (Atom::One, Atom::One) => (Atom::One, vec![]),
+        _ => unreachable!(
+            "invalid boolean unification. Because we never infer One, this should never happen!"
+        ),
+    }
+}
+
 fn unify_zip<'a, I>(subs: &mut Subs, pool: &mut Pool, left_iter: I, right_iter: I) -> Outcome
 where
     I: Iterator<Item = &'a Variable>,
 {
     let mut problems = Vec::new();
 
-    for (&l_var, &r_var) in left_iter.zip(right_iter) {
+    let it = left_iter.zip(right_iter);
+
+    for (&l_var, &r_var) in it {
         problems.extend(unify_pool(subs, pool, l_var, r_var));
     }
 
@@ -563,6 +614,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
 #[inline(always)]
 fn unify_flex(
     subs: &mut Subs,
+    pool: &mut Pool,
     ctx: &Context,
     opt_name: &Option<Lowercase>,
     other: &Content,
@@ -572,11 +624,18 @@ fn unify_flex(
             // If both are flex, and only left has a name, keep the name around.
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
+
+        Structure(FlatType::Boolean(Bool(Atom::Variable(var), _rest))) => {
+            unify_pool(subs, pool, ctx.first, *var)
+        }
+
         FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _) => {
+            // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
             merge(subs, ctx, other.clone())
         }
+
         Error => merge(subs, ctx, Error),
     }
 }
