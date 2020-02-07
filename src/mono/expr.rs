@@ -93,8 +93,10 @@ pub enum Expr<'a> {
         name: InlinableString,
         arguments: &'a [Expr<'a>],
     },
-
-    Struct(&'a [(Lowercase, Expr<'a>)]),
+    Struct {
+        fields: &'a [(Lowercase, Expr<'a>)],
+        layout: Layout<'a>,
+    },
     Access {
         label: Lowercase,
         field_layout: Layout<'a>,
@@ -217,7 +219,8 @@ fn from_can<'a>(
             branches,
         } => from_can_when(env, cond_var, expr_var, *loc_cond, branches, procs),
 
-        Record(_, fields) => {
+        Record(ext_var, fields) => {
+            let subs = env.subs;
             let arena = env.arena;
             let mut field_bodies = Vec::with_capacity_in(fields.len(), arena);
 
@@ -227,7 +230,19 @@ fn from_can<'a>(
                 field_bodies.push((label, expr));
             }
 
-            Expr::Struct(field_bodies.into_bump_slice())
+            let struct_content = subs.get_without_compacting(ext_var).content;
+            let struct_layout = match Layout::from_content(arena, struct_content, subs) {
+                Ok(layout) => layout,
+                Err(()) => {
+                    // Invalid field!
+                    panic!("TODO gracefully handle Record with invalid struct_layout");
+                }
+            };
+
+            Expr::Struct {
+                fields: field_bodies.into_bump_slice(),
+                layout: struct_layout,
+            }
         }
 
         Access {

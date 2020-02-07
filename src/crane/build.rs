@@ -1,3 +1,5 @@
+use std::convert::TryFrom;
+
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use cranelift::frontend::Switch;
@@ -202,15 +204,9 @@ pub fn build_expr<'a, B: Backend>(
             }
             None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
         },
-        Struct(fields) => {
-            // Todo list
-            // - [ ] Better naming for sorted_fields
-            // - [ ] Look into options to sort these fields
-            // - [ ] Handle integer conversions for stack_size and max index
-            // - [ ] Get rid of index_max var, it is not very clearly named
-            // - [ ] Panic if expression does not evaluate to i64 or f64 for now
-            // - [ ] Is loading the stack the appropriate return?
-            // - [ ] Compute layout of record, use type_from_layout and Layout::from_content()
+        Struct { layout, fields } => {
+            let subs = &env.subs;
+            let cfg = env.cfg;
 
             // Sort the fields
             let mut sorted_fields = Vec::with_capacity_in(fields.len(), env.arena);
@@ -219,30 +215,36 @@ pub fn build_expr<'a, B: Backend>(
             }
             sorted_fields.sort_by_key(|k| &k.0);
 
-            // Get slot
-            let stack_size = (std::mem::size_of::<i64>() * fields.len()) as u32;
-            let index_max = fields.len() as i32;
-            let slot = builder
-                .create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, stack_size));
+            // Create a slot
+            let slot = builder.create_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                layout.stack_size(cfg),
+            ));
 
             // Create instructions for storing each field's expression
-            sorted_fields
-                .iter()
-                .zip(0..index_max)
-                .for_each(|((_, ref inner_expr), index)| {
-                    let val = build_expr(env, &scope, module, builder, inner_expr, procs);
-                    builder.ins().stack_store(val, slot, Offset32::new(index));
-                });
+            for (index, (_, ref inner_expr)) in sorted_fields.iter().enumerate() {
+                let val = build_expr(env, &scope, module, builder, inner_expr, procs);
 
-            // Placeholder: replace with call to type_from_layout
-            let ir_type = if fields.len() < 4 {
-                types::I64.by(4).unwrap()
-            } else {
-                panic!("TODO build record layout type properly");
-            };
+                // Is there an existing function for this?
+                let field_size = match inner_expr {
+                    Int(_) => std::mem::size_of::<i64>(),
+                    _ => panic!("I don't yet know how to calculate the offset for {:?} when building a cranelift struct", val),
+                };
+                let offset = i32::try_from(index * field_size)
+                    .expect("TODO handle field size conversion to i32");
 
-            // Not sure if this is the appropriate thing to return
-            builder.ins().stack_load(ir_type, slot, Offset32::new(0))
+                builder.ins().stack_store(val, slot, Offset32::new(offset));
+            }
+
+            let ir_type = type_from_layout(cfg, layout, subs);
+            builder.ins().stack_addr(ir_type, slot, Offset32::new(0))
+        }
+        Access {
+            label,
+            field_layout,
+            struct_layout,
+        } => {
+            panic!("I don't yet know how to crane build {:?}", expr);
         }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
