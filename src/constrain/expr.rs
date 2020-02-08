@@ -61,7 +61,6 @@ pub fn constrain_expr(
     expr: &Expr,
     expected: Expected<Type>,
 ) -> Constraint {
-    dbg!(&expr);
     match expr {
         Int(var, _) => int_literal(*var, expected, region),
         Float(var, _) => float_literal(*var, expected, region),
@@ -742,19 +741,22 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 annotation.substitute(&rigid_substitution);
             }
 
-            // TODO also do this for more complex patterns
-            if let Pattern::Identifier(symbol) = def.loc_pattern.value {
-                pattern_state.headers.insert(
-                    symbol,
-                    Located::at(def.loc_pattern.region, annotation.clone()),
-                );
+            let arity = annotation.arity();
+
+            if let Some(headers) = crate::constrain::pattern::headers_from_annotation(
+                &def.loc_pattern.value,
+                &Located::at(def.loc_pattern.region, annotation.clone()),
+            ) {
+                for (k, v) in headers {
+                    pattern_state.headers.insert(k, v);
+                }
             }
 
             let annotation_expected = FromAnnotation(
                 def.loc_pattern.clone(),
-                annotation.arity(),
+                arity,
                 AnnotationSource::TypedBody,
-                annotation.clone(),
+                annotation,
             );
 
             pattern_state.constraints.push(Eq(

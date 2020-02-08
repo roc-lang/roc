@@ -1710,24 +1710,35 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn let_record_pattern_with_alias_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+
+               { x, y } : Foo
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Str",
+        );
+    }
+
     //    #[test]
-    //    fn rigid_in_let_pattern() {
+    //    fn let_tag_pattern_with_annotation() {
     //        infer_eq_without_problem(
     //            indoc!(
     //                r#"
-    //                           List q : [ Cons q (List q), Nil ]
+    //                UserId x : [ UserId Int ]
+    //                UserId x = UserId 42
     //
-    //                           { x, y } : { x : List a, y : List b }
-    //                           { x, y } =
-    //                               result : List a
-    //                               result = Nil
-    //
-    //                               { x : result, y : Nil }
-    //
-    //                           43
-    //                              "#
+    //                x
+    //               "#
     //            ),
-    //            "List a -> List a",
+    //            "Int",
     //        );
     //    }
 }

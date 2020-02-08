@@ -386,6 +386,14 @@ impl Type {
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => false,
         }
     }
+
+    /// a shallow dealias, continue until the first constructor is not an alias.
+    pub fn shallow_dealias(&self) -> &Self {
+        match self {
+            Type::Alias(_, _, actual) => actual.shallow_dealias(),
+            _ => self,
+        }
+    }
 }
 
 fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
