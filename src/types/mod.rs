@@ -296,7 +296,10 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
-            Alias(_, _zipped, actual_type) => {
+            Alias(_, zipped, actual_type) => {
+                for (_, value) in zipped.iter_mut() {
+                    value.substitute(substitutions);
+                }
                 actual_type.substitute(substitutions);
             }
             Apply(_, args) => {

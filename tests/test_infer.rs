@@ -58,10 +58,8 @@ mod test_infer {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            panic!(
-                "PROBLEMS\n{:?}\nexpected:\n{:?}\ninferred:\n{:?}",
-                problems, expected, actual
-            );
+            dbg!(&problems);
+            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());
     }
@@ -1675,4 +1673,46 @@ mod test_infer {
             "{ x : [ Attr [ Shared ]* Str ]*, y : [ Attr [ Shared ]* Str ]* }",
         );
     }
+
+    #[test]
+    fn rigid_in_let() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                        List q : [ Cons q (List q), Nil ]
+    
+                        toEmpty : List a -> List a
+                        toEmpty = \_ ->
+                            result : List a
+                            result = Nil
+    
+                            result
+    
+                        toEmpty
+                           "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    //    #[test]
+    //    fn rigid_in_let_pattern() {
+    //        infer_eq_without_problem(
+    //            indoc!(
+    //                r#"
+    //                        List q : [ Cons q (List q), Nil ]
+    //
+    //                        { x, y } : { x : List a, y : List b }
+    //                        { x, y } =
+    //                            result : List a
+    //                            result = Nil
+    //
+    //                            { x : result, y : Nil }
+    //
+    //                        43
+    //                           "#
+    //            ),
+    //            "List a -> List a",
+    //        );
+    //    }
 }
