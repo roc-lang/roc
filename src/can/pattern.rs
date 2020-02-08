@@ -43,8 +43,27 @@ pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
 }
 
 pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
-    if let Pattern::Identifier(symbol) = pattern {
-        symbols.push(symbol.clone());
+    use Pattern::*;
+
+    match pattern {
+        Identifier(symbol) => {
+            symbols.push(symbol.clone());
+        }
+
+        AppliedTag(_, _, arguments) => {
+            for (_, nested) in arguments {
+                symbols_from_pattern_help(&nested.value, symbols);
+            }
+        }
+        RecordDestructure(_, destructs) => {
+            for destruct in destructs {
+                symbols.push(destruct.value.symbol.clone());
+            }
+        }
+
+        IntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | Underscore | UnsupportedPattern(_) => {}
+
+        Shadowed(_, _) => {}
     }
 }
 

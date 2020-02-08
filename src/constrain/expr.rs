@@ -61,6 +61,7 @@ pub fn constrain_expr(
     expr: &Expr,
     expected: Expected<Type>,
 ) -> Constraint {
+    dbg!(&expr);
     match expr {
         Int(var, _) => int_literal(*var, expected, region),
         Float(var, _) => float_literal(*var, expected, region),

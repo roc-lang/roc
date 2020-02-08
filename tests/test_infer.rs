@@ -1695,22 +1695,37 @@ mod test_infer {
         );
     }
 
+    #[test]
+    fn let_record_pattern_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+               { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Str",
+        );
+    }
+
     //    #[test]
     //    fn rigid_in_let_pattern() {
     //        infer_eq_without_problem(
     //            indoc!(
     //                r#"
-    //                        List q : [ Cons q (List q), Nil ]
+    //                           List q : [ Cons q (List q), Nil ]
     //
-    //                        { x, y } : { x : List a, y : List b }
-    //                        { x, y } =
-    //                            result : List a
-    //                            result = Nil
+    //                           { x, y } : { x : List a, y : List b }
+    //                           { x, y } =
+    //                               result : List a
+    //                               result = Nil
     //
-    //                            { x : result, y : Nil }
+    //                               { x : result, y : Nil }
     //
-    //                        43
-    //                           "#
+    //                           43
+    //                              "#
     //            ),
     //            "List a -> List a",
     //        );
