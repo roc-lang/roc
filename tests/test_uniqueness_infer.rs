@@ -25,6 +25,9 @@ mod test_infer_uniq {
         let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
         let mut subs = solved.into_inner();
 
+        dbg!(&subs);
+        dbg!(&content);
+
         name_all_type_vars(variable, &mut subs);
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
@@ -41,6 +44,7 @@ mod test_infer_uniq {
         let (problems, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
+            dbg!(&problems);
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());
@@ -1546,4 +1550,195 @@ mod test_infer_uniq {
                    "Attr.Attr * { left : (Attr.Attr Attr.Shared { left : (Attr.Attr * Int), right : (Attr.Attr * Int) }), right : (Attr.Attr Attr.Shared { left : (Attr.Attr * Int), right : (Attr.Attr * Int) }) }",
                );
     }
+
+    #[test]
+    fn result_succeed_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                       Result e a : [ Err e, Ok a ]
+
+                       succeed : q -> Result p q
+                       succeed = \x -> Ok x
+
+                       succeed
+                       "#
+            ),
+            "Attr.Attr * (a -> Attr.Attr * (Result * a))",
+        );
+    }
+
+    #[test]
+    fn result_succeed() {
+        infer_eq(
+            indoc!(
+                r#"
+                       succeed : a -> [ Err e, Ok a ]
+                       succeed = \x -> Ok x
+
+                       succeed
+                       "#
+            ),
+            "Attr.Attr * (a -> Attr.Attr * [ Err *, Ok a ])",
+        );
+    }
+
+    #[test]
+    fn list_singleton_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                singleton : a -> List a
+                singleton = \x -> Cons x Nil
+
+                singleton
+                       "#
+            ),
+            "Attr.Attr * (a -> Attr.Attr * (List a))",
+        );
+    }
+
+    #[test]
+    fn list_singleton_as() {
+        infer_eq(
+            indoc!(
+                r#"
+                singleton : a -> [ Cons a (List a), Nil ] as List a
+                singleton = \x -> Cons x Nil
+
+                singleton
+                       "#
+            ),
+            "Attr.Attr * (a -> Attr.Attr * (List a))",
+        );
+    }
+
+    #[test]
+    fn list_singleton_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                singleton = \x -> Cons x Nil
+
+                singleton
+                       "#
+            ),
+            "Attr.Attr * (a -> Attr.Attr * [ Cons a (Attr.Attr * [ Nil ]*) ]*)",
+        );
+    }
+
+    #[test]
+    fn list_map_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                map : (a -> b), List a -> List b
+                map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons x xs ->
+                                a = f x
+                                b = map f xs
+
+                                Cons a b
+
+
+                map
+                       "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a b -> c), Attr.Attr * (List (Attr.Attr a b)) -> Attr.Attr * (List c))" ,
+        );
+    }
+
+    #[test]
+    fn list_map_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons x xs ->
+                                a = f x
+                                b = map f xs
+
+                                Cons a b
+
+
+                map
+                       "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a b -> c), Attr.Attr d [ Cons (Attr.Attr a b) (Attr.Attr d e), Nil ]* as e -> Attr.Attr f [ Cons c (Attr.Attr f g), Nil ]* as g)" ,
+        );
+    }
+
+    #[test]
+    fn peano_map_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                map : Peano -> Peano
+                map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest ->
+                                map rest |> S
+
+
+                map
+                       "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr * Peano -> Attr.Attr * Peano)",
+        );
+    }
+
+    #[test]
+    fn peano_map_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest ->
+                                map rest |> S
+
+
+                map
+                       "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr a [ S (Attr.Attr a b), Z ]* as b -> Attr.Attr c [ S (Attr.Attr c d), Z ]* as d)",
+        );
+    }
+
+    // fails the variable usage check, but I also
+    // Assume this gives an error because the generated uniqueness rigid
+    // of the top-level signature (say `Attr u1 (List _)`, doesn't unify with the
+    // annotation of result (e.g. `Attr u2 (List _)`
+    //    #[test]
+    //    fn rigid_in_let() {
+    //        infer_eq(
+    //            indoc!(
+    //                r#"
+    //                        List q : [ Cons q (List q), Nil ]
+    //
+    //                        toEmpty : List a -> List a
+    //                        toEmpty = \_ ->
+    //                            result : List a
+    //                            result = Nil
+    //
+    //                            result
+    //
+    //                        toEmpty
+    //                           "#
+    //            ),
+    //            "(a -> b), List a -> List b",
+    //        );
+    //    }
 }
