@@ -249,7 +249,6 @@ pub fn sort_can_defs(
 
     // Determine the full set of references by traversing the graph.
     let mut visited_symbols = MutSet::default();
-
     let returned_lookups = ImSet::clone(&output.references.lookups);
 
     // Start with the return expression's referenced locals. They're the only ones that count!

@@ -18,13 +18,9 @@ mod test_load {
     use roc::can::def::Declaration::*;
     use roc::collections::MutMap;
     use roc::load::{load, LoadedModule};
-    use roc::module::symbol::ModuleId;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
-    use roc::solve::ModuleSubs;
+    use roc::solve::SubsByModule;
     use std::collections::HashMap;
-
-    /// TODO change solve::SubsByModule to be this
-    type SubsByModule = MutMap<ModuleId, ModuleSubs>;
 
     // HELPERS
 
