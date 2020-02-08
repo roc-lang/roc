@@ -31,7 +31,7 @@ mod test_infer {
 
         assert_correct_variable_usage(&constraint);
 
-        for (var, name) in output.rigids {
+        for (name, var) in output.rigids {
             subs.rigid_var(var, name);
         }
 
@@ -1675,27 +1675,6 @@ mod test_infer {
     }
 
     #[test]
-    fn rigid_in_let() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                        List q : [ Cons q (List q), Nil ]
-
-                        toEmpty : List a -> List a
-                        toEmpty = \_ ->
-                            result : List a
-                            result = Nil
-
-                            result
-
-                        toEmpty
-                           "#
-            ),
-            "List a -> List a",
-        );
-    }
-
-    #[test]
     fn peano_map_alias() {
         infer_eq(
             indoc!(
@@ -1718,21 +1697,21 @@ mod test_infer {
     }
 
     #[test]
-    fn rigid_in_let2() {
+    fn rigid_in_let() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                        List a : [ Cons a (List a), Nil ]
-    
-                        toEmpty : List a -> List a
-                        toEmpty = \_ ->
-                            result : List a
-                            result = Nil
-    
-                            result
-    
-                        toEmpty
-                           "#
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List a -> List a
+                toEmpty = \_ ->
+                    result : List a
+                    result = Nil
+
+                    result
+
+                toEmpty
+                   "#
             ),
             "List a -> List a",
         );

@@ -725,7 +725,7 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
             let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
 
-            for (var, name) in free_vars {
+            for (name, var) in free_vars {
                 if let Some(existing_rigid) = rigids.get(name) {
                     rigid_substitution.insert(*var, existing_rigid.clone());
                 } else {
@@ -742,6 +742,8 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             }
 
             let arity = annotation.arity();
+
+            dbg!(&annotation, &rigid_substitution, &rigids, &ftv, &free_vars);
 
             if let Some(headers) = crate::constrain::pattern::headers_from_annotation(
                 &def.loc_pattern.value,
@@ -871,7 +873,7 @@ pub fn rec_defs_help(
                 let rigids = &env.rigids;
                 let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
 
-                for (var, name) in seen_rigids {
+                for (name, var) in seen_rigids {
                     // if the rigid is known already, nothing needs to happen
                     // otherwise register it.
                     if !rigids.contains_key(name) {

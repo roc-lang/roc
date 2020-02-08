@@ -1430,7 +1430,7 @@ pub fn constrain_def(
 
             pattern_state.vars.extend(uniq_vars);
 
-            for (var, name) in free_vars {
+            for (name, var) in free_vars {
                 // if the rigid is known already, nothing needs to happen
                 // otherwise register it.
                 if !rigids.contains_key(name) {
@@ -1586,7 +1586,7 @@ pub fn rec_defs_help(
                 let rigids = &env.rigids;
                 let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
 
-                for (var, name) in seen_rigids {
+                for (name, var) in seen_rigids {
                     // if the rigid is known already, nothing needs to happen
                     // otherwise register it.
                     if !rigids.contains_key(name) {

@@ -17,9 +17,13 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_output, _problems, subs, variable, constraint, home, interns) = uniq_expr(src);
+        let (output, _problems, mut subs, variable, constraint, home, interns) = uniq_expr(src);
 
         assert_correct_variable_usage(&constraint);
+
+        for (name, var) in output.rigids {
+            subs.rigid_var(var, name);
+        }
 
         let mut unify_problems = Vec::new();
         let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
@@ -1134,7 +1138,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                   numIdentity : Num.Num a -> Num.Num a
+                   numIdentity : Num.Num b -> Num.Num b
                    numIdentity = \x -> x
 
                    numIdentity
@@ -1564,7 +1568,7 @@ mod test_infer_uniq {
                        succeed
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * (Result * a))",
+            "Attr.Attr * (q -> Attr.Attr * (Result p q))",
         );
     }
 
@@ -1579,7 +1583,7 @@ mod test_infer_uniq {
                        succeed
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * [ Err *, Ok a ])",
+            "Attr.Attr * (a -> Attr.Attr * [ Err e, Ok a ])",
         );
     }
 

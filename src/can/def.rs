@@ -29,7 +29,7 @@ pub struct Def {
     pub loc_expr: Located<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
-    pub annotation: Option<(Type, SendMap<Variable, Lowercase>)>,
+    pub annotation: Option<(Type, SendMap<Lowercase, Variable>)>,
 }
 
 #[derive(Debug)]
@@ -98,7 +98,7 @@ impl Declaration {
 #[inline(always)]
 pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
-    found_rigids: &mut SendMap<Variable, Lowercase>,
+    found_rigids: &mut SendMap<Lowercase, Variable>,
     var_store: &VarStore,
     original_scope: &Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
@@ -647,7 +647,7 @@ fn pattern_to_vars_by_symbol(
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_pending_def<'a>(
     env: &mut Env<'a>,
-    found_rigids: &mut SendMap<Variable, Lowercase>,
+    found_rigids: &mut SendMap<Lowercase, Variable>,
     pending_def: PendingDef<'a>,
     _original_scope: &Scope,
     scope: &mut Scope,
@@ -669,7 +669,7 @@ fn canonicalize_pending_def<'a>(
             let ann = loc_ann.value;
 
             // union seen rigids with already found ones
-            for (k, v) in ann.ftv {
+            for (k, v) in ann.rigids {
                 found_rigids.insert(k, v);
             }
 
@@ -755,7 +755,7 @@ fn canonicalize_pending_def<'a>(
 
             // aliases cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
-            for (k, v) in can_ann.ftv {
+            for (k, v) in can_ann.rigids {
                 found_rigids.insert(k, v);
             }
         }
@@ -768,7 +768,7 @@ fn canonicalize_pending_def<'a>(
             let typ = ann.typ;
 
             // union seen rigids with already found ones
-            for (k, v) in ann.ftv {
+            for (k, v) in ann.rigids {
                 found_rigids.insert(k, v);
             }
 
