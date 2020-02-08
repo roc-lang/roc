@@ -1560,7 +1560,7 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List q : [ Cons q (List q), Nil ]
+                    List a : [ Cons a (List a), Nil ]
 
                     map : (a -> b), List a -> List b
                     map = \f, list ->
@@ -1718,6 +1718,27 @@ mod test_infer {
     }
 
     #[test]
+    fn rigid_in_let2() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                        List a : [ Cons a (List a), Nil ]
+    
+                        toEmpty : List a -> List a
+                        toEmpty = \_ ->
+                            result : List a
+                            result = Nil
+    
+                            result
+    
+                        toEmpty
+                           "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    #[test]
     fn let_record_pattern_with_annotation() {
         infer_eq_without_problem(
             indoc!(
@@ -1767,6 +1788,23 @@ mod test_infer {
             "Str",
         );
     }
+
+    //    #[test]
+    //    fn mutually_recursive_tag_union() {
+    //        infer_eq_without_problem(
+    //            indoc!(
+    //                r#"
+    //                ListA a b = [ Cons a (ListB b a), Nil ]
+    //                ListB a b = [ Cons a (ListA b a), Nil ]
+    //
+    //                List q : [ Cons q (List q), Nil ]
+    //
+    //                toAs : (b -> a), ListA a b -> List a
+    //               "#
+    //            ),
+    //            "Str",
+    //        );
+    //    }
 
     //    #[test]
     //    fn let_tag_pattern_with_annotation() {
