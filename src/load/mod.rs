@@ -665,12 +665,6 @@ fn solve_module(
                 value: symbol,
                 region,
             };
-            let var = vars_by_symbol.get(&symbol).unwrap_or_else(|| {
-                panic!(
-                    "Could not find an entry for symbol {:?} in vars_by_symbol {:?}",
-                    symbol, vars_by_symbol
-                )
-            });
 
             match exposed_types.get(&module_id) {
                 Some(ExposedModuleTypes::Valid(solved_types)) => {
