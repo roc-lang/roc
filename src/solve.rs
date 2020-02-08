@@ -119,8 +119,7 @@ impl SolvedType {
                 let mut new_fields = Vec::with_capacity(fields.len());
 
                 for (label, var) in fields {
-                    let field =
-                        Self::from_content(subs, subs.get_without_compacting(ext_var).content);
+                    let field = Self::from_content(subs, subs.get_without_compacting(var).content);
 
                     new_fields.push((label, field));
                 }
@@ -152,7 +151,7 @@ impl SolvedType {
 
                 SolvedType::TagUnion(new_tags, Box::new(ext))
             }
-            RecursiveTagUnion(rec_var, tags, ext_var) => {
+            RecursiveTagUnion(_rec_var, _tags, _ext_var) => {
                 panic!("TODO make solved type for RecursiveTagUnion");
             }
             EmptyRecord => SolvedType::EmptyRecord,
