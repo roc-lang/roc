@@ -296,6 +296,19 @@ impl Subs {
         occurs(self, &ImSet::default(), var)
     }
 
+    pub fn explicit_substitute(
+        &mut self,
+        from: Variable,
+        to: Variable,
+        in_var: Variable,
+    ) -> Variable {
+        let x = self.get_root_key(from);
+        let y = self.get_root_key(to);
+        let z = self.get_root_key(in_var);
+        let mut seen = ImSet::default();
+        explicit_substitute(self, x, y, z, &mut seen)
+    }
+
     pub fn var_to_error_type(&mut self, var: Variable) -> ErrorType {
         let names = get_var_names(self, var, ImMap::default());
         let mut taken = MutSet::default();
@@ -475,20 +488,22 @@ pub enum Builtin {
     EmptyRecord,
 }
 
-fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> Option<Variable> {
+fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, input_var: Variable) -> Option<Variable> {
     use self::Content::*;
     use self::FlatType::*;
 
-    if seen.contains(&var) {
-        Some(var)
+    let root_var = subs.get_root_key(input_var);
+
+    if seen.contains(&root_var) {
+        Some(root_var)
     } else {
-        match subs.get(var).content {
+        match subs.get(root_var).content {
             FlexVar(_) | RigidVar(_) | Error => None,
 
             Structure(flat_type) => {
                 let mut new_seen = seen.clone();
 
-                new_seen.insert(var);
+                new_seen.insert(root_var);
 
                 match flat_type {
                     Apply(_, args) => {
@@ -567,7 +582,7 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> Option<Vari
             }
             Alias(_, args, _) => {
                 let mut new_seen = seen.clone();
-                new_seen.insert(var);
+                new_seen.insert(root_var);
                 for var in args.into_iter().map(|(_, var)| var) {
                     if let Some(v) = occurs(subs, &new_seen, var) {
                         return Some(v);
@@ -575,6 +590,99 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, var: Variable) -> Option<Vari
                 }
 
                 None
+            }
+        }
+    }
+}
+
+fn explicit_substitute(
+    subs: &mut Subs,
+    from: Variable,
+    to: Variable,
+    in_var: Variable,
+    seen: &mut ImSet<Variable>,
+) -> Variable {
+    use self::Content::*;
+    use self::FlatType::*;
+    let in_root = subs.get_root_key(in_var);
+    if seen.contains(&in_root) {
+        in_var
+    } else {
+        seen.insert(in_root);
+
+        if subs.get_root_key(from) == subs.get_root_key(in_var) {
+            to
+        } else {
+            match subs.get(in_var).content {
+                FlexVar(_) | RigidVar(_) | Error => in_var,
+
+                Structure(flat_type) => {
+                    match flat_type {
+                        Apply(symbol, args) => {
+                            let new_args = args
+                                .iter()
+                                .map(|var| explicit_substitute(subs, from, to, *var, seen))
+                                .collect();
+
+                            subs.set_content(in_var, Structure(Apply(symbol, new_args)));
+                        }
+                        Func(arg_vars, ret_var) => {
+                            let new_arg_vars = arg_vars
+                                .iter()
+                                .map(|var| explicit_substitute(subs, from, to, *var, seen))
+                                .collect();
+                            let new_ret_var = explicit_substitute(subs, from, to, ret_var, seen);
+
+                            subs.set_content(in_var, Structure(Func(new_arg_vars, new_ret_var)));
+                        }
+                        TagUnion(mut tags, ext_var) => {
+                            let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
+                            for (_, variables) in tags.iter_mut() {
+                                for var in variables.iter_mut() {
+                                    *var = explicit_substitute(subs, from, to, *var, seen);
+                                }
+                            }
+                            subs.set_content(in_var, Structure(TagUnion(tags, new_ext_var)));
+                        }
+                        RecursiveTagUnion(rec_var, mut tags, ext_var) => {
+                            // NOTE rec_var is not substituted, verify that this is correct!
+                            let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
+                            for (_, variables) in tags.iter_mut() {
+                                for var in variables.iter_mut() {
+                                    *var = explicit_substitute(subs, from, to, *var, seen);
+                                }
+                            }
+                            subs.set_content(
+                                in_var,
+                                Structure(RecursiveTagUnion(rec_var, tags, new_ext_var)),
+                            );
+                        }
+                        Record(mut vars_by_field, ext_var) => {
+                            let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
+
+                            for (_, var) in vars_by_field.iter_mut() {
+                                *var = explicit_substitute(subs, from, to, *var, seen);
+                            }
+                            subs.set_content(in_var, Structure(Record(vars_by_field, new_ext_var)));
+                        }
+
+                        // NOTE assume we never substitute into a Boolean
+                        EmptyRecord | EmptyTagUnion | Boolean(_) | Erroneous(_) => {}
+                    }
+
+                    in_var
+                }
+                Alias(symbol, mut args, actual) => {
+                    for (_, var) in args.iter_mut() {
+                        *var = explicit_substitute(subs, from, to, *var, seen);
+                    }
+
+                    let new_actual = explicit_substitute(subs, from, to, actual, seen);
+
+                    subs.set_content(in_var, Alias(symbol, args, new_actual));
+
+                    in_var
+                }
             }
         }
     }

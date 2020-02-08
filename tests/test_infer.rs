@@ -1675,4 +1675,106 @@ mod test_infer {
             "{ x : [ Attr [ Shared ]* Str ]*, y : [ Attr [ Shared ]* Str ]* }",
         );
     }
+
+    #[test]
+    fn peano_map_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                map : Peano -> Peano
+                map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest ->
+                                map rest |> S
+
+
+                map
+                       "#
+            ),
+            "Peano -> Peano",
+        );
+    }
+
+    #[test]
+    fn peano_map_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest ->
+                                map rest |> S
+
+
+                map
+                       "#
+            ),
+            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+        );
+    }
+
+    #[test]
+    fn typecheck_record_linked_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List q : [ Cons { x: q, xs: List q }, Nil ]
+
+                    map : (a -> b), List a -> List b
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons { x,  xs } ->
+                                Cons { x: f x, xs : map f xs }
+
+                    map
+                       "#
+            ),
+            "(a -> b), List a -> List b",
+        );
+    }
+
+    #[test]
+    fn infer_record_linked_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons { x,  xs } ->
+                                Cons { x: f x, xs : map f xs }
+
+                    map
+                       "#
+            ),
+            "(a -> b), [ Cons { x : a, xs : c }*, Nil ]* as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
+        );
+    }
+
+    // fails the variable usage check
+    //    #[test]
+    //    fn rigid_in_let() {
+    //        infer_eq_without_problem(
+    //            indoc!(
+    //                r#"
+    //                    List q : [ Cons q (List q), Nil ]
+    //
+    //                    toEmpty : List a -> List a
+    //                    toEmpty = \_ ->
+    //                        result : List a
+    //                        result = Nil
+    //
+    //                        result
+    //
+    //                    toEmpty
+    //                       "#
+    //            ),
+    //            "(a -> b), List a -> List b",
+    //        );
+    //    }
 }
