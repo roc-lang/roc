@@ -42,7 +42,7 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut Vec<Variable>, var_store: &
     use crate::solve::SolvedType::*;
 
     match solved_type {
-        Function(args, ret) => {
+        Func(args, ret) => {
             let mut new_args = Vec::with_capacity(args.len());
 
             for arg in args {
@@ -82,6 +82,8 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut Vec<Variable>, var_store: &
 
             Type::Record(new_fields, Box::new(to_type(ext, free_vars, var_store)))
         }
+        EmptyRecord => Type::EmptyRec,
+        EmptyTagUnion => Type::EmptyTagUnion,
         TagUnion(tags, ext) => {
             let mut new_tags = Vec::with_capacity(tags.len());
 
@@ -96,6 +98,13 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut Vec<Variable>, var_store: &
             }
 
             Type::TagUnion(new_tags, Box::new(to_type(ext, free_vars, var_store)))
+        }
+        Boolean(val) => Type::Boolean(val.clone()),
+        Alias(_, _, _) => {
+            panic!("TODO convert from SolvedType::Alias to Type::Alias");
+        }
+        Error => {
+            panic!("TODO convert from SolvedType::Error to Type somehow");
         }
         Erroneous(problem) => Type::Erroneous(problem.clone()),
     }
