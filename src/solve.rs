@@ -575,9 +575,8 @@ fn check_for_infinite_type(
 
                 for (label, args) in &tags {
                     let new_args: Vec<_> = args
-                        .clone()
-                        .into_iter()
-                        .map(|var| subs.explicit_substitute(recursive, rec_var, var))
+                        .iter()
+                        .map(|var| subs.explicit_substitute(recursive, rec_var, *var))
                         .collect();
 
                     new_tags.insert(label.clone(), new_args);
@@ -610,9 +609,8 @@ fn check_for_infinite_type(
 
                         for (label, args) in &tags {
                             let new_args: Vec<_> = args
-                                .clone()
-                                .into_iter()
-                                .map(|var| subs.explicit_substitute(recursive, attr_var, var))
+                                .iter()
+                                .map(|var| subs.explicit_substitute(recursive, attr_var, *var))
                                 .collect();
 
                             new_tags.insert(label.clone(), new_args);
