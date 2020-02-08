@@ -83,6 +83,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
+    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content);
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
@@ -496,6 +497,13 @@ fn unify_flat_type(
             )
         }
 
+        (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+
+            unify_tag_union(subs, pool, ctx, union1, union2, (Some(*rec1), Some(*rec2)))
+        }
+
         (Boolean(Bool(free1, rest1)), Boolean(Bool(free2, rest2))) => {
             // unify the free variables
             let (new_free, mut free_var_problems) = unify_free_atoms(subs, pool, *free1, *free2);
@@ -549,7 +557,10 @@ fn unify_flat_type(
                 problems
             }
         }
-        _ => mismatch!(),
+        (_other1, _other2) => {
+            // Can't unify other1 and other2
+            mismatch!()
+        }
     }
 }
 

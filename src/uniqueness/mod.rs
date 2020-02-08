@@ -1346,6 +1346,27 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                 ),
             )
         }
+        RecursiveTagUnion(rec_var, tags, ext_type) => {
+            let uniq_var = var_store.fresh();
+            let mut vars = Vec::with_capacity(tags.len());
+            let mut lifted_tags = Vec::with_capacity(tags.len());
+
+            for (tag, fields) in tags {
+                let (new_vars, lifted_fields) = annotation_to_attr_type_many(var_store, fields);
+                vars.extend(new_vars);
+                lifted_tags.push((tag.clone(), lifted_fields));
+            }
+
+            vars.push(uniq_var);
+
+            (
+                vars,
+                attr_type(
+                    Bool::variable(uniq_var),
+                    Type::RecursiveTagUnion(*rec_var, lifted_tags, ext_type.clone()),
+                ),
+            )
+        }
 
         Alias(symbol, fields, actual) => {
             let (actual_vars, lifted_actual) = annotation_to_attr_type(var_store, actual);
@@ -1370,7 +1391,6 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             }
         }
         As(_, _) => panic!("TODO implement lifting for As"),
-        RecursiveTagUnion(_, _, _) => panic!("TODO implement lifting for RecursiveTagUnion"),
     }
 }
 
@@ -1517,14 +1537,14 @@ pub fn rec_defs_help(
             constraints: Vec::with_capacity(1),
         };
 
+        pattern_state.vars.push(expr_var);
+
         constrain_pattern(
             var_store,
             &mut pattern_state,
             &def.loc_pattern,
             pattern_expected,
         );
-
-        pattern_state.vars.push(expr_var);
 
         let mut new_rigids = Vec::new();
         match &def.annotation {
@@ -1554,6 +1574,16 @@ pub fn rec_defs_help(
             }
 
             Some((annotation, seen_rigids)) => {
+                let (uniq_vars, annotation) = annotation_to_attr_type(var_store, annotation);
+
+                // TODO also do this for more complex patterns
+                if let Pattern::Identifier(symbol) = def.loc_pattern.value {
+                    pattern_state.headers.insert(
+                        symbol,
+                        Located::at(def.loc_pattern.region, annotation.clone()),
+                    );
+                }
+
                 let rigids = &env.rigids;
                 let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
 
@@ -1561,6 +1591,35 @@ pub fn rec_defs_help(
                     // if the rigid is known already, nothing needs to happen
                     // otherwise register it.
                     if !rigids.contains_key(name) {
+                        // possible use this rigid in nested def's
+                        ftv.insert(name.clone(), Type::Variable(*var));
+
+                        new_rigids.push(*var);
+                    }
+                }
+
+                // NOTE uniqueness rigids can lead to type errors I think
+                //
+                // foo : a -> b
+                //
+                //      x : a
+                //      x = ...
+                //
+                // Turns into
+                //
+                // foo : Attr u1 a -> Attr u2 b
+                //
+                //      x : Attr u3 a
+                //      x = ...
+                //
+                // Now u1 /~ u3! Unsure how to fix this at the moment.
+                // Something to try is to register the uniqueness vars in flex_vars.
+                // That seems to work
+                for (i, var) in uniq_vars.iter().enumerate() {
+                    // generate a name (unique in this annotation) for the new uniqueness vars
+                    let name: Lowercase = format!("$u{}", i).into();
+
+                    if !rigids.contains_key(&name) {
                         // possible use this rigid in nested def's
                         ftv.insert(name.clone(), Type::Variable(*var));
 
@@ -1604,6 +1663,8 @@ pub fn rec_defs_help(
                 }));
 
                 rigid_info.vars.extend(&new_rigids);
+                // because of how in Roc headers point to variables, we must include the pattern var here
+                rigid_info.vars.extend(pattern_state.vars);
                 rigid_info.constraints.push(Let(Box::new(LetConstraint {
                     rigid_vars: new_rigids,
                     flex_vars: Vec::new(),         // no flex vars introduced

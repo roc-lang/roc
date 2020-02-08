@@ -361,9 +361,19 @@ fn solve(
                         next_pools.get_mut(next_rank).clear();
 
                         // check that things went well
-                        debug_assert!(rigid_vars
-                            .iter()
-                            .all(|&var| subs.get_without_compacting(var).rank == Rank::NONE));
+                        debug_assert!({
+                            let failing: Vec<_> = rigid_vars
+                                .iter()
+                                .filter(|&var| subs.get_without_compacting(*var).rank != Rank::NONE)
+                                .collect();
+
+                            if !failing.is_empty() {
+                                dbg!(&subs);
+                                println!("Failing {:?}", failing);
+                            }
+
+                            failing.is_empty()
+                        });
                         let mut new_vars_by_symbol = vars_by_symbol.clone();
 
                         for (symbol, loc_var) in local_def_vars.iter() {
@@ -551,35 +561,96 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     while let Some(recursive) = subs.occurs(var) {
+        let description = subs.get(recursive);
+        let content = description.content;
+
         // try to make a tag union recursive, see if that helps
-        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
-            let rec_var = subs.fresh_unnamed_flex_var();
+        match content {
+            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                let rec_var = subs.fresh_unnamed_flex_var();
 
-            let mut new_tags = MutMap::default();
+                // TODO figure out whether to keep original rank ?
 
-            for (label, args) in tags {
-                let new_args = args
-                    .clone()
-                    .into_iter()
-                    .map(|var| if var == recursive { rec_var } else { var })
-                    .collect();
+                let mut new_tags = MutMap::default();
 
-                new_tags.insert(label.clone(), new_args);
+                for (label, args) in &tags {
+                    let new_args: Vec<_> = args
+                        .clone()
+                        .into_iter()
+                        .map(|var| subs.explicit_substitute(recursive, rec_var, var))
+                        .collect();
+
+                    new_tags.insert(label.clone(), new_args);
+                }
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+
+                subs.set_content(recursive, Content::Structure(flat_type));
             }
+            Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+                debug_assert!(args.len() == 2);
+                let uniq_var = args[0];
+                let tag_union_var = args[1];
+                match subs.get(tag_union_var).content {
+                    Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                        let rec_var = subs.fresh_unnamed_flex_var();
+                        let attr_var = subs.fresh_unnamed_flex_var();
 
-            let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
-            subs.set_content(recursive, Content::Structure(flat_type));
-        } else {
-            let error_type = subs.var_to_error_type(var);
-            let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+                        subs.set_content(
+                            attr_var,
+                            Content::Structure(FlatType::Apply(
+                                Symbol::ATTR_ATTR,
+                                vec![uniq_var, rec_var],
+                            )),
+                        );
 
-            subs.set_content(var, Content::Error);
+                        // TODO figure out whether to keep original rank ?
 
-            problems.push(problem);
+                        let mut new_tags = MutMap::default();
+
+                        for (label, args) in &tags {
+                            let new_args: Vec<_> = args
+                                .clone()
+                                .into_iter()
+                                .map(|var| subs.explicit_substitute(recursive, attr_var, var))
+                                .collect();
+
+                            new_tags.insert(label.clone(), new_args);
+                        }
+
+                        let new_tag_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+                        subs.set_content(tag_union_var, Content::Structure(new_tag_type));
+
+                        let new_recursive =
+                            FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, tag_union_var]);
+                        subs.set_content(recursive, Content::Structure(new_recursive));
+                    }
+                    _ => {
+                        circular_error(subs, problems, symbol, &loc_var);
+                    }
+                }
+            }
+            _ => {
+                circular_error(subs, problems, symbol, &loc_var);
+            }
         }
     }
 }
 
+fn circular_error(
+    subs: &mut Subs,
+    problems: &mut Vec<Problem>,
+    symbol: Symbol,
+    loc_var: &Located<Variable>,
+) {
+    let var = loc_var.value;
+    let error_type = subs.var_to_error_type(var);
+    let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+
+    subs.set_content(var, Content::Error);
+
+    problems.push(problem);
+}
 fn generalize(
     subs: &mut Subs,
     young_mark: Mark,
@@ -718,6 +789,20 @@ fn adjust_rank_content(
 
         Structure(flat_type) => {
             match flat_type {
+                Apply(Symbol::ATTR_ATTR, args) => {
+                    // Attr.Attr is special-cased. Starting the rank at `toplevel()` would
+                    // introduce a level of rank that doesn't exist in the source.
+                    //
+                    // That can mean the difference between Rank=0 and Rank != 0, which affects
+                    // generalization.
+                    let mut rank = Rank::NONE;
+
+                    for var in args {
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                    }
+
+                    rank
+                }
                 Apply(_, args) => {
                     let mut rank = Rank::toplevel();
 
@@ -781,7 +866,8 @@ fn adjust_rank_content(
                 }
 
                 Boolean(b) => {
-                    let mut rank = Rank::toplevel();
+                    // Boolean is also special-cased to start at rank None, not toplevel()
+                    let mut rank = Rank::NONE;
                     for var in b.variables() {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
