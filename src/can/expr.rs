@@ -134,7 +134,7 @@ pub fn canonicalize_expr<'a>(
     var_store: &VarStore,
     scope: &mut Scope,
     region: Region,
-    expr: &'a ast::Expr,
+    expr: &'a ast::Expr<'a>,
 ) -> (Located<Expr>, Output) {
     use Expr::*;
 

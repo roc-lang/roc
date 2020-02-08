@@ -1,5 +1,4 @@
-use crate::can::def::Declaration;
-use crate::can::def::Def;
+use crate::can::def::{Declaration, Def};
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::Field;
 use crate::can::ident::{Lowercase, TagName};
@@ -691,8 +690,6 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
 }
 
 fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> PatternState {
-    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-    // (However, still include it in scope, because you *can* recursively refer to yourself.)
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
@@ -730,7 +727,7 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 // if the rigid is known already, nothing needs to happen
                 // otherwise register it.
                 if !rigids.contains_key(name) {
-                    // possible use this rigid in nested def's
+                    // It's possible to use this rigid in nested defs
                     ftv.insert(name.clone(), Type::Variable(*var));
 
                     new_rigids.push(*var);

@@ -2,13 +2,13 @@ use crate::can::def::Declaration;
 use crate::can::ident::{Ident, ModuleName};
 use crate::can::module::{canonicalize_module_defs, ModuleOutput};
 use crate::collections::{default_hasher, insert_all, MutMap, MutSet, SendMap};
-use crate::constrain::module::constrain_module;
+use crate::constrain::module::{constrain_imported_values, constrain_module, Import};
 use crate::module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
-use crate::region::Region;
-use crate::solve::{self, ModuleSubs, Solved, SubsByModule};
+use crate::region::{Located, Region};
+use crate::solve::{self, ExposedModuleTypes, Solved, SolvedType, SubsByModule};
 use crate::subs::{Subs, VarStore, Variable};
 use crate::types::{Constraint, Problem};
 use bumpalo::Bump;
@@ -31,6 +31,7 @@ pub struct Module {
     pub module_id: ModuleId,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
+    pub references: MutSet<Symbol>,
 }
 
 pub struct LoadedModule {
@@ -68,10 +69,11 @@ enum Msg {
         module: Module,
         constraint: Constraint,
         ident_ids: IdentIds,
-        next_var: Variable,
+        var_store: VarStore,
     },
     Solved {
         module_id: ModuleId,
+        solved_types: MutMap<Symbol, SolvedType>,
         subs: Arc<Solved<Subs>>,
         problems: Vec<Problem>,
         new_vars_by_symbol: SendMap<Symbol, Variable>,
@@ -123,7 +125,7 @@ type MsgReceiver = mpsc::Receiver<Msg>;
 pub async fn load<'a>(
     src_dir: PathBuf,
     filename: PathBuf,
-    mut subs_by_module: SubsByModule,
+    mut exposed_types: SubsByModule,
 ) -> Result<LoadedModule, LoadingProblem> {
     use self::MaybeShared::*;
 
@@ -187,7 +189,7 @@ pub async fn load<'a>(
     // If the relevant module's waiting_for_solve entry is now empty, solve the module.
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
-    let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, Variable)> = MutMap::default();
+    let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
     let mut vars_by_symbol = SendMap::default();
 
     // Parse and canonicalize the module's deps
@@ -241,7 +243,7 @@ pub async fn load<'a>(
                                 header,
                                 Arc::clone(&arc_modules),
                                 &exposed_idents_by_module,
-                                &subs_by_module,
+                                &exposed_types,
                                 &mut waiting_for_solve,
                                 msg_tx.clone(),
                             )
@@ -274,7 +276,7 @@ pub async fn load<'a>(
                         header,
                         Arc::clone(&arc_modules),
                         &exposed_idents_by_module,
-                        &subs_by_module,
+                        &exposed_types,
                         &mut waiting_for_solve,
                         msg_tx.clone(),
                     )
@@ -301,7 +303,7 @@ pub async fn load<'a>(
                 module,
                 ident_ids,
                 constraint,
-                next_var,
+                var_store,
             } => {
                 let module_id = module.module_id;
                 let waiting_for = waiting_for_solve.get_mut(&module_id).unwrap_or_else(|| {
@@ -318,7 +320,7 @@ pub async fn load<'a>(
                 // It's possible that some modules have been solved since
                 // we began waiting for them. Remove those from waiting_for,
                 // because we no longer need to wait for them!
-                waiting_for.retain(|id| !subs_by_module.contains_key(id));
+                waiting_for.retain(|id| !exposed_types.contains_key(id));
 
                 if waiting_for.is_empty() {
                     // All of our dependencies have already been solved. Great!
@@ -326,16 +328,16 @@ pub async fn load<'a>(
                     solve_module(
                         module,
                         constraint,
-                        next_var,
+                        var_store,
                         msg_tx.clone(),
-                        &subs_by_module,
+                        &mut exposed_types,
                         &mut declarations_by_id,
                         vars_by_symbol.clone(),
                     );
                 } else {
                     // We will have to wait for our dependencies to be solved.
                     debug_assert!(!unsolved_modules.contains_key(&module_id));
-                    unsolved_modules.insert(module_id, (module, constraint, next_var));
+                    unsolved_modules.insert(module_id, (module, constraint, var_store));
 
                     // Register a listener with each of these.
                     for dep_id in waiting_for.iter() {
@@ -349,6 +351,7 @@ pub async fn load<'a>(
             }
             Solved {
                 module_id,
+                solved_types,
                 subs,
                 problems,
                 new_vars_by_symbol,
@@ -359,16 +362,16 @@ pub async fn load<'a>(
                     // Once we've solved the originally requested module, we're done!
                     msg_rx.close();
 
+                    let solved = Arc::try_unwrap(subs).unwrap_or_else(|_| {
+                        panic!("There were still outstanding Arc references to Solved<Subs>")
+                    });
+
                     let module_ids = Arc::try_unwrap(arc_modules)
                         .unwrap_or_else(|_| {
                             panic!("There were still outstanding Arc references to module_ids")
                         })
                         .into_inner()
                         .expect("Unwrapping mutex for module_ids");
-
-                    let solved = Arc::try_unwrap(subs).unwrap_or_else(|_| {
-                        panic!("There were still outstanding Arc references to Solved<Subs>")
-                    });
 
                     let declarations = declarations_by_id
                         .remove(&module_id)
@@ -390,8 +393,8 @@ pub async fn load<'a>(
                     // This was a dependency. Write it down and keep processing messaages.
                     vars_by_symbol = vars_by_symbol.union(new_vars_by_symbol);
 
-                    debug_assert!(!subs_by_module.contains_key(&module_id));
-                    subs_by_module.insert(module_id, ModuleSubs::Valid(subs));
+                    debug_assert!(!exposed_types.contains_key(&module_id));
+                    exposed_types.insert(module_id, ExposedModuleTypes::Valid(solved_types));
 
                     // Notify all the listeners that this solved.
                     if let Some(listeners) = solve_listeners.remove(&module_id) {
@@ -406,29 +409,16 @@ pub async fn load<'a>(
 
                             // If it's no longer waiting for anything else, solve it.
                             if waiting_for.is_empty() {
-                                let (module, constraint, next_var) = unsolved_modules
+                                let (module, constraint, var_store) = unsolved_modules
                                     .remove(&listener_id)
                                     .expect("Could not find listener ID in unsolved_modules");
-
-                                let mut subs_by_dep = MutMap::default();
-
-                                for (module_id, subs) in subs_by_module.iter() {
-                                    // TODO FIXME actually determine if this is a dependency of the
-                                    // module in question! Otherwise we'll deep clone the subs for
-                                    // *every single module* instead of just the ones we need.
-                                    let is_dep = true;
-
-                                    if is_dep {
-                                        subs_by_dep.insert(*module_id, subs.clone());
-                                    }
-                                }
 
                                 solve_module(
                                     module,
                                     constraint,
-                                    next_var,
+                                    var_store,
                                     msg_tx.clone(),
-                                    &subs_by_dep,
+                                    &mut exposed_types,
                                     &mut declarations_by_id,
                                     vars_by_symbol.clone(),
                                 );
@@ -655,12 +645,57 @@ fn add_exposed_to_scope(
 fn solve_module(
     module: Module,
     constraint: Constraint,
-    next_var: Variable,
+    var_store: VarStore,
     msg_tx: MsgSender,
-    _subs_by_module: &SubsByModule,
+    exposed_types: &mut SubsByModule,
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
     mut vars_by_symbol: SendMap<Symbol, Variable>,
 ) {
+    let home = module.module_id;
+    let mut imports = Vec::with_capacity(module.references.len());
+
+    // Translate referenced symbols into constraints
+    for &symbol in module.references.iter() {
+        let module_id = symbol.module_id();
+
+        // We already have constraints for our own symbols.
+        if module_id != home {
+            let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
+            let loc_symbol = Located {
+                value: symbol,
+                region,
+            };
+
+            match exposed_types.get(&module_id) {
+                Some(ExposedModuleTypes::Valid(solved_types)) => {
+                    let solved_type = solved_types.get(&loc_symbol.value).unwrap();
+
+                    imports.push(Import {
+                        loc_symbol,
+                        solved_type,
+                    });
+                }
+                Some(ExposedModuleTypes::Invalid) => {
+                    // If that module was invalid, use True constraints
+                    // for everything imported from it.
+                    imports.push(Import {
+                        loc_symbol,
+                        solved_type: &SolvedType::Erroneous(Problem::InvalidModule),
+                    });
+                }
+                None => {
+                    panic!(
+                        "Could not find module {:?} in exposed_types {:?}",
+                        module_id, exposed_types
+                    );
+                }
+            }
+        }
+    }
+
+    // Wrap the existing module constraint in these imported constraints.
+    let constraint = constrain_imported_values(imports, constraint, &var_store);
+
     // All the exposed imports should be available in the solver's vars_by_symbol
     for (symbol, expr_var) in module.exposed_imports.iter() {
         vars_by_symbol.insert(*symbol, *expr_var);
@@ -684,6 +719,7 @@ fn solve_module(
     }
 
     let module_id = module.module_id;
+    let exposed_imports = module.exposed_imports;
 
     declarations_by_id.insert(module.module_id, module.declarations);
 
@@ -695,13 +731,20 @@ fn solve_module(
         // We'll use a fresh Subs for this, because we're starting from
         // other modules' Subs plus the variables we've generated during
         // our own canonicalization.
-        let subs = Subs::new(next_var);
-
+        let subs = Subs::new(var_store.into());
         let mut problems = Vec::new();
 
         // Run the solver to populate Subs.
-        let (solved, new_vars_by_symbol) =
+        let (solved_subs, new_vars_by_symbol) =
             solve::run(&vars_by_symbol, &mut problems, subs, &constraint);
+
+        let mut solved_types = MutMap::default();
+
+        for (symbol, var) in &exposed_imports {
+            let solved_type = SolvedType::new(&solved_subs, *var);
+
+            solved_types.insert(*symbol, solved_type);
+        }
 
         tokio::spawn(async move {
             let mut tx = msg_tx;
@@ -709,7 +752,8 @@ fn solve_module(
             // Send the subs to the main thread for processing,
             tx.send(Msg::Solved {
                 module_id,
-                subs: Arc::new(solved),
+                subs: Arc::new(solved_subs),
+                solved_types,
                 new_vars_by_symbol,
                 problems,
             })
@@ -723,7 +767,7 @@ fn spawn_parse_and_constrain(
     header: ModuleHeader,
     module_ids: Arc<Mutex<ModuleIds>>,
     exposed_idents: &MutMap<ModuleId, Arc<IdentIds>>,
-    subs_by_module: &SubsByModule,
+    exposed_types: &SubsByModule,
     waiting_for_solve: &mut MutMap<ModuleId, MutSet<ModuleId>>,
     msg_tx: MsgSender,
 ) {
@@ -754,7 +798,7 @@ fn spawn_parse_and_constrain(
     let mut solve_needed = HashSet::with_capacity_and_hasher(num_deps, default_hasher());
 
     for dep_id in deps_by_name.values() {
-        if !subs_by_module.contains_key(dep_id) {
+        if !exposed_types.contains_key(dep_id) {
             solve_needed.insert(*dep_id);
         }
     }
@@ -801,6 +845,7 @@ fn parse_and_constrain(
             exposed_imports,
             lookups,
             ident_ids,
+            references,
             ..
         }) => {
             let constraint = constrain_module(module_id, &declarations, lookups);
@@ -809,6 +854,7 @@ fn parse_and_constrain(
                 module_id,
                 declarations,
                 exposed_imports,
+                references,
             };
 
             (module, ident_ids, constraint)
@@ -818,8 +864,6 @@ fn parse_and_constrain(
         }
     };
 
-    let next_var = var_store.into();
-
     tokio::spawn(async move {
         let mut tx = msg_tx;
 
@@ -828,7 +872,7 @@ fn parse_and_constrain(
             module,
             ident_ids,
             constraint,
-            next_var,
+            var_store,
         })
         .await
         .unwrap_or_else(|_| panic!("Failed to send Constrained message"));

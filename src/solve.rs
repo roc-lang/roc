@@ -1,4 +1,4 @@
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::Located;
@@ -8,18 +8,158 @@ use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
 use crate::uniqueness::boolean_algebra::{self, Atom};
-use std::sync::Arc;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
 // Thank you, Evan!
 
-pub type SubsByModule = MutMap<ModuleId, ModuleSubs>;
+pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
 #[derive(Clone, Debug)]
-pub enum ModuleSubs {
+pub enum ExposedModuleTypes {
     Invalid,
-    Valid(Arc<Solved<Subs>>),
+    Valid(MutMap<Symbol, SolvedType>),
+}
+
+/// This is a fully solved type, with no Variables remaining in it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SolvedType {
+    /// A function. The types of its arguments, then the type of its return value.
+    Func(Vec<SolvedType>, Box<SolvedType>),
+    /// Applying a type to some arguments (e.g. Map.Map String Int)
+    Apply(Symbol, Vec<SolvedType>),
+    /// A bound type variable, e.g. `a` in `(a -> a)`
+    Rigid(Lowercase),
+    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    Record {
+        fields: Vec<(Lowercase, SolvedType)>,
+        /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
+        /// This is None if it's a closed record annotation like `{ name: Str }`.
+        ext: Box<SolvedType>,
+    },
+    EmptyRecord,
+    TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
+    EmptyTagUnion,
+    /// The `*` type variable, e.g. in (List *)
+    Wildcard,
+    /// A type from an Invalid module
+    Erroneous(Problem),
+
+    /// A type alias
+    Alias(Symbol, Vec<Lowercase>, Box<SolvedType>),
+
+    /// a boolean algebra Bool
+    Boolean(boolean_algebra::Bool),
+
+    /// A type error
+    Error,
+}
+
+impl SolvedType {
+    pub fn new(solved_subs: &Solved<Subs>, var: Variable) -> Self {
+        let subs = solved_subs.inner();
+        let content = subs.get_without_compacting(var).content;
+
+        Self::from_content(subs, content)
+    }
+
+    fn from_content(subs: &Subs, content: Content) -> Self {
+        use crate::subs::Content::*;
+
+        match content {
+            FlexVar(_) => SolvedType::Wildcard,
+            RigidVar(name) => SolvedType::Rigid(name),
+            Structure(flat_type) => Self::from_flat_type(subs, flat_type),
+            Alias(symbol, args, var) => {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for (arg_name, _arg_var) in args {
+                    new_args.push(arg_name);
+                }
+
+                let aliased_to = Self::from_content(subs, subs.get_without_compacting(var).content);
+
+                SolvedType::Alias(symbol, new_args, Box::new(aliased_to))
+            }
+            Error => SolvedType::Error,
+        }
+    }
+
+    fn from_flat_type(subs: &Subs, flat_type: FlatType) -> Self {
+        use crate::subs::FlatType::*;
+
+        match flat_type {
+            Apply(symbol, args) => {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for var in args {
+                    new_args.push(Self::from_content(
+                        subs,
+                        subs.get_without_compacting(var).content,
+                    ));
+                }
+
+                SolvedType::Apply(symbol, new_args)
+            }
+            Func(args, ret) => {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for var in args {
+                    new_args.push(Self::from_content(
+                        subs,
+                        subs.get_without_compacting(var).content,
+                    ));
+                }
+
+                let ret = Self::from_content(subs, subs.get_without_compacting(ret).content);
+
+                SolvedType::Func(new_args, Box::new(ret))
+            }
+            Record(fields, ext_var) => {
+                let mut new_fields = Vec::with_capacity(fields.len());
+
+                for (label, var) in fields {
+                    let field = Self::from_content(subs, subs.get_without_compacting(var).content);
+
+                    new_fields.push((label, field));
+                }
+
+                let ext = Self::from_content(subs, subs.get_without_compacting(ext_var).content);
+
+                SolvedType::Record {
+                    fields: new_fields,
+                    ext: Box::new(ext),
+                }
+            }
+            TagUnion(tags, ext_var) => {
+                let mut new_tags = Vec::with_capacity(tags.len());
+
+                for (tag_name, args) in tags {
+                    let mut new_args = Vec::with_capacity(args.len());
+
+                    for var in args {
+                        new_args.push(Self::from_content(
+                            subs,
+                            subs.get_without_compacting(var).content,
+                        ));
+                    }
+
+                    new_tags.push((tag_name, new_args));
+                }
+
+                let ext = Self::from_content(subs, subs.get_without_compacting(ext_var).content);
+
+                SolvedType::TagUnion(new_tags, Box::new(ext))
+            }
+            RecursiveTagUnion(_rec_var, _tags, _ext_var) => {
+                panic!("TODO make solved type for RecursiveTagUnion");
+            }
+            EmptyRecord => SolvedType::EmptyRecord,
+            EmptyTagUnion => SolvedType::EmptyTagUnion,
+            Boolean(val) => SolvedType::Boolean(val),
+            Erroneous(problem) => SolvedType::Erroneous(problem),
+        }
+    }
 }
 
 type Env = SendMap<Symbol, Variable>;
@@ -543,7 +683,6 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
-        As(_, _) => panic!("TODO turn As into a variable"),
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem.clone()));
 

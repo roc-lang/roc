@@ -21,6 +21,7 @@ use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use crate::types::Type;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -131,19 +132,6 @@ pub fn canonicalize_defs<'a>(
     let mut refs_by_symbol = MutMap::default();
     let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
     let mut pending = Vec::with_capacity(num_defs); // TODO bump allocate this!
-
-    use std::cmp::Ordering;
-
-    let aliases_first = |x: &&Located<ast::Def<'a>>, _: &&Located<ast::Def<'a>>| -> Ordering {
-        match x.value {
-            ast::Def::Alias { .. } | ast::Def::Nested(ast::Def::Alias { .. }) => Ordering::Less,
-            _ => Ordering::Greater,
-        }
-    };
-
-    let mut loc_defs = loc_defs.clone();
-    loc_defs.sort_by(aliases_first);
-
     let mut iter = loc_defs.iter().peekable();
 
     // Canonicalize all the patterns, record shadowing problems, and store
@@ -192,6 +180,13 @@ pub fn canonicalize_defs<'a>(
     if cfg!(debug_assertions) {
         env.home.register_debug_idents(&env.ident_ids);
     }
+
+    let aliases_first = |x: &PendingDef<'_>, _: &PendingDef<'_>| match x {
+        PendingDef::Alias { .. } => Ordering::Less,
+        _ => Ordering::Greater,
+    };
+
+    pending.sort_by(aliases_first);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -254,7 +249,6 @@ pub fn sort_can_defs(
 
     // Determine the full set of references by traversing the graph.
     let mut visited_symbols = MutSet::default();
-
     let returned_lookups = ImSet::clone(&output.references.lookups);
 
     // Start with the return expression's referenced locals. They're the only ones that count!

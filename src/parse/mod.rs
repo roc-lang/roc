@@ -13,14 +13,16 @@ pub mod type_annotation;
 use bumpalo::collections::string::String;
 
 use crate::operator::{BinOp, CalledVia, UnaryOp};
-use crate::parse::ast::{AssignedField, Attempting, Def, Expr, Pattern, Spaceable, TypeAnnotation};
+use crate::parse::ast::{
+    AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
+};
 use crate::parse::blankspace::{
     space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
 };
 use crate::parse::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::parse::number_literal::number_literal;
 use crate::parse::parser::{
-    allocated, char, not, not_followed_by, optional, sep_by1, string, then, unexpected,
+    allocated, char, fail, not, not_followed_by, optional, sep_by1, string, then, unexpected,
     unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
 };
 use crate::region::{Located, Region};
@@ -34,13 +36,140 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     move |arena, state| parse_expr(min_indent, arena, state)
 }
 
+macro_rules! loc_parenthetical_expr {
+    ($min_indent:expr, $args_parser:expr) => {
+    then(
+        loc!(and!(
+            between!(
+                char('('),
+                map_with_arena!(
+                    space0_around(
+                        loc!(move |arena, state| parse_expr($min_indent, arena, state)),
+                        $min_indent,
+                    ),
+                    |arena: &'a Bump, loc_expr: Located<Expr<'a>>| {
+                        Located {
+                            region: loc_expr.region,
+                            value: Expr::ParensAround(arena.alloc(loc_expr.value)),
+                        }
+                    }
+                ),
+                char(')')
+            ),
+            optional(either!(
+                // There may optionally be function args after the ')'
+                // e.g. ((foo bar) baz)
+                $args_parser,
+                // If there aren't any args, there may be a '=' or ':' after it.
+                //
+                // (It's a syntax error to write e.g. `foo bar =` - so if there
+                // were any args, there is definitely no need to parse '=' or ':'!)
+                //
+                // Also, there may be a '.' for field access (e.g. `(foo).bar`),
+                // but we only want to look for that if there weren't any args,
+                // as if there were any args they'd have consumed it anyway
+                // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
+                either!(
+                    one_or_more!(skip_first!(char('.'), lowercase_ident())),
+                    and!(space0($min_indent), equals_with_indent())
+                )
+            ))
+        )),
+        move |arena, state, loc_expr_with_extras: Located<(Located<Expr<'a>>, Option<Either<
+            Vec<'a, Located<Expr<'a>>>
+            , Either<Vec<'a, &'a str>, (&'a [CommentOrNewline<'a>], u16)>>>)>
+
+
+            | {
+            // We parse the parenthetical expression *and* the arguments after it
+            // in one region, so that (for example) the region for Apply includes its args.
+            let (loc_expr, opt_extras) = loc_expr_with_extras.value;
+
+            match opt_extras {
+                Some(Either::First(loc_args)) => {
+                    let mut allocated_args = Vec::with_capacity_in(loc_args.len(), arena);
+
+                    for loc_arg in loc_args {
+                        allocated_args.push(&*arena.alloc(loc_arg));
+                    }
+
+                    Ok((
+                        Located {
+                            region: loc_expr_with_extras.region,
+                            value: Expr::Apply(
+                                arena.alloc(loc_expr),
+                                allocated_args,
+                                CalledVia::Space,
+                            ),
+                        },
+                        state,
+                    ))
+                }
+                // '=' after optional spaces
+                Some(Either::Second(Either::Second((spaces_before_equals, equals_indent)))) => {
+                    let region = loc_expr.region;
+
+                    // Re-parse the Expr as a Pattern.
+                    let pattern = match expr_to_pattern(arena, &loc_expr.value) {
+                        Ok(valid) => valid,
+                        Err(fail) => return Err((fail, state)),
+                    };
+
+                    // Make sure we don't discard the spaces - might be comments in there!
+                    let value = if spaces_before_equals.is_empty() {
+                        pattern
+                    } else {
+                        Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_equals)
+                    };
+
+                    let loc_first_pattern = Located { region, value };
+
+                    // Continue parsing the expression as a Def.
+                    let (spaces_after_equals, state) = space0($min_indent).parse(arena, state)?;
+                    let (parsed_expr, state) =
+                        parse_def_expr($min_indent, equals_indent, arena, state, loc_first_pattern)?;
+
+                    let value = if spaces_after_equals.is_empty() {
+                        parsed_expr
+                    } else {
+                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
+                    };
+
+                    Ok((Located { value, region }, state))
+                }
+                // '.' and a record field immediately after ')', no optional spaces
+                Some(Either::Second(Either::First(fields))) => {
+                    let mut value = loc_expr.value;
+
+                    for field in fields {
+                        // Wrap the previous answer in the new one, so we end up
+                        // with a nested Expr. That way, `foo.bar.baz` gets represented
+                        // in the AST as if it had been written (foo.bar).baz all along.
+                        value = Expr::Access(arena.alloc(value), field);
+                    }
+
+                    Ok((
+                        Located {
+                            region: loc_expr.region,
+                            value,
+                        },
+                        state,
+                    ))
+                }
+                None => Ok((loc_expr, state)),
+            }
+        },
+    )
+    }
+}
+
 fn loc_parse_expr_body_without_operators<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
     one_of!(
-        loc_parenthetical_expr(min_indent),
+        loc_parenthetical_expr!(min_indent, loc_function_args(min_indent)),
         loc!(string_literal()),
         loc!(number_literal()),
         loc!(closure(min_indent)),
@@ -119,126 +248,6 @@ fn parse_expr<'a>(min_indent: u16, arena: &'a Bump, state: State<'a>) -> ParseRe
     );
 
     expr_parser.parse(arena, state)
-}
-
-pub fn loc_parenthetical_expr<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
-    then(
-        loc!(and!(
-            between!(
-                char('('),
-                map_with_arena!(
-                    space0_around(
-                        loc!(move |arena, state| parse_expr(min_indent, arena, state)),
-                        min_indent,
-                    ),
-                    |arena: &'a Bump, loc_expr: Located<Expr<'a>>| {
-                        Located {
-                            region: loc_expr.region,
-                            value: Expr::ParensAround(arena.alloc(loc_expr.value)),
-                        }
-                    }
-                ),
-                char(')')
-            ),
-            optional(either!(
-                // There may optionally be function args after the ')'
-                // e.g. ((foo bar) baz)
-                loc_function_args(min_indent),
-                // If there aren't any args, there may be a '=' or ':' after it.
-                //
-                // (It's a syntax error to write e.g. `foo bar =` - so if there
-                // were any args, there is definitely no need to parse '=' or ':'!)
-                //
-                // Also, there may be a '.' for field access (e.g. `(foo).bar`),
-                // but we only want to look for that if there weren't any args,
-                // as if there were any args they'd have consumed it anyway
-                // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
-                either!(
-                    one_or_more!(skip_first!(char('.'), lowercase_ident())),
-                    and!(space0(min_indent), equals_with_indent())
-                )
-            ))
-        )),
-        move |arena, state, loc_expr_with_extras| {
-            // We parse the parenthetical expression *and* the arguments after it
-            // in one region, so that (for example) the region for Apply includes its args.
-            let (loc_expr, opt_extras) = loc_expr_with_extras.value;
-
-            match opt_extras {
-                Some(Either::First(loc_args)) => {
-                    let mut allocated_args = Vec::with_capacity_in(loc_args.len(), arena);
-
-                    for loc_arg in loc_args {
-                        allocated_args.push(&*arena.alloc(loc_arg));
-                    }
-
-                    Ok((
-                        Located {
-                            region: loc_expr_with_extras.region,
-                            value: Expr::Apply(
-                                arena.alloc(loc_expr),
-                                allocated_args,
-                                CalledVia::Space,
-                            ),
-                        },
-                        state,
-                    ))
-                }
-                // '=' after optional spaces
-                Some(Either::Second(Either::Second((spaces_before_equals, equals_indent)))) => {
-                    let region = loc_expr.region;
-
-                    // Re-parse the Expr as a Pattern.
-                    let pattern = match expr_to_pattern(arena, &loc_expr.value) {
-                        Ok(valid) => valid,
-                        Err(fail) => return Err((fail, state)),
-                    };
-
-                    // Make sure we don't discard the spaces - might be comments in there!
-                    let value = if spaces_before_equals.is_empty() {
-                        pattern
-                    } else {
-                        Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_equals)
-                    };
-
-                    let loc_first_pattern = Located { region, value };
-
-                    // Continue parsing the expression as a Def.
-                    let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
-                    let (parsed_expr, state) =
-                        parse_def_expr(min_indent, equals_indent, arena, state, loc_first_pattern)?;
-
-                    let value = if spaces_after_equals.is_empty() {
-                        parsed_expr
-                    } else {
-                        Expr::SpaceBefore(arena.alloc(parsed_expr), spaces_after_equals)
-                    };
-
-                    Ok((Located { value, region }, state))
-                }
-                // '.' and a record field immediately after ')', no optional spaces
-                Some(Either::Second(Either::First(fields))) => {
-                    let mut value = loc_expr.value;
-
-                    for field in fields {
-                        // Wrap the previous answer in the new one, so we end up
-                        // with a nested Expr. That way, `foo.bar.baz` gets represented
-                        // in the AST as if it had been written (foo.bar).baz all along.
-                        value = Expr::Access(arena.alloc(value), field);
-                    }
-
-                    Ok((
-                        Located {
-                            region: loc_expr.region,
-                            value,
-                        },
-                        state,
-                    ))
-                }
-                None => Ok((loc_expr, state)),
-            }
-        },
-    )
 }
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
@@ -759,7 +768,7 @@ fn loc_parse_function_arg<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>> {
     one_of!(
-        loc_parenthetical_expr(min_indent),
+        loc_parenthetical_expr!(min_indent, fail() /* don't parse args within args! */),
         loc!(string_literal()),
         loc!(number_literal()),
         loc!(closure(min_indent)),
