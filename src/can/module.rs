@@ -90,7 +90,7 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
         } else {
-            // TODO add type aliases to type alias dictionary, based on exposed types
+            panic!("TODO add type aliases to type alias dictionary, based on exposed types");
         }
     }
 
