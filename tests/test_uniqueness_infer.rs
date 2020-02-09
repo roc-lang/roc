@@ -1138,13 +1138,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                   numIdentity : Num.Num b -> Num.Num b
+                   numIdentity : Num.Num p -> Num.Num p
                    numIdentity = \x -> x
 
                    numIdentity
                    "#
             ),
-            "Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))",
+            "Attr.Attr * (Attr.Attr a (Num (Attr.Attr b p)) -> Attr.Attr a (Num (Attr.Attr b p)))",
         );
     }
 
@@ -1183,7 +1183,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                   numIdentity : Num.Num b -> Num.Num b
+                   numIdentity : Num.Num p -> Num.Num p
                    numIdentity = \foo -> foo
 
                    p = numIdentity 42
@@ -1191,7 +1191,8 @@ mod test_infer_uniq {
 
                    { numIdentity, p, q }
                    "#
-            ), "Attr.Attr * { numIdentity : (Attr.Attr Attr.Shared (Attr.Attr a (Num b) -> Attr.Attr a (Num b))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
+            ), 
+        "Attr.Attr * { numIdentity : (Attr.Attr Attr.Shared (Attr.Attr a (Num (Attr.Attr b p)) -> Attr.Attr a (Num (Attr.Attr b p)))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
         );
     }
 
@@ -1568,7 +1569,7 @@ mod test_infer_uniq {
                        succeed
                        "#
             ),
-            "Attr.Attr * (q -> Attr.Attr * (Result p q))",
+            "Attr.Attr * (Attr.Attr a q -> Attr.Attr * (Result (Attr.Attr * p) (Attr.Attr a q)))",
         );
     }
 
@@ -1577,13 +1578,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                       succeed : a -> [ Err e, Ok a ]
+                       succeed : p -> [ Err e, Ok p ]
                        succeed = \x -> Ok x
 
                        succeed
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * [ Err e, Ok a ])",
+            "Attr.Attr * (Attr.Attr a p -> Attr.Attr * [ Err (Attr.Attr * e), Ok (Attr.Attr a p) ])",
         );
     }
 
@@ -1594,13 +1595,13 @@ mod test_infer_uniq {
                 r#"
                 List a : [ Cons a (List a), Nil ]
 
-                singleton : a -> List a
+                singleton : p -> List p
                 singleton = \x -> Cons x Nil
 
                 singleton
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * (List a))",
+            "Attr.Attr * (Attr.Attr a p -> Attr.Attr * (List (Attr.Attr a p)))",
         );
     }
 
@@ -1609,13 +1610,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                singleton : a -> [ Cons a (List a), Nil ] as List a
+                singleton : p -> [ Cons p (List p), Nil ] as List p
                 singleton = \x -> Cons x Nil
 
                 singleton
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * (List a))",
+            "Attr.Attr * (Attr.Attr a p -> Attr.Attr * (List (Attr.Attr a p)))",
         );
     }
 
@@ -1640,7 +1641,7 @@ mod test_infer_uniq {
                 r#"
                 List a : [ Cons a (List a), Nil ]
 
-                map : (a -> b), List a -> List b
+                map : (p -> q), List p -> List q
                 map = \f, list ->
                         when list is
                             Nil -> Nil
@@ -1654,7 +1655,7 @@ mod test_infer_uniq {
                 map
                        "#
             ),
-            "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a b -> c), Attr.Attr * (List (Attr.Attr a b)) -> Attr.Attr * (List c))" ,
+            "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a p -> Attr.Attr b q), Attr.Attr * (List (Attr.Attr a p)) -> Attr.Attr * (List (Attr.Attr b q)))" ,
         );
     }
 
@@ -1718,6 +1719,25 @@ mod test_infer_uniq {
                        "#
             ),
             "Attr.Attr Attr.Shared (Attr.Attr a [ S (Attr.Attr a b), Z ]* as b -> Attr.Attr c [ S (Attr.Attr c d), Z ]* as d)",
+        );
+    }
+
+    // This snippet exhibits the rank issue. Seems to only occur when using recursive types with
+    // recursive functions.
+    #[test]
+    fn rigids_in_signature() {
+        infer_eq(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                map : (p -> q), p -> List q
+                map = \f, x -> map f x
+
+                map
+                       "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr * (Attr.Attr a p -> Attr.Attr b q), Attr.Attr a p -> Attr.Attr * (List (Attr.Attr b q)))",
         );
     }
 

@@ -514,6 +514,7 @@ fn solve(
 
                             failing.is_empty()
                         });
+
                         let mut new_vars_by_symbol = vars_by_symbol.clone();
 
                         for (symbol, loc_var) in local_def_vars.iter() {
@@ -911,6 +912,9 @@ fn adjust_rank(
     }
 }
 
+// In the future, I hope we can find a way around special-casing the Attr constructor and Bool values.
+const SPECIAL_CASE_ATTR: bool = true;
+
 fn adjust_rank_content(
     subs: &mut Subs,
     young_mark: Mark,
@@ -932,7 +936,12 @@ fn adjust_rank_content(
                     //
                     // That can mean the difference between Rank=0 and Rank != 0, which affects
                     // generalization.
-                    let mut rank = Rank::NONE;
+
+                    let mut rank = if SPECIAL_CASE_ATTR {
+                        Rank::NONE
+                    } else {
+                        Rank::toplevel()
+                    };
 
                     for var in args {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
@@ -1004,7 +1013,11 @@ fn adjust_rank_content(
 
                 Boolean(b) => {
                     // Boolean is also special-cased to start at rank None, not toplevel()
-                    let mut rank = Rank::NONE;
+                    let mut rank = if SPECIAL_CASE_ATTR {
+                        Rank::NONE
+                    } else {
+                        Rank::toplevel()
+                    };
                     for var in b.variables() {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }

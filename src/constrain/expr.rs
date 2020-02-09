@@ -708,7 +708,7 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
     state
 }
 
-pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
+fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
@@ -742,8 +742,6 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             }
 
             let arity = annotation.arity();
-
-            dbg!(&annotation, &rigid_substitution, &rigids, &ftv, &free_vars);
 
             if let Some(headers) = crate::constrain::pattern::headers_from_annotation(
                 &def.loc_pattern.value,

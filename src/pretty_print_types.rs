@@ -508,23 +508,50 @@ fn write_apply(
             let arg_content = subs.get(arg).content;
             let mut arg_param = String::new();
 
-            write_content(env, arg_content, subs, &mut arg_param, Parens::InTypeParam);
-
-            if arg_param == "Int.Integer" {
-                buf.push_str("Int");
-            } else if arg_param == "Float.FloatingPoint" {
-                buf.push_str("Float");
-            } else {
+            let mut default_case = |subs, content| {
                 if write_parens {
                     buf.push_str("(");
                 }
 
+                write_content(env, content, subs, &mut arg_param, Parens::InTypeParam);
                 buf.push_str("Num ");
                 buf.push_str(&arg_param);
 
                 if write_parens {
                     buf.push_str(")");
                 }
+            };
+
+            match &arg_content {
+                Content::Structure(FlatType::Apply(symbol, nested_args)) => match *symbol {
+                    Symbol::INT_INTEGER if nested_args.is_empty() => {
+                        buf.push_str("Int");
+                    }
+                    Symbol::FLOAT_FLOATINGPOINT if nested_args.is_empty() => {
+                        buf.push_str("Float");
+                    }
+                    Symbol::ATTR_ATTR => match nested_args
+                        .get(1)
+                        .map(|v| subs.get_without_compacting(*v).content)
+                    {
+                        Some(Content::Structure(FlatType::Apply(
+                            double_nested_symbol,
+                            double_nested_args,
+                        ))) => match double_nested_symbol {
+                            Symbol::INT_INTEGER if double_nested_args.is_empty() => {
+                                buf.push_str("Int");
+                            }
+                            Symbol::FLOAT_FLOATINGPOINT if double_nested_args.is_empty() => {
+                                buf.push_str("Float");
+                            }
+                            _ => default_case(subs, arg_content),
+                        },
+
+                        _ => default_case(subs, arg_content),
+                    },
+                    _ => default_case(subs, arg_content),
+                },
+                _ => default_case(subs, arg_content),
             }
         }
         Symbol::LIST_LIST => {
