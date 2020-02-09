@@ -20,6 +20,7 @@ pub struct ModuleOutput {
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub ident_ids: IdentIds,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
 }
 
@@ -30,6 +31,7 @@ pub fn canonicalize_module_defs<'a>(
     module_ids: &ModuleIds,
     dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
+    mut exposed_symbols: MutSet<Symbol>,
     var_store: &VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
@@ -115,9 +117,45 @@ pub fn canonicalize_module_defs<'a>(
 
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(declarations), output) => {
-            // TODO examine the patterns, extract toplevel identifiers from them,
-            // and verify that everything in the `exposes` list is actually present in
-            // that set of identifiers. You can't expose it if it wasn't defined!
+            use crate::can::def::Declaration::*;
+
+            let mut exposed_vars_by_symbol = Vec::with_capacity(exposed_symbols.len());
+
+            for decl in declarations.iter() {
+                match decl {
+                    Declare(def) => {
+                        // TODO if this doesn't work, try def.expr_var
+                        for (symbol, variable) in def.pattern_vars.iter() {
+                            if exposed_symbols.contains(symbol) {
+                                // This is one of our exposed symbols;
+                                // record the corresponding variable!
+                                exposed_vars_by_symbol.push((*symbol, *variable));
+
+                                // Remove this from exposed_symbols,
+                                // so that at the end of the process,
+                                // we can see if there were any
+                                // exposed symbols which did not have
+                                // corresponding defs.
+                                exposed_symbols.remove(symbol);
+                            }
+                        }
+                    }
+                    DeclareRec(_defs) => {
+                        panic!("TODO support exposing recursive defs");
+                    }
+                    InvalidCycle(_, _) => {
+                        panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs");
+                    }
+                }
+            }
+
+            // By this point, all exposed symbols should have been removed from
+            // exposed_symbols and added to exposed_vars_by_symbol. If any were
+            // not, that means they were declared as exposed but there was
+            // no actual declaration with that name!
+            if !exposed_symbols.is_empty() {
+                panic!("TODO gracefully handle invalid `exposes` entry (or entries) which had no corresponding definition: {:?}", exposed_symbols);
+            }
 
             // TODO incorporate rigids into here (possibly by making this be a Let instead
             // of an And)
@@ -132,6 +170,7 @@ pub fn canonicalize_module_defs<'a>(
                 references,
                 exposed_imports: can_exposed_imports,
                 lookups,
+                exposed_vars_by_symbol,
                 ident_ids: env.ident_ids,
             })
         }

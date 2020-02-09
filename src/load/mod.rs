@@ -31,6 +31,7 @@ pub struct Module {
     pub module_id: ModuleId,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
 }
 
@@ -198,6 +199,7 @@ pub async fn load<'a>(
 
         match msg {
             Header(header) => {
+                let module_id = header.module_id;
                 let deps_by_name = &header.deps_by_name;
                 let mut headers_needed =
                     HashSet::with_capacity_and_hasher(deps_by_name.len(), default_hasher());
@@ -209,15 +211,18 @@ pub async fn load<'a>(
                 }
 
                 // This was a dependency. Write it down and keep processing messaages.
-                let mut exposed_ids = IdentIds::default();
+                let mut exposed_ids: IdentIds = IdentIds::default();
+                let mut exposed_symbols: MutSet<Symbol> =
+                    HashSet::with_capacity_and_hasher(header.exposes.len(), default_hasher());
 
                 for ident in header.exposes.iter() {
                     debug_assert!(exposed_ids.get_id(ident.as_inline_str()).is_none());
 
-                    exposed_ids.add(ident.clone().into());
-                }
+                    // Record the exposed ident in both exposed_ids and exposed_symbols
+                    let ident_id = exposed_ids.add(ident.clone().into());
 
-                let module_id = header.module_id;
+                    exposed_symbols.insert(Symbol::new(module_id, ident_id));
+                }
 
                 debug_assert!(!exposed_idents_by_module.contains_key(&module_id));
                 exposed_idents_by_module.insert(module_id, Arc::new(exposed_ids));
@@ -244,6 +249,7 @@ pub async fn load<'a>(
                                 Arc::clone(&arc_modules),
                                 &exposed_idents_by_module,
                                 &exposed_types,
+                                exposed_symbols.clone(),
                                 &mut waiting_for_solve,
                                 msg_tx.clone(),
                             )
@@ -277,6 +283,7 @@ pub async fn load<'a>(
                         Arc::clone(&arc_modules),
                         &exposed_idents_by_module,
                         &exposed_types,
+                        exposed_symbols,
                         &mut waiting_for_solve,
                         msg_tx.clone(),
                     )
@@ -723,10 +730,9 @@ fn solve_module(
         }
     }
 
-    let module_id = module.module_id;
-    let exposed_imports = module.exposed_imports;
+    declarations_by_id.insert(home, module.declarations);
 
-    declarations_by_id.insert(module.module_id, module.declarations);
+    let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
 
     // Start solving this module in the background.
     spawn_blocking(move || {
@@ -745,10 +751,15 @@ fn solve_module(
 
         let mut solved_types = MutMap::default();
 
-        for (symbol, var) in &exposed_imports {
-            let solved_type = SolvedType::new(&solved_subs, *var);
+        // exposed_vars_by_symbol contains the Variables for all the Symbols
+        // this module exposes. We want to convert those into flat SolvedType
+        // annotations which are decoupled from our Subs, because that's how
+        // other modules will generate constraints for imported values
+        // within the context of their own Subs.
+        for (symbol, var) in exposed_vars_by_symbol {
+            let solved_type = SolvedType::new(&solved_subs, var);
 
-            solved_types.insert(*symbol, solved_type);
+            solved_types.insert(symbol, solved_type);
         }
 
         tokio::spawn(async move {
@@ -756,7 +767,7 @@ fn solve_module(
 
             // Send the subs to the main thread for processing,
             tx.send(Msg::Solved {
-                module_id,
+                module_id: home,
                 subs: Arc::new(solved_subs),
                 solved_types,
                 new_vars_by_symbol,
@@ -773,6 +784,7 @@ fn spawn_parse_and_constrain(
     module_ids: Arc<Mutex<ModuleIds>>,
     exposed_idents: &MutMap<ModuleId, Arc<IdentIds>>,
     exposed_types: &SubsByModule,
+    exposed_symbols: MutSet<Symbol>,
     waiting_for_solve: &mut MutMap<ModuleId, MutSet<ModuleId>>,
     msg_tx: MsgSender,
 ) {
@@ -813,7 +825,7 @@ fn spawn_parse_and_constrain(
     // Now that we have waiting_for_solve populated, continue parsing,
     // canonicalizing, and constraining the module.
     spawn_blocking(move || {
-        parse_and_constrain(header, module_ids, dep_idents, msg_tx);
+        parse_and_constrain(header, module_ids, dep_idents, exposed_symbols, msg_tx);
     });
 }
 
@@ -822,6 +834,7 @@ fn parse_and_constrain(
     header: ModuleHeader,
     arc_module_ids: Arc<Mutex<ModuleIds>>,
     dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
+    exposed_symbols: MutSet<Symbol>,
     msg_tx: MsgSender,
 ) {
     let module_id = header.module_id;
@@ -843,6 +856,7 @@ fn parse_and_constrain(
         &module_ids,
         dep_idents,
         header.exposed_imports,
+        exposed_symbols,
         &var_store,
     ) {
         Ok(ModuleOutput {
@@ -850,6 +864,7 @@ fn parse_and_constrain(
             exposed_imports,
             lookups,
             ident_ids,
+            exposed_vars_by_symbol,
             references,
             ..
         }) => {
@@ -859,6 +874,7 @@ fn parse_and_constrain(
                 module_id,
                 declarations,
                 exposed_imports,
+                exposed_vars_by_symbol,
                 references,
             };
 
