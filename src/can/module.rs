@@ -12,7 +12,6 @@ use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use bumpalo::Bump;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct ModuleOutput {
@@ -29,7 +28,8 @@ pub fn canonicalize_module_defs<'a>(
     loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
     home: ModuleId,
     module_ids: &ModuleIds,
-    dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
+    exposed_ident_ids: IdentIds,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     mut exposed_symbols: MutSet<Symbol>,
     var_store: &VarStore,
@@ -55,7 +55,7 @@ pub fn canonicalize_module_defs<'a>(
         }));
     }
 
-    let mut env = Env::new(home, dep_idents, module_ids, IdentIds::default());
+    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let mut lookups = Vec::with_capacity(num_deps);
 
     // Exposed values are treated like defs that appear before any others, e.g.

@@ -4,6 +4,9 @@ interface Dep2
 
 one = 1
 
+foo = "foo" # TODO FIXME this should be reported as shadowing!
+
 two = 2.0
 
-foo = "foo"
+one = 1
+

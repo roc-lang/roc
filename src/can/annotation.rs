@@ -219,7 +219,12 @@ fn can_annotation_help(
         }
         As(loc_inner, _spaces, loc_as) => match loc_as.value {
             TypeAnnotation::Apply(module_name, ident, loc_vars) if module_name.is_empty() => {
-                let symbol = match scope.introduce(ident.into(), &mut env.ident_ids, region) {
+                let symbol = match scope.introduce(
+                    ident.into(),
+                    &env.exposed_ident_ids,
+                    &mut env.ident_ids,
+                    region,
+                ) {
                     Ok(symbol) => symbol,
 
                     Err((original_region, shadow)) => {

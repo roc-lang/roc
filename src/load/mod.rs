@@ -57,8 +57,9 @@ pub enum BuildProblem<'a> {
 struct ModuleHeader {
     module_id: ModuleId,
     module_name: ModuleName,
+    exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<ModuleName, ModuleId>,
-    exposes: Vec<Ident>,
+    exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     src: Box<str>,
 }
@@ -99,7 +100,8 @@ enum MaybeShared<'a, 'b, A, B> {
     Unique(&'a mut A, &'b mut B),
 }
 
-type SharedModules<'a, 'b> = MaybeShared<'a, 'b, ModuleIds, MutMap<ModuleId, IdentIds>>;
+type SharedModules<'a, 'b> = MaybeShared<'a, 'b, ModuleIds, IdentIdsByModule>;
+type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
 
 type MsgSender = mpsc::Sender<Msg>;
 type MsgReceiver = mpsc::Receiver<Msg>;
@@ -137,24 +139,25 @@ pub async fn load<'a>(
 
     let (msg_tx, mut msg_rx): (MsgSender, MsgReceiver) = mpsc::channel(1024);
     let mut module_ids = ModuleIds::default();
-    let mut exposed_ident_ids = MutMap::default();
+    let mut root_exposed_ident_ids: IdentIdsByModule = IdentIds::exposed_builtins();
 
     // This is the "final" list of IdentIds, after canonicalization and constraint gen
     // have completed for a given module.
     let mut constrained_ident_ids = MutMap::default();
+    let mut headers_parsed = MutSet::default();
 
     // Load the root module synchronously; we can't proceed until we have its id.
     let root_id = load_filename(
         filename,
         msg_tx.clone(),
-        Unique(&mut module_ids, &mut exposed_ident_ids),
+        Unique(&mut module_ids, &mut root_exposed_ident_ids),
     )?;
 
-    exposed_ident_ids.insert(root_id, IdentIds::default());
+    headers_parsed.insert(root_id);
 
     // From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     let arc_modules = Arc::new(Mutex::new(module_ids));
-    let arc_idents = Arc::new(Mutex::new(exposed_ident_ids));
+    let ident_ids_by_module: Arc<Mutex<IdentIdsByModule>> = Arc::new(Mutex::new(root_exposed_ident_ids));
 
     // All the dependent modules we've already begun loading -
     // meaning we should never kick off another load_module on them!
@@ -169,8 +172,7 @@ pub async fn load<'a>(
     // The declarations we'll ultimately be returning
     let mut declarations_by_id: MutMap<ModuleId, Vec<Declaration>> = MutMap::default();
 
-    let mut exposed_idents_by_module: MutMap<ModuleId, Arc<IdentIds>> =
-        IdentIds::exposed_builtins();
+    let mut exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>> = MutMap::default();
 
     // Modules which are waiting for certain headers to be parsed
     let mut waiting_for_headers: MutMap<ModuleId, MutSet<ModuleId>> = MutMap::default();
@@ -199,36 +201,33 @@ pub async fn load<'a>(
 
         match msg {
             Header(header) => {
-                let module_id = header.module_id;
+                let home = header.module_id;
                 let deps_by_name = &header.deps_by_name;
                 let mut headers_needed =
                     HashSet::with_capacity_and_hasher(deps_by_name.len(), default_hasher());
 
+                headers_parsed.insert(home);
+
                 for dep_id in deps_by_name.values() {
-                    if !exposed_idents_by_module.contains_key(&dep_id) {
+                    if !headers_parsed.contains(&dep_id) {
                         headers_needed.insert(*dep_id);
                     }
                 }
 
                 // This was a dependency. Write it down and keep processing messaages.
-                let mut exposed_ids: IdentIds = IdentIds::default();
                 let mut exposed_symbols: MutSet<Symbol> =
                     HashSet::with_capacity_and_hasher(header.exposes.len(), default_hasher());
 
-                for ident in header.exposes.iter() {
-                    debug_assert!(exposed_ids.get_id(ident.as_inline_str()).is_none());
-
-                    // Record the exposed ident in both exposed_ids and exposed_symbols
-                    let ident_id = exposed_ids.add(ident.clone().into());
-
-                    exposed_symbols.insert(Symbol::new(module_id, ident_id));
+                // TODO can we avoid this loop by storing them as a Set in Header to begin with?
+                for symbol in header.exposes.iter() {
+                    exposed_symbols.insert(*symbol);
                 }
 
-                debug_assert!(!exposed_idents_by_module.contains_key(&module_id));
-                exposed_idents_by_module.insert(module_id, Arc::new(exposed_ids));
+                debug_assert!(!exposed_symbols_by_module.contains_key(&home));
+                exposed_symbols_by_module.insert(home, exposed_symbols);
 
-                // Notify all the listeners that headers are now available for this.
-                if let Some(listeners) = header_listeners.remove(&module_id) {
+                // Notify all the listeners that headers are now available for this module.
+                if let Some(listeners) = header_listeners.remove(&home) {
                     for listener_id in listeners {
                         // This listener is longer waiting for this module,
                         // because this module's headers are now available!
@@ -236,7 +235,7 @@ pub async fn load<'a>(
                             .get_mut(&listener_id)
                             .expect("Unable to find module ID in waiting_for_headers");
 
-                        waiting_for.remove(&module_id);
+                        waiting_for.remove(&home);
 
                         // If it's no longer waiting for anything else, solve it.
                         if waiting_for.is_empty() {
@@ -244,10 +243,14 @@ pub async fn load<'a>(
                                 .remove(&listener_id)
                                 .expect("Could not find listener ID in unparsed_modules");
 
+                            let exposed_symbols = exposed_symbols_by_module
+                                .remove(&listener_id)
+                                .expect("Could not find listener ID in exposed_symbols_by_module");
+
                             spawn_parse_and_constrain(
                                 header,
                                 Arc::clone(&arc_modules),
-                                &exposed_idents_by_module,
+                                Arc::clone(&ident_ids_by_module),
                                 &exposed_types,
                                 exposed_symbols.clone(),
                                 &mut waiting_for_solve,
@@ -266,22 +269,27 @@ pub async fn load<'a>(
 
                         let env = env.clone();
                         let msg_tx = msg_tx.clone();
-                        let shared_module_ids =
-                            Shared(Arc::clone(&arc_modules), Arc::clone(&arc_idents));
                         let dep_name = dep_name.clone();
 
+                        // Provide mutexes of ModuleIds and IdentIds by module,
+                        // so other modules can populate them as they load.
+                        let shared =
+                            Shared(Arc::clone(&arc_modules), Arc::clone(&ident_ids_by_module));
+
                         // Start loading this module in the background.
-                        spawn_blocking(move || {
-                            load_module(env, dep_name, msg_tx, shared_module_ids)
-                        });
+                        spawn_blocking(move || load_module(env, dep_name, msg_tx, shared));
                     }
                 }
 
                 if headers_needed.is_empty() {
+                    let exposed_symbols = exposed_symbols_by_module
+                        .remove(&home)
+                        .expect("Could not find listener ID in exposed_symbols_by_module");
+
                     spawn_parse_and_constrain(
                         header,
                         Arc::clone(&arc_modules),
-                        &exposed_idents_by_module,
+                        Arc::clone(&ident_ids_by_module),
                         &exposed_types,
                         exposed_symbols,
                         &mut waiting_for_solve,
@@ -290,8 +298,8 @@ pub async fn load<'a>(
                 } else {
                     // We will have to wait for our deps' headers to be parsed,
                     // so we can access their IdentId, which we need for canonicalization.
-                    debug_assert!(!unparsed_modules.contains_key(&module_id));
-                    unparsed_modules.insert(module_id, header);
+                    debug_assert!(!unparsed_modules.contains_key(&home));
+                    unparsed_modules.insert(home, header);
 
                     // Register a listener with each of these.
                     for dep_id in headers_needed.iter() {
@@ -299,11 +307,11 @@ pub async fn load<'a>(
                             .entry(*dep_id)
                             .or_insert_with(|| Vec::with_capacity(1));
 
-                        (*listeners).push(module_id);
+                        (*listeners).push(home);
                     }
 
-                    debug_assert!(!waiting_for_headers.contains_key(&module_id));
-                    waiting_for_headers.insert(module_id, headers_needed);
+                    debug_assert!(!waiting_for_headers.contains_key(&home));
+                    waiting_for_headers.insert(home, headers_needed);
                 }
             }
             Constrained {
@@ -527,73 +535,115 @@ fn send_interface_header<'a>(
     let num_exposes = header.exposes.len();
     let mut deps_by_name: MutMap<ModuleName, ModuleId> =
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
-    let mut exposes = Vec::with_capacity(num_exposes);
-
-    for loc_exposed in header.exposes.iter() {
-        exposes.push(loc_exposed.value.as_str().into());
-    }
+    let mut exposes: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     // Make sure the module_ids has ModuleIds for all our deps,
     // then record those ModuleIds in can_module_ids for later.
     let mut scope: MutMap<Ident, (Symbol, Region)> =
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
-    let module_id: ModuleId;
+    let home: ModuleId;
 
-    match shared_modules {
-        Shared(arc_module_ids, arc_exposed_ident_ids) => {
+    let ident_ids = match shared_modules {
+        Shared(arc_module_ids, arc_ident_ids) => {
             // Lock just long enough to perform the minimal operations necessary.
             let mut module_ids = (*arc_module_ids).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
-            let mut exposed_ident_ids = (*arc_exposed_ident_ids).lock().expect("Failed to acquire lock for interning ident IDs, presumably because a thread panicked.");
+            let mut ident_ids_by_module = (*arc_ident_ids).lock().expect("Failed to acquire lock for interning ident IDs, presumably because a thread panicked.");
 
-            module_id = module_ids.get_or_insert(&declared_name.as_inline_str());
+            home = module_ids.get_or_insert(&declared_name.as_inline_str());
 
+            // Ensure this module has an entry in the exposed_ident_ids map.
+            ident_ids_by_module
+                .entry(home)
+                .or_insert_with(IdentIds::default);
+
+            // This can't possibly fail, because we just ensured it
+            // has an entry with this key.
+            let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
+
+            // For each of our imports, add an entry to deps_by_name
+            //
+            // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name
             for (module_name, _, _) in imports.iter() {
                 let module_id = module_ids.get_or_insert(module_name.into());
 
                 deps_by_name.insert(module_name.clone(), module_id);
             }
 
+            // For each of our imports, add any exposed values to scope.
+            //
+            // e.g. for `imports [ Foo.{ bar } ]`, add `bar` to scope.
             for (_, exposed, region) in imports.into_iter() {
                 if !exposed.is_empty() {
-                    // Ensure exposed_ident_ids is present in the map.
-                    exposed_ident_ids
-                        .entry(module_id)
-                        .or_insert_with(IdentIds::default);
-
-                    // This can't possibly fail, because we just ensured it
-                    // has an entry with this key.
-                    let ident_ids = exposed_ident_ids.get_mut(&module_id).unwrap();
-
-                    add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
+                    add_exposed_to_scope(home, &mut scope, exposed, ident_ids, region);
                 }
             }
+
+            // Generate IdentIds entries for all values this module exposes.
+            // This way, when we encounter them in Defs later, they already
+            // have an IdentIds entry.
+            //
+            // We must *not* add them to scope yet, or else the Defs will
+            // incorrectly think they're shadowing them!
+            for loc_exposed in header.exposes.iter() {
+                let ident_id = ident_ids.add(loc_exposed.value.as_str().into());
+                let symbol = Symbol::new(home, ident_id);
+
+                exposes.push(symbol);
+            }
+
+            if cfg!(debug_assertions) {
+                home.register_debug_idents(&ident_ids);
+            }
+
+            ident_ids.clone()
         }
-        Unique(module_ids, exposed_ident_ids) => {
+        Unique(module_ids, ident_ids_by_module) => {
             // If this is the original file the user loaded,
             // then we already have a mutable reference,
             // and won't need to pay locking costs.
-            module_id = module_ids.get_or_insert(declared_name.as_inline_str());
+            home = module_ids.get_or_insert(declared_name.as_inline_str());
 
+            let mut ident_ids = IdentIds::default();
+
+            // For each of our imports, add it to deps_by_name,
+            // and also add any exposed values to scope.
+            //
+            // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name and `bar` to scope.
             for (module_name, exposed, region) in imports.into_iter() {
                 let module_id = module_ids.get_or_insert(&module_name.clone().into());
 
                 deps_by_name.insert(module_name, module_id);
 
                 if !exposed.is_empty() {
-                    // Ensure exposed_ident_ids is present in the map.
-                    exposed_ident_ids
-                        .entry(module_id)
-                        .or_insert_with(IdentIds::default);
-
-                    // This can't possibly fail, because we just ensured it
-                    // has an entry with this key.
-                    let ident_ids = exposed_ident_ids.get_mut(&module_id).unwrap();
-
-                    add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
+                    add_exposed_to_scope(home, &mut scope, exposed, &mut ident_ids, region);
                 }
             }
+
+            // Generate IdentIds entries for all values this module exposes.
+            // This way, when we encounter them in Defs later, they already
+            // have an IdentIds entry.
+            //
+            // We must *not* add them to scope yet, or else the Defs will
+            // incorrectly think they're shadowing them!
+            for loc_exposed in header.exposes.iter() {
+                let ident_id = ident_ids.add(loc_exposed.value.as_str().into());
+                let symbol = Symbol::new(home, ident_id);
+
+                exposes.push(symbol);
+            }
+
+            if cfg!(debug_assertions) {
+                home.register_debug_idents(&ident_ids);
+            }
+
+            // Record this entry into ident_ids_by_module. It should not
+            // have been recorded previously, since this was Unique.
+            debug_assert!(!ident_ids_by_module.contains_key(&home));
+            ident_ids_by_module.insert(home, ident_ids.clone());
+
+            ident_ids
         }
-    }
+    };
 
     // Box up the input &str for transfer over the wire.
     // We'll need this in order to continue parsing later.
@@ -610,7 +660,8 @@ fn send_interface_header<'a>(
     tokio::spawn(async move {
         // Send the header the main thread for processing,
         tx.send(Msg::Header(ModuleHeader {
-            module_id,
+            module_id: home,
+            exposed_ident_ids: ident_ids,
             module_name: declared_name,
             deps_by_name,
             exposes,
@@ -618,15 +669,10 @@ fn send_interface_header<'a>(
             exposed_imports: scope,
         }))
         .await
-        .unwrap_or_else(|_| {
-            panic!(
-                "Failed to send Header message for module ID: {:?}",
-                module_id
-            )
-        });
+        .unwrap_or_else(|_| panic!("Failed to send Header message for module ID: {:?}", home));
     });
 
-    module_id
+    home
 }
 
 fn add_exposed_to_scope(
@@ -778,7 +824,7 @@ fn solve_module(
 fn spawn_parse_and_constrain(
     header: ModuleHeader,
     module_ids: Arc<Mutex<ModuleIds>>,
-    exposed_idents: &MutMap<ModuleId, Arc<IdentIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: &SubsByModule,
     exposed_symbols: MutSet<Symbol>,
     waiting_for_solve: &mut MutMap<ModuleId, MutSet<ModuleId>>,
@@ -789,20 +835,24 @@ fn spawn_parse_and_constrain(
     let num_deps = deps_by_name.len();
     let mut dep_idents = HashMap::with_capacity_and_hasher(num_deps, default_hasher());
 
-    // Populate dep_idents with each of their IdentIds,
-    // which we'll need during canonicalization to translate
-    // identifier strings into IdentIds, which we need to build Symbols.
-    // We only include the modules we care about (the ones we import).
-    //
-    // At the end of this loop, dep_idents contains all the information to
-    // resolve a symbol from another module: if it's in here, that means
-    // we have both imported the module and the ident was exported by that mdoule.
-    for dep_id in header.deps_by_name.values() {
-        // We already verified that these are all present,
-        // so unwrapping should always succeed here.
-        let idents = exposed_idents.get(&dep_id).unwrap();
+    {
+        let ident_ids_by_module = (*ident_ids_by_module).lock().expect("Failed to acquire lock for interning ident IDs, presumably because a thread panicked.");
 
-        dep_idents.insert(*dep_id, Arc::clone(&idents));
+        // Populate dep_idents with each of their IdentIds,
+        // which we'll need during canonicalization to translate
+        // identifier strings into IdentIds, which we need to build Symbols.
+        // We only include the modules we care about (the ones we import).
+        //
+        // At the end of this loop, dep_idents contains all the information to
+        // resolve a symbol from another module: if it's in here, that means
+        // we have both imported the module and the ident was exported by that mdoule.
+        for dep_id in header.deps_by_name.values() {
+            // We already verified that these are all present,
+            // so unwrapping should always succeed here.
+            let idents = ident_ids_by_module.get(&dep_id).unwrap();
+
+            dep_idents.insert(*dep_id, idents.clone());
+        }
     }
 
     // Once this step has completed, the next thing we'll need
@@ -829,7 +879,7 @@ fn spawn_parse_and_constrain(
 fn parse_and_constrain(
     header: ModuleHeader,
     arc_module_ids: Arc<Mutex<ModuleIds>>,
-    dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
+    dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,
     msg_tx: MsgSender,
 ) {
@@ -850,6 +900,7 @@ fn parse_and_constrain(
         parsed_defs,
         module_id,
         &module_ids,
+        header.exposed_ident_ids,
         dep_idents,
         header.exposed_imports,
         exposed_symbols,

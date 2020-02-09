@@ -86,7 +86,8 @@ impl Scope {
     pub fn introduce(
         &mut self,
         ident: Ident,
-        ident_ids: &mut IdentIds,
+        exposed_ident_ids: &IdentIds,
+        all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Located<Ident>)> {
         match self.idents.get(&ident) {
@@ -99,7 +100,14 @@ impl Scope {
                 Err((*original_region, shadow))
             }
             None => {
-                let ident_id = ident_ids.add(ident.clone().into());
+                // If this IdentId was already added previously
+                // when the value was exposed in the module header,
+                // use that existing IdentId. Otherwise, create a fresh one.
+                let ident_id = match exposed_ident_ids.get_id(&ident.as_inline_str()) {
+                    Some(ident_id) => *ident_id,
+                    None => all_ident_ids.add(ident.clone().into()),
+                };
+
                 let symbol = Symbol::new(self.home, ident_id);
 
                 self.symbols.insert(symbol, region);
