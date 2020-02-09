@@ -1697,7 +1697,7 @@ mod test_infer {
     }
 
     #[test]
-    fn rigid_in_let() {
+    fn rigid_in_letnonrec() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -1709,6 +1709,27 @@ mod test_infer {
                     result = Nil
 
                     result
+
+                toEmpty
+                   "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    #[test]
+    fn rigid_in_letrec() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List a -> List a
+                toEmpty = \_ ->
+                    result : List a
+                    result = Nil
+
+                    toEmpty result
 
                 toEmpty
                    "#

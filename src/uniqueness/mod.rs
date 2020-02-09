@@ -1299,6 +1299,25 @@ fn annotation_to_attr_type(
             )
         }
 
+        Apply(Symbol::ATTR_ATTR, args) => {
+            let uniq_type = args[0].clone();
+
+            // A rigid behind an attr has already been lifted, don't do it again!
+            let (result_vars, result_lifted) = match args[1] {
+                Type::Variable(_) => match uniq_type {
+                    Type::Boolean(Bool(Atom::Variable(urigid), _)) => {
+                        (vec![urigid], args[1].clone())
+                    }
+                    _ => (vec![], args[1].clone()),
+                },
+                _ => annotation_to_attr_type(var_store, &args[1], rigids),
+            };
+
+            let result = Apply(Symbol::ATTR_ATTR, vec![uniq_type, result_lifted]);
+
+            (result_vars, result)
+        }
+
         Apply(symbol, args) => {
             let uniq_var = var_store.fresh();
 
@@ -1378,7 +1397,8 @@ fn annotation_to_attr_type(
         }
 
         Alias(symbol, fields, actual) => {
-            let (actual_vars, lifted_actual) = annotation_to_attr_type(var_store, actual, rigids);
+            let (mut actual_vars, lifted_actual) =
+                annotation_to_attr_type(var_store, actual, rigids);
 
             if let Type::Apply(attr_symbol, args) = lifted_actual {
                 debug_assert!(attr_symbol == Symbol::ATTR_ATTR);
@@ -1388,7 +1408,9 @@ fn annotation_to_attr_type(
 
                 let mut new_fields = Vec::with_capacity(fields.len());
                 for (name, tipe) in fields {
-                    let (_, lifted) = annotation_to_attr_type(var_store, tipe, rigids);
+                    let (lifted_vars, lifted) = annotation_to_attr_type(var_store, tipe, rigids);
+
+                    actual_vars.extend(lifted_vars);
 
                     new_fields.push((name.clone(), lifted));
                 }

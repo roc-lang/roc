@@ -29,9 +29,6 @@ mod test_infer_uniq {
         let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
         let mut subs = solved.into_inner();
 
-        dbg!(&subs);
-        dbg!(&content);
-
         name_all_type_vars(variable, &mut subs);
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
@@ -1740,6 +1737,49 @@ mod test_infer_uniq {
             "Attr.Attr Attr.Shared (Attr.Attr * (Attr.Attr a p -> Attr.Attr b q), Attr.Attr a p -> Attr.Attr * (List (Attr.Attr b q)))",
         );
     }
+
+    #[test]
+    fn rigid_in_letnonrec() {
+        infer_eq(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List p -> List p
+                toEmpty = \_ ->
+                    result : List p
+                    result = Nil
+
+                    result
+
+                toEmpty
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr * (List (Attr.Attr a p)) -> Attr.Attr * (List (Attr.Attr a p)))",
+        );
+    }
+
+    #[test]
+    fn rigid_in_letrec() {
+        infer_eq(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List p -> List p
+                toEmpty = \_ ->
+                    result : List p
+                    result = Nil
+
+                    toEmpty result
+
+                toEmpty
+                   "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr * (List (Attr.Attr a p)) -> Attr.Attr * (List (Attr.Attr a p)))",
+        );
+    }
+
 
     // fails the variable usage check, but I also
     // Assume this gives an error because the generated uniqueness rigid
