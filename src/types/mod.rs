@@ -75,12 +75,14 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(symbol, args, _actual) => {
+            Type::Alias(symbol, args, actual) => {
                 write!(f, "Alias {:?}", symbol)?;
 
                 for (_, arg) in args {
                     write!(f, " {:?}", arg)?;
                 }
+
+                write!(f, "but really {:?}", actual)?;
 
                 Ok(())
             }
@@ -296,7 +298,10 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
-            Alias(_, _zipped, actual_type) => {
+            Alias(_, zipped, actual_type) => {
+                for (_, value) in zipped.iter_mut() {
+                    value.substitute(substitutions);
+                }
                 actual_type.substitute(substitutions);
             }
             Apply(_, args) => {
@@ -381,6 +386,14 @@ impl Type {
             Apply(symbol, _) if *symbol == rep_symbol => true,
             Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => false,
+        }
+    }
+
+    /// a shallow dealias, continue until the first constructor is not an alias.
+    pub fn shallow_dealias(&self) -> &Self {
+        match self {
+            Type::Alias(_, _, actual) => actual.shallow_dealias(),
+            _ => self,
         }
     }
 }
