@@ -1548,6 +1548,92 @@ mod test_format {
         ));
     }
 
+    // UNARY OP
+
+    #[test]
+    fn unary_op() {
+        expr_formats_same(indoc!(
+            r#"
+                y = -4
+
+                !x
+            "#
+        ));
+    }
+
+    // BINARY OP
+
+    #[test]
+    fn binary_op() {
+        expr_formats_same(indoc!(
+            r#"
+            1 == 1
+            "#
+        ));
+
+        expr_formats_to(indoc!(
+            r#"
+            2   !=   3
+            "#
+        ), indoc!(
+            r#"
+            2 != 3
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            isLast
+                && isEmpty
+                && isLoaded
+            "#
+        ));
+
+        expr_formats_to(indoc!(
+            r#"
+            1
+            * 2
+            / 3
+            // 4
+            "#
+        ),indoc!(
+            r#"
+            1
+                * 2
+                / 3
+                // 4
+            "#
+        ));
+
+        expr_formats_to(indoc!(
+            r#"
+            2 % 3
+                %% 5
+                + 7
+            "#
+        ),indoc!(
+            r#"
+            2
+                % 3
+                %% 5
+                + 7
+            "#
+        ));
+
+        expr_formats_to(indoc!(
+            r#"
+            isGreenLight
+                && isRedLight && isYellowLight
+            "#
+        ),indoc!(
+            r#"
+            isGreenLight
+                && isRedLight
+                && isYellowLight
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]
