@@ -1780,6 +1780,21 @@ mod test_infer_uniq {
         );
     }
 
+    #[test]
+    fn let_record_pattern_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+               { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Attr.Attr * Str",
+        );
+    }
+
 
     // fails the variable usage check, but I also
     // Assume this gives an error because the generated uniqueness rigid
