@@ -1076,10 +1076,11 @@ mod when {
                 char('|'),
                 space0_around(loc_pattern(min_indent), min_indent),
             ),
-            optional(loc!(skip_first!(
+            optional(skip_first!(
                 string(keyword::IF),
-                map!(string("?"), |_| Expr::Int("1"))
-            )))
+                // TODO we should require space before the expression but not after
+                space1_around(loc!(move |arena, state| parse_expr(min_indent, arena, state)), min_indent)
+            ))
         )
     }
 

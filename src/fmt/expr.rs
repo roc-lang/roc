@@ -195,7 +195,7 @@ pub fn fmt_expr<'a>(
         List(loc_items) => {
             fmt_list(buf, &loc_items, indent);
         }
-        other => panic!("TODO implement Display for AST variant {:?}", other),
+        other => panic!("TODO implement Fmt for AST variant {:?}", other),
     }
 }
 
