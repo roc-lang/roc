@@ -262,7 +262,7 @@ fn fmt_bin_op<'a>(
         operator::BinOp::DoublePercent => buf.push_str("%%"),
         operator::BinOp::Plus => buf.push('+'),
         operator::BinOp::Minus => buf.push('-'),
-        operator::BinOp::Equals => buf.push_str("=,"),
+        operator::BinOp::Equals => buf.push_str("=="),
         operator::BinOp::NotEquals => buf.push_str("!="),
         operator::BinOp::LessThan => buf.push('<'),
         operator::BinOp::GreaterThan => buf.push('>'),
