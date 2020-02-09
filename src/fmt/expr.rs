@@ -3,12 +3,11 @@ use crate::fmt::pattern::fmt_pattern;
 use crate::fmt::spaces::{
     add_spaces, fmt_comments_only, fmt_if_spaces, fmt_spaces, is_comment, newline, INDENT,
 };
-use crate::parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern};
-use crate::region::Located;
-//use crate::operator::{UnaryOp};
-use bumpalo::collections::{String, Vec};
 use crate::operator;
 use crate::operator::BinOp;
+use crate::parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern};
+use crate::region::Located;
+use bumpalo::collections::{String, Vec};
 
 pub fn fmt_expr<'a>(
     buf: &mut String<'a>,
@@ -193,49 +192,60 @@ pub fn fmt_expr<'a>(
         List(loc_items) => {
             fmt_list(buf, &loc_items, indent);
         }
-//        other => panic!("TODO implement Display for AST variant {:?}", other),
-        Access(_, _) => {}
-        AccessorFunction(_) => {}
-        BinOp((left_side, bin_op, right_side)) => {
-            fmt_bin_op(buf, left_side, bin_op, right_side, false, apply_needs_parens, indent)
-        }
+        BinOp((loc_left_side, bin_op, loc_right_side)) => fmt_bin_op(
+            buf,
+            loc_left_side,
+            bin_op,
+            loc_right_side,
+            false,
+            apply_needs_parens,
+            indent,
+        ),
         UnaryOp(sub_expr, unary_op) => {
             match &unary_op.value {
                 operator::UnaryOp::Negate => {
                     buf.push('-');
-                },
+                }
                 operator::UnaryOp::Not => {
                     buf.push('!');
-                },
+                }
             }
 
-            fmt_expr(buf, &sub_expr.value, indent, apply_needs_parens, format_newlines);
+            fmt_expr(
+                buf,
+                &sub_expr.value,
+                indent,
+                apply_needs_parens,
+                format_newlines,
+            );
         }
         Nested(nested_expr) => {
-            fmt_expr(buf, nested_expr, indent, apply_needs_parens, format_newlines);
+            fmt_expr(
+                buf,
+                nested_expr,
+                indent,
+                apply_needs_parens,
+                format_newlines,
+            );
         }
-        MalformedIdent(_) => {}
-        MalformedClosure => {}
-        PrecedenceConflict(_, _, _) => {}
+        other => panic!("TODO implement Display for AST variant {:?}", other),
     }
 }
 
-
 fn fmt_bin_op<'a>(
     buf: &mut String<'a>,
-    left_side: &'a Located<Expr<'a>>,
-    bin_op: &'a Located<BinOp>,
-    right_side: &'a Located<Expr<'a>>,
+    loc_left_side: &'a Located<Expr<'a>>,
+    loc_bin_op: &'a Located<BinOp>,
+    loc_right_side: &'a Located<Expr<'a>>,
     part_of_multi_line_bin_ops: bool,
     apply_needs_parens: bool,
     indent: u16,
 ) {
-    fmt_expr(buf, &left_side.value, indent, apply_needs_parens, false);
+    fmt_expr(buf, &loc_left_side.value, indent, apply_needs_parens, false);
 
-    let is_multiline =
-        is_multiline_expr(&right_side.value)
-            || is_multiline_expr(&left_side.value)
-            || part_of_multi_line_bin_ops;
+    let is_multiline = is_multiline_expr(&loc_right_side.value)
+        || is_multiline_expr(&loc_left_side.value)
+        || part_of_multi_line_bin_ops;
 
     if is_multiline {
         newline(buf, indent + INDENT)
@@ -243,69 +253,43 @@ fn fmt_bin_op<'a>(
         buf.push(' ');
     }
 
-    match &bin_op.value {
-        operator::BinOp::Caret => {
-            buf.push('^');
-        },
-        operator::BinOp::Star => {
-            buf.push('*');
-        },
-        operator::BinOp::Slash => {
-            buf.push('/');
-        },
-        operator::BinOp::DoubleSlash => {
-            buf.push_str("//");
-        },
-        operator::BinOp::Percent => {
-            buf.push('%')
-        },
-        operator::BinOp::DoublePercent => {
-            buf.push_str("%%");
-        },
-        operator::BinOp::Plus => {
-            buf.push('+');
-        },
-        operator::BinOp::Minus => {
-            buf.push('-');
-        },
-        operator::BinOp::Equals => {
-            buf.push_str("==");
-        },
-        operator::BinOp::NotEquals => {
-            buf.push_str("!=");
-        },
-        operator::BinOp::LessThan => {
-            buf.push('<');
-        },
-        operator::BinOp::GreaterThan => {
-            buf.push('>');
-        },
-        operator::BinOp::LessThanOrEq => {
-            buf.push_str("<=");
-        },
-        operator::BinOp::GreaterThanOrEq => {
-            buf.push_str(">=");
-        },
-        operator::BinOp::And => {
-            buf.push_str("&&");
-        },
-        operator::BinOp::Or => {
-            buf.push_str("||");
-        },
-        operator::BinOp::Pizza => {
-            buf.push_str("|>");
-        },
+    match &loc_bin_op.value {
+        operator::BinOp::Caret => buf.push('^'),
+        operator::BinOp::Star => buf.push('*'),
+        operator::BinOp::Slash => buf.push('/'),
+        operator::BinOp::DoubleSlash => buf.push_str("//"),
+        operator::BinOp::Percent => buf.push('%'),
+        operator::BinOp::DoublePercent => buf.push_str("%%"),
+        operator::BinOp::Plus => buf.push('+'),
+        operator::BinOp::Minus => buf.push('-'),
+        operator::BinOp::Equals => buf.push_str("=,"),
+        operator::BinOp::NotEquals => buf.push_str("!="),
+        operator::BinOp::LessThan => buf.push('<'),
+        operator::BinOp::GreaterThan => buf.push('>'),
+        operator::BinOp::LessThanOrEq => buf.push_str("<="),
+        operator::BinOp::GreaterThanOrEq => buf.push_str(">="),
+        operator::BinOp::And => buf.push_str("&&"),
+        operator::BinOp::Or => buf.push_str("||"),
+        operator::BinOp::Pizza => buf.push_str("|>"),
     }
 
     buf.push(' ');
 
-    match &right_side.value {
+    match &loc_right_side.value {
         Expr::BinOp((nested_left_side, nested_bin_op, nested_right_side)) => {
-            fmt_bin_op(buf, nested_left_side, nested_bin_op, nested_right_side, is_multiline, apply_needs_parens, indent);
+            fmt_bin_op(
+                buf,
+                nested_left_side,
+                nested_bin_op,
+                nested_right_side,
+                is_multiline,
+                apply_needs_parens,
+                indent,
+            );
         }
 
         _ => {
-            fmt_expr(buf, &right_side.value, indent, apply_needs_parens, true);
+            fmt_expr(buf, &loc_right_side.value, indent, apply_needs_parens, true);
         }
     }
 }
@@ -535,10 +519,12 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         BinOp((loc_left, _, loc_right)) => {
             let next_is_multiline_bin_op: bool = match &loc_right.value {
                 Expr::BinOp((_, _, nested_loc_right)) => is_multiline_expr(&nested_loc_right.value),
-                _ =>  false
+                _ => false,
             };
 
-            is_multiline_expr(&loc_left.value) || is_multiline_expr(&loc_right.value) || next_is_multiline_bin_op
+            is_multiline_expr(&loc_left.value)
+                || is_multiline_expr(&loc_right.value)
+                || next_is_multiline_bin_op
         }
 
         UnaryOp(loc_subexpr, _) | PrecedenceConflict(_, _, loc_subexpr) => {
