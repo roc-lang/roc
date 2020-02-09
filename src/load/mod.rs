@@ -737,11 +737,7 @@ fn solve_module(
     // Start solving this module in the background.
     spawn_blocking(move || {
         // Now that the module is parsed, canonicalized, and constrained,
-        // we just need to type check it.
-        //
-        // We'll use a fresh Subs for this, because we're starting from
-        // other modules' Subs plus the variables we've generated during
-        // our own canonicalization.
+        // we need to type check it.
         let subs = Subs::new(var_store.into());
         let mut problems = Vec::new();
 
