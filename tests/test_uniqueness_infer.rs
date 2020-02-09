@@ -1188,7 +1188,7 @@ mod test_infer_uniq {
 
                    { numIdentity, p, q }
                    "#
-            ), 
+            ),
         "Attr.Attr * { numIdentity : (Attr.Attr Attr.Shared (Attr.Attr a (Num (Attr.Attr b p)) -> Attr.Attr a (Num (Attr.Attr b p)))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
         );
     }
@@ -1795,29 +1795,51 @@ mod test_infer_uniq {
         );
     }
 
-
-    // fails the variable usage check, but I also
-    // Assume this gives an error because the generated uniqueness rigid
-    // of the top-level signature (say `Attr u1 (List _)`, doesn't unify with the
-    // annotation of result (e.g. `Attr u2 (List _)`
     //    #[test]
-    //    fn rigid_in_let() {
+    //    fn typecheck_mutually_recursive_tag_union() {
     //        infer_eq(
     //            indoc!(
     //                r#"
-    //                        List q : [ Cons q (List q), Nil ]
+    //                   ListA a b : [ Cons a (ListB b a), Nil ]
+    //                   ListB a b : [ Cons a (ListA b a), Nil ]
     //
-    //                        toEmpty : List a -> List a
-    //                        toEmpty = \_ ->
-    //                            result : List a
-    //                            result = Nil
+    //                   List q : [ Cons q (List q), Nil ]
     //
-    //                            result
+    //                   toAs : (b -> a), ListA a b -> List a
+    //                   toAs = \f, lista ->
+    //                        when lista is
+    //                            Nil -> Nil
+    //                            Cons a listb ->
+    //                                when listb is
+    //                                    Nil -> Nil
+    //                                    Cons b newLista ->
+    //                                        Cons a (Cons (f b) (toAs f newLista))
     //
-    //                        toEmpty
-    //                           "#
+    //                   toAs
+    //                  "#
     //            ),
-    //            "(a -> b), List a -> List b",
+    //            "(b -> a), ListA a b -> List a",
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn infer_mutually_recursive_tag_union() {
+    //        infer_eq(
+    //            indoc!(
+    //                r#"
+    //                   toAs = \f, lista ->
+    //                        when lista is
+    //                            Nil -> Nil
+    //                            Cons a listb ->
+    //                                when listb is
+    //                                    Nil -> Nil
+    //                                    Cons b newLista ->
+    //                                        Cons a (Cons (f b) (toAs f newLista))
+    //
+    //                   toAs
+    //                  "#
+    //            ),
+    //            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
     //        );
     //    }
 }
