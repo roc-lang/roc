@@ -104,6 +104,15 @@ pub fn canonicalize_module_defs<'a>(
         PatternType::TopLevelDef,
     );
 
+    let mut references = MutSet::default();
+
+    // Gather up all the symbols that were referenced across all the defs.
+    for (_, def_refs) in defs.refs_by_symbol.values() {
+        for symbol in def_refs.lookups.iter() {
+            references.insert(*symbol);
+        }
+    }
+
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(declarations), output) => {
             // TODO examine the patterns, extract toplevel identifiers from them,
@@ -113,12 +122,11 @@ pub fn canonicalize_module_defs<'a>(
             // TODO incorporate rigids into here (possibly by making this be a Let instead
             // of an And)
 
-            let mut references = MutSet::default();
-
-            // TODO instead of doing this conversion, store References as a MutMap
-            // and replace .union() behavior with in-place mutation
-            for reference in output.references.lookups {
-                references.insert(reference);
+            // Incorporate any remaining output.lookups entries into references.
+            // TODO is this necessary? Or did we already get all of them in
+            // the earlier loop?
+            for symbol in output.references.lookups {
+                references.insert(symbol);
             }
 
             Ok(ModuleOutput {
