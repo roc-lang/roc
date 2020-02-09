@@ -1071,12 +1071,15 @@ mod when {
     fn branch_alternatives<'a>(
         min_indent: u16,
     ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>)> {
-        map!(
+        and!(
             sep_by1(
                 char('|'),
                 space0_around(loc_pattern(min_indent), min_indent),
             ),
-            |patterns| { (patterns, None) }
+            optional(loc!(skip_first!(
+                string(keyword::IF),
+                map!(string("?"), |_| Expr::Int("1"))
+            )))
         )
     }
 
