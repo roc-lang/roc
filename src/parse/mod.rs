@@ -1071,21 +1071,12 @@ mod when {
     fn branch_alternatives<'a>(
         min_indent: u16,
     ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>)> {
-        one_of!(
-            map!(
-                sep_by1(
-                    char('|'),
-                    space0_around(loc_pattern(min_indent), min_indent),
-                ),
-                |patterns| { (patterns, None) }
+        map!(
+            sep_by1(
+                char('|'),
+                space0_around(loc_pattern(min_indent), min_indent),
             ),
-            map!(
-                sep_by1(
-                    char('|'),
-                    space0_around(loc_pattern(min_indent), min_indent),
-                ),
-                |patterns| { (patterns, None) }
-            )
+            |patterns| { (patterns, None) }
         )
     }
 
