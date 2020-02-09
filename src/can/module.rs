@@ -123,8 +123,6 @@ pub fn canonicalize_module_defs<'a>(
             // of an And)
 
             // Incorporate any remaining output.lookups entries into references.
-            // TODO is this necessary? Or did we already get all of them in
-            // the earlier loop?
             for symbol in output.references.lookups {
                 references.insert(symbol);
             }

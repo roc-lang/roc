@@ -668,7 +668,12 @@ fn solve_module(
 
             match exposed_types.get(&module_id) {
                 Some(ExposedModuleTypes::Valid(solved_types)) => {
-                    let solved_type = solved_types.get(&loc_symbol.value).unwrap();
+                    let solved_type = solved_types.get(&loc_symbol.value).unwrap_or_else(|| {
+                        panic!(
+                            "Could not find {:?} in solved_types {:?}",
+                            loc_symbol.value, solved_types
+                        )
+                    });
 
                     imports.push(Import {
                         loc_symbol,
