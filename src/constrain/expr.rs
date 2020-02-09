@@ -736,6 +736,8 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 }
             }
 
+            dbg!(&annotation);
+
             // Instantiate rigid variables
             if !rigid_substitution.is_empty() {
                 annotation.substitute(&rigid_substitution);

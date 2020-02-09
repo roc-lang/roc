@@ -1,4 +1,4 @@
-use crate::can::annotation::{canonicalize_annotation, Annotation};
+use crate::can::annotation::canonicalize_annotation;
 use crate::can::env::Env;
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::{
@@ -49,7 +49,7 @@ enum PendingDef<'a> {
     AnnotationOnly(
         &'a Located<ast::Pattern<'a>>,
         Located<Pattern>,
-        Located<Annotation>,
+        &'a Located<ast::TypeAnnotation<'a>>,
     ),
     /// A body with no type annotation
     Body(
@@ -61,7 +61,7 @@ enum PendingDef<'a> {
     TypedBody(
         &'a Located<ast::Pattern<'a>>,
         Located<Pattern>,
-        Located<Annotation>,
+        &'a Located<ast::TypeAnnotation<'a>>,
         &'a Located<ast::Expr<'a>>,
     ),
 
@@ -645,6 +645,7 @@ fn pattern_to_vars_by_symbol(
 
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::cognitive_complexity)]
 fn canonicalize_pending_def<'a>(
     env: &mut Env<'a>,
     found_rigids: &mut SendMap<Lowercase, Variable>,
@@ -666,7 +667,11 @@ fn canonicalize_pending_def<'a>(
             // TODO we have ann.references here, which includes information about
             // which symbols were referenced in type annotations, but we never
             // use them. We discard them!
-            let ann = loc_ann.value;
+
+            // annotation sans body cannot introduce new rigids that are visible in other annotations
+            // but the rigids can show up in type error messages, so still register them
+            let ann =
+                canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // union seen rigids with already found ones
             for (k, v) in ann.rigids {
@@ -747,8 +752,43 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        Alias { ann, .. } => {
+        Alias { name, ann, vars } => {
+            let symbol = name.value;
             let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
+
+            dbg!(&can_ann);
+
+            let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
+
+            for loc_lowercase in vars {
+                if let Some(var) = can_ann.rigids.get(&loc_lowercase.value) {
+                    // This is a valid lowercase rigid var for the alias.
+                    can_vars.push(Located {
+                        value: (loc_lowercase.value.clone(), *var),
+                        region: loc_lowercase.region,
+                    });
+                } else {
+                    panic!("TODO handle phantom type variables, they are not allowed!");
+                }
+            }
+
+            scope.add_alias(symbol, name.region, can_vars, can_ann.typ.clone());
+
+            /*
+            if can_ann.typ.contains_symbol(symbol) {
+                // the alias is recursive. If it's a tag union, we attempt to fix this
+                if let Type::TagUnion(tags, ext) = can_ann.typ {
+                    // re-canonicalize the alias with the alias already in scope
+                    let rec_var = var_store.fresh();
+                    let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
+                    rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
+
+                    scope.add_alias(symbol, name.region, can_vars, rec_type_union);
+                } else {
+                    panic!("recursion in type alias that is not behind a Tag");
+                }
+            }
+            */
 
             // TODO should probably incorporate can_ann.references here - possibly by
             // inserting them into refs_by_symbol?
@@ -760,11 +800,13 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        TypedBody(loc_pattern, loc_can_pattern, loc_annotation, loc_expr) => {
+        TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             // TODO we have ann.references here, which includes information about
             // which symbols were referenced in type annotations, but we never
             // use them. We discard them!
-            let ann = loc_annotation.value;
+            let ann =
+                canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
+
             let typ = ann.typ;
 
             // union seen rigids with already found ones
@@ -1138,20 +1180,7 @@ fn to_pending_def<'a>(
                 loc_pattern.region,
             );
 
-            // annotation sans body cannot introduce new rigids that are visible in other annotations
-            // but the rigids can show up in type error messages, so still register them
-            let loc_can_ann = Located {
-                region: loc_ann.region,
-                value: canonicalize_annotation(
-                    env,
-                    scope,
-                    &loc_ann.value,
-                    loc_ann.region,
-                    var_store,
-                ),
-            };
-
-            PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_can_ann)
+            PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann)
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
@@ -1180,12 +1209,13 @@ fn to_pending_def<'a>(
             let region = Region::span_across(&name.region, &ann.region);
             match scope.introduce(name.value.into(), &mut env.ident_ids, region) {
                 Ok(symbol) => {
+                    // TODO
+                    let mut can_rigids: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
+
                     let can_ann =
                         canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
 
-                    let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
-                        Vec::with_capacity(vars.len());
-                    let mut can_rigids: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
+                    dbg!(&can_ann);
 
                     for loc_var in vars.iter() {
                         match loc_var.value {
@@ -1193,41 +1223,14 @@ fn to_pending_def<'a>(
                                 if name.chars().next().unwrap().is_lowercase() =>
                             {
                                 let lowercase = Lowercase::from(name);
-                                if let Some(var) = can_ann.rigids.get(&lowercase) {
-                                    // This is a valid lowercase rigid var for the alias.
-                                    can_vars.push(Located {
-                                        value: (lowercase.clone(), *var),
-                                        region: loc_var.region,
-                                    });
-                                    can_rigids.push(Located {
-                                        value: lowercase,
-                                        region: loc_var.region,
-                                    });
-                                } else {
-                                    panic!(
-                                        "TODO handle phantom type variables, they are not allowed!"
-                                    );
-                                }
+                                can_rigids.push(Located {
+                                    value: lowercase,
+                                    region: loc_var.region,
+                                });
                             }
                             _ => {
                                 panic!("TODO gracefully handle an invalid pattern appearing where a type alias rigid var should be.");
                             }
-                        }
-                    }
-
-                    scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
-
-                    if can_ann.typ.contains_symbol(symbol) {
-                        // the alias is recursive. If it's a tag union, we attempt to fix this
-                        if let Type::TagUnion(tags, ext) = can_ann.typ {
-                            // re-canonicalize the alias with the alias already in scope
-                            let rec_var = var_store.fresh();
-                            let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
-                            rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
-
-                            scope.add_alias(symbol, name.region, can_vars, rec_type_union);
-                        } else {
-                            panic!("recursion in type alias that is not behind a Tag");
                         }
                     }
 
@@ -1260,10 +1263,6 @@ fn pending_typed_body<'a>(
     scope: &mut Scope,
     pattern_type: PatternType,
 ) -> PendingDef<'a> {
-    let loc_can_ann = Located {
-        region: loc_ann.region,
-        value: canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store),
-    };
     // This takes care of checking for shadowing and adding idents to scope.
     let loc_can_pattern = canonicalize_pattern(
         env,
@@ -1274,5 +1273,5 @@ fn pending_typed_body<'a>(
         loc_pattern.region,
     );
 
-    PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_can_ann, loc_expr)
+    PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr)
 }
