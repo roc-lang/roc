@@ -720,13 +720,15 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
 
     let expr_con = match &def.annotation {
         Some((annotation, free_vars)) => {
+            let mut annotation = annotation.clone();
             let rigids = &env.rigids;
             let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
+            let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
 
             for (var, name) in free_vars {
-                // if the rigid is known already, nothing needs to happen
-                // otherwise register it.
-                if !rigids.contains_key(name) {
+                if let Some(existing_rigid) = rigids.get(name) {
+                    rigid_substitution.insert(*var, existing_rigid.clone());
+                } else {
                     // It's possible to use this rigid in nested defs
                     ftv.insert(name.clone(), Type::Variable(*var));
 
@@ -734,11 +736,27 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 }
             }
 
+            // Instantiate rigid variables
+            if !rigid_substitution.is_empty() {
+                annotation.substitute(&rigid_substitution);
+            }
+
+            let arity = annotation.arity();
+
+            if let Some(headers) = crate::constrain::pattern::headers_from_annotation(
+                &def.loc_pattern.value,
+                &Located::at(def.loc_pattern.region, annotation.clone()),
+            ) {
+                for (k, v) in headers {
+                    pattern_state.headers.insert(k, v);
+                }
+            }
+
             let annotation_expected = FromAnnotation(
                 def.loc_pattern.clone(),
-                annotation.arity(),
+                arity,
                 AnnotationSource::TypedBody,
-                annotation.clone(),
+                annotation,
             );
 
             pattern_state.constraints.push(Eq(
@@ -843,6 +861,13 @@ pub fn rec_defs_help(
             }
 
             Some((annotation, seen_rigids)) => {
+                // TODO also do this for more complex patterns
+                if let Pattern::Identifier(symbol) = def.loc_pattern.value {
+                    pattern_state.headers.insert(
+                        symbol,
+                        Located::at(def.loc_pattern.region, annotation.clone()),
+                    );
+                }
                 let rigids = &env.rigids;
                 let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
 

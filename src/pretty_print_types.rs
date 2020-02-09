@@ -235,11 +235,21 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
         RigidVar(name) => buf.push_str(name.as_str()),
         Structure(flat_type) => write_flat_type(env, flat_type, subs, buf, parens),
         Alias(symbol, args, _actual) => {
+            let write_parens = parens == Parens::InTypeParam && !args.is_empty();
+
+            if write_parens {
+                buf.push('(')
+            }
+
             write_symbol(env, symbol, buf);
 
             for (_, var) in args {
                 buf.push(' ');
                 write_content(env, subs.get(var).content, subs, buf, parens);
+            }
+
+            if write_parens {
+                buf.push(')')
             }
         }
         Error => buf.push_str("<type mismatch>"),

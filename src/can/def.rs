@@ -7,9 +7,7 @@ use crate::can::expr::{
 };
 use crate::can::ident::{Ident, Lowercase};
 use crate::can::pattern::PatternType;
-use crate::can::pattern::{
-    bindings_from_patterns, canonicalize_pattern, symbols_from_pattern, Pattern,
-};
+use crate::can::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError;
 use crate::can::procedure::References;
@@ -616,13 +614,42 @@ fn group_to_declaration(
     }
 }
 
+fn pattern_to_vars_by_symbol(
+    vars_by_symbol: &mut SendMap<Symbol, Variable>,
+    pattern: &Pattern,
+    expr_var: Variable,
+) {
+    use Pattern::*;
+    match pattern {
+        Identifier(symbol) => {
+            vars_by_symbol.insert(symbol.clone(), expr_var);
+        }
+
+        AppliedTag(_, _, arguments) => {
+            for (var, nested) in arguments {
+                pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
+            }
+        }
+
+        RecordDestructure(_, destructs) => {
+            for destruct in destructs {
+                vars_by_symbol.insert(destruct.value.symbol.clone(), destruct.value.var);
+            }
+        }
+
+        IntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | Underscore | UnsupportedPattern(_) => {}
+
+        Shadowed(_, _) => {}
+    }
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_pending_def<'a>(
     env: &mut Env<'a>,
     found_rigids: &mut SendMap<Variable, Lowercase>,
     pending_def: PendingDef<'a>,
-    original_scope: &Scope,
+    _original_scope: &Scope,
     scope: &mut Scope,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &VarStore,
@@ -645,6 +672,8 @@ fn canonicalize_pending_def<'a>(
             for (k, v) in ann.ftv {
                 found_rigids.insert(k, v);
             }
+
+            pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
             let typ = ann.typ;
 
@@ -693,9 +722,8 @@ fn canonicalize_pending_def<'a>(
                 }
             };
 
-            for (ident, (symbol, _)) in scope.idents() {
-                // TODO Could we do this by symbol instead, to avoid cloning idents?
-                if original_scope.contains_ident(ident) {
+            for (_, (symbol, _)) in scope.idents() {
+                if !vars_by_symbol.contains_key(&symbol) {
                     continue;
                 }
 
@@ -750,8 +778,9 @@ fn canonicalize_pending_def<'a>(
 
             if let Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
                 env.tailcallable_symbol = Some(*defined_symbol);
-                vars_by_symbol.insert(defined_symbol.clone(), expr_var);
             };
+
+            pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
             let (mut loc_can_expr, can_output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
@@ -818,14 +847,10 @@ fn canonicalize_pending_def<'a>(
                 );
             }
 
-            let symbols_defined_here: ImSet<Symbol> = symbols_from_pattern(&loc_can_pattern.value)
-                .into_iter()
-                .collect();
-
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
             for (ident, (symbol, region)) in scope.idents() {
-                if !symbols_defined_here.contains(&symbol) {
+                if !vars_by_symbol.contains_key(&symbol) {
                     continue;
                 }
 
