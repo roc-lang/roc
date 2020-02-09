@@ -1,4 +1,4 @@
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImSet, MutMap, MutSet};
 use crate::module::symbol::{Interns, ModuleId, Symbol};
 use crate::subs::{Content, FlatType, Subs, Variable};
@@ -396,6 +396,10 @@ fn write_flat_type(
                     sorted_fields.push((label.clone(), vars));
                 }
 
+                // If the `ext` contains tags, merge them into the list of tags.
+                // this can occur when inferring mutually recursive tags
+                let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
+
                 sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
 
                 let mut any_written_yet = false;
@@ -415,19 +419,14 @@ fn write_flat_type(
                 }
 
                 buf.push_str(" ]");
-            }
 
-            match subs.get(ext_var).content {
-                Content::Structure(EmptyTagUnion) => {
-                    // This is a closed record. We're done!
-                }
-                content => {
+                if let Some(content) = ext_content {
                     // This is an open tag union, so print the variable
                     // right after the ']'
                     //
                     // e.g. the "*" at the end of `{ x: Int }*`
                     // or the "r" at the end of `{ x: Int }r`
-                    write_content(env, content, subs, buf, parens);
+                    write_content(env, content, subs, buf, parens)
                 }
             }
 
@@ -440,6 +439,27 @@ fn write_flat_type(
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }
+    }
+}
+
+fn chase_ext_tag_union(
+    subs: &mut Subs,
+    var: Variable,
+    fields: &mut Vec<(TagName, Vec<Variable>)>,
+) -> Option<Content> {
+    use FlatType::*;
+    match subs.get(var).content {
+        Content::Structure(EmptyTagUnion) => None,
+        Content::Structure(TagUnion(tags, ext_var))
+        | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
+            for (label, vars) in tags {
+                fields.push((label.clone(), vars.to_vec()));
+            }
+
+            chase_ext_tag_union(subs, ext_var, fields)
+        }
+
+        content => Some(content),
     }
 }
 

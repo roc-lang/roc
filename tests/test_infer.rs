@@ -1887,7 +1887,7 @@ mod test_infer {
                    toAs
                   "#
             ),
-            "toAs : (b -> a), ListA a b -> List a",
+            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
         );
     }
 }
