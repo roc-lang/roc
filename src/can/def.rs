@@ -756,8 +756,6 @@ fn canonicalize_pending_def<'a>(
             let symbol = name.value;
             let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
 
-            dbg!(&can_ann);
-
             let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
 
             for loc_lowercase in vars {
@@ -772,9 +770,8 @@ fn canonicalize_pending_def<'a>(
                 }
             }
 
-            scope.add_alias(symbol, name.region, can_vars, can_ann.typ.clone());
+            scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
 
-            /*
             if can_ann.typ.contains_symbol(symbol) {
                 // the alias is recursive. If it's a tag union, we attempt to fix this
                 if let Type::TagUnion(tags, ext) = can_ann.typ {
@@ -788,7 +785,6 @@ fn canonicalize_pending_def<'a>(
                     panic!("recursion in type alias that is not behind a Tag");
                 }
             }
-            */
 
             // TODO should probably incorporate can_ann.references here - possibly by
             // inserting them into refs_by_symbol?
@@ -1209,13 +1205,7 @@ fn to_pending_def<'a>(
             let region = Region::span_across(&name.region, &ann.region);
             match scope.introduce(name.value.into(), &mut env.ident_ids, region) {
                 Ok(symbol) => {
-                    // TODO
                     let mut can_rigids: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
-
-                    let can_ann =
-                        canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
-
-                    dbg!(&can_ann);
 
                     for loc_var in vars.iter() {
                         match loc_var.value {

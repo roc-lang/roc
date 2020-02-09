@@ -722,7 +722,9 @@ fn check_for_infinite_type(
                     new_tags.insert(label.clone(), new_args);
                 }
 
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+                let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
 
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
