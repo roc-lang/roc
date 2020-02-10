@@ -62,7 +62,7 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    while let Some(recursive) = subs.occurs(variable) {
+    while let Some((recursive, _)) = subs.occurs(variable) {
         if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
             let rec_var = subs.fresh_unnamed_flex_var();
 

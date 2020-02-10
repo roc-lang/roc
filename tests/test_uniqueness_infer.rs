@@ -1794,51 +1794,51 @@ mod test_infer_uniq {
         );
     }
 
-    //    #[test]
-    //    fn typecheck_mutually_recursive_tag_union() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                   ListA a b : [ Cons a (ListB b a), Nil ]
-    //                   ListB a b : [ Cons a (ListA b a), Nil ]
-    //
-    //                   List q : [ Cons q (List q), Nil ]
-    //
-    //                   toAs : (b -> a), ListA a b -> List a
-    //                   toAs = \f, lista ->
-    //                        when lista is
-    //                            Nil -> Nil
-    //                            Cons a listb ->
-    //                                when listb is
-    //                                    Nil -> Nil
-    //                                    Cons b newLista ->
-    //                                        Cons a (Cons (f b) (toAs f newLista))
-    //
-    //                   toAs
-    //                  "#
-    //            ),
-    //            "(b -> a), ListA a b -> List a",
-    //        );
-    //    }
-    //
-    //    #[test]
-    //    fn infer_mutually_recursive_tag_union() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                   toAs = \f, lista ->
-    //                        when lista is
-    //                            Nil -> Nil
-    //                            Cons a listb ->
-    //                                when listb is
-    //                                    Nil -> Nil
-    //                                    Cons b newLista ->
-    //                                        Cons a (Cons (f b) (toAs f newLista))
-    //
-    //                   toAs
-    //                  "#
-    //            ),
-    //            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
-    //        );
-    //    }
+    #[test]
+    fn typecheck_mutually_recursive_tag_union() {
+        infer_eq(
+            indoc!(
+                r#"
+                      ListA a b : [ Cons a (ListB b a), Nil ]
+                      ListB a b : [ Cons a (ListA b a), Nil ]
+
+                      List q : [ Cons q (List q), Nil ]
+
+                      toAs : (q -> p), ListA p q -> List p
+                      toAs = \f, lista ->
+                           when lista is
+                               Nil -> Nil
+                               Cons a listb ->
+                                   when listb is
+                                       Nil -> Nil
+                                       Cons b newLista ->
+                                           Cons a (Cons (f b) (toAs f newLista))
+
+                      toAs
+                     "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a q -> Attr.Attr b p), Attr.Attr * (ListA (Attr.Attr b p) (Attr.Attr a q)) -> Attr.Attr * (List (Attr.Attr b p)))"
+        );
+    }
+
+    #[test]
+    fn infer_mutually_recursive_tag_union() {
+        infer_eq(
+                indoc!(
+                    r#"
+                       toAs = \f, lista ->
+                            when lista is
+                                Nil -> Nil
+                                Cons a listb ->
+                                    when listb is
+                                        Nil -> Nil
+                                        Cons b newLista ->
+                                            Cons a (Cons (f b) (toAs f newLista))
+    
+                       toAs
+                      "#
+                ),
+                "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a b -> c), Attr.Attr d [ Cons (Attr.Attr e f) (Attr.Attr * [ Cons (Attr.Attr a b) (Attr.Attr d g), Nil ]*), Nil ]* as g -> Attr.Attr h [ Cons (Attr.Attr e f) (Attr.Attr * [ Cons c (Attr.Attr h i) ]*), Nil ]* as i)",
+            );
+    }
 }

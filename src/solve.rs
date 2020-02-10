@@ -502,12 +502,20 @@ fn solve(
 
                         // check that things went well
                         debug_assert!({
+                            // NOTE the `subs.redundant` check is added for the uniqueness
+                            // inference, and does not come from elm. It's unclear whether this is
+                            // a bug with uniqueness inference (something is redundant that
+                            // shouldn't be) or that it just never came up in elm.
                             let failing: Vec<_> = rigid_vars
                                 .iter()
-                                .filter(|&var| subs.get_without_compacting(*var).rank != Rank::NONE)
+                                .filter(|&var| {
+                                    !subs.redundant(*var)
+                                        && subs.get_without_compacting(*var).rank != Rank::NONE
+                                })
                                 .collect();
 
                             if !failing.is_empty() {
+                                println!("Rigids {:?}", &rigid_vars);
                                 println!("Failing {:?}", failing);
                             }
 
@@ -699,81 +707,125 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    while let Some(recursive) = subs.occurs(var) {
+    let is_uniqueness_infer = match subs.get(var).content {
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, _)) => true,
+        _ => false,
+    };
+
+    while let Some((recursive, chain)) = subs.occurs(var) {
         let description = subs.get(recursive);
         let content = description.content;
 
         // try to make a tag union recursive, see if that helps
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let rec_var = subs.fresh_unnamed_flex_var();
+                if !is_uniqueness_infer {
+                    let rec_var = subs.fresh_unnamed_flex_var();
+                    subs.set_rank(rec_var, description.rank);
 
-                // TODO figure out whether to keep original rank ?
+                    let mut new_tags = MutMap::default();
 
-                let mut new_tags = MutMap::default();
+                    for (label, args) in &tags {
+                        let new_args: Vec<_> = args
+                            .iter()
+                            .map(|var| subs.explicit_substitute(recursive, rec_var, *var))
+                            .collect();
 
-                for (label, args) in &tags {
-                    let new_args: Vec<_> = args
-                        .iter()
-                        .map(|var| subs.explicit_substitute(recursive, rec_var, *var))
-                        .collect();
+                        new_tags.insert(label.clone(), new_args);
+                    }
 
-                    new_tags.insert(label.clone(), new_args);
+                    let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
+
+                    let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+
+                    subs.set_content(recursive, Content::Structure(flat_type));
+                } else {
+                    let index = 0;
+                    match subs.get(chain[index]).content {
+                        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+                            debug_assert!(args.len() == 2);
+                            debug_assert!(
+                                subs.get_root_key(recursive) == subs.get_root_key(args[1])
+                            );
+
+                            // NOTE this ensures we use the same uniqueness var for the whole spine
+                            // that might add too much uniqueness restriction.
+                            // using `subs.fresh_unnamed_flex_var()` loosens it.
+                            let uniq_var = args[0];
+                            let tag_union_var = recursive;
+                            let recursive = chain[index];
+
+                            correct_recursive_attr(
+                                subs,
+                                recursive,
+                                uniq_var,
+                                tag_union_var,
+                                ext_var,
+                                &tags,
+                            );
+                        }
+                        _ => circular_error(subs, problems, symbol, &loc_var),
+                    }
                 }
-
-                let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
-
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
-
-                subs.set_content(recursive, Content::Structure(flat_type));
             }
             Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
                 debug_assert!(args.len() == 2);
                 let uniq_var = args[0];
                 let tag_union_var = args[1];
-                match subs.get(tag_union_var).content {
+                let nested_description = subs.get(tag_union_var);
+                match nested_description.content {
                     Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                        let rec_var = subs.fresh_unnamed_flex_var();
-                        let attr_var = subs.fresh_unnamed_flex_var();
-
-                        subs.set_content(
-                            attr_var,
-                            Content::Structure(FlatType::Apply(
-                                Symbol::ATTR_ATTR,
-                                vec![uniq_var, rec_var],
-                            )),
+                        correct_recursive_attr(
+                            subs,
+                            recursive,
+                            uniq_var,
+                            tag_union_var,
+                            ext_var,
+                            &tags,
                         );
-
-                        // TODO figure out whether to keep original rank ?
-
-                        let mut new_tags = MutMap::default();
-
-                        for (label, args) in &tags {
-                            let new_args: Vec<_> = args
-                                .iter()
-                                .map(|var| subs.explicit_substitute(recursive, attr_var, *var))
-                                .collect();
-
-                            new_tags.insert(label.clone(), new_args);
-                        }
-
-                        let new_tag_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
-                        subs.set_content(tag_union_var, Content::Structure(new_tag_type));
-
-                        let new_recursive =
-                            FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, tag_union_var]);
-                        subs.set_content(recursive, Content::Structure(new_recursive));
                     }
-                    _ => {
-                        circular_error(subs, problems, symbol, &loc_var);
-                    }
+                    _ => circular_error(subs, problems, symbol, &loc_var),
                 }
             }
-            _ => {
-                circular_error(subs, problems, symbol, &loc_var);
-            }
+            _ => circular_error(subs, problems, symbol, &loc_var),
         }
     }
+}
+
+fn correct_recursive_attr(
+    subs: &mut Subs,
+    recursive: Variable,
+    uniq_var: Variable,
+    tag_union_var: Variable,
+    ext_var: Variable,
+    tags: &MutMap<TagName, Vec<Variable>>,
+) {
+    let rec_var = subs.fresh_unnamed_flex_var();
+    let attr_var = subs.fresh_unnamed_flex_var();
+
+    subs.set_content(
+        attr_var,
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, rec_var])),
+    );
+
+    let mut new_tags = MutMap::default();
+
+    let new_ext_var = subs.explicit_substitute(recursive, attr_var, ext_var);
+    for (label, args) in tags {
+        let new_args: Vec<_> = args
+            .iter()
+            .map(|var| subs.explicit_substitute(recursive, attr_var, *var))
+            .collect();
+
+        new_tags.insert(label.clone(), new_args);
+    }
+
+    let new_tag_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+    subs.set_content(tag_union_var, Content::Structure(new_tag_type));
+
+    let new_recursive = FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, tag_union_var]);
+
+    subs.set_content(recursive, Content::Structure(new_recursive));
 }
 
 fn circular_error(
@@ -790,6 +842,7 @@ fn circular_error(
 
     problems.push(problem);
 }
+
 fn generalize(
     subs: &mut Subs,
     young_mark: Mark,
@@ -832,7 +885,6 @@ fn generalize(
                 pools.get_mut(desc.rank).push(var);
             } else {
                 desc.rank = Rank::NONE;
-
                 subs.set(var, desc);
             }
         }
@@ -913,9 +965,6 @@ fn adjust_rank(
     }
 }
 
-// In the future, I hope we can find a way around special-casing the Attr constructor and Bool values.
-const SPECIAL_CASE_ATTR: bool = true;
-
 fn adjust_rank_content(
     subs: &mut Subs,
     young_mark: Mark,
@@ -931,25 +980,6 @@ fn adjust_rank_content(
 
         Structure(flat_type) => {
             match flat_type {
-                Apply(Symbol::ATTR_ATTR, args) => {
-                    // Attr.Attr is special-cased. Starting the rank at `toplevel()` would
-                    // introduce a level of rank that doesn't exist in the source.
-                    //
-                    // That can mean the difference between Rank=0 and Rank != 0, which affects
-                    // generalization.
-
-                    let mut rank = if SPECIAL_CASE_ATTR {
-                        Rank::NONE
-                    } else {
-                        Rank::toplevel()
-                    };
-
-                    for var in args {
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
-                    }
-
-                    rank
-                }
                 Apply(_, args) => {
                     let mut rank = Rank::toplevel();
 
@@ -1013,12 +1043,7 @@ fn adjust_rank_content(
                 }
 
                 Boolean(b) => {
-                    // Boolean is also special-cased to start at rank None, not toplevel()
-                    let mut rank = if SPECIAL_CASE_ATTR {
-                        Rank::NONE
-                    } else {
-                        Rank::toplevel()
-                    };
+                    let mut rank = Rank::toplevel();
                     for var in b.variables() {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
