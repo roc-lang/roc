@@ -1450,7 +1450,6 @@ fn constrain_def(
     env: &Env,
     var_store: &VarStore,
     var_usage: &VarUsage,
-
     applied_usage_constraint: &mut ImSet<Symbol>,
     def: &Def,
     body_con: Constraint,
@@ -1466,68 +1465,17 @@ fn constrain_def(
 
     let expr_con = match &def.annotation {
         Some((annotation, free_vars)) => {
-            let unlifed_annotation = annotation.clone();
-            let mut annotation = annotation.clone();
-
-            let rigids = &env.rigids;
-            let mut ftv: ImMap<Lowercase, (Variable, Variable)> = rigids.clone();
-            let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
-
-            for (name, var) in free_vars {
-                if let Some((existing_rigid, existing_uvar)) = rigids.get(name) {
-                    rigid_substitution.insert(
-                        *var,
-                        attr_type(
-                            Bool::variable(*existing_uvar),
-                            Type::Variable(*existing_rigid),
-                        ),
-                    );
-                } else {
-                    // possible use this rigid in nested def's
-                    let uvar = var_store.fresh();
-                    ftv.insert(name.clone(), (*var, uvar));
-
-                    new_rigids.push(*var);
-                }
-            }
-
-            // Instantiate rigid variables
-            if !rigid_substitution.is_empty() {
-                annotation.substitute(&rigid_substitution);
-            }
-
             let arity = annotation.arity();
-
-            let mut new_rigid_pairs = ImMap::default();
-            let (mut uniq_vars, annotation) =
-                annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs);
-
-            if let Pattern::Identifier(symbol) = def.loc_pattern.value {
-                pattern_state.headers.insert(
-                    symbol,
-                    Located::at(def.loc_pattern.region, annotation.clone()),
-                );
-            } else if let Some(headers) = crate::constrain::pattern::headers_from_annotation(
-                &def.loc_pattern.value,
-                &Located::at(def.loc_pattern.region, unlifed_annotation),
-            ) {
-                for (k, v) in headers {
-                    let (new_uniq_vars, attr_annotation) =
-                        annotation_to_attr_type(var_store, &v.value, &mut new_rigid_pairs);
-
-                    uniq_vars.extend(new_uniq_vars);
-
-                    pattern_state
-                        .headers
-                        .insert(k, Located::at(def.loc_pattern.region, attr_annotation));
-                }
-            }
-
-            new_rigids.extend(uniq_vars);
-
-            for (_, v) in new_rigid_pairs {
-                new_rigids.push(v);
-            }
+            let mut ftv = env.rigids.clone();
+            let annotation = instantiate_rigids(
+                var_store,
+                annotation,
+                &free_vars,
+                &mut new_rigids,
+                &mut ftv,
+                &def.loc_pattern,
+                &mut pattern_state.headers,
+            );
 
             let annotation_expected = Expected::FromAnnotation(
                 def.loc_pattern.clone(),
@@ -1579,6 +1527,76 @@ fn constrain_def(
         })),
         ret_constraint: body_con,
     }))
+}
+
+fn instantiate_rigids(
+    var_store: &VarStore,
+    annotation: &Type,
+    free_vars: &SendMap<Lowercase, Variable>,
+    new_rigids: &mut Vec<Variable>,
+    ftv: &mut ImMap<Lowercase, (Variable, Variable)>,
+    loc_pattern: &Located<Pattern>,
+    headers: &mut SendMap<Symbol, Located<Type>>,
+) -> Type {
+    let unlifed_annotation = annotation.clone();
+    let mut annotation = annotation.clone();
+
+    let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+
+    for (name, var) in free_vars {
+        if let Some((existing_rigid, existing_uvar)) = ftv.get(&name) {
+            rigid_substitution.insert(
+                *var,
+                attr_type(
+                    Bool::variable(*existing_uvar),
+                    Type::Variable(*existing_rigid),
+                ),
+            );
+        } else {
+            // possible use this rigid in nested def's
+            let uvar = var_store.fresh();
+            ftv.insert(name.clone(), (*var, uvar));
+
+            new_rigids.push(*var);
+
+            // TODO should uvar be added here?
+            //new_rigids.push(uvar);
+        }
+    }
+
+    // Instantiate rigid variables
+    if !rigid_substitution.is_empty() {
+        annotation.substitute(&rigid_substitution);
+    }
+
+    let mut new_rigid_pairs = ImMap::default();
+    let (mut uniq_vars, annotation) =
+        annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs);
+
+    // TODO remove special-casing of identifier
+    if let Pattern::Identifier(symbol) = loc_pattern.value {
+        headers.insert(symbol, Located::at(loc_pattern.region, annotation.clone()));
+    } else if let Some(new_headers) = crate::constrain::pattern::headers_from_annotation(
+        &loc_pattern.value,
+        &Located::at(loc_pattern.region, unlifed_annotation),
+    ) {
+        for (k, v) in new_headers {
+            let (new_uniq_vars, attr_annotation) =
+                annotation_to_attr_type(var_store, &v.value, &mut new_rigid_pairs);
+
+            uniq_vars.extend(new_uniq_vars);
+
+            headers.insert(k, Located::at(loc_pattern.region, attr_annotation));
+        }
+    }
+
+    new_rigids.extend(uniq_vars);
+
+    for (_, v) in new_rigid_pairs {
+        new_rigids.push(v);
+    }
+
+    annotation
 }
 
 fn constrain_recursive_defs(
@@ -1661,69 +1679,17 @@ pub fn rec_defs_help(
             }
 
             Some((annotation, free_vars)) => {
-                let unlifed_annotation = annotation.clone();
-                let mut annotation = annotation.clone();
-
-                let rigids = &env.rigids;
-                let mut ftv: ImMap<Lowercase, (Variable, Variable)> = rigids.clone();
-                let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
-
-                for (name, var) in free_vars {
-                    if let Some((existing_rigid, existing_uvar)) = rigids.get(name) {
-                        rigid_substitution.insert(
-                            *var,
-                            attr_type(
-                                Bool::variable(*existing_uvar),
-                                Type::Variable(*existing_rigid),
-                            ),
-                        );
-                    } else {
-                        // possible use this rigid in nested def's
-                        let uvar = var_store.fresh();
-                        ftv.insert(name.clone(), (*var, uvar));
-
-                        new_rigids.push(*var);
-                    }
-                }
-
-                // Instantiate rigid variables
-                if !rigid_substitution.is_empty() {
-                    annotation.substitute(&rigid_substitution);
-                }
-
                 let arity = annotation.arity();
-
-                let mut new_rigid_pairs = ImMap::default();
-                let (mut uniq_vars, annotation) =
-                    annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs);
-
-                if let Pattern::Identifier(symbol) = def.loc_pattern.value {
-                    pattern_state.headers.insert(
-                        symbol,
-                        Located::at(def.loc_pattern.region, annotation.clone()),
-                    );
-                } else if let Some(headers) = crate::constrain::pattern::headers_from_annotation(
-                    &def.loc_pattern.value,
-                    &Located::at(def.loc_pattern.region, unlifed_annotation),
-                ) {
-                    for (k, v) in headers {
-                        let (new_uniq_vars, attr_annotation) =
-                            annotation_to_attr_type(var_store, &v.value, &mut new_rigid_pairs);
-
-                        uniq_vars.extend(new_uniq_vars);
-
-                        pattern_state
-                            .headers
-                            .insert(k, Located::at(def.loc_pattern.region, attr_annotation));
-                    }
-                }
-
-                new_rigids.extend(uniq_vars);
-
-                for (_, v) in new_rigid_pairs {
-                    new_rigids.push(v);
-                }
-
+                let mut ftv = env.rigids.clone();
+                let annotation = instantiate_rigids(
+                    var_store,
+                    annotation,
+                    &free_vars,
+                    &mut new_rigids,
+                    &mut ftv,
+                    &def.loc_pattern,
+                    &mut pattern_state.headers,
+                );
                 let annotation_expected = Expected::FromAnnotation(
                     def.loc_pattern.clone(),
                     arity,

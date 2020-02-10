@@ -51,7 +51,7 @@ pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
     /// for example `a` in the annotation `identity : a -> a`, we add it to this
     /// map so that expressions within that annotation can share these vars.
-    pub rigids: ImMap<Lowercase, Type>,
+    pub rigids: ImMap<Lowercase, Variable>,
     pub home: ModuleId,
 }
 
@@ -720,37 +720,17 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
 
     let expr_con = match &def.annotation {
         Some((annotation, free_vars)) => {
-            let mut annotation = annotation.clone();
-            let rigids = &env.rigids;
-            let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
-            let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
-
-            for (name, var) in free_vars {
-                if let Some(existing_rigid) = rigids.get(name) {
-                    rigid_substitution.insert(*var, existing_rigid.clone());
-                } else {
-                    // It's possible to use this rigid in nested defs
-                    ftv.insert(name.clone(), Type::Variable(*var));
-
-                    new_rigids.push(*var);
-                }
-            }
-
-            // Instantiate rigid variables
-            if !rigid_substitution.is_empty() {
-                annotation.substitute(&rigid_substitution);
-            }
-
             let arity = annotation.arity();
+            let mut ftv: ImMap<Lowercase, Variable> = env.rigids.clone();
 
-            if let Some(headers) = crate::constrain::pattern::headers_from_annotation(
-                &def.loc_pattern.value,
-                &Located::at(def.loc_pattern.region, annotation.clone()),
-            ) {
-                for (k, v) in headers {
-                    pattern_state.headers.insert(k, v);
-                }
-            }
+            let annotation = instantiate_rigids(
+                annotation,
+                &free_vars,
+                &mut new_rigids,
+                &mut ftv,
+                &def.loc_pattern,
+                &mut pattern_state.headers,
+            );
 
             let annotation_expected = FromAnnotation(
                 def.loc_pattern.clone(),
@@ -762,6 +742,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
+                // TODO proper region
                 Region::zero(),
             ));
 
@@ -796,6 +777,45 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
         })),
         ret_constraint: body_con,
     }))
+}
+
+fn instantiate_rigids(
+    annotation: &Type,
+    free_vars: &SendMap<Lowercase, Variable>,
+    new_rigids: &mut Vec<Variable>,
+    ftv: &mut ImMap<Lowercase, Variable>,
+    loc_pattern: &Located<Pattern>,
+    headers: &mut SendMap<Symbol, Located<Type>>,
+) -> Type {
+    let mut annotation = annotation.clone();
+    let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+
+    for (name, var) in free_vars {
+        if let Some(existing_rigid) = ftv.get(name) {
+            rigid_substitution.insert(*var, Type::Variable(existing_rigid.clone()));
+        } else {
+            // It's possible to use this rigid in nested defs
+            ftv.insert(name.clone(), *var);
+
+            new_rigids.push(*var);
+        }
+    }
+
+    // Instantiate rigid variables
+    if !rigid_substitution.is_empty() {
+        annotation.substitute(&rigid_substitution);
+    }
+
+    if let Some(new_headers) = crate::constrain::pattern::headers_from_annotation(
+        &loc_pattern.value,
+        &Located::at(loc_pattern.region, annotation.clone()),
+    ) {
+        for (k, v) in new_headers {
+            headers.insert(k, v);
+        }
+    }
+
+    annotation
 }
 
 fn constrain_recursive_defs(env: &Env, defs: &[Def], body_con: Constraint) -> Constraint {
@@ -860,31 +880,22 @@ pub fn rec_defs_help(
                 flex_info.def_types.extend(pattern_state.headers);
             }
 
-            Some((annotation, seen_rigids)) => {
-                // TODO also do this for more complex patterns
-                if let Pattern::Identifier(symbol) = def.loc_pattern.value {
-                    pattern_state.headers.insert(
-                        symbol,
-                        Located::at(def.loc_pattern.region, annotation.clone()),
-                    );
-                }
-                let rigids = &env.rigids;
-                let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
+            Some((annotation, free_vars)) => {
+                let arity = annotation.arity();
+                let mut ftv: ImMap<Lowercase, Variable> = env.rigids.clone();
 
-                for (name, var) in seen_rigids {
-                    // if the rigid is known already, nothing needs to happen
-                    // otherwise register it.
-                    if !rigids.contains_key(name) {
-                        // possible use this rigid in nested def's
-                        ftv.insert(name.clone(), Type::Variable(*var));
-
-                        new_rigids.push(*var);
-                    }
-                }
+                let annotation = instantiate_rigids(
+                    annotation,
+                    &free_vars,
+                    &mut new_rigids,
+                    &mut ftv,
+                    &def.loc_pattern,
+                    &mut pattern_state.headers,
+                );
 
                 let annotation_expected = FromAnnotation(
                     def.loc_pattern.clone(),
-                    annotation.arity(),
+                    arity,
                     AnnotationSource::TypedBody,
                     annotation.clone(),
                 );
