@@ -1558,9 +1558,6 @@ fn instantiate_rigids(
             ftv.insert(name.clone(), (*var, uvar));
 
             new_rigids.push(*var);
-
-            // TODO should uvar be added here?
-            //new_rigids.push(uvar);
         }
     }
 
@@ -1573,7 +1570,6 @@ fn instantiate_rigids(
     let (mut uniq_vars, annotation) =
         annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs);
 
-    // TODO remove special-casing of identifier
     if let Pattern::Identifier(symbol) = loc_pattern.value {
         headers.insert(symbol, Located::at(loc_pattern.region, annotation.clone()));
     } else if let Some(new_headers) = crate::constrain::pattern::headers_from_annotation(

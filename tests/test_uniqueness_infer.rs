@@ -1795,6 +1795,23 @@ mod test_infer_uniq {
     }
 
     #[test]
+    fn let_record_pattern_with_annotation_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+
+               { x, y } : Foo
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Attr.Attr * Str",
+        );
+    }
+
+    #[test]
     fn typecheck_mutually_recursive_tag_union() {
         infer_eq(
             indoc!(

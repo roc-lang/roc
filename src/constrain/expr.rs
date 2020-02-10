@@ -792,7 +792,7 @@ fn instantiate_rigids(
 
     for (name, var) in free_vars {
         if let Some(existing_rigid) = ftv.get(name) {
-            rigid_substitution.insert(*var, Type::Variable(existing_rigid.clone()));
+            rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
         } else {
             // It's possible to use this rigid in nested defs
             ftv.insert(name.clone(), *var);
