@@ -17,6 +17,7 @@ pub fn constrain_module(
     constrain_decls(home, &decls)
 }
 
+#[derive(Debug, Clone)]
 pub struct Import<'a> {
     pub loc_symbol: Located<Symbol>,
     pub solved_type: &'a SolvedType,
