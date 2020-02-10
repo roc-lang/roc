@@ -23,6 +23,8 @@ pub struct ModuleOutput {
     pub references: MutSet<Symbol>,
 }
 
+// TODO trim these down
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
     loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,

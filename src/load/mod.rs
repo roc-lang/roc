@@ -157,7 +157,8 @@ pub async fn load<'a>(
 
     // From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     let arc_modules = Arc::new(Mutex::new(module_ids));
-    let ident_ids_by_module: Arc<Mutex<IdentIdsByModule>> = Arc::new(Mutex::new(root_exposed_ident_ids));
+    let ident_ids_by_module: Arc<Mutex<IdentIdsByModule>> =
+        Arc::new(Mutex::new(root_exposed_ident_ids));
 
     // All the dependent modules we've already begun loading -
     // meaning we should never kick off another load_module on them!
@@ -836,7 +837,9 @@ fn spawn_parse_and_constrain(
     let mut dep_idents = HashMap::with_capacity_and_hasher(num_deps, default_hasher());
 
     {
-        let ident_ids_by_module = (*ident_ids_by_module).lock().expect("Failed to acquire lock for interning ident IDs, presumably because a thread panicked.");
+        let ident_ids_by_module = (*ident_ids_by_module).lock().expect(
+            "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.",
+        );
 
         // Populate dep_idents with each of their IdentIds,
         // which we'll need during canonicalization to translate
