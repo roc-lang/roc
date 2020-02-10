@@ -745,7 +745,8 @@ fn check_for_infinite_type(
                         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
                             debug_assert!(args.len() == 2);
                             debug_assert!(
-                                subs.get_root_key(recursive) == subs.get_root_key(args[1])
+                                subs.get_root_key_without_compacting(recursive)
+                                    == subs.get_root_key_without_compacting(args[1])
                             );
 
                             // NOTE this ensures we use the same uniqueness var for the whole spine

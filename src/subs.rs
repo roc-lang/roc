@@ -243,6 +243,10 @@ impl Subs {
         self.utable.get_root_key(key)
     }
 
+    pub fn get_root_key_without_compacting(&self, key: Variable) -> Variable {
+        self.utable.get_root_key_without_compacting(key)
+    }
+
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key);
 
@@ -289,7 +293,7 @@ impl Subs {
         self.utable.unioned(left, right)
     }
 
-    pub fn redundant(&mut self, var: Variable) -> bool {
+    pub fn redundant(&self, var: Variable) -> bool {
         self.utable.is_redirect(var)
     }
 
