@@ -91,7 +91,12 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => match scope.introduce((*name).into(), &mut env.ident_ids, region) {
+        Identifier(name) => match scope.introduce(
+            (*name).into(),
+            &env.exposed_ident_ids,
+            &mut env.ident_ids,
+            region,
+        ) {
             Ok(symbol) => Pattern::Identifier(symbol),
             Err((original_region, shadow)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
@@ -215,7 +220,12 @@ pub fn canonicalize_pattern<'a>(
             for loc_pattern in *patterns {
                 match loc_pattern.value {
                     Identifier(label) => {
-                        match scope.introduce(label.into(), &mut env.ident_ids, region) {
+                        match scope.introduce(
+                            label.into(),
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            region,
+                        ) {
                             Ok(symbol) => {
                                 fields.push(Located {
                                     region: loc_pattern.region,
@@ -242,7 +252,12 @@ pub fn canonicalize_pattern<'a>(
                         };
                     }
                     RecordField(label, loc_guard) => {
-                        match scope.introduce(label.into(), &mut env.ident_ids, region) {
+                        match scope.introduce(
+                            label.into(),
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            region,
+                        ) {
                             Ok(symbol) => {
                                 let can_guard = canonicalize_pattern(
                                     env,

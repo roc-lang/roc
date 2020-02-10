@@ -25,9 +25,6 @@ mod test_infer_uniq {
         let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
         let mut subs = solved.into_inner();
 
-        dbg!(&subs);
-        dbg!(&content);
-
         name_all_type_vars(variable, &mut subs);
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
@@ -44,7 +41,6 @@ mod test_infer_uniq {
         let (problems, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
-            dbg!(&problems);
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());

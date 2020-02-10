@@ -92,7 +92,8 @@ mod test_load {
         let mut subs = loaded_module.solved.into_inner();
 
         assert_eq!(loaded_module.problems, Vec::new());
-        assert_eq!(expected_types.len(), loaded_module.declarations.len());
+
+        let num_decls = loaded_module.declarations.len();
 
         for decl in loaded_module.declarations {
             let def = match decl {
@@ -128,6 +129,8 @@ mod test_load {
                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
             }
         }
+
+        assert_eq!(expected_types.len(), num_decls);
     }
 
     // TESTS
@@ -287,6 +290,26 @@ mod test_load {
             );
         });
     }
+
+    // #[test]
+    // fn load_dep_types() {
+    //     test_async(async {
+    //         let subs_by_module = MutMap::default();
+    //         let loaded_module =
+    //             load_without_builtins("interface_with_deps", "Primary", subs_by_module).await;
+
+    //         expect_types(
+    //             loaded_module,
+    //             hashmap! {
+    //                 "blah" => "{}",
+    //                 "str" => "Str",
+    //                 "alwaysThree" => "* -> Str",
+    //                 "identity" => "a -> a",
+    //                 "three" => "Str",
+    //             },
+    //         );
+    //     });
+    // }
 
     // #[test]
     // fn load_records() {

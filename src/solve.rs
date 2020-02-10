@@ -508,7 +508,6 @@ fn solve(
                                 .collect();
 
                             if !failing.is_empty() {
-                                dbg!(&subs);
                                 println!("Failing {:?}", failing);
                             }
 

@@ -1178,7 +1178,12 @@ fn to_pending_def<'a>(
 
         Alias { name, vars, ann } => {
             let region = Region::span_across(&name.region, &ann.region);
-            match scope.introduce(name.value.into(), &mut env.ident_ids, region) {
+            match scope.introduce(
+                name.value.into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                region,
+            ) {
                 Ok(symbol) => {
                     let can_ann =
                         canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
