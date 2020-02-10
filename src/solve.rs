@@ -740,6 +740,9 @@ fn check_for_infinite_type(
 
                     subs.set_content(recursive, Content::Structure(flat_type));
                 } else {
+                    // Sometimes, the recursion "starts" at the tag-union, not an `Attr`. Here we
+                    // We use the path that `occurs` took to find the recursion to go one step
+                    // forward in the recursion and find the `Attr` there.
                     let index = 0;
                     match subs.get(chain[index]).content {
                         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
