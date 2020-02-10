@@ -4,7 +4,6 @@ use crate::collections::{MutMap, MutSet};
 use crate::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use crate::region::Region;
 use inlinable_string::InlinableString;
-use std::sync::Arc;
 
 /// The canonicalization environment for a particular module.
 pub struct Env<'a> {
@@ -12,7 +11,7 @@ pub struct Env<'a> {
     /// are assumed to be relative to this path.
     pub home: ModuleId,
 
-    pub dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
+    pub dep_idents: MutMap<ModuleId, IdentIds>,
 
     pub module_ids: &'a ModuleIds,
 
@@ -31,20 +30,22 @@ pub struct Env<'a> {
     pub referenced: MutSet<ModuleId>,
 
     pub ident_ids: IdentIds,
+    pub exposed_ident_ids: IdentIds,
 }
 
 impl<'a> Env<'a> {
     pub fn new(
         home: ModuleId,
-        dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         module_ids: &'a ModuleIds,
-        home_ident_ids: IdentIds,
+        exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
         Env {
             home,
             dep_idents,
             module_ids,
-            ident_ids: home_ident_ids,
+            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
+            exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
             referenced: MutSet::default(),

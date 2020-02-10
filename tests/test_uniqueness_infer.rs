@@ -45,7 +45,6 @@ mod test_infer_uniq {
         let (problems, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
-            dbg!(&problems);
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());
