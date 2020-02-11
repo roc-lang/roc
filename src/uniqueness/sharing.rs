@@ -338,11 +338,11 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 annotate_usage(&loc_elem.value, usage);
             }
         }
-        LetNonRec(def, loc_expr, _) => {
+        LetNonRec(def, loc_expr, _, _) => {
             annotate_usage(&def.loc_expr.value, usage);
             annotate_usage(&loc_expr.value, usage);
         }
-        LetRec(defs, loc_expr, _) => {
+        LetRec(defs, loc_expr, _, _) => {
             // TODO test this with a practical example.
             if defs.len() == 1 {
                 // just like a letrec, but mark defined symbol as Shared

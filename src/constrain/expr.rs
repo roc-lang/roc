@@ -49,6 +49,22 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
     }))
 }
 
+#[inline(always)]
+pub fn exists_with_aliases(
+    aliases: SendMap<Symbol, Alias>,
+    flex_vars: Vec<Variable>,
+    constraint: Constraint,
+) -> Constraint {
+    Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars,
+        def_types: SendMap::default(),
+        def_aliases: aliases,
+        defs_constraint: constraint,
+        ret_constraint: Constraint::True,
+    }))
+}
+
 pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
     /// for example `a` in the annotation `identity : a -> a`, we add it to this
@@ -543,10 +559,11 @@ pub fn constrain_expr(
                 ),
             )
         }
-        LetRec(defs, loc_ret, var) => {
+        LetRec(defs, loc_ret, var, aliases) => {
             let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
-            exists(
+            exists_with_aliases(
+                aliases.clone(),
                 vec![*var],
                 And(vec![
                     constrain_recursive_defs(env, defs, body_con),
@@ -556,10 +573,11 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetNonRec(def, loc_ret, var) => {
+        LetNonRec(def, loc_ret, var, aliases) => {
             let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
-            exists(
+            exists_with_aliases(
+                aliases.clone(),
                 vec![*var],
                 And(vec![
                     constrain_def(env, def, body_con),
@@ -715,7 +733,6 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
 pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
-    let mut def_aliases: SendMap<Symbol, Alias> = SendMap::default();
 
     let mut pattern_state = constrain_def_pattern(&def.loc_pattern, expr_type.clone());
 
@@ -824,6 +841,7 @@ pub fn rec_defs_help(
     mut rigid_info: Info,
     mut flex_info: Info,
 ) -> Constraint {
+    let mut def_aliases = SendMap::default();
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -870,7 +888,11 @@ pub fn rec_defs_help(
                 flex_info.def_types.extend(pattern_state.headers);
             }
 
-            Some((annotation, seen_rigids, def_aliases)) => {
+            Some((annotation, seen_rigids, ann_def_aliases)) => {
+                for (symbol, alias) in ann_def_aliases.clone() {
+                    def_aliases.insert(symbol, alias);
+                }
+
                 // TODO also do this for more complex patterns
                 if let Pattern::Identifier(symbol) = def.loc_pattern.value {
                     pattern_state.headers.insert(
@@ -945,7 +967,7 @@ pub fn rec_defs_help(
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
         def_types: rigid_info.def_types,
-        def_aliases: SendMap::default(),
+        def_aliases,
         defs_constraint: True,
         ret_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),

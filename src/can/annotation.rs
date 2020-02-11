@@ -39,7 +39,7 @@ pub fn canonicalize_annotation(
     // but a variable can only have one name. Therefore
     // `ftv : SendMap<Variable, Lowercase>`.
     let mut rigids = ImMap::default();
-    let mut local_aliases = Vec::new();
+    let mut aliases = SendMap::default();
     let (typ, references) = can_annotation_help(
         env,
         annotation,
@@ -47,15 +47,8 @@ pub fn canonicalize_annotation(
         scope,
         var_store,
         &mut rigids,
-        &mut local_aliases,
+        &mut aliases,
     );
-
-    let mut aliases = SendMap::default();
-    for (symbol, (vars, typ)) in local_aliases {
-        let alias = Alias { region, vars, typ };
-
-        aliases.insert(symbol, alias);
-    }
 
     let mut ftv = MutMap::default();
 
@@ -79,7 +72,7 @@ fn can_annotation_help(
     scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    local_aliases: &mut Vec<(Symbol, (Vec<Located<(Lowercase, Variable)>>, Type))>,
+    local_aliases: &mut SendMap<Symbol, Alias>,
 ) -> (Type, MutSet<Symbol>) {
     use crate::parse::ast::TypeAnnotation::*;
 
@@ -172,41 +165,7 @@ fn can_annotation_help(
                 args.push(arg_ann);
             }
 
-            if let Some(alias) = scope.lookup_alias(symbol) {
-                let ftv = &alias.vars;
-                let actual = &alias.typ;
-
-                if args.len() != ftv.len() {
-                    panic!("TODO alias applied to incorrect number of type arguments");
-                }
-                let mut zipped_args: Vec<(Lowercase, Type)> = Vec::with_capacity(args.len());
-                let mut substitution = ImMap::default();
-
-                for (loc_var, arg) in ftv.iter().zip(args.iter()) {
-                    substitution.insert(loc_var.value.1, arg.clone());
-                    zipped_args.push((loc_var.value.0.clone(), arg.clone()));
-                }
-
-                let mut instantiated = actual.clone();
-                instantiated.substitute(&substitution);
-
-                if let Type::RecursiveTagUnion(rec, _, _) = &mut instantiated {
-                    let new_rec = var_store.fresh();
-                    let old = *rec;
-                    *rec = new_rec;
-
-                    let mut rec_substitution = ImMap::default();
-                    rec_substitution.insert(old, Type::Variable(new_rec));
-                    instantiated.substitute(&rec_substitution);
-                }
-
-                (
-                    Type::Alias(symbol, zipped_args, Box::new(instantiated)),
-                    references,
-                )
-            } else {
-                (Type::Apply(symbol, args), references)
-            }
+            (Type::Apply(symbol, args), references)
         }
         BoundVariable(v) => {
             let name = Lowercase::from(*v);
@@ -295,16 +254,20 @@ fn can_annotation_help(
                         }
                         new_tags.push((tag_name.clone(), new_args));
                     }
-                    let rec_tag_union = Type::RecursiveTagUnion(rec_var, new_tags, ext);
-                    rec_tag_union
+                    Type::RecursiveTagUnion(rec_var, new_tags, ext)
                 } else {
                     inner_type
                 };
 
-                let alias = Type::Alias(symbol, vars, Box::new(alias_actual.clone()));
-                local_aliases.push((symbol, (lowercase_vars, alias_actual)));
+                let alias = Alias {
+                    region,
+                    vars: lowercase_vars,
+                    typ: alias_actual.clone(),
+                };
+                local_aliases.insert(symbol, alias);
 
-                (alias, references)
+                let type_alias = Type::Alias(symbol, vars, Box::new(alias_actual));
+                (type_alias, references)
             }
             _ => {
                 // This is a syntactically invalid type alias.
@@ -407,7 +370,7 @@ fn can_assigned_field<'a>(
     scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    local_aliases: &mut Vec<(Symbol, (Vec<Located<(Lowercase, Variable)>>, Type))>,
+    local_aliases: &mut SendMap<Symbol, Alias>,
     field_types: &mut SendMap<Lowercase, Type>,
 ) -> MutSet<Symbol> {
     use crate::parse::ast::AssignedField::*;
@@ -469,7 +432,7 @@ fn can_tag<'a>(
     scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    local_aliases: &mut Vec<(Symbol, (Vec<Located<(Lowercase, Variable)>>, Type))>,
+    local_aliases: &mut SendMap<Symbol, Alias>,
     tag_types: &mut Vec<(TagName, Vec<Type>)>,
 ) -> MutSet<Symbol> {
     match tag {

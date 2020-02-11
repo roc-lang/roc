@@ -11,10 +11,12 @@ use crate::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
+use crate::types::Alias;
 use bumpalo::Bump;
 
 #[derive(Debug)]
 pub struct ModuleOutput {
+    pub aliases: MutMap<Symbol, Alias>,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
@@ -99,7 +101,7 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let mut output = Output::default();
-    let (defs, _) = canonicalize_defs(
+    let (defs, populated_scope) = canonicalize_defs(
         &mut env,
         &mut output.rigids,
         var_store,
@@ -167,7 +169,14 @@ pub fn canonicalize_module_defs<'a>(
                 references.insert(symbol);
             }
 
+            let mut aliases = MutMap::default();
+
+            for (symbol, alias) in populated_scope.aliases() {
+                aliases.insert(*symbol, alias.clone());
+            }
+
             Ok(ModuleOutput {
+                aliases,
                 declarations,
                 references,
                 exposed_imports: can_exposed_imports,

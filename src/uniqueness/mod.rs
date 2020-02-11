@@ -5,7 +5,7 @@ use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::collections::{ImMap, ImSet, SendMap};
 use crate::constrain::builtins;
-use crate::constrain::expr::{exists, Env, Info};
+use crate::constrain::expr::{exists, exists_with_aliases, Env, Info};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
@@ -616,7 +616,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetRec(defs, loc_ret, var) => {
+        LetRec(defs, loc_ret, var, aliases) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -628,7 +628,9 @@ pub fn constrain_expr(
                 &loc_ret.value,
                 expected.clone(),
             );
-            exists(
+
+            exists_with_aliases(
+                aliases.clone(),
                 vec![*var],
                 And(vec![
                     constrain_recursive_defs(
@@ -645,7 +647,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetNonRec(def, loc_ret, var) => {
+        LetNonRec(def, loc_ret, var, aliases) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -658,7 +660,8 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            exists(
+            exists_with_aliases(
+                aliases.clone(),
                 vec![*var],
                 And(vec![
                     constrain_def(
@@ -1530,6 +1533,7 @@ pub fn rec_defs_help(
     mut rigid_info: Info,
     mut flex_info: Info,
 ) -> Constraint {
+    let mut def_aliases = SendMap::default();
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -1552,7 +1556,6 @@ pub fn rec_defs_help(
         );
 
         // TODO see where aliases should go
-        let mut def_aliases = SendMap::default();
         let mut new_rigids = Vec::new();
         match &def.annotation {
             None => {
@@ -1582,7 +1585,10 @@ pub fn rec_defs_help(
             }
 
             Some((annotation, seen_rigids, ann_def_aliases)) => {
-                def_aliases = ann_def_aliases.clone();
+                for (symbol, alias) in ann_def_aliases.clone() {
+                    def_aliases.insert(symbol, alias);
+                }
+
                 let (uniq_vars, annotation) = annotation_to_attr_type(var_store, annotation);
 
                 // TODO also do this for more complex patterns
@@ -1692,7 +1698,7 @@ pub fn rec_defs_help(
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
         def_types: rigid_info.def_types,
-        def_aliases: SendMap::default(),
+        def_aliases,
         defs_constraint: True,
         ret_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),

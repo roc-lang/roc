@@ -368,10 +368,16 @@ fn solve(
                 True if let_con.rigid_vars.is_empty() => {
                     introduce(subs, rank, pools, &let_con.flex_vars);
 
+                    let mut new_env = env.clone();
+
+                    for (symbol, alias) in let_con.def_aliases.iter() {
+                        new_env.aliases.insert(*symbol, alias.clone());
+                    }
+
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(
-                        env,
+                        &new_env,
                         state,
                         rank,
                         pools,
@@ -572,7 +578,6 @@ fn type_to_var(
     aliases: &SendMap<Symbol, Alias>,
     typ: &Type,
 ) -> Variable {
-    dbg!(&aliases);
     type_to_variable(subs, rank, pools, aliases, typ)
 }
 
@@ -587,20 +592,48 @@ fn type_to_variable(
         Variable(var) => *var,
         Apply(symbol, args) => {
             if let Some(alias) = aliases.get(symbol) {
-                /*
-                let mut arg_vars = Vec::with_capacity(args.len());
-                let mut new_aliases = ImMap::default();
-
-                for (arg, arg_type) in alias.args {
-                    let arg_var = type_to_variable(subs, rank, pools, aliases, arg_type);
-
-                    arg_vars.push((arg.clone(), arg_var));
-                    new_aliases.insert(arg.clone(), arg_var);
+                if args.len() != alias.vars.len() {
+                    panic!(
+                        "Alias {:?} applied to incorrect number of arguments",
+                        symbol
+                    );
                 }
-                */
 
-                let alias_var = type_to_variable(subs, rank, pools, aliases, &alias.typ);
-                let content = Content::Alias(*symbol, vec![], alias_var);
+                let mut actual = alias.typ.clone();
+                let mut substitution = ImMap::default();
+                let mut arg_vars = Vec::with_capacity(args.len());
+
+                for (
+                    tipe,
+                    Located {
+                        value: (lowercase, var),
+                        ..
+                    },
+                ) in args.iter().zip(alias.vars.iter())
+                {
+                    let new_var = type_to_variable(subs, rank, pools, aliases, tipe);
+                    substitution.insert(*var, Type::Variable(new_var));
+                    arg_vars.push((lowercase.clone(), new_var));
+                }
+
+                actual.substitute(&substitution);
+
+                // We must instantiate the recursion variable, otherwise all e.g. lists will be
+                // unified, List Int ~ List Float
+                if let Type::RecursiveTagUnion(rec_var, _, _) = actual {
+                    let new_rec_var = subs.fresh_unnamed_flex_var();
+                    substitution.clear();
+                    substitution.insert(rec_var, Type::Variable(new_rec_var));
+
+                    actual.substitute(&substitution);
+
+                    if let Type::RecursiveTagUnion(_, tags, ext_var) = actual {
+                        actual = Type::RecursiveTagUnion(new_rec_var, tags, ext_var);
+                    }
+                }
+
+                let alias_var = type_to_variable(subs, rank, pools, aliases, &actual);
+                let content = Content::Alias(*symbol, arg_vars, alias_var);
 
                 register(subs, rank, pools, content)
             } else {
