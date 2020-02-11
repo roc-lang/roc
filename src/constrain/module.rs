@@ -102,8 +102,19 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut Vec<Variable>, var_store: &
             Type::TagUnion(new_tags, Box::new(to_type(ext, free_vars, var_store)))
         }
         Boolean(val) => Type::Boolean(val.clone()),
-        Alias(_, _, _) => {
-            panic!("TODO convert from SolvedType::Alias to Type::Alias");
+        Alias(symbol, solved_type_variables, solved_actual) => {
+            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
+
+            for (lowercase, solved_type) in solved_type_variables {
+                type_variables.push((
+                    lowercase.clone(),
+                    to_type(solved_type, free_vars, var_store),
+                ));
+            }
+
+            let actual = to_type(solved_actual, free_vars, var_store);
+
+            Type::Alias(*symbol, type_variables, Box::new(actual))
         }
         Error => {
             panic!("TODO convert from SolvedType::Error to Type somehow");
