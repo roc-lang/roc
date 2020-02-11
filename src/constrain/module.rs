@@ -118,8 +118,29 @@ fn constrain_imported_value(
     body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
+    use Constraint::*;
+
+    let mut def_types = SendMap::default();
     let mut free_vars = Vec::new();
     let typ = to_type(solved_type, &mut free_vars, var_store);
 
-    panic!("TODO create a Let constraint which wraps body_con");
+    def_types.insert(
+        loc_symbol.value,
+        Located {
+            region: loc_symbol.region,
+            value: typ,
+        },
+    );
+
+    Let(Box::new(LetConstraint {
+        // rigids from other modules should not be treated as rigid
+        // within this module; rather, they should be treated as flex
+        rigid_vars: Vec::new(),
+        flex_vars: free_vars,
+        // Importing a value doesn't constrain this module at all.
+        // All it does is introduce variables and provide def_types for lookups
+        def_types,
+        defs_constraint: True,
+        ret_constraint: body_con,
+    }))
 }

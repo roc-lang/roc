@@ -406,9 +406,7 @@ pub async fn load<'a>(
                         declarations,
                     });
                 } else {
-                    // This was a dependency. Write it down and keep processing messaages.
-                    vars_by_symbol = vars_by_symbol.union(new_vars_by_symbol);
-
+                    // This was a dependency. Write it down and keep processing messages.
                     debug_assert!(!exposed_types.contains_key(&module_id));
                     exposed_types.insert(module_id, ExposedModuleTypes::Valid(solved_types));
 
