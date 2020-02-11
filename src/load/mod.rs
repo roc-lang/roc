@@ -708,6 +708,8 @@ fn solve_module(
     let home = module.module_id;
     let mut imports = Vec::with_capacity(module.references.len());
 
+    // dbg!(home, &module.references);
+
     // Translate referenced symbols into constraints
     for &symbol in module.references.iter() {
         let module_id = symbol.module_id();
@@ -804,6 +806,8 @@ fn solve_module(
 
             solved_types.insert(symbol, solved_type);
         }
+
+        // dbg!(&solved_types);
 
         tokio::spawn(async move {
             let mut tx = msg_tx;

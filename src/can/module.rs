@@ -119,6 +119,8 @@ pub fn canonicalize_module_defs<'a>(
         references.insert(*symbol);
     }
 
+    dbg!(home, &references);
+
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(declarations), output) => {
             use crate::can::def::Declaration::*;
@@ -168,6 +170,8 @@ pub fn canonicalize_module_defs<'a>(
             for symbol in output.references.lookups {
                 references.insert(symbol);
             }
+
+            dbg!(home, &references);
 
             Ok(ModuleOutput {
                 declarations,
