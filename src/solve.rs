@@ -3,6 +3,7 @@ use crate::collections::{ImMap, MutMap, SendMap};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
+use crate::types::Alias;
 use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
@@ -162,7 +163,11 @@ impl SolvedType {
     }
 }
 
-type Env = SendMap<Symbol, Variable>;
+#[derive(Clone, Debug)]
+pub struct Env {
+    pub vars_by_symbol: SendMap<Symbol, Variable>,
+    pub aliases: SendMap<Symbol, Alias>,
+}
 
 const DEFAULT_POOLS: usize = 8;
 
@@ -215,7 +220,7 @@ impl Pools {
 
 #[derive(Clone)]
 struct State {
-    vars_by_symbol: Env,
+    env: Env,
     mark: Mark,
 }
 
@@ -235,32 +240,26 @@ impl<T> Solved<T> {
 }
 
 pub fn run(
-    vars_by_symbol: &Env,
+    env: &Env,
     problems: &mut Vec<Problem>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
     let mut pools = Pools::default();
     let state = State {
-        vars_by_symbol: vars_by_symbol.clone(),
+        env: env.clone(),
         mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
     let state = solve(
-        vars_by_symbol,
-        state,
-        rank,
-        &mut pools,
-        problems,
-        &mut subs,
-        constraint,
+        env, state, rank, &mut pools, problems, &mut subs, constraint,
     );
 
-    (Solved(subs), state.vars_by_symbol)
+    (Solved(subs), state.env)
 }
 
 fn solve(
-    vars_by_symbol: &Env,
+    env: &Env,
     state: State,
     rank: Rank,
     pools: &mut Pools,
@@ -273,13 +272,19 @@ fn solve(
         SaveTheEnvironment => {
             let mut copy = state;
 
-            copy.vars_by_symbol = vars_by_symbol.clone();
+            copy.env = env.clone();
 
             copy
         }
         Eq(typ, expected_type, _region) => {
-            let actual = type_to_var(subs, rank, pools, typ);
-            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
+            let actual = type_to_var(subs, rank, pools, &env.aliases, typ);
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                &env.aliases,
+                expected_type.get_type_ref(),
+            );
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -290,12 +295,12 @@ fn solve(
             state
         }
         Lookup(symbol, expected_type, _region) => {
-            let var = *vars_by_symbol.get(&symbol).unwrap_or_else(|| {
+            let var = *env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
                 // a Problem ("module Foo does not expose `bar`") for later.
                 panic!(
                     "Could not find symbol {:?} in vars_by_symbol {:?}",
-                    symbol, vars_by_symbol
+                    symbol, env.vars_by_symbol
                 )
             });
 
@@ -321,7 +326,13 @@ fn solve(
             // is being looked up in this module, then we use our Subs as both
             // the source and destination.
             let actual = deep_copy_var(subs, rank, pools, var);
-            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                &env.aliases,
+                expected_type.get_type_ref(),
+            );
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -335,22 +346,14 @@ fn solve(
             let mut state = state;
 
             for sub_constraint in sub_constraints.iter() {
-                state = solve(
-                    vars_by_symbol,
-                    state,
-                    rank,
-                    pools,
-                    problems,
-                    subs,
-                    sub_constraint,
-                );
+                state = solve(env, state, rank, pools, problems, subs, sub_constraint);
             }
 
             state
         }
         Pattern(_region, _category, typ, expected) => {
-            let actual = type_to_var(subs, rank, pools, typ);
-            let expected = type_to_var(subs, rank, pools, expected.get_type_ref());
+            let actual = type_to_var(subs, rank, pools, &env.aliases, typ);
+            let expected = type_to_var(subs, rank, pools, &env.aliases, expected.get_type_ref());
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -368,7 +371,7 @@ fn solve(
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(
-                        vars_by_symbol,
+                        env,
                         state,
                         rank,
                         pools,
@@ -379,7 +382,7 @@ fn solve(
                 }
                 ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
                     let state = solve(
-                        vars_by_symbol,
+                        env,
                         state,
                         rank,
                         pools,
@@ -388,11 +391,17 @@ fn solve(
                         &let_con.defs_constraint,
                     );
 
+                    let mut new_env = env.clone();
+
+                    for (symbol, alias) in let_con.def_aliases.iter() {
+                        new_env.aliases.insert(*symbol, alias.clone());
+                    }
+
                     // Add a variable for each def to new_vars_by_env.
                     let mut local_def_vars = ImMap::default();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(subs, rank, pools, &loc_type.value);
+                        let var = type_to_var(subs, rank, pools, &new_env.aliases, &loc_type.value);
 
                         local_def_vars.insert(
                             symbol.clone(),
@@ -403,23 +412,13 @@ fn solve(
                         );
                     }
 
-                    let mut new_vars_by_symbol = vars_by_symbol.clone();
-
                     for (symbol, loc_var) in local_def_vars.iter() {
-                        if !new_vars_by_symbol.contains_key(&symbol) {
-                            new_vars_by_symbol.insert(symbol.clone(), loc_var.value);
+                        if !new_env.vars_by_symbol.contains_key(&symbol) {
+                            new_env.vars_by_symbol.insert(symbol.clone(), loc_var.value);
                         }
                     }
 
-                    let new_state = solve(
-                        &new_vars_by_symbol,
-                        state,
-                        rank,
-                        pools,
-                        problems,
-                        subs,
-                        ret_con,
-                    );
+                    let new_state = solve(&new_env, state, rank, pools, problems, subs, ret_con);
 
                     for (symbol, loc_var) in local_def_vars {
                         check_for_infinite_type(subs, problems, symbol, loc_var);
@@ -448,12 +447,26 @@ fn solve(
                         pool.extend(rigid_vars.iter());
                         pool.extend(flex_vars.iter());
 
+                        let mut new_env = env.clone();
+
+                        for (symbol, alias) in let_con.def_aliases.iter() {
+                            new_env.aliases.insert(*symbol, alias.clone());
+                        }
+
                         // Add a variable for each def to local_def_vars.
                         let mut local_def_vars = ImMap::default();
 
                         for (symbol, loc_type) in let_con.def_types.iter() {
                             let def_type = loc_type.value.clone();
-                            let var = type_to_var(subs, next_rank, next_pools, &def_type);
+
+                            // TODO should this use new aliases?
+                            let var = type_to_var(
+                                subs,
+                                next_rank,
+                                next_pools,
+                                &new_env.aliases,
+                                &def_type,
+                            );
 
                             local_def_vars.insert(
                                 symbol.clone(),
@@ -468,7 +481,7 @@ fn solve(
 
                         // Solve the assignments' constraints first.
                         let new_state = solve(
-                            vars_by_symbol,
+                            &new_env,
                             state,
                             next_rank,
                             next_pools,
@@ -513,31 +526,24 @@ fn solve(
 
                             failing.is_empty()
                         });
-                        let mut new_vars_by_symbol = vars_by_symbol.clone();
 
                         for (symbol, loc_var) in local_def_vars.iter() {
-                            if !new_vars_by_symbol.contains_key(&symbol) {
-                                new_vars_by_symbol.insert(symbol.clone(), loc_var.value);
+                            if !new_env.vars_by_symbol.contains_key(&symbol) {
+                                new_env.vars_by_symbol.insert(symbol.clone(), loc_var.value);
                             }
                         }
 
                         // Note that this vars_by_symbol is the one returned by the
                         // previous call to solve()
                         let temp_state = State {
-                            vars_by_symbol: new_state.vars_by_symbol,
+                            env: new_state.env,
                             mark: final_mark,
                         };
 
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
                         let new_state = solve(
-                            &new_vars_by_symbol,
-                            temp_state,
-                            rank,
-                            next_pools,
-                            problems,
-                            subs,
-                            &ret_con,
+                            &new_env, temp_state, rank, next_pools, problems, subs, &ret_con,
                         );
 
                         for (symbol, loc_var) in local_def_vars {
@@ -559,30 +565,56 @@ fn solve(
     }
 }
 
-fn type_to_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) -> Variable {
-    type_to_variable(subs, rank, pools, &ImMap::default(), typ)
+fn type_to_var(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    aliases: &SendMap<Symbol, Alias>,
+    typ: &Type,
+) -> Variable {
+    dbg!(&aliases);
+    type_to_variable(subs, rank, pools, aliases, typ)
 }
 
 fn type_to_variable(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    aliases: &ImMap<Lowercase, Variable>,
+    aliases: &SendMap<Symbol, Alias>,
     typ: &Type,
 ) -> Variable {
     match typ {
         Variable(var) => *var,
         Apply(symbol, args) => {
-            let mut arg_vars = Vec::with_capacity(args.len());
+            if let Some(alias) = aliases.get(symbol) {
+                /*
+                let mut arg_vars = Vec::with_capacity(args.len());
+                let mut new_aliases = ImMap::default();
 
-            for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
+                for (arg, arg_type) in alias.args {
+                    let arg_var = type_to_variable(subs, rank, pools, aliases, arg_type);
+
+                    arg_vars.push((arg.clone(), arg_var));
+                    new_aliases.insert(arg.clone(), arg_var);
+                }
+                */
+
+                let alias_var = type_to_variable(subs, rank, pools, aliases, &alias.typ);
+                let content = Content::Alias(*symbol, vec![], alias_var);
+
+                register(subs, rank, pools, content)
+            } else {
+                let mut arg_vars = Vec::with_capacity(args.len());
+
+                for arg in args {
+                    arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
+                }
+
+                let flat_type = FlatType::Apply(*symbol, arg_vars);
+                let content = Content::Structure(flat_type);
+
+                register(subs, rank, pools, content)
             }
-
-            let flat_type = FlatType::Apply(*symbol, arg_vars);
-            let content = Content::Structure(flat_type);
-
-            register(subs, rank, pools, content)
         }
         EmptyRec => {
             let content = Content::Structure(FlatType::EmptyRecord);
@@ -671,13 +703,13 @@ fn type_to_variable(
             let mut new_aliases = ImMap::default();
 
             for (arg, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, &ImMap::default(), arg_type);
+                let arg_var = type_to_variable(subs, rank, pools, aliases, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
                 new_aliases.insert(arg.clone(), arg_var);
             }
 
-            let alias_var = type_to_variable(subs, rank, pools, &new_aliases, alias_type);
+            let alias_var = type_to_variable(subs, rank, pools, aliases, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
             register(subs, rank, pools, content)

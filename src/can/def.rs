@@ -18,7 +18,7 @@ use crate::module::symbol::Symbol;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
-use crate::types::Type;
+use crate::types::{Alias, Type};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -29,7 +29,7 @@ pub struct Def {
     pub loc_expr: Located<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
-    pub annotation: Option<(Type, SendMap<Variable, Lowercase>)>,
+    pub annotation: Option<(Type, SendMap<Variable, Lowercase>, SendMap<Symbol, Alias>)>,
 }
 
 #[derive(Debug)]
@@ -741,7 +741,7 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((typ.clone(), found_rigids.clone())),
+                        annotation: Some((typ.clone(), found_rigids.clone(), ann.aliases.clone())),
                     },
                 );
             }
@@ -760,11 +760,11 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        TypedBody(loc_pattern, loc_can_pattern, loc_annotation, loc_expr) => {
+        TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             // TODO we have ann.references here, which includes information about
             // which symbols were referenced in type annotations, but we never
             // use them. We discard them!
-            let ann = loc_annotation.value;
+            let ann = loc_ann.value;
             let typ = ann.typ;
 
             // union seen rigids with already found ones
@@ -887,7 +887,7 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((typ.clone(), found_rigids.clone())),
+                        annotation: Some((typ.clone(), found_rigids.clone(), ann.aliases.clone())),
                     },
                 );
             }

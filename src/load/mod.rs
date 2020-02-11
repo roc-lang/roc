@@ -78,7 +78,7 @@ enum Msg {
         solved_types: MutMap<Symbol, SolvedType>,
         subs: Arc<Solved<Subs>>,
         problems: Vec<Problem>,
-        new_vars_by_symbol: SendMap<Symbol, Variable>,
+        new_vars_by_symbol: solve::Env,
     },
 }
 
@@ -407,8 +407,6 @@ pub async fn load<'a>(
                     });
                 } else {
                     // This was a dependency. Write it down and keep processing messaages.
-                    vars_by_symbol = vars_by_symbol.union(new_vars_by_symbol);
-
                     debug_assert!(!exposed_types.contains_key(&module_id));
                     exposed_types.insert(module_id, ExposedModuleTypes::Valid(solved_types));
 
@@ -788,9 +786,13 @@ fn solve_module(
         let subs = Subs::new(var_store.into());
         let mut problems = Vec::new();
 
+        let env = solve::Env {
+            vars_by_symbol,
+            aliases: SendMap::default(),
+        };
+
         // Run the solver to populate Subs.
-        let (solved_subs, new_vars_by_symbol) =
-            solve::run(&vars_by_symbol, &mut problems, subs, &constraint);
+        let (solved_subs, new_vars_by_symbol) = solve::run(&env, &mut problems, subs, &constraint);
 
         let mut solved_types = MutMap::default();
 

@@ -6,9 +6,10 @@ use crate::can::scope::Scope;
 use crate::collections::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use crate::module::symbol::Symbol;
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
+use crate::region::Located;
 use crate::region::Region;
 use crate::subs::{VarStore, Variable};
-use crate::types::{Problem, Type};
+use crate::types::{Alias, Problem, Type};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -17,6 +18,7 @@ pub struct Annotation {
     pub ftv: MutMap<Variable, Lowercase>,
     pub rigids: ImMap<Lowercase, Variable>,
     pub references: MutSet<Symbol>,
+    pub aliases: SendMap<Symbol, Alias>,
 }
 
 pub fn canonicalize_annotation(
@@ -38,7 +40,7 @@ pub fn canonicalize_annotation(
     // `ftv : SendMap<Variable, Lowercase>`.
     let mut rigids = ImMap::default();
     let mut local_aliases = Vec::new();
-    let (mut typ, references) = can_annotation_help(
+    let (typ, references) = can_annotation_help(
         env,
         annotation,
         region,
@@ -48,8 +50,11 @@ pub fn canonicalize_annotation(
         &mut local_aliases,
     );
 
-    for (symbol, tipe) in local_aliases {
-        typ.substitute_alias(symbol, &tipe);
+    let mut aliases = SendMap::default();
+    for (symbol, (vars, typ)) in local_aliases {
+        let alias = Alias { region, vars, typ };
+
+        aliases.insert(symbol, alias);
     }
 
     let mut ftv = MutMap::default();
@@ -63,6 +68,7 @@ pub fn canonicalize_annotation(
         ftv,
         references,
         rigids,
+        aliases,
     }
 }
 
@@ -73,8 +79,8 @@ fn can_annotation_help(
     scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    local_aliases: &mut Vec<(Symbol, crate::types::Type)>,
-) -> (crate::types::Type, MutSet<Symbol>) {
+    local_aliases: &mut Vec<(Symbol, (Vec<Located<(Lowercase, Variable)>>, Type))>,
+) -> (Type, MutSet<Symbol>) {
     use crate::parse::ast::TypeAnnotation::*;
 
     match annotation {
@@ -245,6 +251,7 @@ fn can_annotation_help(
                     local_aliases,
                 );
                 let mut vars = Vec::with_capacity(loc_vars.len());
+                let mut lowercase_vars = Vec::with_capacity(loc_vars.len());
 
                 references.insert(symbol);
 
@@ -259,7 +266,9 @@ fn can_annotation_help(
                                 let var = var_store.fresh();
 
                                 rigids.insert(var_name.clone(), var);
-                                vars.push((var_name, Type::Variable(var)));
+                                vars.push((var_name.clone(), Type::Variable(var)));
+
+                                lowercase_vars.push(Located::at(loc_var.region, (var_name, var)));
                             }
                         }
                         _ => {
@@ -273,7 +282,7 @@ fn can_annotation_help(
                     }
                 }
 
-                let alias = if let Type::TagUnion(tags, ext) = inner_type {
+                let alias_actual = if let Type::TagUnion(tags, ext) = inner_type {
                     let rec_var = var_store.fresh();
 
                     let mut new_tags = Vec::with_capacity(tags.len());
@@ -287,13 +296,13 @@ fn can_annotation_help(
                         new_tags.push((tag_name.clone(), new_args));
                     }
                     let rec_tag_union = Type::RecursiveTagUnion(rec_var, new_tags, ext);
-
-                    Type::Alias(symbol, vars, Box::new(rec_tag_union))
+                    rec_tag_union
                 } else {
-                    Type::Alias(symbol, vars, Box::new(inner_type))
+                    inner_type
                 };
 
-                local_aliases.push((symbol, alias.clone()));
+                let alias = Type::Alias(symbol, vars, Box::new(alias_actual.clone()));
+                local_aliases.push((symbol, (lowercase_vars, alias_actual)));
 
                 (alias, references)
             }
@@ -398,7 +407,7 @@ fn can_assigned_field<'a>(
     scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    local_aliases: &mut Vec<(Symbol, Type)>,
+    local_aliases: &mut Vec<(Symbol, (Vec<Located<(Lowercase, Variable)>>, Type))>,
     field_types: &mut SendMap<Lowercase, Type>,
 ) -> MutSet<Symbol> {
     use crate::parse::ast::AssignedField::*;
@@ -460,7 +469,7 @@ fn can_tag<'a>(
     scope: &mut Scope,
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
-    local_aliases: &mut Vec<(Symbol, Type)>,
+    local_aliases: &mut Vec<(Symbol, (Vec<Located<(Lowercase, Variable)>>, Type))>,
     tag_types: &mut Vec<(TagName, Vec<Type>)>,
 ) -> MutSet<Symbol> {
     match tag {
