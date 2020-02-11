@@ -98,7 +98,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, _, output) = canonicalize_defs(
+    let (defs, scope, output) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -118,8 +118,6 @@ pub fn canonicalize_module_defs<'a>(
     for symbol in env.referenced_symbols.iter() {
         references.insert(*symbol);
     }
-
-    dbg!(home, &references);
 
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(declarations), output) => {
@@ -153,6 +151,15 @@ pub fn canonicalize_module_defs<'a>(
                         panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs");
                     }
                 }
+            }
+
+            for (symbol, _alias) in scope.aliases() {
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_symbols.remove(symbol);
             }
 
             // By this point, all exposed symbols should have been removed from
