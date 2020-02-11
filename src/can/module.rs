@@ -98,10 +98,9 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let mut output = Output::default();
-    let (defs, _) = canonicalize_defs(
+    let (defs, _, output) = canonicalize_defs(
         &mut env,
-        &mut output.rigids,
+        Output::default(),
         var_store,
         &scope,
         &desugared,
@@ -111,10 +110,13 @@ pub fn canonicalize_module_defs<'a>(
     let mut references = MutSet::default();
 
     // Gather up all the symbols that were referenced across all the defs.
-    for (_, def_refs) in defs.refs_by_symbol.values() {
-        for symbol in def_refs.lookups.iter() {
-            references.insert(*symbol);
-        }
+    for symbol in output.references.lookups.iter() {
+        references.insert(*symbol);
+    }
+
+    // Gather up all the symbols that were referenced from other modules.
+    for symbol in env.referenced_symbols.iter() {
+        references.insert(*symbol);
     }
 
     match sort_can_defs(&mut env, defs, Output::default()) {
