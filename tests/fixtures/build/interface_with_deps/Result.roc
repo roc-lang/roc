@@ -6,7 +6,6 @@ Result e a : [ Ok a, Err e ]
 
 ConsList a : [ Cons a (ConsList a), Nil ]
 
-# currently fails
 listMap : ConsList a, (a -> b) -> ConsList b
 listMap = \list, f ->
     when list is
