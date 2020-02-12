@@ -48,7 +48,7 @@ pub enum SolvedType {
     Erroneous(Problem),
 
     /// A type alias
-    Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
+    Alias(Symbol, Vec<Lowercase>, Box<SolvedType>),
 
     /// a boolean algebra Bool
     Boolean(boolean_algebra::Bool),
@@ -145,10 +145,9 @@ impl SolvedType {
             Alias(symbol, args, box_type) => {
                 let solved_type = Self::from_type(solved_subs, *box_type);
                 let mut solved_args = Vec::with_capacity(args.len());
-                for (name, typ) in args {
-                    let solved_type = Self::from_type(solved_subs, typ);
 
-                    solved_args.push((name.clone(), solved_type));
+                for (name, _) in args {
+                    solved_args.push(name.clone());
                 }
 
                 SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
@@ -167,8 +166,8 @@ impl SolvedType {
             Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for (arg_name, arg_var) in args {
-                    new_args.push((arg_name, Self::from_var(subs, arg_var)));
+                for (arg_name, _) in args {
+                    new_args.push(arg_name);
                 }
 
                 let aliased_to = Self::from_var(subs, actual_var);
