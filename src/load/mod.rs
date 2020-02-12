@@ -79,7 +79,6 @@ enum Msg {
         solved_types: MutMap<Symbol, SolvedType>,
         subs: Arc<Solved<Subs>>,
         problems: Vec<Problem>,
-        solved_env: solve::Env,
     },
 }
 
@@ -805,7 +804,7 @@ fn solve_module(
 
         let mut solved_types = MutMap::default();
 
-        for (symbol, alias) in solved_env.aliases.iter() {
+        for (symbol, alias) in solved_env.aliases.into_iter() {
             let mut args = Vec::with_capacity(alias.vars.len());
 
             for Located {
@@ -817,10 +816,10 @@ fn solve_module(
                 args.push((name.clone(), solved_arg));
             }
 
-            let solved_type = SolvedType::from_type(&solved_subs, &alias.typ);
-            let solved_alias = SolvedType::Alias(*symbol, args, Box::new(solved_type));
+            let solved_type = SolvedType::from_type(&solved_subs, alias.typ);
+            let solved_alias = SolvedType::Alias(symbol, args, Box::new(solved_type));
 
-            solved_types.insert(*symbol, solved_alias);
+            solved_types.insert(symbol, solved_alias);
         }
 
         // exposed_vars_by_symbol contains the Variables for all the Symbols
@@ -842,7 +841,6 @@ fn solve_module(
                 module_id: home,
                 subs: Arc::new(solved_subs),
                 solved_types,
-                solved_env,
                 problems,
             })
             .await
