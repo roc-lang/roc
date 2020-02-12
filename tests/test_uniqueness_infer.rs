@@ -17,9 +17,13 @@ mod test_infer_uniq {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_output, _problems, subs, variable, constraint, home, interns) = uniq_expr(src);
+        let (output, _problems, mut subs, variable, constraint, home, interns) = uniq_expr(src);
 
         assert_correct_variable_usage(&constraint);
+
+        for (name, var) in output.rigids {
+            subs.rigid_var(var, name);
+        }
 
         let mut unify_problems = Vec::new();
         let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
@@ -1130,13 +1134,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                   numIdentity : Num.Num a -> Num.Num a
+                   numIdentity : Num.Num p -> Num.Num p
                    numIdentity = \x -> x
 
                    numIdentity
                    "#
             ),
-            "Attr.Attr * (Attr.Attr a (Num b) -> Attr.Attr a (Num b))",
+            "Attr.Attr * (Attr.Attr a (Num (Attr.Attr b p)) -> Attr.Attr a (Num (Attr.Attr b p)))",
         );
     }
 
@@ -1175,7 +1179,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                   numIdentity : Num.Num b -> Num.Num b
+                   numIdentity : Num.Num p -> Num.Num p
                    numIdentity = \foo -> foo
 
                    p = numIdentity 42
@@ -1183,7 +1187,8 @@ mod test_infer_uniq {
 
                    { numIdentity, p, q }
                    "#
-            ), "Attr.Attr * { numIdentity : (Attr.Attr Attr.Shared (Attr.Attr a (Num b) -> Attr.Attr a (Num b))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
+            ),
+        "Attr.Attr * { numIdentity : (Attr.Attr Attr.Shared (Attr.Attr a (Num (Attr.Attr b p)) -> Attr.Attr a (Num (Attr.Attr b p)))), p : (Attr.Attr * Int), q : (Attr.Attr * Float) }"
         );
     }
 
@@ -1560,7 +1565,7 @@ mod test_infer_uniq {
                        succeed
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * (Result * a))",
+            "Attr.Attr * (Attr.Attr a q -> Attr.Attr * (Result (Attr.Attr * p) (Attr.Attr a q)))",
         );
     }
 
@@ -1569,13 +1574,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                       succeed : a -> [ Err e, Ok a ]
+                       succeed : p -> [ Err e, Ok p ]
                        succeed = \x -> Ok x
 
                        succeed
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * [ Err *, Ok a ])",
+            "Attr.Attr * (Attr.Attr a p -> Attr.Attr * [ Err (Attr.Attr * e), Ok (Attr.Attr a p) ])",
         );
     }
 
@@ -1586,13 +1591,13 @@ mod test_infer_uniq {
                 r#"
                 List a : [ Cons a (List a), Nil ]
 
-                singleton : a -> List a
+                singleton : p -> List p
                 singleton = \x -> Cons x Nil
 
                 singleton
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * (List a))",
+            "Attr.Attr * (Attr.Attr a p -> Attr.Attr * (List (Attr.Attr a p)))",
         );
     }
 
@@ -1601,13 +1606,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                singleton : a -> [ Cons a (List a), Nil ] as List a
+                singleton : p -> [ Cons p (List p), Nil ] as List p
                 singleton = \x -> Cons x Nil
 
                 singleton
                        "#
             ),
-            "Attr.Attr * (a -> Attr.Attr * (List a))",
+            "Attr.Attr * (Attr.Attr a p -> Attr.Attr * (List (Attr.Attr a p)))",
         );
     }
 
@@ -1632,7 +1637,7 @@ mod test_infer_uniq {
                 r#"
                 List a : [ Cons a (List a), Nil ]
 
-                map : (a -> b), List a -> List b
+                map : (p -> q), List p -> List q
                 map = \f, list ->
                         when list is
                             Nil -> Nil
@@ -1646,7 +1651,7 @@ mod test_infer_uniq {
                 map
                        "#
             ),
-            "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a b -> c), Attr.Attr * (List (Attr.Attr a b)) -> Attr.Attr * (List c))" ,
+            "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a p -> Attr.Attr b q), Attr.Attr * (List (Attr.Attr a p)) -> Attr.Attr * (List (Attr.Attr b q)))" ,
         );
     }
 
@@ -1713,28 +1718,145 @@ mod test_infer_uniq {
         );
     }
 
-    // fails the variable usage check, but I also
-    // Assume this gives an error because the generated uniqueness rigid
-    // of the top-level signature (say `Attr u1 (List _)`, doesn't unify with the
-    // annotation of result (e.g. `Attr u2 (List _)`
+    // This snippet exhibits the rank issue. Seems to only occur when using recursive types with
+    // recursive functions.
+    #[test]
+    fn rigids_in_signature() {
+        infer_eq(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                map : (p -> q), p -> List q
+                map = \f, x -> map f x
+
+                map
+                       "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr * (Attr.Attr a p -> Attr.Attr b q), Attr.Attr a p -> Attr.Attr * (List (Attr.Attr b q)))",
+        );
+    }
+
+    #[test]
+    fn rigid_in_letnonrec() {
+        infer_eq(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List p -> List p
+                toEmpty = \_ ->
+                    result : List p
+                    result = Nil
+
+                    result
+
+                toEmpty
+                   "#
+            ),
+            "Attr.Attr * (Attr.Attr * (List (Attr.Attr a p)) -> Attr.Attr * (List (Attr.Attr a p)))",
+        );
+    }
+
+    #[test]
+    fn rigid_in_letrec() {
+        infer_eq(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List p -> List p
+                toEmpty = \_ ->
+                    result : List p
+                    result = Nil
+
+                    toEmpty result
+
+                toEmpty
+                   "#
+            ),
+            "Attr.Attr Attr.Shared (Attr.Attr * (List (Attr.Attr a p)) -> Attr.Attr * (List (Attr.Attr a p)))",
+        );
+    }
+
+    #[test]
+    fn let_record_pattern_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+               { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Attr.Attr * Str",
+        );
+    }
+
+    #[test]
+    fn let_record_pattern_with_annotation_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+
+               { x, y } : Foo
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Attr.Attr * Str",
+        );
+    }
+
+    // infinite loop in type_to_var
     //    #[test]
-    //    fn rigid_in_let() {
+    //    fn typecheck_mutually_recursive_tag_union() {
     //        infer_eq(
     //            indoc!(
     //                r#"
-    //                        List q : [ Cons q (List q), Nil ]
+    //                      ListA a b : [ Cons a (ListB b a), Nil ]
+    //                      ListB a b : [ Cons a (ListA b a), Nil ]
     //
-    //                        toEmpty : List a -> List a
-    //                        toEmpty = \_ ->
-    //                            result : List a
-    //                            result = Nil
+    //                      List q : [ Cons q (List q), Nil ]
     //
-    //                            result
+    //                      toAs : (q -> p), ListA p q -> List p
+    //                      toAs = \f, lista ->
+    //                           when lista is
+    //                               Nil -> Nil
+    //                               Cons a listb ->
+    //                                   when listb is
+    //                                       Nil -> Nil
+    //                                       Cons b newLista ->
+    //                                           Cons a (Cons (f b) (toAs f newLista))
     //
-    //                        toEmpty
-    //                           "#
+    //                      toAs
+    //                     "#
     //            ),
-    //            "(a -> b), List a -> List b",
+    //            "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a q -> Attr.Attr b p), Attr.Attr * (ListA (Attr.Attr b p) (Attr.Attr a q)) -> Attr.Attr * (List (Attr.Attr b p)))"
     //        );
     //    }
+
+    #[test]
+    fn infer_mutually_recursive_tag_union() {
+        infer_eq(
+                indoc!(
+                    r#"
+                       toAs = \f, lista ->
+                            when lista is
+                                Nil -> Nil
+                                Cons a listb ->
+                                    when listb is
+                                        Nil -> Nil
+                                        Cons b newLista ->
+                                            Cons a (Cons (f b) (toAs f newLista))
+    
+                       toAs
+                      "#
+                ),
+                "Attr.Attr Attr.Shared (Attr.Attr Attr.Shared (Attr.Attr a b -> c), Attr.Attr d [ Cons (Attr.Attr e f) (Attr.Attr * [ Cons (Attr.Attr a b) (Attr.Attr d g), Nil ]*), Nil ]* as g -> Attr.Attr h [ Cons (Attr.Attr e f) (Attr.Attr * [ Cons c (Attr.Attr h i) ]*), Nil ]* as i)",
+            );
+    }
 }

@@ -25,7 +25,7 @@ use std::ops::Neg;
 pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
-    pub rigids: SendMap<Variable, Lowercase>,
+    pub rigids: SendMap<Lowercase, Variable>,
     pub aliases: SendMap<Symbol, Alias>,
 }
 

@@ -1,4 +1,4 @@
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImSet, MutMap, MutSet};
 use crate::module::symbol::{Interns, ModuleId, Symbol};
 use crate::subs::{Content, FlatType, Subs, Variable};
@@ -62,7 +62,7 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    while let Some(recursive) = subs.occurs(variable) {
+    while let Some((recursive, _)) = subs.occurs(variable) {
         if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
             let rec_var = subs.fresh_unnamed_flex_var();
 
@@ -396,6 +396,10 @@ fn write_flat_type(
                     sorted_fields.push((label.clone(), vars));
                 }
 
+                // If the `ext` contains tags, merge them into the list of tags.
+                // this can occur when inferring mutually recursive tags
+                let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
+
                 sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
 
                 let mut any_written_yet = false;
@@ -415,19 +419,14 @@ fn write_flat_type(
                 }
 
                 buf.push_str(" ]");
-            }
 
-            match subs.get(ext_var).content {
-                Content::Structure(EmptyTagUnion) => {
-                    // This is a closed record. We're done!
-                }
-                content => {
+                if let Some(content) = ext_content {
                     // This is an open tag union, so print the variable
                     // right after the ']'
                     //
                     // e.g. the "*" at the end of `{ x: Int }*`
                     // or the "r" at the end of `{ x: Int }r`
-                    write_content(env, content, subs, buf, parens);
+                    write_content(env, content, subs, buf, parens)
                 }
             }
 
@@ -440,6 +439,27 @@ fn write_flat_type(
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }
+    }
+}
+
+fn chase_ext_tag_union(
+    subs: &mut Subs,
+    var: Variable,
+    fields: &mut Vec<(TagName, Vec<Variable>)>,
+) -> Option<Content> {
+    use FlatType::*;
+    match subs.get(var).content {
+        Content::Structure(EmptyTagUnion) => None,
+        Content::Structure(TagUnion(tags, ext_var))
+        | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
+            for (label, vars) in tags {
+                fields.push((label.clone(), vars.to_vec()));
+            }
+
+            chase_ext_tag_union(subs, ext_var, fields)
+        }
+
+        content => Some(content),
     }
 }
 
@@ -508,23 +528,50 @@ fn write_apply(
             let arg_content = subs.get(arg).content;
             let mut arg_param = String::new();
 
-            write_content(env, arg_content, subs, &mut arg_param, Parens::InTypeParam);
-
-            if arg_param == "Int.Integer" {
-                buf.push_str("Int");
-            } else if arg_param == "Float.FloatingPoint" {
-                buf.push_str("Float");
-            } else {
+            let mut default_case = |subs, content| {
                 if write_parens {
                     buf.push_str("(");
                 }
 
+                write_content(env, content, subs, &mut arg_param, Parens::InTypeParam);
                 buf.push_str("Num ");
                 buf.push_str(&arg_param);
 
                 if write_parens {
                     buf.push_str(")");
                 }
+            };
+
+            match &arg_content {
+                Content::Structure(FlatType::Apply(symbol, nested_args)) => match *symbol {
+                    Symbol::INT_INTEGER if nested_args.is_empty() => {
+                        buf.push_str("Int");
+                    }
+                    Symbol::FLOAT_FLOATINGPOINT if nested_args.is_empty() => {
+                        buf.push_str("Float");
+                    }
+                    Symbol::ATTR_ATTR => match nested_args
+                        .get(1)
+                        .map(|v| subs.get_without_compacting(*v).content)
+                    {
+                        Some(Content::Structure(FlatType::Apply(
+                            double_nested_symbol,
+                            double_nested_args,
+                        ))) => match double_nested_symbol {
+                            Symbol::INT_INTEGER if double_nested_args.is_empty() => {
+                                buf.push_str("Int");
+                            }
+                            Symbol::FLOAT_FLOATINGPOINT if double_nested_args.is_empty() => {
+                                buf.push_str("Float");
+                            }
+                            _ => default_case(subs, arg_content),
+                        },
+
+                        _ => default_case(subs, arg_content),
+                    },
+                    _ => default_case(subs, arg_content),
+                },
+                _ => default_case(subs, arg_content),
             }
         }
         Symbol::LIST_LIST => {
