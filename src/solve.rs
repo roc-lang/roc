@@ -64,6 +64,10 @@ impl SolvedType {
         Self::from_content(subs, content)
     }
 
+    pub fn from_type(solved_subs: &Solved<Subs>, typ: &Type) -> Self {
+        panic!("TODO");
+    }
+
     fn from_content(subs: &Subs, content: Content) -> Self {
         use crate::subs::Content::*;
 

@@ -805,6 +805,24 @@ fn solve_module(
 
         let mut solved_types = MutMap::default();
 
+        for (symbol, alias) in solved_env.aliases.iter() {
+            let mut args = Vec::with_capacity(alias.vars.len());
+
+            for Located {
+                value: (name, var), ..
+            } in alias.vars.iter()
+            {
+                let solved_arg = SolvedType::new(&solved_subs, *var);
+
+                args.push((name.clone(), solved_arg));
+            }
+
+            let solved_type = SolvedType::from_type(&solved_subs, &alias.typ);
+            let solved_alias = SolvedType::Alias(*symbol, args, Box::new(solved_type));
+
+            solved_types.insert(*symbol, solved_alias);
+        }
+
         // exposed_vars_by_symbol contains the Variables for all the Symbols
         // this module exposes. We want to convert those into flat SolvedType
         // annotations which are decoupled from our Subs, because that's how
