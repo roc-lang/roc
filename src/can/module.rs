@@ -153,9 +153,25 @@ pub fn canonicalize_module_defs<'a>(
                             }
                         }
                     }
-                    DeclareRec(_defs) => {
-                        panic!("TODO support exposing recursive defs");
+                    DeclareRec(defs) => {
+                        for def in defs {
+                            for (symbol, variable) in def.pattern_vars.iter() {
+                                if exposed_symbols.contains(symbol) {
+                                    // This is one of our exposed symbols;
+                                    // record the corresponding variable!
+                                    exposed_vars_by_symbol.push((*symbol, *variable));
+
+                                    // Remove this from exposed_symbols,
+                                    // so that at the end of the process,
+                                    // we can see if there were any
+                                    // exposed symbols which did not have
+                                    // corresponding defs.
+                                    exposed_symbols.remove(symbol);
+                                }
+                            }
+                        }
                     }
+
                     InvalidCycle(identifiers, _) => {
                         panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs {:?}" , identifiers);
                     }
