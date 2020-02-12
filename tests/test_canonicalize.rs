@@ -222,7 +222,7 @@ mod test_canonicalize {
 
     fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
         match expr {
-            LetRec(assignments, body, _) => {
+            LetRec(assignments, body, _, _) => {
                 match &assignments.get(i).map(|def| &def.loc_expr.value) {
                     Some(Closure(_, _, recursion, _, _)) => recursion.clone(),
                     Some(other @ _) => {
@@ -237,7 +237,7 @@ mod test_canonicalize {
                     }
                 }
             }
-            LetNonRec(def, body, _) => {
+            LetNonRec(def, body, _, _) => {
                 if i > 0 {
                     // recurse in the body (not the def!)
                     get_closure(&body.value, i - 1)
