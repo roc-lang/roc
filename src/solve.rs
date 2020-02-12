@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{default_hasher, ImMap, MutMap, SendMap};
 use crate::module::symbol::{ModuleId, Symbol};
-use crate::region::Located;
+use crate::region::{Located, Region};
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, VarId, Variable};
 use crate::types::Alias;
 use crate::types::Constraint::{self, *};
@@ -262,13 +262,9 @@ impl SolvedType {
     /// Keep this up to date by hand!
     const NUM_BUILTIN_IMPORTS: usize = 7;
 
-    pub fn builtins(extra_capacity: usize) -> MutMap<Symbol, (SolvedType, Region)> {
-        use Symbol::*;
-
-        let mut types = HashMap::with_capacity_and_hasher(
-            Self::NUM_BUILTIN_IMPORTS + extra_capacity,
-            default_hasher(),
-        );
+    pub fn builtins() -> MutMap<Symbol, (SolvedType, Region)> {
+        let mut types =
+            HashMap::with_capacity_and_hasher(Self::NUM_BUILTIN_IMPORTS, default_hasher());
 
         // TODO instead of using Region::zero for all of these,
         // instead use the Region where they were defined in their
@@ -278,11 +274,14 @@ impl SolvedType {
 
         // Str : [ @Str ]
         types.insert(
-            STR_STR,
-            SolvedType::Alias(
-                STR_STR,
-                Vec::new(),
-                Box::new(SolvedType::Apply(STR_AT_STR, Vec::new())),
+            Symbol::STR_STR,
+            (
+                SolvedType::Alias(
+                    Symbol::STR_STR,
+                    Vec::new(),
+                    Box::new(SolvedType::Apply(Symbol::STR_AT_STR, Vec::new())),
+                ),
+                Region::zero(),
             ),
         );
 
@@ -290,13 +289,13 @@ impl SolvedType {
 
         // Num range : [ @Num range ]
         types.insert(
-            NUM_NUM,
+            Symbol::NUM_NUM,
             (
                 SolvedType::Alias(
-                    NUM_NUM,
+                    Symbol::NUM_NUM,
                     vec!["range".into()],
                     Box::new(SolvedType::Apply(
-                        NUM_AT_NUM,
+                        Symbol::NUM_AT_NUM,
                         vec![SolvedType::Rigid("range".into())],
                     )),
                 ),
@@ -308,12 +307,12 @@ impl SolvedType {
 
         // Integer : [ @Integer ]
         types.insert(
-            INT_INTEGER,
+            Symbol::INT_INTEGER,
             (
                 SolvedType::Alias(
-                    INT_INTEGER,
+                    Symbol::INT_INTEGER,
                     Vec::new(),
-                    Box::new(SolvedType::Apply(INT_AT_INTEGER, Vec::new())),
+                    Box::new(SolvedType::Apply(Symbol::INT_AT_INTEGER, Vec::new())),
                 ),
                 Region::zero(),
             ),
@@ -321,14 +320,14 @@ impl SolvedType {
 
         // Int : Num Integer
         types.insert(
-            INT_INT,
+            Symbol::INT_INT,
             (
                 SolvedType::Alias(
-                    INT_INT,
+                    Symbol::INT_INT,
                     Vec::new(),
                     Box::new(SolvedType::Apply(
-                        NUM_NUM,
-                        vec![SolvedType::Apply(INT_INTEGER, Vec::new())],
+                        Symbol::NUM_NUM,
+                        vec![SolvedType::Apply(Symbol::INT_INTEGER, Vec::new())],
                     )),
                 ),
                 Region::zero(),
@@ -339,12 +338,15 @@ impl SolvedType {
 
         // FloatingPoint : [ @FloatingPoint ]
         types.insert(
-            FLOAT_FLOATINGPOINT,
+            Symbol::FLOAT_FLOATINGPOINT,
             (
                 SolvedType::Alias(
-                    FLOAT_FLOATINGPOINT,
+                    Symbol::FLOAT_FLOATINGPOINT,
                     Vec::new(),
-                    Box::new(SolvedType::Apply(FLOAT_AT_FLOATINTPOINT, Vec::new())),
+                    Box::new(SolvedType::Apply(
+                        Symbol::FLOAT_AT_FLOATINTPOINT,
+                        Vec::new(),
+                    )),
                 ),
                 Region::zero(),
             ),
@@ -352,14 +354,14 @@ impl SolvedType {
 
         // Float : Num FloatingPoint
         types.insert(
-            FLOAT_FLOAT,
+            Symbol::FLOAT_FLOAT,
             (
                 SolvedType::Alias(
-                    FLOAT_FLOAT,
+                    Symbol::FLOAT_FLOAT,
                     Vec::new(),
                     Box::new(SolvedType::Apply(
-                        NUM_NUM,
-                        vec![SolvedType::Apply(FLOAT_FLOATINGPOINT, Vec::new())],
+                        Symbol::NUM_NUM,
+                        vec![SolvedType::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new())],
                     )),
                 ),
                 Region::zero(),
@@ -370,13 +372,13 @@ impl SolvedType {
 
         // List elem : [ @List elem ]
         types.insert(
-            LIST_LIST,
+            Symbol::LIST_LIST,
             (
                 SolvedType::Alias(
-                    LIST_LIST,
+                    Symbol::LIST_LIST,
                     vec!["elem".into()],
                     Box::new(SolvedType::Apply(
-                        LIST_AT_LIST,
+                        Symbol::LIST_AT_LIST,
                         vec![SolvedType::Rigid("elem".into())],
                     )),
                 ),

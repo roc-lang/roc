@@ -528,7 +528,7 @@ define_builtins! {
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" // the Num.Num type alias
-        1 NUM_NUM: "@Num" // the Num.@Num private tag
+        1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
         2 NUM_ABS: "abs"
         3 NUM_ADD: "add"
         4 NUM_SUB: "sub"
@@ -543,7 +543,7 @@ define_builtins! {
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" // the Float.Float type alias
         1 FLOAT_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
-        1 FLOAT_AT_FLOATINTPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
+        2 FLOAT_AT_FLOATINTPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
         3 FLOAT_DIV: "div"
     }
     4 BOOL: "Bool" => {
@@ -553,12 +553,12 @@ define_builtins! {
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" // the Str.Str type alias
-        1 STR_STR: "@Str" // the Str.@Str private tag
+        1 STR_AT_STR: "@Str" // the Str.@Str private tag
         2 STR_ISEMPTY: "isEmpty"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" // the List.List type alias
-        1 LIST_AT_LIST: "List" // the List.@List private tag
+        1 LIST_AT_LIST: "@List" // the List.@List private tag
         2 LIST_ISEMPTY: "isEmpty"
     }
 

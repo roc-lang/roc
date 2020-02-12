@@ -146,13 +146,17 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
         }
         Boolean(val) => Type::Boolean(val.clone()),
         Alias(symbol, solved_type_variables, solved_actual) => {
+            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
             // solved_type_variables consists of Lowercase values,
             // but what we need are Variable values.
             //
             // Generate a fresh Variable for each of them, and
             // incorporate them into free_vars
-            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
-            let rigid_vars = &mut free_vars.rigid_vars;
+            //
+            // Clone the existing rigid_vars; we don't want to modify them
+            // when introducing these (since they only apply within the
+            // type being aliased) but we still want any rigids already in scope.
+            let mut rigid_vars = free_vars.rigid_vars.clone();
 
             for lowercase in solved_type_variables {
                 let generated_var = match rigid_vars.get(&lowercase) {
@@ -169,7 +173,11 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
                 type_variables.push((lowercase.clone(), Type::Variable(generated_var)));
             }
 
-            let actual = to_type(solved_actual, free_vars, var_store);
+            let mut free_vars = FreeVars {
+                rigid_vars,
+                flex_vars: free_vars.flex_vars.clone(),
+            };
+            let actual = to_type(solved_actual, &mut free_vars, var_store);
 
             Type::Alias(*symbol, type_variables, Box::new(actual))
         }

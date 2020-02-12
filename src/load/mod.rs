@@ -196,6 +196,7 @@ pub async fn load<'a>(
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
     let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
+    let builtins = SolvedType::builtins();
 
     // TODO can be removed I think
     let vars_by_symbol = SendMap::default();
@@ -352,6 +353,7 @@ pub async fn load<'a>(
                         msg_tx.clone(),
                         &mut exposed_types,
                         &mut declarations_by_id,
+                        &builtins,
                         vars_by_symbol.clone(),
                     );
                 } else {
@@ -440,6 +442,7 @@ pub async fn load<'a>(
                                     msg_tx.clone(),
                                     &mut exposed_types,
                                     &mut declarations_by_id,
+                                    &builtins,
                                     vars_by_symbol.clone(),
                                 );
                             }
@@ -707,6 +710,7 @@ fn solve_module(
     msg_tx: MsgSender,
     exposed_types: &mut SubsByModule,
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
+    builtins: &MutMap<Symbol, (SolvedType, Region)>,
     mut vars_by_symbol: SendMap<Symbol, Variable>,
 ) {
     let home = module.module_id;
@@ -720,13 +724,13 @@ fn solve_module(
         if module_id.is_builtin() {
             // For builtin modules, we create imports from the
             // hardcoded builtin map.
-            let (solved_type, region) = builtins.get(symbol).unwrap_or_else(|| {
+            let (solved_type, region) = builtins.get(&symbol).unwrap_or_else(|| {
                 panic!(
                     "Could not find {:?} in builtins {:?}",
-                    loc_symbol.value, solved_types
+                    symbol, builtins
                 )
             });
-            let loc_symbol = Located { value: symbol, region };
+            let loc_symbol = Located { value: symbol, region: *region };
 
             imports.push(Import {
                 loc_symbol,
@@ -742,7 +746,7 @@ fn solve_module(
 
             match exposed_types.get(&module_id) {
                 Some(ExposedModuleTypes::Valid(solved_types, new_aliases)) => {
-                    let solved_type = solved_types.get(symbol).unwrap_or_else(|| {
+                    let solved_type = solved_types.get(&symbol).unwrap_or_else(|| {
                         panic!(
                             "Could not find {:?} in solved_types {:?}",
                             loc_symbol.value, solved_types
