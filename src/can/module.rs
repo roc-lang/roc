@@ -100,7 +100,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, populated_scope, output) = canonicalize_defs(
+    let (defs, scope, output) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -155,13 +155,21 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
-            for (symbol, _alias) in scope.aliases() {
+            let mut aliases = MutMap::default();
+
+            for (symbol, alias) in scope.into_aliases() {
                 // Remove this from exposed_symbols,
                 // so that at the end of the process,
                 // we can see if there were any
                 // exposed symbols which did not have
                 // corresponding defs.
-                exposed_symbols.remove(symbol);
+                exposed_symbols.remove(&symbol);
+
+                // TODO store aliases as a MutMap inside Scope
+                // (and manually remove them when exiting a scope)
+                // and we can use it directly instead of rebuilding it
+                // piece by piece like this.
+                aliases.insert(symbol, alias);
             }
 
             // By this point, all exposed symbols should have been removed from
@@ -178,12 +186,6 @@ pub fn canonicalize_module_defs<'a>(
             // Incorporate any remaining output.lookups entries into references.
             for symbol in output.references.lookups {
                 references.insert(symbol);
-            }
-
-            let mut aliases = MutMap::default();
-
-            for (symbol, alias) in populated_scope.aliases() {
-                aliases.insert(*symbol, alias.clone());
             }
 
             Ok(ModuleOutput {
