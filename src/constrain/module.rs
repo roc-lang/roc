@@ -1,11 +1,10 @@
 use crate::can::def::Declaration;
-use crate::collections::{ImMap, SendMap};
+use crate::collections::SendMap;
 use crate::constrain::expr::constrain_decls;
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::solve::SolvedType;
 use crate::subs::{VarStore, Variable};
-use crate::types::Expected::*;
 use crate::types::{Constraint, LetConstraint, Type};
 
 #[inline(always)]
