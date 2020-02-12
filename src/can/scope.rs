@@ -4,14 +4,7 @@ use crate::collections::ImMap;
 use crate::module::symbol::{IdentIds, ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::Variable;
-use crate::types::Type;
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Alias {
-    pub region: Region,
-    pub vars: Vec<Located<(Lowercase, Variable)>>,
-    pub typ: Type,
-}
+use crate::types::{Alias, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
