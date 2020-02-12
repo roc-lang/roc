@@ -1,5 +1,3 @@
-pub mod builtins;
-
 use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::Pattern;
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
