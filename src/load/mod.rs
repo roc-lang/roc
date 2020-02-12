@@ -837,12 +837,10 @@ fn solve_module(
             let mut args = Vec::with_capacity(alias.vars.len());
 
             for Located {
-                value: (name, var), ..
+                value: (name, _), ..
             } in alias.vars.iter()
             {
-                let solved_arg = SolvedType::new(&solved_subs, *var);
-
-                args.push((name.clone(), solved_arg));
+                args.push(name.clone());
             }
 
             let solved_type = SolvedType::from_type(&solved_subs, alias.typ);

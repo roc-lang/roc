@@ -146,13 +146,27 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
         }
         Boolean(val) => Type::Boolean(val.clone()),
         Alias(symbol, solved_type_variables, solved_actual) => {
+            // solved_type_variables consists of Lowercase values,
+            // but what we need are Variable values.
+            //
+            // Generate a fresh Variable for each of them, and
+            // incorporate them into free_vars
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
+            let rigid_vars = &mut free_vars.rigid_vars;
 
-            for (lowercase, solved_type) in solved_type_variables {
-                type_variables.push((
-                    lowercase.clone(),
-                    to_type(solved_type, free_vars, var_store),
-                ));
+            for lowercase in solved_type_variables {
+                let generated_var = match rigid_vars.get(&lowercase) {
+                    Some(var) => *var,
+                    None => {
+                        let var = var_store.fresh();
+
+                        rigid_vars.insert(lowercase.clone(), var);
+
+                        var
+                    }
+                };
+
+                type_variables.push((lowercase.clone(), Type::Variable(generated_var)));
             }
 
             let actual = to_type(solved_actual, free_vars, var_store);
