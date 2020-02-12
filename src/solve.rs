@@ -43,8 +43,6 @@ pub enum SolvedType {
     TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
     RecursiveTagUnion(VarId, Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
     EmptyTagUnion,
-    /// The `*` type variable, e.g. in (List *)
-    Wildcard,
     /// A type from an Invalid module
     Erroneous(Problem),
 
