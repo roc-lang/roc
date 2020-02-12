@@ -1,5 +1,5 @@
 use crate::can::def::Declaration;
-use crate::can::ident::{Ident, ModuleName};
+use crate::can::ident::{Ident, Lowercase, ModuleName};
 use crate::can::module::{canonicalize_module_defs, ModuleOutput};
 use crate::collections::{default_hasher, insert_all, MutMap, MutSet, SendMap};
 use crate::constrain::module::{constrain_imported_values, constrain_module, Import};
@@ -34,6 +34,7 @@ pub struct Module {
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
+    pub rigid_variables: MutMap<Variable, Lowercase>,
 }
 
 pub struct LoadedModule {
@@ -77,6 +78,7 @@ enum Msg {
     Solved {
         module_id: ModuleId,
         solved_types: MutMap<Symbol, SolvedType>,
+        aliases: MutMap<Symbol, Alias>,
         subs: Arc<Solved<Subs>>,
         problems: Vec<Problem>,
     },
@@ -372,6 +374,7 @@ pub async fn load<'a>(
                 solved_types,
                 subs,
                 problems,
+                aliases,
                 ..
             } => {
                 all_problems.extend(problems);
@@ -410,7 +413,8 @@ pub async fn load<'a>(
                 } else {
                     // This was a dependency. Write it down and keep processing messages.
                     debug_assert!(!exposed_types.contains_key(&module_id));
-                    exposed_types.insert(module_id, ExposedModuleTypes::Valid(solved_types));
+                    exposed_types
+                        .insert(module_id, ExposedModuleTypes::Valid(solved_types, aliases));
 
                     // Notify all the listeners that this solved.
                     if let Some(listeners) = solve_listeners.remove(&module_id) {
@@ -707,6 +711,7 @@ fn solve_module(
 ) {
     let home = module.module_id;
     let mut imports = Vec::with_capacity(module.references.len());
+    let mut aliases = MutMap::default();
 
     // Translate referenced symbols into constraints
     for &symbol in module.references.iter() {
@@ -721,13 +726,18 @@ fn solve_module(
             };
 
             match exposed_types.get(&module_id) {
-                Some(ExposedModuleTypes::Valid(solved_types)) => {
+                Some(ExposedModuleTypes::Valid(solved_types, new_aliases)) => {
                     let solved_type = solved_types.get(&loc_symbol.value).unwrap_or_else(|| {
                         panic!(
                             "Could not find {:?} in solved_types {:?}",
                             loc_symbol.value, solved_types
                         )
                     });
+
+                    // TODO should this be a union?
+                    for (k, v) in new_aliases.clone() {
+                        aliases.insert(k, v);
+                    }
 
                     imports.push(Import {
                         loc_symbol,
@@ -753,7 +763,7 @@ fn solve_module(
     }
 
     // Wrap the existing module constraint in these imported constraints.
-    let constraint = constrain_imported_values(imports, constraint, &var_store);
+    let constraint = constrain_imported_values(imports, aliases, constraint, &var_store);
 
     // All the exposed imports should be available in the solver's vars_by_symbol
     for (symbol, expr_var) in module.exposed_imports.iter() {
@@ -787,17 +797,21 @@ fn solve_module(
         aliases.insert(symbol, alias);
     }
 
+    let env = solve::Env {
+        vars_by_symbol,
+        aliases: aliases.clone(),
+    };
+
+    let mut subs = Subs::new(var_store.into());
+    for (var, name) in module.rigid_variables {
+        subs.rigid_var(var, name);
+    }
+
     // Start solving this module in the background.
     spawn_blocking(move || {
         // Now that the module is parsed, canonicalized, and constrained,
         // we need to type check it.
-        let subs = Subs::new(var_store.into());
         let mut problems = Vec::new();
-
-        let env = solve::Env {
-            vars_by_symbol,
-            aliases,
-        };
 
         // Run the solver to populate Subs.
         let (solved_subs, solved_env) = solve::run(&env, &mut problems, subs, &constraint);
@@ -842,6 +856,7 @@ fn solve_module(
                 subs: Arc::new(solved_subs),
                 solved_types,
                 problems,
+                aliases: aliases.clone().into_iter().collect(),
             })
             .await
             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
@@ -944,6 +959,7 @@ fn parse_and_constrain(
             exposed_vars_by_symbol,
             references,
             aliases,
+            rigid_variables,
             ..
         }) => {
             let constraint = constrain_module(module_id, &declarations, lookups);
@@ -955,6 +971,7 @@ fn parse_and_constrain(
                 exposed_vars_by_symbol,
                 references,
                 aliases,
+                rigid_variables,
             };
 
             (module, ident_ids, constraint)

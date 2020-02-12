@@ -2,6 +2,7 @@ use crate::can::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::can::env::Env;
 use crate::can::expr::Output;
 use crate::can::ident::Ident;
+use crate::can::ident::Lowercase;
 use crate::can::operator::desugar_def;
 use crate::can::pattern::PatternType;
 use crate::can::problem::RuntimeError;
@@ -17,6 +18,7 @@ use bumpalo::Bump;
 #[derive(Debug)]
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
+    pub rigid_variables: MutMap<Variable, Lowercase>,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
@@ -61,6 +63,7 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let mut lookups = Vec::with_capacity(num_deps);
+    let mut rigid_variables = MutMap::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
@@ -108,6 +111,10 @@ pub fn canonicalize_module_defs<'a>(
         &desugared,
         PatternType::TopLevelDef,
     );
+
+    for (var, lowercase) in output.rigids.clone() {
+        rigid_variables.insert(var, lowercase);
+    }
 
     let mut references = MutSet::default();
 
@@ -190,6 +197,7 @@ pub fn canonicalize_module_defs<'a>(
 
             Ok(ModuleOutput {
                 aliases,
+                rigid_variables,
                 declarations,
                 references,
                 exposed_imports: can_exposed_imports,

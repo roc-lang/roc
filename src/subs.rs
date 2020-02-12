@@ -288,7 +288,7 @@ impl Subs {
         self.utable.unioned(left, right)
     }
 
-    pub fn redundant(&mut self, var: Variable) -> bool {
+    pub fn redundant(&self, var: Variable) -> bool {
         self.utable.is_redirect(var)
     }
 

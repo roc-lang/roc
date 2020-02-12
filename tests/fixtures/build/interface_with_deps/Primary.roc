@@ -1,6 +1,6 @@
 interface Primary
     exposes [ blah, str ]
-    imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar } ]
+    imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Result ]
 
 blah = {}
 
@@ -17,6 +17,24 @@ identity = \a -> a
 z : Dep1.Unit
 z = Unit
 
-w : Dep1.Identity Int
-w = Identity 42
+w : Dep1.Identity {}
+w = Identity {}
 
+succeed : a -> Dep1.Identity a
+succeed = \x -> Identity x
+
+map = Result.withDefault
+
+yay : Result.Result e {}
+yay = Ok {}
+
+
+
+# yay =
+#     v = Ok "foo"
+#
+#     f = \_ -> {}
+#
+#     v
+#         |> Result.map f
+#         |> Result.withDefault {}

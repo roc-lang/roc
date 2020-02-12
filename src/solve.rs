@@ -19,7 +19,7 @@ pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 #[derive(Clone, Debug)]
 pub enum ExposedModuleTypes {
     Invalid,
-    Valid(MutMap<Symbol, SolvedType>),
+    Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
 }
 
 /// This is a fully solved type, with no Variables remaining in it.
@@ -139,8 +139,9 @@ impl SolvedType {
                 SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
             }
             Boolean(val) => SolvedType::Boolean(val),
-            Variable(_var) => {
-                panic!("TODO handle translate variable to SolvedType (wildcard or rigid)");
+            Variable(var) => {
+                let content = solved_subs.inner().get_without_compacting(var).content;
+                Self::from_content(solved_subs.inner(), content)
             }
         }
     }
@@ -149,16 +150,17 @@ impl SolvedType {
         use crate::subs::Content::*;
 
         match content {
-            FlexVar(_) => SolvedType::Wildcard,
+            FlexVar(None) => SolvedType::Wildcard,
+            FlexVar(Some(name)) => SolvedType::Rigid(name),
             RigidVar(name) => SolvedType::Rigid(name),
             Structure(flat_type) => Self::from_flat_type(subs, flat_type),
             Alias(symbol, args, var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for (arg_name, _arg_var) in args {
+                for (arg_name, arg_var) in args {
                     new_args.push((
                         arg_name,
-                        Self::from_content(subs, subs.get_without_compacting(var).content),
+                        Self::from_content(subs, subs.get_without_compacting(arg_var).content),
                     ));
                 }
 
@@ -607,7 +609,10 @@ fn solve(
                         debug_assert!({
                             let failing: Vec<_> = rigid_vars
                                 .iter()
-                                .filter(|&var| subs.get_without_compacting(*var).rank != Rank::NONE)
+                                .filter(|&var| {
+                                    !subs.redundant(*var)
+                                        && subs.get_without_compacting(*var).rank != Rank::NONE
+                                })
                                 .collect();
 
                             if !failing.is_empty() {

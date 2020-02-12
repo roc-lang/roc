@@ -159,7 +159,7 @@ mod test_load {
                 .expect("Test ModuleID not found in module_ids");
 
             assert_eq!(expected_name, &InlinableString::from("Primary"));
-            assert_eq!(def_count, 5);
+            assert_eq!(def_count, 9);
         });
     }
 
@@ -306,7 +306,10 @@ mod test_load {
                     "alwaysThree" => "* -> Str",
                     "identity" => "a -> a",
                     "z" => "Dep1.Unit",
-                    "w" => "Dep1.Identity Int",
+                    "w" => "Dep1.Identity {}",
+                    "succeed" => "a -> Dep1.Identity a",
+                    "yay" => "Result.Result e {}",
+                    "map" => "Result.Result * a, a -> a",
                 },
             );
         });
