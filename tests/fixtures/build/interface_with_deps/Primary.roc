@@ -26,15 +26,9 @@ succeed = \x -> Identity x
 map = Result.withDefault
 
 yay : Result.Result e {}
-yay = Ok {}
+yay =
+    v = Ok "foo"
 
+    f = \_ -> {}
 
-
-# yay =
-#     v = Ok "foo"
-#
-#     f = \_ -> {}
-#
-#     v
-#         |> Result.map f
-#         |> Result.withDefault {}
+    Result.map v f
