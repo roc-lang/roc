@@ -1548,6 +1548,28 @@ mod test_format {
         ));
     }
 
+    // ACCESSOR
+
+    #[test]
+    fn accessor() {
+        expr_formats_same(indoc!(
+            r#"
+            .id
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            user.name
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            (getUser userId users).name
+            "#
+        ));
+    }
     // UNARY OP
 
     #[test]
