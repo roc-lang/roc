@@ -2,6 +2,7 @@ use crate::can::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::can::env::Env;
 use crate::can::expr::Output;
 use crate::can::ident::Ident;
+use crate::can::ident::Lowercase;
 use crate::can::operator::desugar_def;
 use crate::can::pattern::PatternType;
 use crate::can::problem::RuntimeError;
@@ -17,6 +18,7 @@ use bumpalo::Bump;
 #[derive(Debug)]
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
+    pub rigid_variables: MutMap<Lowercase, Variable>,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
@@ -61,6 +63,7 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let mut lookups = Vec::with_capacity(num_deps);
+    let mut rigid_variables = MutMap::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
@@ -100,23 +103,29 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let mut output = Output::default();
-    let (defs, populated_scope) = canonicalize_defs(
+    let (defs, scope, output) = canonicalize_defs(
         &mut env,
-        &mut output.rigids,
+        Output::default(),
         var_store,
         &scope,
         &desugared,
         PatternType::TopLevelDef,
     );
 
+    for (var, lowercase) in output.rigids.clone() {
+        rigid_variables.insert(var, lowercase);
+    }
+
     let mut references = MutSet::default();
 
     // Gather up all the symbols that were referenced across all the defs.
-    for (_, def_refs) in defs.refs_by_symbol.values() {
-        for symbol in def_refs.lookups.iter() {
-            references.insert(*symbol);
-        }
+    for symbol in output.references.lookups.iter() {
+        references.insert(*symbol);
+    }
+
+    // Gather up all the symbols that were referenced from other modules.
+    for symbol in env.referenced_symbols.iter() {
+        references.insert(*symbol);
     }
 
     match sort_can_defs(&mut env, defs, Output::default()) {
@@ -144,13 +153,46 @@ pub fn canonicalize_module_defs<'a>(
                             }
                         }
                     }
-                    DeclareRec(_defs) => {
-                        panic!("TODO support exposing recursive defs");
+                    DeclareRec(defs) => {
+                        for def in defs {
+                            for (symbol, variable) in def.pattern_vars.iter() {
+                                if exposed_symbols.contains(symbol) {
+                                    // This is one of our exposed symbols;
+                                    // record the corresponding variable!
+                                    exposed_vars_by_symbol.push((*symbol, *variable));
+
+                                    // Remove this from exposed_symbols,
+                                    // so that at the end of the process,
+                                    // we can see if there were any
+                                    // exposed symbols which did not have
+                                    // corresponding defs.
+                                    exposed_symbols.remove(symbol);
+                                }
+                            }
+                        }
                     }
-                    InvalidCycle(_, _) => {
-                        panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs");
+
+                    InvalidCycle(identifiers, _) => {
+                        panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs {:?}" , identifiers);
                     }
                 }
+            }
+
+            let mut aliases = MutMap::default();
+
+            for (symbol, alias) in scope.into_aliases() {
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_symbols.remove(&symbol);
+
+                // TODO store aliases as a MutMap inside Scope
+                // (and manually remove them when exiting a scope)
+                // and we can use it directly instead of rebuilding it
+                // piece by piece like this.
+                aliases.insert(symbol, alias);
             }
 
             // By this point, all exposed symbols should have been removed from
@@ -169,14 +211,9 @@ pub fn canonicalize_module_defs<'a>(
                 references.insert(symbol);
             }
 
-            let mut aliases = MutMap::default();
-
-            for (symbol, alias) in populated_scope.aliases() {
-                aliases.insert(*symbol, alias.clone());
-            }
-
             Ok(ModuleOutput {
                 aliases,
+                rigid_variables,
                 declarations,
                 references,
                 exposed_imports: can_exposed_imports,

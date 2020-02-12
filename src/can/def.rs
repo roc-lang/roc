@@ -100,12 +100,12 @@ impl Declaration {
 #[inline(always)]
 pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
-    found_rigids: &mut SendMap<Lowercase, Variable>,
+    mut output: Output,
     var_store: &VarStore,
     original_scope: &Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     pattern_type: PatternType,
-) -> (CanDefs, Scope) {
+) -> (CanDefs, Scope, Output) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -193,11 +193,10 @@ pub fn canonicalize_defs<'a>(
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
     for pending_def in pending.into_iter() {
-        canonicalize_pending_def(
+        output = canonicalize_pending_def(
             env,
-            found_rigids,
             pending_def,
-            &original_scope,
+            output,
             &mut scope,
             &mut can_defs_by_symbol,
             var_store,
@@ -236,6 +235,7 @@ pub fn canonicalize_defs<'a>(
             aliases,
         },
         scope,
+        output,
     )
 }
 
@@ -659,15 +659,14 @@ fn pattern_to_vars_by_symbol(
 #[allow(clippy::cognitive_complexity)]
 fn canonicalize_pending_def<'a>(
     env: &mut Env<'a>,
-    found_rigids: &mut SendMap<Lowercase, Variable>,
     pending_def: PendingDef<'a>,
-    _original_scope: &Scope,
+    mut output: Output,
     scope: &mut Scope,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &VarStore,
     refs_by_symbol: &mut MutMap<Symbol, (Located<Ident>, References)>,
     aliases: &mut SendMap<Symbol, Alias>,
-) {
+) -> Output {
     use PendingDef::*;
 
     // Make types for the body expr, even if we won't end up having a body.
@@ -691,7 +690,7 @@ fn canonicalize_pending_def<'a>(
 
             // union seen rigids with already found ones
             for (k, v) in ann.rigids {
-                found_rigids.insert(k, v);
+                output.rigids.insert(k, v);
             }
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
@@ -762,7 +761,7 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((typ.clone(), found_rigids.clone(), ann.aliases.clone())),
+                        annotation: Some((typ.clone(), output.rigids.clone(), ann.aliases.clone())),
                     },
                 );
             }
@@ -811,7 +810,7 @@ fn canonicalize_pending_def<'a>(
             // aliases cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
             for (k, v) in can_ann.rigids {
-                found_rigids.insert(k, v);
+                output.rigids.insert(k, v);
             }
         }
 
@@ -830,7 +829,7 @@ fn canonicalize_pending_def<'a>(
 
             // union seen rigids with already found ones
             for (k, v) in ann.rigids {
-                found_rigids.insert(k, v);
+                output.rigids.insert(k, v);
             }
 
             // bookkeeping for tail-call detection. If we're assigning to an
@@ -948,7 +947,7 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((typ.clone(), found_rigids.clone(), ann.aliases.clone())),
+                        annotation: Some((typ.clone(), output.rigids.clone(), ann.aliases.clone())),
                     },
                 );
             }
@@ -1084,8 +1083,12 @@ fn canonicalize_pending_def<'a>(
                     },
                 );
             }
+
+            output.references = output.references.union(can_output.references);
         }
     };
+
+    output
 }
 
 #[inline(always)]
@@ -1096,11 +1099,9 @@ pub fn can_defs_with_return<'a>(
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let mut found_rigids = SendMap::default();
-
-    let (unsorted, mut scope) = canonicalize_defs(
+    let (unsorted, mut scope, defs_output) = canonicalize_defs(
         env,
-        &mut found_rigids,
+        Output::default(),
         var_store,
         &scope,
         loc_defs,
@@ -1113,7 +1114,8 @@ pub fn can_defs_with_return<'a>(
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
     let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
 
-    output.rigids = output.rigids.union(found_rigids);
+    output.rigids = output.rigids.union(defs_output.rigids);
+    output.references = output.references.union(defs_output.references);
 
     match can_defs {
         Ok(decls) => {

@@ -1,11 +1,12 @@
 use crate::can::def::Declaration;
-use crate::collections::SendMap;
+use crate::can::ident::Lowercase;
+use crate::collections::{ImMap, MutMap, SendMap};
 use crate::constrain::expr::constrain_decls;
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::solve::SolvedType;
-use crate::subs::{VarStore, Variable};
-use crate::types::{Constraint, LetConstraint, Type};
+use crate::subs::{VarId, VarStore, Variable};
+use crate::types::{Alias, Constraint, LetConstraint, Type};
 
 #[inline(always)]
 pub fn constrain_module(
@@ -25,6 +26,7 @@ pub struct Import<'a> {
 
 pub fn constrain_imported_values(
     imports: Vec<Import<'_>>,
+    aliases: MutMap<Symbol, Alias>,
     mut body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
@@ -32,14 +34,25 @@ pub fn constrain_imported_values(
     // don't need to make this big linked list of nested constraints.
     // Theoretically that should be equivalent to doing it this way!
     for import in imports {
-        body_con =
-            constrain_imported_value(import.loc_symbol, import.solved_type, body_con, var_store);
+        body_con = constrain_imported_value(
+            import.loc_symbol,
+            import.solved_type,
+            body_con,
+            &aliases,
+            var_store,
+        );
     }
 
     body_con
 }
 
-fn to_type(solved_type: &SolvedType, free_vars: &mut Vec<Variable>, var_store: &VarStore) -> Type {
+#[derive(Debug, Clone, Default)]
+pub struct FreeVars {
+    rigid_vars: ImMap<Lowercase, Variable>,
+    flex_vars: ImMap<VarId, Variable>,
+}
+
+fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
     use crate::solve::SolvedType::*;
 
     match solved_type {
@@ -63,16 +76,23 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut Vec<Variable>, var_store: &
 
             Type::Apply(*symbol, new_args)
         }
-        Rigid(symbol) => {
-            // TODO: I guess the design here is that we need to record
-            // rigids after all, and incorporate them into
-            // the final constraint? Just to make sure the types
-            // actually line up? Should take a look at how
-            // this is done in the Defs annotations.
-            panic!("TODO to_type for a rigid: {:?}", symbol);
+        Rigid(lowercase) => {
+            if let Some(var) = free_vars.rigid_vars.get(&lowercase) {
+                Type::Variable(*var)
+            } else {
+                let var = var_store.fresh();
+                free_vars.rigid_vars.insert(lowercase.clone(), var);
+                Type::Variable(var)
+            }
         }
-        Wildcard => {
-            panic!("TODO flex variable for wildcard");
+        Flex(var_id) => {
+            if let Some(var) = free_vars.flex_vars.get(&var_id) {
+                Type::Variable(*var)
+            } else {
+                let var = var_store.fresh();
+                free_vars.flex_vars.insert(*var_id, var);
+                Type::Variable(var)
+            }
         }
         Record { fields, ext } => {
             let mut new_fields = SendMap::default();
@@ -100,9 +120,44 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut Vec<Variable>, var_store: &
 
             Type::TagUnion(new_tags, Box::new(to_type(ext, free_vars, var_store)))
         }
+        RecursiveTagUnion(rec_var_id, tags, ext) => {
+            let mut new_tags = Vec::with_capacity(tags.len());
+
+            for (tag_name, args) in tags {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for arg in args.iter() {
+                    new_args.push(to_type(arg, free_vars, var_store));
+                }
+
+                new_tags.push((tag_name.clone(), new_args));
+            }
+
+            let rec_var = free_vars
+                .flex_vars
+                .get(rec_var_id)
+                .expect("rec var not in flex vars");
+
+            Type::RecursiveTagUnion(
+                *rec_var,
+                new_tags,
+                Box::new(to_type(ext, free_vars, var_store)),
+            )
+        }
         Boolean(val) => Type::Boolean(val.clone()),
-        Alias(_, _, _) => {
-            panic!("TODO convert from SolvedType::Alias to Type::Alias");
+        Alias(symbol, solved_type_variables, solved_actual) => {
+            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
+
+            for (lowercase, solved_type) in solved_type_variables {
+                type_variables.push((
+                    lowercase.clone(),
+                    to_type(solved_type, free_vars, var_store),
+                ));
+            }
+
+            let actual = to_type(solved_actual, free_vars, var_store);
+
+            Type::Alias(*symbol, type_variables, Box::new(actual))
         }
         Error => {
             panic!("TODO convert from SolvedType::Error to Type somehow");
@@ -115,31 +170,96 @@ fn constrain_imported_value(
     loc_symbol: Located<Symbol>,
     solved_type: &SolvedType,
     body_con: Constraint,
+    aliases: &MutMap<Symbol, Alias>,
     var_store: &VarStore,
 ) -> Constraint {
     use Constraint::*;
+    let mut free_vars = FreeVars::default();
 
-    let mut def_types = SendMap::default();
-    let mut free_vars = Vec::new();
-    let typ = to_type(solved_type, &mut free_vars, var_store);
+    // an imported symbol can be both an alias and a value
+    match solved_type {
+        SolvedType::Alias(symbol, _, _) if symbol == &loc_symbol.value => {
+            if let Some(alias) = aliases.get(symbol) {
+                constrain_imported_alias(loc_symbol, alias, body_con, var_store)
+            } else {
+                panic!("Alias {:?} is not available", symbol)
+            }
+        }
+        _ => {
+            let mut def_types = SendMap::default();
+            let typ = to_type(solved_type, &mut free_vars, var_store);
 
-    def_types.insert(
-        loc_symbol.value,
-        Located {
-            region: loc_symbol.region,
-            value: typ,
-        },
-    );
+            def_types.insert(
+                loc_symbol.value,
+                Located {
+                    region: loc_symbol.region,
+                    value: typ,
+                },
+            );
+
+            let mut rigid_vars = Vec::new();
+
+            for (_, var) in free_vars.rigid_vars {
+                rigid_vars.push(var);
+            }
+
+            Let(Box::new(LetConstraint {
+                // rigids from other modules should not be treated as rigid
+                // within this module; rather, they should be treated as flex
+                rigid_vars,
+                flex_vars: Vec::new(),
+                // Importing a value doesn't constrain this module at all.
+                // All it does is introduce variables and provide def_types for lookups
+                def_types,
+                def_aliases: SendMap::default(),
+                defs_constraint: True,
+                ret_constraint: body_con,
+            }))
+        }
+    }
+}
+
+fn constrain_imported_alias(
+    loc_symbol: Located<Symbol>,
+    imported_alias: &Alias,
+    body_con: Constraint,
+    var_store: &VarStore,
+) -> Constraint {
+    use Constraint::*;
+    let mut def_aliases = SendMap::default();
+
+    let mut vars = Vec::with_capacity(imported_alias.vars.len());
+    let mut substitution = ImMap::default();
+    for Located {
+        region,
+        value: (lowercase, old_var),
+    } in &imported_alias.vars
+    {
+        let new_var = var_store.fresh();
+        vars.push(Located::at(*region, (lowercase.clone(), new_var)));
+        substitution.insert(*old_var, Type::Variable(new_var));
+    }
+
+    let mut actual = imported_alias.typ.clone();
+    actual.substitute(&substitution);
+
+    let alias = Alias {
+        vars,
+        region: loc_symbol.region,
+        typ: actual,
+    };
+
+    def_aliases.insert(loc_symbol.value, alias);
 
     Let(Box::new(LetConstraint {
         // rigids from other modules should not be treated as rigid
         // within this module; rather, they should be treated as flex
         rigid_vars: Vec::new(),
-        flex_vars: free_vars,
+        flex_vars: Vec::new(),
         // Importing a value doesn't constrain this module at all.
         // All it does is introduce variables and provide def_types for lookups
-        def_types,
-        def_aliases: SendMap::default(),
+        def_types: SendMap::default(),
+        def_aliases,
         defs_constraint: True,
         ret_constraint: body_con,
     }))

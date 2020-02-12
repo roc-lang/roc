@@ -42,8 +42,8 @@ impl Scope {
         self.symbols.iter()
     }
 
-    pub fn aliases(&self) -> impl Iterator<Item = &(Symbol, Alias)> {
-        self.aliases.iter()
+    pub fn into_aliases(self) -> ImMap<Symbol, Alias> {
+        self.aliases
     }
 
     pub fn contains_ident(&self, ident: &Ident) -> bool {
