@@ -5,7 +5,7 @@ use crate::constrain::expr::constrain_decls;
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::solve::SolvedType;
-use crate::subs::{VarStore, Variable};
+use crate::subs::{VarId, VarStore, Variable};
 use crate::types::{Alias, Constraint, LetConstraint, Type};
 
 #[inline(always)]
@@ -49,7 +49,7 @@ pub fn constrain_imported_values(
 #[derive(Debug, Clone, Default)]
 pub struct FreeVars {
     rigid_vars: ImMap<Lowercase, Variable>,
-    flex_vars: Vec<Variable>,
+    flex_vars: ImMap<VarId, Variable>,
 }
 
 fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
@@ -85,11 +85,16 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
                 Type::Variable(var)
             }
         }
-        Wildcard => {
-            let var = var_store.fresh();
-            free_vars.flex_vars.push(var);
-            Type::Variable(var)
+        Flex(var_id) => {
+            if let Some(var) = free_vars.flex_vars.get(&var_id) {
+                Type::Variable(*var)
+            } else {
+                let var = var_store.fresh();
+                free_vars.flex_vars.insert(*var_id, var);
+                Type::Variable(var)
+            }
         }
+        Wildcard => panic!(),
         Record { fields, ext } => {
             let mut new_fields = SendMap::default();
 
@@ -115,6 +120,30 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
             }
 
             Type::TagUnion(new_tags, Box::new(to_type(ext, free_vars, var_store)))
+        }
+        RecursiveTagUnion(rec_var_id, tags, ext) => {
+            let mut new_tags = Vec::with_capacity(tags.len());
+
+            for (tag_name, args) in tags {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for arg in args.iter() {
+                    new_args.push(to_type(arg, free_vars, var_store));
+                }
+
+                new_tags.push((tag_name.clone(), new_args));
+            }
+
+            let rec_var = free_vars
+                .flex_vars
+                .get(rec_var_id)
+                .expect("rec var not in flex vars");
+
+            Type::RecursiveTagUnion(
+                *rec_var,
+                new_tags,
+                Box::new(to_type(ext, free_vars, var_store)),
+            )
         }
         Boolean(val) => Type::Boolean(val.clone()),
         Alias(symbol, solved_type_variables, solved_actual) => {

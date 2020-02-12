@@ -2,7 +2,7 @@ use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::Located;
-use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
+use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, VarId, Variable};
 use crate::types::Alias;
 use crate::types::Constraint::{self, *};
 use crate::types::Problem;
@@ -31,6 +31,7 @@ pub enum SolvedType {
     Apply(Symbol, Vec<SolvedType>),
     /// A bound type variable, e.g. `a` in `(a -> a)`
     Rigid(Lowercase),
+    Flex(VarId),
     /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
     Record {
         fields: Vec<(Lowercase, SolvedType)>,
@@ -40,6 +41,7 @@ pub enum SolvedType {
     },
     EmptyRecord,
     TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
+    RecursiveTagUnion(VarId, Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
     EmptyTagUnion,
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
@@ -58,10 +60,7 @@ pub enum SolvedType {
 
 impl SolvedType {
     pub fn new(solved_subs: &Solved<Subs>, var: Variable) -> Self {
-        let subs = solved_subs.inner();
-        let content = subs.get_without_compacting(var).content;
-
-        Self::from_content(subs, content)
+        Self::from_var(solved_subs.inner(), var)
     }
 
     pub fn from_type(solved_subs: &Solved<Subs>, typ: Type) -> Self {
@@ -123,8 +122,25 @@ impl SolvedType {
 
                 SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
             }
-            RecursiveTagUnion(_var, _tags, _box_ext) => {
-                panic!("TODO turn RecursiveTagUnion into SolvedType");
+            RecursiveTagUnion(rec_var, tags, box_ext) => {
+                let solved_ext = Self::from_type(solved_subs, *box_ext);
+                let mut solved_tags = Vec::with_capacity(tags.len());
+                for (tag_name, types) in tags {
+                    let mut solved_types = Vec::with_capacity(types.len());
+
+                    for typ in types {
+                        let solved_type = Self::from_type(solved_subs, typ);
+                        solved_types.push(solved_type);
+                    }
+
+                    solved_tags.push((tag_name.clone(), solved_types));
+                }
+
+                SolvedType::RecursiveTagUnion(
+                    VarId::from_var(rec_var),
+                    solved_tags,
+                    Box::new(solved_ext),
+                )
             }
             Erroneous(problem) => SolvedType::Erroneous(problem),
             Alias(symbol, args, box_type) => {
@@ -139,32 +155,24 @@ impl SolvedType {
                 SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
             }
             Boolean(val) => SolvedType::Boolean(val),
-            Variable(var) => {
-                let content = solved_subs.inner().get_without_compacting(var).content;
-                Self::from_content(solved_subs.inner(), content)
-            }
+            Variable(var) => Self::from_var(solved_subs.inner(), var),
         }
     }
 
-    fn from_content(subs: &Subs, content: Content) -> Self {
-        use crate::subs::Content::*;
-
-        match content {
-            FlexVar(None) => SolvedType::Wildcard,
-            FlexVar(Some(name)) => SolvedType::Rigid(name),
+    fn from_var(subs: &Subs, var: Variable) -> Self {
+        use Content::*;
+        match subs.get_without_compacting(var).content {
+            FlexVar(_) => SolvedType::Flex(VarId::from_var(var)),
             RigidVar(name) => SolvedType::Rigid(name),
             Structure(flat_type) => Self::from_flat_type(subs, flat_type),
-            Alias(symbol, args, var) => {
+            Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for (arg_name, arg_var) in args {
-                    new_args.push((
-                        arg_name,
-                        Self::from_content(subs, subs.get_without_compacting(arg_var).content),
-                    ));
+                    new_args.push((arg_name, Self::from_var(subs, arg_var)));
                 }
 
-                let aliased_to = Self::from_content(subs, subs.get_without_compacting(var).content);
+                let aliased_to = Self::from_var(subs, actual_var);
 
                 SolvedType::Alias(symbol, new_args, Box::new(aliased_to))
             }
@@ -180,10 +188,7 @@ impl SolvedType {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for var in args {
-                    new_args.push(Self::from_content(
-                        subs,
-                        subs.get_without_compacting(var).content,
-                    ));
+                    new_args.push(Self::from_var(subs, var));
                 }
 
                 SolvedType::Apply(symbol, new_args)
@@ -192,13 +197,10 @@ impl SolvedType {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for var in args {
-                    new_args.push(Self::from_content(
-                        subs,
-                        subs.get_without_compacting(var).content,
-                    ));
+                    new_args.push(Self::from_var(subs, var));
                 }
 
-                let ret = Self::from_content(subs, subs.get_without_compacting(ret).content);
+                let ret = Self::from_var(subs, ret);
 
                 SolvedType::Func(new_args, Box::new(ret))
             }
@@ -206,12 +208,12 @@ impl SolvedType {
                 let mut new_fields = Vec::with_capacity(fields.len());
 
                 for (label, var) in fields {
-                    let field = Self::from_content(subs, subs.get_without_compacting(var).content);
+                    let field = Self::from_var(subs, var);
 
                     new_fields.push((label, field));
                 }
 
-                let ext = Self::from_content(subs, subs.get_without_compacting(ext_var).content);
+                let ext = Self::from_var(subs, ext_var);
 
                 SolvedType::Record {
                     fields: new_fields,
@@ -225,21 +227,32 @@ impl SolvedType {
                     let mut new_args = Vec::with_capacity(args.len());
 
                     for var in args {
-                        new_args.push(Self::from_content(
-                            subs,
-                            subs.get_without_compacting(var).content,
-                        ));
+                        new_args.push(Self::from_var(subs, var));
                     }
 
                     new_tags.push((tag_name, new_args));
                 }
 
-                let ext = Self::from_content(subs, subs.get_without_compacting(ext_var).content);
+                let ext = Self::from_var(subs, ext_var);
 
                 SolvedType::TagUnion(new_tags, Box::new(ext))
             }
-            RecursiveTagUnion(_rec_var, _tags, _ext_var) => {
-                panic!("TODO make solved type for RecursiveTagUnion");
+            RecursiveTagUnion(rec_var, tags, ext_var) => {
+                let mut new_tags = Vec::with_capacity(tags.len());
+
+                for (tag_name, args) in tags {
+                    let mut new_args = Vec::with_capacity(args.len());
+
+                    for var in args {
+                        new_args.push(Self::from_var(subs, var));
+                    }
+
+                    new_tags.push((tag_name, new_args));
+                }
+
+                let ext = Self::from_var(subs, ext_var);
+
+                SolvedType::RecursiveTagUnion(VarId::from_var(rec_var), new_tags, Box::new(ext))
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,

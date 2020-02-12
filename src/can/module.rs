@@ -156,8 +156,8 @@ pub fn canonicalize_module_defs<'a>(
                     DeclareRec(_defs) => {
                         panic!("TODO support exposing recursive defs");
                     }
-                    InvalidCycle(_, _) => {
-                        panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs");
+                    InvalidCycle(identifiers, _) => {
+                        panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs {:?}" , identifiers);
                     }
                 }
             }

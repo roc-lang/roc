@@ -186,6 +186,24 @@ impl UnifyKey for Variable {
     }
 }
 
+/// Used in SolvedType
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VarId(u32);
+
+impl VarId {
+    pub fn from_var(var: Variable) -> Self {
+        let Variable(n) = var;
+
+        VarId(n)
+    }
+}
+
+impl fmt::Debug for VarId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl Subs {
     pub fn new(next_var: Variable) -> Self {
         let entries = next_var.0;
