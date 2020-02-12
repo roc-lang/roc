@@ -32,7 +32,7 @@ pub fn constrain_imported_values(
     // TODO try out combining all the def_types and free_vars, so that we
     // don't need to make this big linked list of nested constraints.
     // Theoretically that should be equivalent to doing it this way!
-    for import in dbg!(imports) {
+    for import in imports {
         body_con =
             constrain_imported_value(import.loc_symbol, import.solved_type, body_con, var_store);
     }
