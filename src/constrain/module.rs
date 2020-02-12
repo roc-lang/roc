@@ -5,7 +5,7 @@ use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::solve::SolvedType;
 use crate::subs::{VarStore, Variable};
-use crate::types::{Constraint, LetConstraint, Type};
+use crate::types::{Alias, Constraint, LetConstraint, Type};
 
 #[inline(always)]
 pub fn constrain_module(
@@ -28,6 +28,7 @@ pub fn constrain_imported_values(
     mut body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
+    dbg!(&imports);
     // TODO try out combining all the def_types and free_vars, so that we
     // don't need to make this big linked list of nested constraints.
     // Theoretically that should be equivalent to doing it this way!
@@ -129,29 +130,63 @@ fn constrain_imported_value(
     var_store: &VarStore,
 ) -> Constraint {
     use Constraint::*;
-
-    let mut def_types = SendMap::default();
     let mut free_vars = Vec::new();
-    let typ = to_type(solved_type, &mut free_vars, var_store);
 
-    def_types.insert(
-        loc_symbol.value,
-        Located {
-            region: loc_symbol.region,
-            value: typ,
-        },
-    );
+    // an imported symbol can be both an alias and a value
+    match solved_type {
+        SolvedType::Alias(symbol, args, solved_actual) if symbol == &loc_symbol.value => {
+            let mut def_aliases = SendMap::default();
 
-    Let(Box::new(LetConstraint {
-        // rigids from other modules should not be treated as rigid
-        // within this module; rather, they should be treated as flex
-        rigid_vars: Vec::new(),
-        flex_vars: free_vars,
-        // Importing a value doesn't constrain this module at all.
-        // All it does is introduce variables and provide def_types for lookups
-        def_types,
-        def_aliases: SendMap::default(),
-        defs_constraint: True,
-        ret_constraint: body_con,
-    }))
+            let actual = to_type(solved_actual, &mut free_vars, var_store);
+
+            // pub vars: Vec<Located<(Lowercase, Variable)>>,
+            let vars = Vec::new();
+
+            let alias = Alias {
+                region: loc_symbol.region,
+                vars,
+                typ: actual,
+            };
+
+            def_aliases.insert(*symbol, alias);
+
+            Let(Box::new(LetConstraint {
+                // rigids from other modules should not be treated as rigid
+                // within this module; rather, they should be treated as flex
+                rigid_vars: Vec::new(),
+                flex_vars: Vec::new(),
+                // Importing a value doesn't constrain this module at all.
+                // All it does is introduce variables and provide def_types for lookups
+                def_types: SendMap::default(),
+                def_aliases,
+                defs_constraint: True,
+                ret_constraint: body_con,
+            }))
+        }
+        _ => {
+            let mut def_types = SendMap::default();
+            let typ = to_type(solved_type, &mut free_vars, var_store);
+
+            def_types.insert(
+                loc_symbol.value,
+                Located {
+                    region: loc_symbol.region,
+                    value: typ,
+                },
+            );
+
+            Let(Box::new(LetConstraint {
+                // rigids from other modules should not be treated as rigid
+                // within this module; rather, they should be treated as flex
+                rigid_vars: Vec::new(),
+                flex_vars: free_vars,
+                // Importing a value doesn't constrain this module at all.
+                // All it does is introduce variables and provide def_types for lookups
+                def_types,
+                def_aliases: SendMap::default(),
+                defs_constraint: True,
+                ret_constraint: body_con,
+            }))
+        }
+    }
 }

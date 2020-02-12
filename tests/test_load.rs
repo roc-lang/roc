@@ -305,7 +305,8 @@ mod test_load {
                     "str" => "Str",
                     "alwaysThree" => "* -> Str",
                     "identity" => "a -> a",
-                    "three" => "Str",
+                    "z" => "Dep1.Unit",
+                    "w" => "Dep1.Identity Int",
                 },
             );
         });

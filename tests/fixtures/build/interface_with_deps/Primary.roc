@@ -16,3 +16,7 @@ identity = \a -> a
 
 z : Dep1.Unit
 z = Unit
+
+w : Dep1.Identity Int
+w = Identity 42
+
