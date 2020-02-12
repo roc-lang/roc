@@ -139,6 +139,7 @@ fn constrain_imported_value(
         // Importing a value doesn't constrain this module at all.
         // All it does is introduce variables and provide def_types for lookups
         def_types,
+        def_aliases: SendMap::default(),
         defs_constraint: True,
         ret_constraint: body_con,
     }))

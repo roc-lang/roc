@@ -124,7 +124,7 @@ fn from_can<'a>(
         Float(_, val) => Expr::Float(val),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
         Var(symbol) => Expr::Load(symbol.emit()),
-        LetNonRec(def, ret_expr, _) => {
+        LetNonRec(def, ret_expr, _, _) => {
             let arena = env.arena;
             let loc_pattern = def.loc_pattern;
             let loc_expr = def.loc_expr;

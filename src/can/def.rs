@@ -18,18 +18,19 @@ use crate::module::symbol::Symbol;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
-use crate::types::Type;
+use crate::types::{Alias, Type};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+#[allow(clippy::type_complexity)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
     pub loc_pattern: Located<Pattern>,
     pub loc_expr: Located<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
-    pub annotation: Option<(Type, SendMap<Lowercase, Variable>)>,
+    pub annotation: Option<(Type, SendMap<Lowercase, Variable>, SendMap<Symbol, Alias>)>,
 }
 
 #[derive(Debug)]
@@ -39,6 +40,7 @@ pub struct CanDefs {
     pub refs_by_symbol: MutMap<Symbol, (Located<Ident>, References)>,
     pub can_defs_by_symbol: MutMap<Symbol, Def>,
     pub symbols_introduced: MutMap<Symbol, Region>,
+    pub aliases: SendMap<Symbol, Alias>,
 }
 /// A Def that has had patterns and type annnotations canonicalized,
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
@@ -186,6 +188,8 @@ pub fn canonicalize_defs<'a>(
 
     pending.sort_by(aliases_first);
 
+    let mut aliases = SendMap::default();
+
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
     for pending_def in pending.into_iter() {
@@ -198,6 +202,7 @@ pub fn canonicalize_defs<'a>(
             &mut can_defs_by_symbol,
             var_store,
             &mut refs_by_symbol,
+            &mut aliases,
         );
 
         // TODO we should do something with these references; they include
@@ -228,6 +233,7 @@ pub fn canonicalize_defs<'a>(
             refs_by_symbol,
             can_defs_by_symbol,
             symbols_introduced,
+            aliases,
         },
         scope,
     )
@@ -243,7 +249,12 @@ pub fn sort_can_defs(
         symbols_introduced,
         refs_by_symbol,
         can_defs_by_symbol,
+        aliases,
     } = defs;
+
+    for (symbol, alias) in aliases.clone() {
+        output.aliases.insert(symbol, alias);
+    }
 
     // Determine the full set of references by traversing the graph.
     let mut visited_symbols = MutSet::default();
@@ -655,6 +666,7 @@ fn canonicalize_pending_def<'a>(
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &VarStore,
     refs_by_symbol: &mut MutMap<Symbol, (Located<Ident>, References)>,
+    aliases: &mut SendMap<Symbol, Alias>,
 ) {
     use PendingDef::*;
 
@@ -672,6 +684,10 @@ fn canonicalize_pending_def<'a>(
             // but the rigids can show up in type error messages, so still register them
             let ann =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
+
+            for (symbol, alias) in ann.aliases.clone() {
+                aliases.insert(symbol, alias);
+            }
 
             // union seen rigids with already found ones
             for (k, v) in ann.rigids {
@@ -746,7 +762,7 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((typ.clone(), found_rigids.clone())),
+                        annotation: Some((typ.clone(), found_rigids.clone(), ann.aliases.clone())),
                     },
                 );
             }
@@ -786,6 +802,9 @@ fn canonicalize_pending_def<'a>(
                 }
             }
 
+            let alias = scope.lookup_alias(symbol).expect("alias was not added");
+            aliases.insert(symbol, alias.clone());
+
             // TODO should probably incorporate can_ann.references here - possibly by
             // inserting them into refs_by_symbol?
 
@@ -804,6 +823,10 @@ fn canonicalize_pending_def<'a>(
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             let typ = ann.typ;
+
+            for (symbol, alias) in ann.aliases.clone() {
+                aliases.insert(symbol, alias);
+            }
 
             // union seen rigids with already found ones
             for (k, v) in ann.rigids {
@@ -925,7 +948,7 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((typ.clone(), found_rigids.clone())),
+                        annotation: Some((typ.clone(), found_rigids.clone(), ann.aliases.clone())),
                     },
                 );
             }
@@ -1099,7 +1122,7 @@ pub fn can_defs_with_return<'a>(
             for declaration in decls.into_iter().rev() {
                 loc_expr = Located {
                     region: Region::zero(),
-                    value: decl_to_let(var_store, declaration, loc_expr),
+                    value: decl_to_let(var_store, declaration, loc_expr, output.aliases.clone()),
                 };
             }
 
@@ -1109,12 +1132,19 @@ pub fn can_defs_with_return<'a>(
     }
 }
 
-fn decl_to_let(var_store: &VarStore, decl: Declaration, loc_ret: Located<Expr>) -> Expr {
+fn decl_to_let(
+    var_store: &VarStore,
+    decl: Declaration,
+    loc_ret: Located<Expr>,
+    aliases: SendMap<Symbol, Alias>,
+) -> Expr {
     match decl {
         Declaration::Declare(def) => {
-            Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh())
+            Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh(), aliases)
         }
-        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh()),
+        Declaration::DeclareRec(defs) => {
+            Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh(), aliases)
+        }
         Declaration::InvalidCycle(symbols, regions) => {
             Expr::RuntimeError(RuntimeError::CircularDef(symbols, regions))
         }

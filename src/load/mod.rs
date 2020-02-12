@@ -10,7 +10,7 @@ use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
 use crate::solve::{self, ExposedModuleTypes, Solved, SolvedType, SubsByModule};
 use crate::subs::{Subs, VarStore, Variable};
-use crate::types::{Constraint, Problem};
+use crate::types::{Alias, Constraint, Problem};
 use bumpalo::Bump;
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
@@ -33,6 +33,7 @@ pub struct Module {
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
+    pub aliases: MutMap<Symbol, Alias>,
 }
 
 pub struct LoadedModule {
@@ -78,7 +79,7 @@ enum Msg {
         solved_types: MutMap<Symbol, SolvedType>,
         subs: Arc<Solved<Subs>>,
         problems: Vec<Problem>,
-        new_vars_by_symbol: SendMap<Symbol, Variable>,
+        solved_env: solve::Env,
     },
 }
 
@@ -194,7 +195,9 @@ pub async fn load<'a>(
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
     let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
-    let mut vars_by_symbol = SendMap::default();
+
+    // TODO can be removed I think
+    let vars_by_symbol = SendMap::default();
 
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {
@@ -370,7 +373,7 @@ pub async fn load<'a>(
                 solved_types,
                 subs,
                 problems,
-                new_vars_by_symbol,
+                ..
             } => {
                 all_problems.extend(problems);
 
@@ -407,8 +410,6 @@ pub async fn load<'a>(
                     });
                 } else {
                     // This was a dependency. Write it down and keep processing messaages.
-                    vars_by_symbol = vars_by_symbol.union(new_vars_by_symbol);
-
                     debug_assert!(!exposed_types.contains_key(&module_id));
                     exposed_types.insert(module_id, ExposedModuleTypes::Valid(solved_types));
 
@@ -781,6 +782,12 @@ fn solve_module(
 
     let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
 
+    let mut aliases = SendMap::default();
+
+    for (symbol, alias) in module.aliases.clone() {
+        aliases.insert(symbol, alias);
+    }
+
     // Start solving this module in the background.
     spawn_blocking(move || {
         // Now that the module is parsed, canonicalized, and constrained,
@@ -788,9 +795,13 @@ fn solve_module(
         let subs = Subs::new(var_store.into());
         let mut problems = Vec::new();
 
+        let env = solve::Env {
+            vars_by_symbol,
+            aliases,
+        };
+
         // Run the solver to populate Subs.
-        let (solved_subs, new_vars_by_symbol) =
-            solve::run(&vars_by_symbol, &mut problems, subs, &constraint);
+        let (solved_subs, solved_env) = solve::run(&env, &mut problems, subs, &constraint);
 
         let mut solved_types = MutMap::default();
 
@@ -813,7 +824,7 @@ fn solve_module(
                 module_id: home,
                 subs: Arc::new(solved_subs),
                 solved_types,
-                new_vars_by_symbol,
+                solved_env,
                 problems,
             })
             .await
@@ -916,6 +927,7 @@ fn parse_and_constrain(
             ident_ids,
             exposed_vars_by_symbol,
             references,
+            aliases,
             ..
         }) => {
             let constraint = constrain_module(module_id, &declarations, lookups);
@@ -926,6 +938,7 @@ fn parse_and_constrain(
                 exposed_imports,
                 exposed_vars_by_symbol,
                 references,
+                aliases,
             };
 
             (module, ident_ids, constraint)

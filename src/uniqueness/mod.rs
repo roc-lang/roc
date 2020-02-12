@@ -5,10 +5,11 @@ use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::collections::{ImMap, ImSet, SendMap};
 use crate::constrain::builtins;
-use crate::constrain::expr::{exists, Info};
+use crate::constrain::expr::{exists, exists_with_aliases, Info};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
+use crate::types::Alias;
 use crate::types::AnnotationSource::{self, *};
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self};
@@ -534,6 +535,7 @@ pub fn constrain_expr(
                         rigid_vars: Vec::new(),
                         flex_vars: state.vars,
                         def_types: state.headers,
+                        def_aliases: SendMap::default(),
                         defs_constraint,
                         ret_constraint,
                     })),
@@ -625,7 +627,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetRec(defs, loc_ret, var) => {
+        LetRec(defs, loc_ret, var, unlifted_aliases) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -637,7 +639,12 @@ pub fn constrain_expr(
                 &loc_ret.value,
                 expected.clone(),
             );
-            exists(
+
+            let mut aliases = unlifted_aliases.clone();
+            aliases_to_attr_type(var_store, &mut aliases);
+
+            exists_with_aliases(
+                aliases,
                 vec![*var],
                 And(vec![
                     constrain_recursive_defs(
@@ -654,7 +661,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetNonRec(def, loc_ret, var) => {
+        LetNonRec(def, loc_ret, var, unlifted_aliases) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -667,7 +674,11 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            exists(
+            let mut aliases = unlifted_aliases.clone();
+            aliases_to_attr_type(var_store, &mut aliases);
+
+            exists_with_aliases(
+                aliases,
                 vec![*var],
                 And(vec![
                     constrain_def(
@@ -1222,6 +1233,7 @@ fn constrain_when_branch(
         rigid_vars: Vec::new(),
         flex_vars: state.vars,
         def_types: state.headers,
+        def_aliases: SendMap::default(),
         defs_constraint: Constraint::And(state.constraints),
         ret_constraint,
     }))
@@ -1252,23 +1264,28 @@ fn annotation_to_attr_type(
     var_store: &VarStore,
     ann: &Type,
     rigids: &mut ImMap<Variable, Variable>,
+    change_var_kind: bool,
 ) -> (Vec<Variable>, Type) {
     use crate::types::Type::*;
 
     match ann {
         Variable(var) => {
-            if let Some(uvar) = rigids.get(var) {
-                (
-                    vec![],
-                    attr_type(Bool::variable(*uvar), Type::Variable(*var)),
-                )
+            if change_var_kind {
+                if let Some(uvar) = rigids.get(var) {
+                    (
+                        vec![],
+                        attr_type(Bool::variable(*uvar), Type::Variable(*var)),
+                    )
+                } else {
+                    let uvar = var_store.fresh();
+                    rigids.insert(*var, uvar);
+                    (
+                        vec![],
+                        attr_type(Bool::variable(uvar), Type::Variable(*var)),
+                    )
+                }
             } else {
-                let uvar = var_store.fresh();
-                rigids.insert(*var, uvar);
-                (
-                    vec![],
-                    attr_type(Bool::variable(uvar), Type::Variable(*var)),
-                )
+                (vec![], Type::Variable(*var))
             }
         }
 
@@ -1284,8 +1301,9 @@ fn annotation_to_attr_type(
         Function(arguments, result) => {
             let uniq_var = var_store.fresh();
             let (mut arg_vars, args_lifted) =
-                annotation_to_attr_type_many(var_store, arguments, rigids);
-            let (result_vars, result_lifted) = annotation_to_attr_type(var_store, result, rigids);
+                annotation_to_attr_type_many(var_store, arguments, rigids, change_var_kind);
+            let (result_vars, result_lifted) =
+                annotation_to_attr_type(var_store, result, rigids, change_var_kind);
 
             arg_vars.extend(result_vars);
             arg_vars.push(uniq_var);
@@ -1310,7 +1328,7 @@ fn annotation_to_attr_type(
                     }
                     _ => (vec![], args[1].clone()),
                 },
-                _ => annotation_to_attr_type(var_store, &args[1], rigids),
+                _ => annotation_to_attr_type(var_store, &args[1], rigids, change_var_kind),
             };
 
             let result = Apply(Symbol::ATTR_ATTR, vec![uniq_type, result_lifted]);
@@ -1321,7 +1339,8 @@ fn annotation_to_attr_type(
         Apply(symbol, args) => {
             let uniq_var = var_store.fresh();
 
-            let (mut arg_vars, args_lifted) = annotation_to_attr_type_many(var_store, args, rigids);
+            let (mut arg_vars, args_lifted) =
+                annotation_to_attr_type_many(var_store, args, rigids, change_var_kind);
             let result = attr_type(Bool::variable(uniq_var), Type::Apply(*symbol, args_lifted));
 
             arg_vars.push(uniq_var);
@@ -1335,7 +1354,8 @@ fn annotation_to_attr_type(
             let mut lifted_fields = SendMap::default();
 
             for (label, tipe) in fields.clone() {
-                let (new_vars, lifted_field) = annotation_to_attr_type(var_store, &tipe, rigids);
+                let (new_vars, lifted_field) =
+                    annotation_to_attr_type(var_store, &tipe, rigids, change_var_kind);
                 vars.extend(new_vars);
                 lifted_fields.insert(label, lifted_field);
             }
@@ -1358,7 +1378,7 @@ fn annotation_to_attr_type(
 
             for (tag, fields) in tags {
                 let (new_vars, lifted_fields) =
-                    annotation_to_attr_type_many(var_store, fields, rigids);
+                    annotation_to_attr_type_many(var_store, fields, rigids, change_var_kind);
                 vars.extend(new_vars);
                 lifted_tags.push((tag.clone(), lifted_fields));
             }
@@ -1380,7 +1400,7 @@ fn annotation_to_attr_type(
 
             for (tag, fields) in tags {
                 let (new_vars, lifted_fields) =
-                    annotation_to_attr_type_many(var_store, fields, rigids);
+                    annotation_to_attr_type_many(var_store, fields, rigids, change_var_kind);
                 vars.extend(new_vars);
                 lifted_tags.push((tag.clone(), lifted_fields));
             }
@@ -1398,7 +1418,7 @@ fn annotation_to_attr_type(
 
         Alias(symbol, fields, actual) => {
             let (mut actual_vars, lifted_actual) =
-                annotation_to_attr_type(var_store, actual, rigids);
+                annotation_to_attr_type(var_store, actual, rigids, change_var_kind);
 
             if let Type::Apply(attr_symbol, args) = lifted_actual {
                 debug_assert!(attr_symbol == Symbol::ATTR_ATTR);
@@ -1408,7 +1428,8 @@ fn annotation_to_attr_type(
 
                 let mut new_fields = Vec::with_capacity(fields.len());
                 for (name, tipe) in fields {
-                    let (lifted_vars, lifted) = annotation_to_attr_type(var_store, tipe, rigids);
+                    let (lifted_vars, lifted) =
+                        annotation_to_attr_type(var_store, tipe, rigids, change_var_kind);
 
                     actual_vars.extend(lifted_vars);
 
@@ -1435,15 +1456,41 @@ fn annotation_to_attr_type_many(
     var_store: &VarStore,
     anns: &[Type],
     rigids: &mut ImMap<Variable, Variable>,
+    change_var_kind: bool,
 ) -> (Vec<Variable>, Vec<Type>) {
     anns.iter()
         .fold((Vec::new(), Vec::new()), |(mut vars, mut types), value| {
-            let (new_vars, tipe) = annotation_to_attr_type(var_store, value, rigids);
+            let (new_vars, tipe) =
+                annotation_to_attr_type(var_store, value, rigids, change_var_kind);
             vars.extend(new_vars);
             types.push(tipe);
 
             (vars, types)
         })
+}
+
+fn aliases_to_attr_type(var_store: &VarStore, aliases: &mut SendMap<Symbol, Alias>) {
+    for alias in aliases.iter_mut() {
+        // ensure
+        //
+        // Identity a : [ Identity a ]
+        //
+        // does not turn into
+        //
+        // Identity a : [ Identity (Attr u a) ]
+        //
+        // That would give a double attr wrapper on the type arguments.
+        // The `change_var_kind` flag set to false ensures type variables remain of kind *
+        let (_, new) = annotation_to_attr_type(var_store, &alias.typ, &mut ImMap::default(), false);
+
+        // remove the outer Attr, because when this occurs in a signature it'll already be wrapped in one
+        match new {
+            Type::Apply(Symbol::ATTR_ATTR, args) => {
+                alias.typ = args[1].clone();
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 fn constrain_def(
@@ -1461,10 +1508,12 @@ fn constrain_def(
 
     pattern_state.vars.push(expr_var);
 
+    let mut def_aliases = SendMap::default();
     let mut new_rigids = Vec::new();
 
     let expr_con = match &def.annotation {
-        Some((annotation, free_vars)) => {
+        Some((annotation, free_vars, ann_def_aliases)) => {
+            def_aliases = ann_def_aliases.clone();
             let arity = annotation.arity();
             let mut ftv = env.rigids.clone();
             let annotation = instantiate_rigids(
@@ -1514,14 +1563,19 @@ fn constrain_def(
         ),
     };
 
+    // Lift aliases to Attr types
+    aliases_to_attr_type(var_store, &mut def_aliases);
+
     Let(Box::new(LetConstraint {
         rigid_vars: new_rigids,
         flex_vars: pattern_state.vars,
         def_types: pattern_state.headers,
+        def_aliases,
         defs_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),        // always empty
             flex_vars: Vec::new(),         // empty, because our functions have no arguments
             def_types: SendMap::default(), // empty, because our functions have no arguments!
+            def_aliases: SendMap::default(),
             defs_constraint: And(pattern_state.constraints),
             ret_constraint: expr_con,
         })),
@@ -1568,7 +1622,7 @@ fn instantiate_rigids(
 
     let mut new_rigid_pairs = ImMap::default();
     let (mut uniq_vars, annotation) =
-        annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs);
+        annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs, true);
 
     if let Pattern::Identifier(symbol) = loc_pattern.value {
         headers.insert(symbol, Located::at(loc_pattern.region, annotation.clone()));
@@ -1578,7 +1632,7 @@ fn instantiate_rigids(
     ) {
         for (k, v) in new_headers {
             let (new_uniq_vars, attr_annotation) =
-                annotation_to_attr_type(var_store, &v.value, &mut new_rigid_pairs);
+                annotation_to_attr_type(var_store, &v.value, &mut new_rigid_pairs, true);
 
             uniq_vars.extend(new_uniq_vars);
 
@@ -1626,6 +1680,7 @@ pub fn rec_defs_help(
     mut rigid_info: Info,
     mut flex_info: Info,
 ) -> Constraint {
+    let mut def_aliases = SendMap::default();
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -1647,6 +1702,7 @@ pub fn rec_defs_help(
             pattern_expected,
         );
 
+        // TODO see where aliases should go
         let mut new_rigids = Vec::new();
         match &def.annotation {
             None => {
@@ -1665,6 +1721,7 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
+                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -1674,7 +1731,10 @@ pub fn rec_defs_help(
                 flex_info.def_types.extend(pattern_state.headers);
             }
 
-            Some((annotation, free_vars)) => {
+            Some((annotation, free_vars, ann_def_aliases)) => {
+                for (symbol, alias) in ann_def_aliases.clone() {
+                    def_aliases.insert(symbol, alias);
+                }
                 let arity = annotation.arity();
                 let mut ftv = env.rigids.clone();
                 let annotation = instantiate_rigids(
@@ -1717,6 +1777,7 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
+                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -1728,6 +1789,7 @@ pub fn rec_defs_help(
                     rigid_vars: new_rigids,
                     flex_vars: Vec::new(),         // no flex vars introduced
                     def_types: SendMap::default(), // no headers introduced (at this level)
+                    def_aliases: SendMap::default(),
                     defs_constraint: def_con,
                     ret_constraint: True,
                 })));
@@ -1736,19 +1798,25 @@ pub fn rec_defs_help(
         }
     }
 
+    // list aliases to Attr types
+    aliases_to_attr_type(var_store, &mut def_aliases);
+
     Let(Box::new(LetConstraint {
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
         def_types: rigid_info.def_types,
+        def_aliases,
         defs_constraint: True,
         ret_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
             flex_vars: flex_info.vars,
             def_types: flex_info.def_types.clone(),
+            def_aliases: SendMap::default(),
             defs_constraint: Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: Vec::new(),
                 def_types: flex_info.def_types,
+                def_aliases: SendMap::default(),
                 defs_constraint: True,
                 ret_constraint: And(flex_info.constraints),
             })),
