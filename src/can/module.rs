@@ -18,7 +18,7 @@ use bumpalo::Bump;
 #[derive(Debug)]
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
-    pub rigid_variables: MutMap<Variable, Lowercase>,
+    pub rigid_variables: MutMap<Lowercase, Variable>,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,

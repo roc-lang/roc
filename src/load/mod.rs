@@ -34,7 +34,7 @@ pub struct Module {
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
-    pub rigid_variables: MutMap<Variable, Lowercase>,
+    pub rigid_variables: MutMap<Lowercase, Variable>,
 }
 
 pub struct LoadedModule {
@@ -804,7 +804,7 @@ fn solve_module(
 
     let mut subs = Subs::new(var_store.into());
     for (var, name) in module.rigid_variables {
-        subs.rigid_var(var, name);
+        subs.rigid_var(name, var);
     }
 
     // Start solving this module in the background.

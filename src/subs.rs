@@ -5,6 +5,7 @@ use crate::module::symbol::Symbol;
 use crate::types::{name_type_var, ErrorType, Problem, TypeExt};
 use crate::uniqueness::boolean_algebra;
 use std::fmt;
+use std::iter::{once, Iterator};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -260,6 +261,10 @@ impl Subs {
         self.utable.get_root_key(key)
     }
 
+    pub fn get_root_key_without_compacting(&self, key: Variable) -> Variable {
+        self.utable.get_root_key_without_compacting(key)
+    }
+
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key);
 
@@ -310,7 +315,7 @@ impl Subs {
         self.utable.is_redirect(var)
     }
 
-    pub fn occurs(&mut self, var: Variable) -> Option<Variable> {
+    pub fn occurs(&mut self, var: Variable) -> Option<(Variable, Vec<Variable>)> {
         occurs(self, &ImSet::default(), var)
     }
 
@@ -506,14 +511,18 @@ pub enum Builtin {
     EmptyRecord,
 }
 
-fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, input_var: Variable) -> Option<Variable> {
+fn occurs(
+    subs: &mut Subs,
+    seen: &ImSet<Variable>,
+    input_var: Variable,
+) -> Option<(Variable, Vec<Variable>)> {
     use self::Content::*;
     use self::FlatType::*;
 
     let root_var = subs.get_root_key(input_var);
 
     if seen.contains(&root_var) {
-        Some(root_var)
+        Some((root_var, vec![]))
     } else {
         match subs.get(root_var).content {
             FlexVar(_) | RigidVar(_) | Error => None,
@@ -524,75 +533,31 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, input_var: Variable) -> Optio
                 new_seen.insert(root_var);
 
                 match flat_type {
-                    Apply(_, args) => {
-                        for var in args {
-                            if let Some(v) = occurs(subs, &new_seen, var) {
-                                return Some(v);
-                            }
-                        }
-
-                        None
-                    }
+                    Apply(_, args) => short_circuit(subs, root_var, &new_seen, args.iter()),
                     Func(arg_vars, ret_var) => {
-                        if let Some(v) = occurs(subs, &new_seen, ret_var) {
-                            Some(v)
-                        } else {
-                            for var in arg_vars {
-                                if let Some(v) = occurs(subs, &new_seen, var) {
-                                    return Some(v);
-                                }
-                            }
-
-                            None
-                        }
+                        let it = once(&ret_var).chain(arg_vars.iter());
+                        short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
-                        if let Some(v) = occurs(subs, &new_seen, ext_var) {
-                            Some(v)
-                        } else {
-                            for var in vars_by_field.values() {
-                                if let Some(v) = occurs(subs, &new_seen, *var) {
-                                    return Some(v);
-                                }
-                            }
-
-                            None
-                        }
+                        let it = once(&ext_var).chain(vars_by_field.values());
+                        short_circuit(subs, root_var, &new_seen, it)
                     }
                     TagUnion(tags, ext_var) => {
-                        if let Some(v) = occurs(subs, &new_seen, ext_var) {
-                            Some(v)
-                        } else {
-                            for var in tags.values().flatten() {
-                                if let Some(v) = occurs(subs, &new_seen, *var) {
-                                    return Some(v);
-                                }
-                            }
-
-                            None
-                        }
+                        let it = once(&ext_var).chain(tags.values().flatten());
+                        short_circuit(subs, root_var, &new_seen, it)
                     }
                     RecursiveTagUnion(_rec_var, tags, ext_var) => {
                         // TODO rec_var is excluded here, verify that this is correct
-                        if let Some(v) = occurs(subs, &new_seen, ext_var) {
-                            Some(v)
-                        } else {
-                            for var in tags.values().flatten() {
-                                if let Some(v) = occurs(subs, &new_seen, *var) {
-                                    return Some(v);
-                                }
-                            }
-
-                            None
-                        }
+                        let it = once(&ext_var).chain(tags.values().flatten());
+                        short_circuit(subs, root_var, &new_seen, it)
                     }
                     Boolean(b) => {
                         for var in b.variables().iter() {
-                            if let Some(v) = occurs(subs, &new_seen, *var) {
-                                return Some(v);
+                            if let Some((v, mut vec)) = occurs(subs, &new_seen, *var) {
+                                vec.push(root_var);
+                                return Some((v, vec));
                             }
                         }
-
                         None
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => None,
@@ -601,16 +566,29 @@ fn occurs(subs: &mut Subs, seen: &ImSet<Variable>, input_var: Variable) -> Optio
             Alias(_, args, _) => {
                 let mut new_seen = seen.clone();
                 new_seen.insert(root_var);
-                for var in args.into_iter().map(|(_, var)| var) {
-                    if let Some(v) = occurs(subs, &new_seen, var) {
-                        return Some(v);
-                    }
-                }
-
-                None
+                let it = args.iter().map(|(_, var)| var);
+                short_circuit(subs, root_var, &new_seen, it)
             }
         }
     }
+}
+
+fn short_circuit<'a, T>(
+    subs: &mut Subs,
+    root_key: Variable,
+    seen: &ImSet<Variable>,
+    iter: T,
+) -> Option<(Variable, Vec<Variable>)>
+where
+    T: Iterator<Item = &'a Variable>,
+{
+    for var in iter {
+        if let Some((v, mut vec)) = occurs(subs, seen, *var) {
+            vec.push(root_key);
+            return Some((v, vec));
+        }
+    }
+    None
 }
 
 fn explicit_substitute(

@@ -228,6 +228,15 @@ pub fn fmt_expr<'a>(
                 format_newlines,
             );
         }
+        AccessorFunction(key) => {
+            buf.push('.');
+            buf.push_str(key);
+        }
+        Access(expr, key) => {
+            fmt_expr(buf, expr, indent, apply_needs_parens, true);
+            buf.push('.');
+            buf.push_str(key);
+        }
         other => panic!("TODO implement Display for AST variant {:?}", other),
     }
 }
