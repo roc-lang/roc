@@ -34,16 +34,7 @@ mod test_load {
         rt.block_on(future)
     }
 
-    // async fn load_builtins(subs_by_module: &mut SubsByModule) -> LoadedModule {
-    //     let src_dir = builtins_dir();
-    //     let filename = src_dir.join("Defaults.roc");
-
-    //     load(src_dir, filename, subs_by_module)
-    //         .await
-    //         .expect("Failed to load builtins from Defaults.roc")
-    // }
-
-    async fn load_without_builtins(
+    async fn load_fixture(
         dir_name: &str,
         module_name: &str,
         subs_by_module: SubsByModule,
@@ -66,27 +57,6 @@ mod test_load {
 
         loaded_module
     }
-
-    // async fn load_with_builtins(
-    //     dir_name: &str,
-    //     module_name: &str,
-    //     subs_by_module: SubsByModule,
-    // ) -> LoadedModule {
-    //     load_builtins(subs_by_module).await;
-
-    //     let src_dir = fixtures_dir().join(dir_name);
-    //     let filename = src_dir.join(format!("{}.roc", module_name));
-    //     let loaded = load(src_dir, filename, subs_by_module).await;
-    //     let loaded_module = loaded.expect("Test module failed to load");
-    //     let expected_name = loaded_module
-    //         .module_ids
-    //         .get_name(loaded_module.module_id)
-    //         .expect("Test ModuleID not found in module_ids");
-
-    //     assert_eq!(expected_name, &ModuleName::from(module_name));
-
-    //     loaded_module
-    // }
 
     fn expect_types(loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
         let home = loaded_module.module_id;
@@ -254,36 +224,35 @@ mod test_load {
     //     });
     // }
 
-    // #[test]
-    // fn load_and_infer_with_builtins() {
-    //     test_async(async {
-    //         let subs_by_module = MutMap::default();
-    //         let loaded_module =
-    //             load_with_builtins("interface_with_deps", "WithBuiltins", subs_by_module)
-    //                 .await;
+    #[test]
+    fn load_and_infer_with_builtins() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module =
+                load_fixture("interface_with_deps", "WithBuiltins", subs_by_module).await;
 
-    //         expect_types(
-    //             loaded_module,
-    //             hashmap! {
-    //                 "floatTest" => "Float",
-    //                 "divisionFn" => "Float, Float -> Float",
-    //                 "divisionTest" => "Float",
-    //                 "intTest" => "Int",
-    //                 "x" => "Float",
-    //                 "constantInt" => "Int",
-    //                 "divDep1ByDep2" => "Float",
-    //                 "fromDep2" => "Float",
-    //             },
-    //         );
-    //     });
-    // }
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "floatTest" => "Float",
+                    "divisionFn" => "Float, Float -> Float",
+                    "divisionTest" => "Float",
+                    "intTest" => "Int",
+                    "x" => "Float",
+                    "constantInt" => "Int",
+                    "divDep1ByDep2" => "Float",
+                    "fromDep2" => "Float",
+                },
+            );
+        });
+    }
 
     #[test]
     fn load_principal_types() {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
-                load_without_builtins("interface_with_deps", "Principal", subs_by_module).await;
+                load_fixture("interface_with_deps", "Principal", subs_by_module).await;
 
             expect_types(
                 loaded_module,
@@ -300,7 +269,7 @@ mod test_load {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
-                load_without_builtins("interface_with_deps", "Primary", subs_by_module).await;
+                load_fixture("interface_with_deps", "Primary", subs_by_module).await;
 
             expect_types(
                 loaded_module,
@@ -326,7 +295,7 @@ mod test_load {
 
     //         let subs_by_module = MutMap::default();
     //         let loaded_module =
-    //             load_without_builtins("interface_with_deps", "Records", subs_by_module).await;
+    //             load_fixture("interface_with_deps", "Records", subs_by_module).await;
 
     //         // NOTE: `a` here is unconstrained, so unifies with <type error>
     //         let expected_types = hashmap! {
@@ -383,7 +352,7 @@ mod test_load {
     // fn load_and_infer_without_builtins() {
     //     test_async(async {
     //         let subs_by_module = MutMap::default();
-    //         let loaded_module = load_without_builtins(
+    //         let loaded_module = load_fixture(
     //             "interface_with_deps",
     //             "WithoutBuiltins",
     //             subs_by_module,
