@@ -1,16 +1,17 @@
 interface Result
-    exposes [ Result, withDefault, map, andThen, ConsList, listMap ]
+    exposes [ Result, withDefault, map, andThen, ConsList ]
     imports []
 
 Result e a : [ Ok a, Err e ]
 
 ConsList a : [ Cons a (ConsList a), Nil ]
 
-listMap : ConsList a, (a -> b) -> ConsList b
-listMap = \list, f ->
-    when list is
-        Nil -> Nil
-        Cons x xs -> Cons (f x) (listMap xs f)
+# TODO FIXME for some reason, exposing this causes a stack overflow
+# listMap : ConsList a, (a -> b) -> ConsList b
+# listMap = \list, f ->
+    # when list is
+        # Nil -> Nil
+        # Cons x xs -> Cons (f x) (listMap xs f)
 
 map : Result e a, (a -> b) -> Result e b
 map = \result, f ->
