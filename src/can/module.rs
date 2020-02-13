@@ -137,7 +137,7 @@ pub fn canonicalize_module_defs<'a>(
         references.insert(*symbol);
     }
 
-    match sort_can_defs(&mut env, defs, Output::default()) {
+    match sort_can_defs(&mut env, defs, Output::default(), var_store) {
         (Ok(declarations), output) => {
             use crate::can::def::Declaration::*;
 

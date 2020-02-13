@@ -1887,6 +1887,25 @@ mod test_infer {
     }
 
     #[test]
+    fn typecheck_mutually_recursive_tag_union2() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                      ListA a : [ Cons a (ListB a) ]
+                      ListB a : [ Cons a (ListC a) ]
+                      ListC a : [ Cons a (ListA a), Nil ]
+    
+                      val : ListC a
+                      val = Nil
+
+                      val
+                     "#
+            ),
+            "(b -> a), ListA a b -> List a",
+        );
+    }
+
+    #[test]
     fn infer_mutually_recursive_tag_union() {
         infer_eq_without_problem(
             indoc!(

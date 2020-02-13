@@ -179,19 +179,69 @@ pub fn canonicalize_defs<'a>(
     if cfg!(debug_assertions) {
         env.home.register_debug_idents(&env.ident_ids);
     }
-
     let aliases_first = |x: &PendingDef<'_>, _: &PendingDef<'_>| match x {
         PendingDef::Alias { .. } => Ordering::Less,
         _ => Ordering::Greater,
     };
 
-    pending.sort_by(aliases_first);
-
     let mut aliases = SendMap::default();
+    let mut value_defs = Vec::new();
+
+    for pending_def in pending.into_iter() {
+        match pending_def {
+            PendingDef::Alias { name, vars, ann } =>
+            //        name: Located<Symbol>,
+            //        vars: Vec<Located<Lowercase>>,
+            //        ann: &'a Located<ast::TypeAnnotation<'a>>,
+            {
+                let symbol = name.value;
+                let mut can_ann =
+                    canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+
+                let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
+                    Vec::with_capacity(vars.len());
+
+                for loc_lowercase in vars {
+                    if let Some(var) = can_ann.rigids.get(&loc_lowercase.value) {
+                        // This is a valid lowercase rigid var for the alias.
+                        can_vars.push(Located {
+                            value: (loc_lowercase.value.clone(), *var),
+                            region: loc_lowercase.region,
+                        });
+                    } else {
+                        panic!("TODO handle phantom type variables, they are not allowed!");
+                    }
+                }
+
+                if can_ann.typ.contains_symbol(symbol) {
+                    // the alias is recursive. If it's a tag union, we attempt to fix this
+                    if let Type::TagUnion(tags, ext) = can_ann.typ {
+                        // re-canonicalize the alias with the alias already in scope
+                        let rec_var = var_store.fresh();
+                        let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
+                        rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
+                        can_ann.typ = rec_type_union;
+                    } else {
+                        panic!("recursion in type alias that is not behind a Tag");
+                    }
+                }
+
+                let alias = crate::types::Alias {
+                    region: ann.region,
+                    vars: can_vars,
+                    typ: can_ann.typ,
+                };
+                aliases.insert(symbol, alias);
+            }
+            other => value_defs.push(other),
+        }
+    }
+
+    correct_mutual_recursive_type_alias(&mut aliases, &var_store);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
-    for pending_def in pending.into_iter() {
+    for pending_def in value_defs.into_iter() {
         output = canonicalize_pending_def(
             env,
             pending_def,
@@ -241,12 +291,10 @@ pub fn canonicalize_defs<'a>(
 #[inline(always)]
 pub fn sort_can_defs(
     env: &mut Env<'_>,
-    defs: CanDefs,
+    mut defs: CanDefs,
     mut output: Output,
+    var_store: &VarStore,
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
-    correct_resursive_aliases(defs);
-    panic!();
-
     let CanDefs {
         refs_by_symbol,
         can_defs_by_symbol,
@@ -1105,7 +1153,7 @@ pub fn can_defs_with_return<'a>(
     // Use its output as a starting point because its tail_call already has the right answer!
     let (ret_expr, output) =
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
-    let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
+    let (can_defs, mut output) = sort_can_defs(env, unsorted, output, var_store);
 
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
@@ -1305,20 +1353,11 @@ fn pending_typed_body<'a>(
 }
 
 /// Make aliases recursive
-fn correct_resursive_aliases(defs: CanDefs) {
-    let CanDefs {
-        refs_by_symbol,
-        can_defs_by_symbol,
-        aliases,
-        ..
-    } = defs;
-
+fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var_store: &VarStore) {
     let mut symbols_introduced = ImSet::default();
 
-    for key in aliases.keys() {
-        if defs.symbols_introduced.contains_key(key) {
-            symbols_introduced.insert(key);
-        }
+    for (key, _) in aliases.iter() {
+        symbols_introduced.insert(*key);
     }
 
     let all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
@@ -1334,36 +1373,18 @@ fn correct_resursive_aliases(defs: CanDefs) {
         }
     };
 
-    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
-        match aliases.get(symbol) {
-            Some(alias) => {
-                let mut loc_succ = alias.typ.symbols();
-                // remove anything that is not defined in the current block
-                loc_succ.retain(|key| symbols_introduced.contains(key));
-                loc_succ.remove(symbol);
+    let defined_symbols: Vec<Symbol> = aliases.keys().copied().collect();
 
-                loc_succ
-            }
-            None => ImSet::default(),
-        }
-    };
-
-    let defined_symbols: Vec<Symbol> = aliases.keys().map(|x| *x).collect();
-
-    // split into recursive and non-recursive aliases
-    match topological_sort_into_groups(defined_symbols.as_slice(), all_successors_with_self) {
+    // split into self-recursive and mutually recursive
+    match topological_sort_into_groups(&defined_symbols, all_successors_with_self) {
         Ok(_) => {
-            // none of the aliases is (self nor mutually) recursive
+            // no mutual recursion in any alias
         }
-        Err((_non_recursive, recursive_symbols)) => {
-            // split into self-recursive and mutually recursive
-            match topological_sort_into_groups(
-                recursive_symbols.as_slice(),
-                all_successors_without_self,
-            ) {
-                Ok(self_recursive_symbols) => {}
-                Err((self_recursive_symbols, mutually_recursive_symbols)) => {}
-            }
+        Err((_, mutually_recursive_symbols)) => {
+            panic!(
+                "TODO mutually recursive tag unions {:?}",
+                mutually_recursive_symbols
+            );
         }
     }
 }
