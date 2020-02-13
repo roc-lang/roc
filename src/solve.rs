@@ -368,6 +368,24 @@ impl SolvedType {
             ),
         );
 
+        // highest : Float
+        types.insert(
+            Symbol::FLOAT_HIGHEST,
+            (
+                SolvedType::Apply(Symbol::FLOAT_FLOAT, Vec::new()),
+                Region::zero(),
+            ),
+        );
+
+        // lowest : Float
+        types.insert(
+            Symbol::FLOAT_LOWEST,
+            (
+                SolvedType::Apply(Symbol::FLOAT_FLOAT, Vec::new()),
+                Region::zero(),
+            ),
+        );
+
         // List module
 
         // List elem : [ @List elem ]
