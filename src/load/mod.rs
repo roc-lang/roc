@@ -791,7 +791,7 @@ fn solve_module(
     }
 
     // Wrap the existing module constraint in these imported constraints.
-    let constraint = constrain_imported_values(imports, aliases, constraint, &var_store);
+    let constraint = constrain_imported_values(imports, &aliases, constraint, &var_store);
 
     // All the exposed imports should be available in the solver's vars_by_symbol
     for (symbol, expr_var) in module.exposed_imports.iter() {
@@ -819,15 +819,15 @@ fn solve_module(
 
     let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
 
-    let mut aliases = SendMap::default();
+    let mut aliases = MutMap::default();
 
-    for (symbol, alias) in module.aliases.clone() {
-        aliases.insert(symbol, alias);
+    for (symbol, alias) in module.aliases.iter() {
+        aliases.insert(*symbol, alias.clone());
     }
 
     let env = solve::Env {
         vars_by_symbol,
-        aliases: aliases.clone(),
+        aliases: module.aliases.clone()
     };
 
     let mut subs = Subs::new(var_store.into());
@@ -882,7 +882,7 @@ fn solve_module(
                 subs: Arc::new(solved_subs),
                 solved_types,
                 problems,
-                aliases: aliases.clone().into_iter().collect(),
+                aliases
             })
             .await
             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
