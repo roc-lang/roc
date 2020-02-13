@@ -32,6 +32,7 @@ pub enum SolvedType {
     /// A bound type variable, e.g. `a` in `(a -> a)`
     Rigid(Lowercase),
     Flex(VarId),
+    Wildcard,
     /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
     Record {
         fields: Vec<(Lowercase, SolvedType)>,
