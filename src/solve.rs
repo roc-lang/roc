@@ -262,7 +262,7 @@ impl SolvedType {
 #[derive(Clone, Debug)]
 pub struct Env {
     pub vars_by_symbol: SendMap<Symbol, Variable>,
-    pub aliases: SendMap<Symbol, Alias>,
+    pub aliases: MutMap<Symbol, Alias>,
 }
 
 const DEFAULT_POOLS: usize = 8;
@@ -679,7 +679,7 @@ fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    aliases: &SendMap<Symbol, Alias>,
+    aliases: &MutMap<Symbol, Alias>,
     typ: &Type,
 ) -> Variable {
     type_to_variable(subs, rank, pools, aliases, typ)
@@ -689,7 +689,7 @@ fn type_to_variable(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    aliases: &SendMap<Symbol, Alias>,
+    aliases: &MutMap<Symbol, Alias>,
     typ: &Type,
 ) -> Variable {
     match typ {

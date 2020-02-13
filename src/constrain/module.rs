@@ -26,7 +26,7 @@ pub struct Import<'a> {
 
 pub fn constrain_imported_values(
     imports: Vec<Import<'_>>,
-    aliases: MutMap<Symbol, Alias>,
+    aliases: &MutMap<Symbol, Alias>,
     mut body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
@@ -38,7 +38,7 @@ pub fn constrain_imported_values(
             import.loc_symbol,
             import.solved_type,
             body_con,
-            &aliases,
+            aliases,
             var_store,
         );
     }
