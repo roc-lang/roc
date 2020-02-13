@@ -137,95 +137,8 @@ mod test_load {
         });
     }
 
-    // #[test]
-    // fn load_only_builtins() {
-    //     let subs_by_module = MutMap::default();
-    //     let src_dir = builtins_dir();
-    //     let filename = src_dir.join("Defaults.roc");
-
-    //     test_async(async {
-    //         let module_ids_to_load: Vec<ModuleId> =
-    //             subs_by_module.keys().map(|module_id| *module_id).collect();
-    //         let loaded = load(src_dir, filename, subs_by_module).await;
-    //         let loaded_module = loaded.expect("Test module failed to load");
-    //         assert_eq!(loaded_module.problems, Vec::new());
-
-    //         let def_count: usize = loaded_module
-    //             .declarations
-    //             .iter()
-    //             .map(|decl| decl.def_count())
-    //             .sum();
-
-    //         let module_ids = loaded_module.interns.module_ids;
-    //         let expected_name = module_ids
-    //             .get_name(loaded_module.module_id)
-    //             .expect("Test ModuleID not found in module_ids");
-
-    //         assert_eq!(expected_name, &InlinableString::from("Defaults"));
-    //         assert_eq!(def_count, 0);
-
-    //         let mut all_loaded_modules: Vec<InlinableString> = module_ids_to_load
-    //             .iter()
-    //             .map(|&module_id| module_ids.get_name(module_id).unwrap().clone())
-    //             .collect();
-
-    //         let expected: Vec<InlinableString> =
-    //             vec!["Float".into(), "Int".into(), "Map".into(), "Set".into()];
-
-    //         all_loaded_modules.sort();
-
-    //         assert_eq!(all_loaded_modules, expected);
-    //     });
-    // }
-
-    // #[test]
-    // fn interface_with_builtins() {
-    //     test_async(async {
-    //         let subs_by_module = MutMap::default();
-    //         let loaded_module =
-    //             load_with_builtins("interface_with_deps", "WithBuiltins", subs_by_module)
-    //                 .await;
-
-    //         assert_eq!(loaded_module.problems, Vec::new());
-
-    //         let module_ids = loaded_module.module_ids;
-    //         let expected_name = module_ids
-    //             .get_name(loaded_module.module_id)
-    //             .expect("Test ModuleID not found in module_ids");
-
-    //         assert_eq!(expected_name, &ModuleName::from("Primary"));
-
-    //         let def_count: usize = loaded_module
-    //             .declarations
-    //             .iter()
-    //             .map(|decl| decl.def_count())
-    //             .sum();
-    //         assert_eq!(def_count, 6);
-
-    //         let mut all_loaded_modules: Vec<ModuleName> = subs_by_module
-    //             .keys()
-    //             .map(|module_id| module_ids.get_name(*module_id).unwrap().clone())
-    //             .collect();
-
-    //         all_loaded_modules.sort();
-
-    //         assert_eq!(
-    //             all_loaded_modules,
-    //             vec![
-    //                 "Int".into(),
-    //                 "Map".into(),
-    //                 "Set".into(),
-    //                 "Float".into(),
-    //                 "Dep1".into(),
-    //                 "Dep3.Blah".into(),
-    //                 "Dep2".into()
-    //             ]
-    //         );
-    //     });
-    // }
-
     #[test]
-    fn load_and_infer_with_builtins() {
+    fn load_and_infer() {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
@@ -345,30 +258,6 @@ mod test_load {
     //                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
     //             }
     //         }
-    //     });
-    // }
-
-    // #[test]
-    // fn load_and_infer_without_builtins() {
-    //     test_async(async {
-    //         let subs_by_module = MutMap::default();
-    //         let loaded_module = load_fixture(
-    //             "interface_with_deps",
-    //             "WithoutBuiltins",
-    //             subs_by_module,
-    //         )
-    //         .await;
-
-    //         expect_types(
-    //             loaded_module,
-    //             hashmap! {
-    //                 "alwaysThreePointZero" => "* -> Float",
-    //                 "answer" => "Int",
-    //                 "fromDep2" => "Float",
-    //                 "identity" => "a -> a",
-    //                 "threePointZero" => "Float",
-    //             },
-    //         );
     //     });
     // }
 }
