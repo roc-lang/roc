@@ -1,3 +1,4 @@
+use crate::builtins;
 use crate::can;
 use crate::can::def::Declaration;
 use crate::can::ident::{Ident, Lowercase, ModuleName};
@@ -6,7 +7,6 @@ use crate::collections::{default_hasher, insert_all, MutMap, MutSet, SendMap};
 use crate::constrain::module::{constrain_imported_values, constrain_module, Import};
 use crate::module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
-use crate::builtins;
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
@@ -827,7 +827,7 @@ fn solve_module(
 
     let env = solve::Env {
         vars_by_symbol,
-        aliases: module.aliases
+        aliases: module.aliases,
     };
 
     let mut subs = Subs::new(var_store.into());
@@ -882,7 +882,7 @@ fn solve_module(
                 subs: Arc::new(solved_subs),
                 solved_types,
                 problems,
-                aliases
+                aliases,
             })
             .await
             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
