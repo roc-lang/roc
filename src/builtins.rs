@@ -13,7 +13,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     let mut types = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
 
     let mut add_type = |symbol, typ| {
-        debug_assert!(!types.contains_key(&symbol));
+        debug_assert!(
+            !types.contains_key(&symbol),
+            "Duplicate type definition for {:?}",
+            symbol
+        );
 
         // TODO instead of using Region::zero for all of these,
         // instead use the Region where they were defined in their
