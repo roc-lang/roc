@@ -1,5 +1,5 @@
 interface Dep1
-    exposes [ three, str, Unit, Identity ]
+    exposes [ three, str, Unit, Identity, one, two ]
     imports [ Dep3.Blah.{ foo } ]
 
 one = 1

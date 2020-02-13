@@ -1,5 +1,5 @@
 interface Result
-    exposes [ Result, withDefault, map, andThen, ConsList ]
+    exposes [ Result, withDefault, map, andThen, ConsList, listMap ]
     imports []
 
 Result e a : [ Ok a, Err e ]

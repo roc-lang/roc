@@ -1,12 +1,10 @@
 interface Dep2
-    exposes [ two ]
+    exposes [ one, two, blah ]
     imports [ Dep3.Blah.{ foo, bar } ]
 
 one = 1
 
-foo = "foo" # TODO FIXME this should be reported as shadowing!
+blah = "foo"
 
 two = 2.0
-
-one = 1
 
