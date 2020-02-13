@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::module::symbol::{ModuleId, Symbol};
-use crate::region::Located;
+use crate::region::{Located, Region};
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, VarId, Variable};
 use crate::types::Alias;
 use crate::types::Constraint::{self, *};
@@ -258,6 +258,13 @@ impl SolvedType {
             Erroneous(problem) => SolvedType::Erroneous(problem),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuiltinAlias {
+    pub region: Region,
+    pub vars: Vec<Located<(Lowercase, VarId)>>,
+    pub typ: SolvedType,
 }
 
 #[derive(Clone, Debug)]

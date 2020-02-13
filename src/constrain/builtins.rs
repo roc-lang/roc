@@ -8,19 +8,33 @@ use crate::types::Type::{self, *};
 use crate::types::{LetConstraint, Reason};
 
 #[inline(always)]
-pub fn int_literal(var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
-    let typ = number_literal_type(Symbol::INT_INTEGER);
+pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
+    let num_type = Variable(num_var);
     let reason = Reason::IntLiteral;
+    let expected_literal = ForReason(reason, Type::Apply(Symbol::INT_INT, vec![]), region);
 
-    num_literal(var, typ, reason, expected, region)
+    exists(
+        vec![num_var],
+        And(vec![
+            Eq(num_type.clone(), expected_literal, region),
+            Eq(num_type, expected, region),
+        ]),
+    )
 }
 
 #[inline(always)]
-pub fn float_literal(var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
-    let typ = number_literal_type(Symbol::FLOAT_FLOATINGPOINT);
+pub fn float_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
+    let num_type = Variable(num_var);
     let reason = Reason::FloatLiteral;
+    let expected_literal = ForReason(reason, Type::Apply(Symbol::FLOAT_FLOAT, vec![]), region);
 
-    num_literal(var, typ, reason, expected, region)
+    exists(
+        vec![num_var],
+        And(vec![
+            Eq(num_type.clone(), expected_literal, region),
+            Eq(num_type, expected, region),
+        ]),
+    )
 }
 
 #[inline(always)]
