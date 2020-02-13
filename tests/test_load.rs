@@ -155,6 +155,7 @@ mod test_load {
                     "constantInt" => "Int",
                     "divDep1ByDep2" => "Float",
                     "fromDep2" => "Float",
+                    "swap" => "Int, Int, List a -> List a",
                 },
             );
         });

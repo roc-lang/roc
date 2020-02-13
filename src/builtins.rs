@@ -10,6 +10,10 @@ use std::collections::HashMap;
 ///
 const NUM_BUILTIN_IMPORTS: usize = 7;
 
+/// These can be shared between definitions, they will get instantiated when converted to Type
+const TVAR1: VarId = VarId::from_u32(1);
+const TVAR2: VarId = VarId::from_u32(2);
+
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
     use SolvedType::Flex;
     let mut aliases = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
@@ -27,12 +31,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         aliases.insert(symbol, alias);
     };
 
-    // These can be shared between definitions, they will get instantiated when converted to Type
-    let tvar1 = VarId::from_u32(1);
-    let tvar2 = VarId::from_u32(2);
-    let tvar3 = VarId::from_u32(3);
-    let tvar4 = VarId::from_u32(4);
-
     let single_private_tag = |symbol, targs| {
         SolvedType::TagUnion(
             vec![(TagName::Private(symbol), targs)],
@@ -45,8 +43,8 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::NUM_NUM,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), ("range".into(), tvar1))],
-            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![Flex(tvar1)]),
+            vars: vec![Located::at(Region::zero(), ("range".into(), TVAR1))],
+            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![Flex(TVAR1)]),
         },
     );
 
@@ -118,13 +116,13 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![
-                Located::at(Region::zero(), ("a".into(), tvar1)),
-                Located::at(Region::zero(), ("e".into(), tvar2)),
+                Located::at(Region::zero(), ("a".into(), TVAR1)),
+                Located::at(Region::zero(), ("e".into(), TVAR2)),
             ],
             typ: SolvedType::TagUnion(
                 vec![
-                    (TagName::Global("Ok".into()), vec![Flex(tvar1)]),
-                    (TagName::Global("Err".into()), vec![Flex(tvar2)]),
+                    (TagName::Global("Ok".into()), vec![Flex(TVAR1)]),
+                    (TagName::Global("Err".into()), vec![Flex(TVAR2)]),
                 ],
                 Box::new(SolvedType::EmptyTagUnion),
             ),
@@ -136,8 +134,8 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::LIST_LIST,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), ("elem".into(), tvar1))],
-            typ: single_private_tag(Symbol::LIST_AT_LIST, vec![Flex(tvar1)]),
+            vars: vec![Located::at(Region::zero(), ("elem".into(), TVAR1))],
+            typ: single_private_tag(Symbol::LIST_AT_LIST, vec![Flex(TVAR1)]),
         },
     );
 
@@ -230,6 +228,33 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // get : List a, Int -> Result a [ IndexOutOfBounds ]*
+    let index_out_of_bounds = SolvedType::TagUnion(
+        vec![(TagName::Global("IndexOutOfBounds".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(
+        Symbol::LIST_GET,
+        SolvedType::Func(
+            vec![list_type(SolvedType::Flex(TVAR1)), int_type()],
+            Box::new(result_type(SolvedType::Flex(TVAR1), index_out_of_bounds)),
+        ),
+    );
+
+    // set : List a, Int, a -> List a
+    add_type(
+        Symbol::LIST_SET,
+        SolvedType::Func(
+            vec![
+                list_type(SolvedType::Flex(TVAR1)),
+                int_type(),
+                SolvedType::Flex(TVAR1),
+            ],
+            Box::new(list_type(SolvedType::Flex(TVAR1))),
+        ),
+    );
+
     types
 }
 
@@ -251,4 +276,14 @@ fn bool_type() -> SolvedType {
 #[inline(always)]
 fn str_type() -> SolvedType {
     SolvedType::Apply(Symbol::STR_STR, Vec::new())
+}
+
+#[inline(always)]
+fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
+    SolvedType::Apply(Symbol::RESULT_RESULT, vec![a, e])
+}
+
+#[inline(always)]
+fn list_type(a: SolvedType) -> SolvedType {
+    SolvedType::Apply(Symbol::LIST_LIST, vec![a])
 }

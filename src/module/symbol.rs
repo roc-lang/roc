@@ -566,6 +566,8 @@ define_builtins! {
         0 LIST_LIST: "List" // the List.List type alias
         1 LIST_AT_LIST: "@List" // the List.@List private tag
         2 LIST_ISEMPTY: "isEmpty"
+        3 LIST_GET: "get"
+        4 LIST_SET: "set"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias

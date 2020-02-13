@@ -198,7 +198,7 @@ impl VarId {
         VarId(n)
     }
 
-    pub fn from_u32(n: u32) -> Self {
+    pub const fn from_u32(n: u32) -> Self {
         VarId(n)
     }
 }
