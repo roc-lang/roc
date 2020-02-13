@@ -898,7 +898,7 @@ fn canonicalize_lookup(
         // Look it up in the env!
         match env.qualified_lookup(module_name, ident, region) {
             Ok(symbol) => {
-                output.references.lookups.insert(dbg!(symbol));
+                output.references.lookups.insert(symbol);
 
                 Var(symbol)
             }

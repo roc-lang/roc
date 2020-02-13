@@ -730,8 +730,6 @@ fn solve_module(
     for &symbol in module.references.iter() {
         let module_id = symbol.module_id();
 
-        dbg!(&module_id, module_id.is_builtin());
-
         if module_id.is_builtin() {
             // For builtin modules, we create imports from the
             // hardcoded builtin map.
