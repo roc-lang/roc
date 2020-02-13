@@ -145,7 +145,7 @@ pub async fn load<'a>(
 
     // This is the "final" list of IdentIds, after canonicalization and constraint gen
     // have completed for a given module.
-    let mut constrained_ident_ids = MutMap::default();
+    let mut constrained_ident_ids = IdentIds::exposed_builtins();
     let mut headers_parsed = MutSet::default();
 
     // Load the root module synchronously; we can't proceed until we have its id.
