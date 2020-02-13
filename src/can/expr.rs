@@ -897,7 +897,11 @@ fn canonicalize_lookup(
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
         match env.qualified_lookup(module_name, ident, region) {
-            Ok(symbol) => Var(symbol),
+            Ok(symbol) => {
+                output.references.lookups.insert(dbg!(symbol));
+
+                Var(symbol)
+            }
             Err(problem) => {
                 // Either the module wasn't imported, or
                 // it was imported but it doesn't expose this ident.
