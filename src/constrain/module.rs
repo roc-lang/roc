@@ -1,11 +1,10 @@
-use crate::builtins;
 use crate::can::def::Declaration;
 use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::constrain::expr::constrain_decls;
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
-use crate::solve::SolvedType;
+use crate::solve::{BuiltinAlias, SolvedType};
 use crate::subs::{VarId, VarStore, Variable};
 use crate::types::{Alias, Constraint, LetConstraint, Type};
 
@@ -27,25 +26,65 @@ pub struct Import<'a> {
 
 pub fn constrain_imported_values(
     imports: Vec<Import<'_>>,
-    aliases: &MutMap<Symbol, Alias>,
-    mut body_con: Constraint,
+    body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
     use Constraint::*;
-    // TODO try out combining all the def_types and free_vars, so that we
-    // don't need to make this big linked list of nested constraints.
-    // Theoretically that should be equivalent to doing it this way!
+    let mut def_types = SendMap::default();
+    let mut rigid_vars = Vec::new();
+
     for import in imports {
-        body_con = constrain_imported_value(
-            import.loc_symbol,
-            import.solved_type,
-            body_con,
-            aliases,
-            var_store,
-        );
+        let mut free_vars = FreeVars::default();
+        let loc_symbol = import.loc_symbol;
+
+        // an imported symbol can be both an alias and a value
+        match import.solved_type {
+            SolvedType::Alias(symbol, _, _) if symbol == &loc_symbol.value => {
+                // do nothing, in the future the alias definitions should not be in the list of imported values
+            }
+            _ => {
+                let typ = to_type(&import.solved_type, &mut free_vars, var_store);
+
+                def_types.insert(
+                    loc_symbol.value,
+                    Located {
+                        region: loc_symbol.region,
+                        value: typ,
+                    },
+                );
+
+                for (_, var) in free_vars.rigid_vars {
+                    rigid_vars.push(var);
+                }
+            }
+        }
     }
 
-    for (symbol, builtin_alias) in builtins::aliases() {
+    Let(Box::new(LetConstraint {
+        // rigids from other modules should not be treated as rigid
+        // within this module; rather, they should be treated as flex
+        rigid_vars,
+        flex_vars: Vec::new(),
+        // Importing a value doesn't constrain this module at all.
+        // All it does is introduce variables and provide def_types for lookups
+        def_types,
+        def_aliases: SendMap::default(),
+        defs_constraint: True,
+        ret_constraint: body_con,
+    }))
+}
+
+pub fn load_builtin_aliases(
+    aliases: &MutMap<Symbol, BuiltinAlias>,
+    body_con: Constraint,
+    var_store: &VarStore,
+) -> Constraint {
+    use Constraint::*;
+
+    // Load all builtin aliases.
+    // TODO load only the ones actually used in this module
+    let mut def_aliases = SendMap::default();
+    for (symbol, builtin_alias) in aliases {
         let mut free_vars = FreeVars::default();
 
         let actual = to_type(&builtin_alias.typ, &mut free_vars, var_store);
@@ -55,40 +94,37 @@ pub fn constrain_imported_values(
         for Located {
             region,
             value: (lowercase, var_id),
-        } in builtin_alias.vars
+        } in &builtin_alias.vars
         {
             let var = free_vars
                 .flex_vars
                 .get(&var_id)
                 .expect("var_id was not instantiated (is it phantom?)");
 
-            vars.push(Located::at(region, (lowercase, *var)));
+            vars.push(Located::at(*region, (lowercase.clone(), *var)));
         }
 
-        let mut def_aliases = SendMap::default();
         let alias = Alias {
             vars,
             region: builtin_alias.region,
             typ: actual,
         };
 
-        def_aliases.insert(symbol, alias);
-
-        body_con = Let(Box::new(LetConstraint {
-            // rigids from other modules should not be treated as rigid
-            // within this module; rather, they should be treated as flex
-            rigid_vars: Vec::new(),
-            flex_vars: Vec::new(),
-            // Importing a value doesn't constrain this module at all.
-            // All it does is introduce variables and provide def_types for lookups
-            def_types: SendMap::default(),
-            def_aliases,
-            defs_constraint: True,
-            ret_constraint: body_con,
-        }));
+        def_aliases.insert(*symbol, alias);
     }
 
-    body_con
+    Let(Box::new(LetConstraint {
+        // rigids from other modules should not be treated as rigid
+        // within this module; rather, they should be treated as flex
+        rigid_vars: Vec::new(),
+        flex_vars: Vec::new(),
+        // Importing a value doesn't constrain this module at all.
+        // All it does is introduce variables and provide def_types for lookups
+        def_types: SendMap::default(),
+        def_aliases,
+        defs_constraint: True,
+        ret_constraint: body_con,
+    }))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -234,90 +270,38 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
     }
 }
 
-fn constrain_imported_value(
-    loc_symbol: Located<Symbol>,
-    solved_type: &SolvedType,
-    body_con: Constraint,
-    aliases: &MutMap<Symbol, Alias>,
-    var_store: &VarStore,
-) -> Constraint {
-    use Constraint::*;
-    let mut free_vars = FreeVars::default();
-
-    // an imported symbol can be both an alias and a value
-    match solved_type {
-        SolvedType::Alias(symbol, _, _) if symbol == &loc_symbol.value => {
-            if let Some(alias) = aliases.get(symbol) {
-                constrain_imported_alias(loc_symbol, alias, body_con, var_store)
-            } else {
-                panic!("Alias {:?} is not available", symbol)
-            }
-        }
-        _ => {
-            let mut def_types = SendMap::default();
-            let typ = to_type(solved_type, &mut free_vars, var_store);
-
-            def_types.insert(
-                loc_symbol.value,
-                Located {
-                    region: loc_symbol.region,
-                    value: typ,
-                },
-            );
-
-            let mut rigid_vars = Vec::new();
-
-            for (_, var) in free_vars.rigid_vars {
-                rigid_vars.push(var);
-            }
-
-            Let(Box::new(LetConstraint {
-                // rigids from other modules should not be treated as rigid
-                // within this module; rather, they should be treated as flex
-                rigid_vars,
-                flex_vars: Vec::new(),
-                // Importing a value doesn't constrain this module at all.
-                // All it does is introduce variables and provide def_types for lookups
-                def_types,
-                def_aliases: SendMap::default(),
-                defs_constraint: True,
-                ret_constraint: body_con,
-            }))
-        }
-    }
-}
-
-fn constrain_imported_alias(
-    loc_symbol: Located<Symbol>,
-    imported_alias: &Alias,
+pub fn constrain_imported_aliases(
+    aliases: MutMap<Symbol, Alias>,
     body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
     use Constraint::*;
     let mut def_aliases = SendMap::default();
 
-    let mut vars = Vec::with_capacity(imported_alias.vars.len());
-    let mut substitution = ImMap::default();
-    for Located {
-        region,
-        value: (lowercase, old_var),
-    } in &imported_alias.vars
-    {
-        let new_var = var_store.fresh();
-        vars.push(Located::at(*region, (lowercase.clone(), new_var)));
-        substitution.insert(*old_var, Type::Variable(new_var));
+    for (symbol, imported_alias) in aliases {
+        let mut vars = Vec::with_capacity(imported_alias.vars.len());
+        let mut substitution = ImMap::default();
+        for Located {
+            region,
+            value: (lowercase, old_var),
+        } in &imported_alias.vars
+        {
+            let new_var = var_store.fresh();
+            vars.push(Located::at(*region, (lowercase.clone(), new_var)));
+            substitution.insert(*old_var, Type::Variable(new_var));
+        }
+
+        let mut actual = imported_alias.typ.clone();
+        actual.substitute(&substitution);
+
+        let alias = Alias {
+            vars,
+            region: imported_alias.region,
+            typ: actual,
+        };
+
+        def_aliases.insert(symbol, alias);
     }
-
-    let mut actual = imported_alias.typ.clone();
-    actual.substitute(&substitution);
-
-    let alias = Alias {
-        vars,
-        region: loc_symbol.region,
-        typ: actual,
-    };
-
-    def_aliases.insert(loc_symbol.value, alias);
 
     Let(Box::new(LetConstraint {
         // rigids from other modules should not be treated as rigid

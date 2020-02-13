@@ -4,7 +4,10 @@ use crate::can::def::Declaration;
 use crate::can::ident::{Ident, Lowercase, ModuleName};
 use crate::can::module::{canonicalize_module_defs, ModuleOutput};
 use crate::collections::{default_hasher, insert_all, MutMap, MutSet, SendMap};
-use crate::constrain::module::{constrain_imported_values, constrain_module, Import};
+use crate::constrain::module::{
+    constrain_imported_aliases, constrain_imported_values, constrain_module, load_builtin_aliases,
+    Import,
+};
 use crate::module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
 use crate::parse::module::{self, module_defs};
@@ -793,7 +796,9 @@ fn solve_module(
     }
 
     // Wrap the existing module constraint in these imported constraints.
-    let constraint = constrain_imported_values(imports, &aliases, constraint, &var_store);
+    let constraint = constrain_imported_values(imports, constraint, &var_store);
+    let constraint = constrain_imported_aliases(aliases, constraint, &var_store);
+    let constraint = load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
 
     // All the exposed imports should be available in the solver's vars_by_symbol
     for (symbol, expr_var) in module.exposed_imports.iter() {
