@@ -1104,9 +1104,6 @@ pub fn can_defs_with_return<'a>(
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
     let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
 
-    output.rigids = output.rigids.union(defs_output.rigids);
-    output.references = output.references.union(defs_output.references);
-
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
     for (symbol, region) in symbols_introduced {
@@ -1114,6 +1111,9 @@ pub fn can_defs_with_return<'a>(
             env.problem(Problem::UnusedDef(symbol, region));
         }
     }
+
+    output.rigids = output.rigids.union(defs_output.rigids);
+    output.references = output.references.union(defs_output.references);
 
     match can_defs {
         Ok(decls) => {
