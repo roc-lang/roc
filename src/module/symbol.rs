@@ -424,8 +424,8 @@ macro_rules! define_builtins {
         num_modules: $total:literal
     } => {
         impl IdentIds {
-            pub fn exposed_builtins() -> MutMap<ModuleId, IdentIds> {
-                let mut exposed_idents_by_module = MutMap::default();
+            pub fn exposed_builtins(extra_capacity: usize) -> MutMap<ModuleId, IdentIds> {
+                let mut exposed_idents_by_module = HashMap::with_capacity_and_hasher(extra_capacity + $total, default_hasher());
 
                 $(
                     debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);

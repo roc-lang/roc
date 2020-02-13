@@ -156,7 +156,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
     let mut scope = Scope::new(home);
-    let dep_idents = IdentIds::exposed_builtins();
+    let dep_idents = IdentIds::exposed_builtins(0);
     let home_ident_ids = IdentIds::default();
     let mut env = Env::new(home, dep_idents, &module_ids, home_ident_ids);
     let (loc_expr, output) = canonicalize_expr(
@@ -181,7 +181,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     // When pretty printing types, we may need the exposed builtins,
     // so include them in the Interns we'll ultimately return.
-    for (module_id, ident_ids) in IdentIds::exposed_builtins() {
+    for (module_id, ident_ids) in IdentIds::exposed_builtins(0) {
         all_ident_ids.insert(module_id, ident_ids);
     }
 
