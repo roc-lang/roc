@@ -91,17 +91,16 @@ pub fn load_builtin_aliases(
 
         let mut vars = Vec::with_capacity(builtin_alias.vars.len());
 
-        for Located {
-            region,
-            value: (lowercase, var_id),
-        } in &builtin_alias.vars
-        {
+        for (loc_lowercase, index) in builtin_alias.vars.iter().zip(1..) {
             let var = free_vars
                 .flex_vars
-                .get(&var_id)
+                .get(&VarId::from_u32(index))
                 .expect("var_id was not instantiated (is it phantom?)");
 
-            vars.push(Located::at(*region, (lowercase.clone(), *var)));
+            vars.push(Located::at(
+                loc_lowercase.region,
+                (loc_lowercase.value.clone(), *var),
+            ));
         }
 
         let alias = Alias {
