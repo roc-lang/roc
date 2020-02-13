@@ -1,5 +1,5 @@
 use crate::can::ident::{Lowercase, TagName};
-use crate::collections::{ImMap, MutMap, SendMap};
+use crate::collections::{default_hasher, ImMap, MutMap, SendMap};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::Located;
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, VarId, Variable};
@@ -9,6 +9,7 @@ use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
 use crate::uniqueness::boolean_algebra::{self, Atom};
+use std::collections::HashMap;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
@@ -257,6 +258,134 @@ impl SolvedType {
             Boolean(val) => SolvedType::Boolean(val),
             Erroneous(problem) => SolvedType::Erroneous(problem),
         }
+    }
+
+    /// Keep this up to date by hand!
+    const NUM_BUILTIN_IMPORTS: usize = 7;
+
+    pub fn builtins(extra_capacity: usize) -> MutMap<Symbol, (SolvedType, Region)> {
+        use Symbol::*;
+
+        let mut types = HashMap::with_capacity_and_hasher(
+            Self::NUM_BUILTIN_IMPORTS + extra_capacity,
+            default_hasher(),
+        );
+
+        // TODO instead of using Region::zero for all of these,
+        // instead use the Region where they were defined in their
+        // source .roc files! This can give nicer error messages.
+
+        // Str module
+
+        // Str : [ @Str ]
+        types.insert(
+            STR_STR,
+            SolvedType::Alias(
+                STR_STR,
+                Vec::new(),
+                Box::new(SolvedType::Apply(STR_AT_STR, Vec::new())),
+            ),
+        );
+
+        // Num module
+
+        // Num range : [ @Num range ]
+        types.insert(
+            NUM_NUM,
+            (
+                SolvedType::Alias(
+                    NUM_NUM,
+                    vec!["range".into()],
+                    Box::new(SolvedType::Apply(
+                        NUM_AT_NUM,
+                        vec![SolvedType::Rigid("range".into())],
+                    )),
+                ),
+                Region::zero(),
+            ),
+        );
+
+        // Int module
+
+        // Integer : [ @Integer ]
+        types.insert(
+            INT_INTEGER,
+            (
+                SolvedType::Alias(
+                    INT_INTEGER,
+                    Vec::new(),
+                    Box::new(SolvedType::Apply(INT_AT_INTEGER, Vec::new())),
+                ),
+                Region::zero(),
+            ),
+        );
+
+        // Int : Num Integer
+        types.insert(
+            INT_INT,
+            (
+                SolvedType::Alias(
+                    INT_INT,
+                    Vec::new(),
+                    Box::new(SolvedType::Apply(
+                        NUM_NUM,
+                        vec![SolvedType::Apply(INT_INTEGER, Vec::new())],
+                    )),
+                ),
+                Region::zero(),
+            ),
+        );
+
+        // Float module
+
+        // FloatingPoint : [ @FloatingPoint ]
+        types.insert(
+            FLOAT_FLOATINGPOINT,
+            (
+                SolvedType::Alias(
+                    FLOAT_FLOATINGPOINT,
+                    Vec::new(),
+                    Box::new(SolvedType::Apply(FLOAT_AT_FLOATINTPOINT, Vec::new())),
+                ),
+                Region::zero(),
+            ),
+        );
+
+        // Float : Num FloatingPoint
+        types.insert(
+            FLOAT_FLOAT,
+            (
+                SolvedType::Alias(
+                    FLOAT_FLOAT,
+                    Vec::new(),
+                    Box::new(SolvedType::Apply(
+                        NUM_NUM,
+                        vec![SolvedType::Apply(FLOAT_FLOATINGPOINT, Vec::new())],
+                    )),
+                ),
+                Region::zero(),
+            ),
+        );
+
+        // List module
+
+        // List elem : [ @List elem ]
+        types.insert(
+            LIST_LIST,
+            (
+                SolvedType::Alias(
+                    LIST_LIST,
+                    vec!["elem".into()],
+                    Box::new(SolvedType::Apply(
+                        LIST_AT_LIST,
+                        vec![SolvedType::Rigid("elem".into())],
+                    )),
+                ),
+                Region::zero(),
+            ),
+        );
+
+        types
     }
 }
 
