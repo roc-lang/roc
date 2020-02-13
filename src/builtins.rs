@@ -139,10 +139,21 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Str : [ @Str ]
+    add_alias(
+        Symbol::STR_STR,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![],
+            typ: single_private_tag(Symbol::STR_AT_STR, vec![]),
+        },
+    );
+
     aliases
 }
 
 pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
+    use SolvedType::Flex;
     let mut types = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
 
     let mut add_type = |symbol, typ| {
@@ -160,6 +171,42 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Num module
 
+    // add or (+) : Num a, Num a -> Num a
+    add_type(
+        Symbol::NUM_ADD,
+        SolvedType::Func(
+            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            Box::new(num_type(Flex(TVAR1))),
+        ),
+    );
+
+    // sub or (-) : Num a, Num a -> Num a
+    add_type(
+        Symbol::NUM_SUB,
+        SolvedType::Func(
+            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            Box::new(num_type(Flex(TVAR1))),
+        ),
+    );
+
+    // isLt or (<) : Num a, Num a -> Bool
+    add_type(
+        Symbol::NUM_LT,
+        SolvedType::Func(
+            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            Box::new(bool_type()),
+        ),
+    );
+
+    // isLte or (<=) : Num a, Num a -> Bool
+    add_type(
+        Symbol::NUM_LE,
+        SolvedType::Func(
+            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            Box::new(bool_type()),
+        ),
+    );
+
     // Int module
 
     // highest : Int
@@ -170,7 +217,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Float module
 
-    // div : Float -> Float
+    // div : Float, Float -> Float
     add_type(
         Symbol::FLOAT_DIV,
         SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
@@ -197,16 +244,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // Str module
-
-    // Str : [ @Str ]
-    add_type(
-        Symbol::STR_STR,
-        SolvedType::Alias(
-            Symbol::STR_STR,
-            Vec::new(),
-            Box::new(SolvedType::Apply(Symbol::STR_AT_STR, Vec::new())),
-        ),
-    );
 
     // isEmpty : Str -> Bool
     add_type(
@@ -276,6 +313,11 @@ fn bool_type() -> SolvedType {
 #[inline(always)]
 fn str_type() -> SolvedType {
     SolvedType::Apply(Symbol::STR_STR, Vec::new())
+}
+
+#[inline(always)]
+fn num_type(a: SolvedType) -> SolvedType {
+    SolvedType::Apply(Symbol::NUM_NUM, vec![a])
 }
 
 #[inline(always)]

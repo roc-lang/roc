@@ -16,10 +16,13 @@ mod test_load {
     use crate::helpers::fixtures_dir;
     use inlinable_string::InlinableString;
     use roc::can::def::Declaration::*;
+    use roc::can::def::Def;
     use roc::collections::MutMap;
     use roc::load::{load, LoadedModule};
+    use roc::module::symbol::{Interns, ModuleId};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::solve::SubsByModule;
+    use roc::subs::Subs;
     use std::collections::HashMap;
 
     // HELPERS
@@ -58,6 +61,30 @@ mod test_load {
         loaded_module
     }
 
+    fn expect_def(
+        interns: &Interns,
+        subs: &mut Subs,
+        home: ModuleId,
+        def: &Def,
+        expected_types: &HashMap<&str, &str>,
+    ) {
+        for (symbol, expr_var) in &def.pattern_vars {
+            let content = subs.get(*expr_var).content;
+
+            name_all_type_vars(*expr_var, subs);
+
+            let actual_str = content_to_string(content, subs, home, &interns);
+            let fully_qualified = symbol.fully_qualified(&interns, home).to_string();
+            let expected_type = expected_types
+                .get(fully_qualified.as_str())
+                .unwrap_or_else(|| {
+                    panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                });
+
+            assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
+        }
+    }
+
     fn expect_types(loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
@@ -68,38 +95,29 @@ mod test_load {
         let num_decls = loaded_module.declarations.len();
 
         for decl in loaded_module.declarations {
-            let def = match decl {
-                Declare(def) => def,
-                rec_decl @ DeclareRec(_) => {
-                    panic!(
-                        "Unexpected recursive def in module declarations: {:?}",
-                        rec_decl
-                    );
+            match decl {
+                Declare(def) => expect_def(
+                    &loaded_module.interns,
+                    &mut subs,
+                    home,
+                    &def,
+                    &expected_types,
+                ),
+                DeclareRec(defs) => {
+                    for def in defs {
+                        expect_def(
+                            &loaded_module.interns,
+                            &mut subs,
+                            home,
+                            &def,
+                            &expected_types,
+                        );
+                    }
                 }
                 cycle @ InvalidCycle(_, _) => {
                     panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
                 }
             };
-
-            for (symbol, expr_var) in def.pattern_vars {
-                let content = subs.get(expr_var).content;
-
-                name_all_type_vars(expr_var, &mut subs);
-
-                let actual_str =
-                    content_to_string(content, &mut subs, home, &loaded_module.interns);
-                let fully_qualified = symbol
-                    .fully_qualified(&loaded_module.interns, home)
-                    .to_string();
-                let expected_type =
-                    expected_types
-                        .get(fully_qualified.as_str())
-                        .unwrap_or_else(|| {
-                            panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
-                        });
-
-                assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
-            }
         }
 
         assert_eq!(expected_types.len(), num_decls);
@@ -155,7 +173,24 @@ mod test_load {
                     "constantInt" => "Int",
                     "divDep1ByDep2" => "Float",
                     "fromDep2" => "Float",
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn load_and_infer_quicksort() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module =
+                load_fixture("interface_with_deps", "Quicksort", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
                     "swap" => "Int, Int, List a -> List a",
+                    "partition" => "Num Integer, Int, List a -> [ Pair Num Integer List a ]*",
+                    "quicksort" => "List a, Num Integer, Num Integer -> List a",
                 },
             );
         });

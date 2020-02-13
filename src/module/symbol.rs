@@ -535,6 +535,8 @@ define_builtins! {
         3 NUM_ADD: "add"
         4 NUM_SUB: "sub"
         5 NUM_MUL: "mul"
+        6 NUM_LT: "isLt"
+        7 NUM_LE: "isLte"
     }
     2 INT: "Int" => {
         0 INT_INT: "Int" // the Int.Int type alias
@@ -556,6 +558,10 @@ define_builtins! {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
         1 BOOL_AND: "and"
         2 BOOL_OR: "or"
+        3 BOOL_NOT: "not"
+        4 BOOL_XOR: "xor"
+        5 BOOL_EQ: "equal"
+        6 BOOL_NEQ: "notEqual"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" // the Str.Str type alias
