@@ -567,6 +567,9 @@ define_builtins! {
         1 LIST_AT_LIST: "@List" // the List.@List private tag
         2 LIST_ISEMPTY: "isEmpty"
     }
+    7 RESULT: "Result" => {
+        0 RESULT_RESULT: "Result" // the Result.Result type alias
+    }
 
-    num_modules: 7 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
+    num_modules: 8 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
 }

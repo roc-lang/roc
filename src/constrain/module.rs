@@ -1,3 +1,4 @@
+use crate::builtins;
 use crate::can::def::Declaration;
 use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, MutMap, SendMap};
@@ -30,6 +31,7 @@ pub fn constrain_imported_values(
     mut body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
+    use Constraint::*;
     // TODO try out combining all the def_types and free_vars, so that we
     // don't need to make this big linked list of nested constraints.
     // Theoretically that should be equivalent to doing it this way!
@@ -41,6 +43,49 @@ pub fn constrain_imported_values(
             aliases,
             var_store,
         );
+    }
+
+    for (symbol, builtin_alias) in builtins::aliases() {
+        let mut free_vars = FreeVars::default();
+
+        let actual = to_type(&builtin_alias.typ, &mut free_vars, var_store);
+
+        let mut vars = Vec::with_capacity(builtin_alias.vars.len());
+
+        for Located {
+            region,
+            value: (lowercase, var_id),
+        } in builtin_alias.vars
+        {
+            let var = free_vars
+                .flex_vars
+                .get(&var_id)
+                .expect("var_id was not instantiated (is it phantom?)");
+
+            vars.push(Located::at(region, (lowercase, *var)));
+        }
+
+        let mut def_aliases = SendMap::default();
+        let alias = Alias {
+            vars,
+            region: builtin_alias.region,
+            typ: actual,
+        };
+
+        def_aliases.insert(symbol, alias);
+
+        body_con = Let(Box::new(LetConstraint {
+            // rigids from other modules should not be treated as rigid
+            // within this module; rather, they should be treated as flex
+            rigid_vars: Vec::new(),
+            flex_vars: Vec::new(),
+            // Importing a value doesn't constrain this module at all.
+            // All it does is introduce variables and provide def_types for lookups
+            def_types: SendMap::default(),
+            def_aliases,
+            defs_constraint: True,
+            ret_constraint: body_con,
+        }));
     }
 
     body_con

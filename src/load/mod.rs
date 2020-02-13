@@ -733,18 +733,19 @@ fn solve_module(
         if module_id.is_builtin() {
             // For builtin modules, we create imports from the
             // hardcoded builtin map.
-            let (solved_type, region) = builtins.get(&symbol).unwrap_or_else(|| {
-                panic!("Could not find {:?} in builtins {:?}", symbol, builtins)
-            });
-            let loc_symbol = Located {
-                value: symbol,
-                region: *region,
-            };
+            if let Some((solved_type, region)) = builtins.get(&symbol) {
+                let loc_symbol = Located {
+                    value: symbol,
+                    region: *region,
+                };
 
-            imports.push(Import {
-                loc_symbol,
-                solved_type,
-            });
+                imports.push(Import {
+                    loc_symbol,
+                    solved_type,
+                });
+            } else {
+                // TODO panic in else
+            }
         } else if module_id != home {
             // We already have constraints for our own symbols.
             let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
