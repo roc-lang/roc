@@ -141,11 +141,11 @@ pub async fn load<'a>(
 
     let (msg_tx, mut msg_rx): (MsgSender, MsgReceiver) = mpsc::channel(1024);
     let mut module_ids = ModuleIds::default();
-    let mut root_exposed_ident_ids: IdentIdsByModule = IdentIds::exposed_builtins();
+    let mut root_exposed_ident_ids: IdentIdsByModule = IdentIds::exposed_builtins(0);
 
     // This is the "final" list of IdentIds, after canonicalization and constraint gen
     // have completed for a given module.
-    let mut constrained_ident_ids = IdentIds::exposed_builtins();
+    let mut constrained_ident_ids = IdentIds::exposed_builtins(0);
     let mut headers_parsed = MutSet::default();
 
     // Load the root module synchronously; we can't proceed until we have its id.
@@ -893,7 +893,7 @@ fn spawn_parse_and_constrain(
     let module_id = header.module_id;
     let deps_by_name = &header.deps_by_name;
     let num_deps = deps_by_name.len();
-    let mut dep_idents = HashMap::with_capacity_and_hasher(num_deps, default_hasher());
+    let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
 
     {
         let ident_ids_by_module = (*ident_ids_by_module).lock().expect(
