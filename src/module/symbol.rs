@@ -547,7 +547,7 @@ define_builtins! {
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" // the Float.Float type alias
         1 FLOAT_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
-        2 FLOAT_AT_FLOATINTPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
+        2 FLOAT_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
         3 FLOAT_DIV: "div"
         4 FLOAT_HIGHEST: "highest"
         5 FLOAT_LOWEST: "lowest"

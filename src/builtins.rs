@@ -87,7 +87,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             Symbol::FLOAT_FLOATINGPOINT,
             Vec::new(),
             Box::new(SolvedType::Apply(
-                Symbol::FLOAT_AT_FLOATINTPOINT,
+                Symbol::FLOAT_AT_FLOATINGPOINT,
                 Vec::new(),
             )),
         ),
