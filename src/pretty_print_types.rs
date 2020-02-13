@@ -574,25 +574,6 @@ fn write_apply(
                 _ => default_case(subs, arg_content),
             }
         }
-        Symbol::LIST_LIST => {
-            if write_parens {
-                buf.push_str("(");
-            }
-
-            buf.push_str("List ");
-
-            let arg = args
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| panic!("List did not have any type parameters somehow."));
-            let arg_content = subs.get(arg).content;
-
-            write_content(env, arg_content, subs, buf, Parens::InTypeParam);
-
-            if write_parens {
-                buf.push_str(")");
-            }
-        }
         _ => {
             if write_parens {
                 buf.push_str("(");
@@ -650,8 +631,9 @@ fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
     let ident = symbol.ident_string(interns);
     let module_id = symbol.module_id();
 
-    // Don't qualify the symbol if it's in our home module
-    if module_id == env.home {
+    // Don't qualify the symbol if it's in our home module,
+    // or if it's a builtin (since all their types are always in scope)
+    if module_id == env.home || module_id.is_builtin() {
         buf.push_str(ident);
     } else {
         buf.push_str(module_id.to_string(&interns));
