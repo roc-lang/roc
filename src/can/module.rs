@@ -104,7 +104,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, scope, output) = canonicalize_defs(
+    let (defs, scope, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -112,6 +112,14 @@ pub fn canonicalize_module_defs<'a>(
         &desugared,
         PatternType::TopLevelDef,
     );
+
+    // See if any of the new idents we defined went unused.
+    // If any were unused and also not exposed, report it.
+    for (symbol, region) in symbols_introduced {
+        if !output.references.has_lookup(symbol) && !exposed_symbols.contains(&symbol) {
+            env.problem(Problem::UnusedDef(symbol, region));
+        }
+    }
 
     for (var, lowercase) in output.rigids.clone() {
         rigid_variables.insert(var, lowercase);
