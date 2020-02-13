@@ -190,7 +190,7 @@ mod test_load {
                     "blah" => "{}",
                     "str" => "Str",
                     "alwaysThree" => "* -> Str",
-                    "identity" => "a -> a",
+                    // "identity" => "a -> a",
                     "z" => "Dep1.Unit",
                     "w" => "Dep1.Identity {}",
                     "succeed" => "a -> Dep1.Identity a",
