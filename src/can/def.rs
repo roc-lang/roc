@@ -39,7 +39,6 @@ pub struct CanDefs {
     // make refs_by_symbol be something like MutMap<Symbol, (Region, References)>
     pub refs_by_symbol: MutMap<Symbol, (Located<Ident>, References)>,
     pub can_defs_by_symbol: MutMap<Symbol, Def>,
-    pub symbols_introduced: MutMap<Symbol, Region>,
     pub aliases: SendMap<Symbol, Alias>,
 }
 /// A Def that has had patterns and type annnotations canonicalized,
@@ -105,7 +104,7 @@ pub fn canonicalize_defs<'a>(
     original_scope: &Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     pattern_type: PatternType,
-) -> (CanDefs, Scope, Output) {
+) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -231,11 +230,11 @@ pub fn canonicalize_defs<'a>(
         CanDefs {
             refs_by_symbol,
             can_defs_by_symbol,
-            symbols_introduced,
             aliases,
         },
         scope,
         output,
+        symbols_introduced,
     )
 }
 
@@ -246,7 +245,6 @@ pub fn sort_can_defs(
     mut output: Output,
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
     let CanDefs {
-        symbols_introduced,
         refs_by_symbol,
         can_defs_by_symbol,
         aliases,
@@ -290,14 +288,6 @@ pub fn sort_can_defs(
             references_from_call(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
 
         output.references = output.references.union(refs);
-    }
-
-    // Now that we've collected all the references, check to see if any of the new idents
-    // we defined went unused by the return expression. If any were unused, report it.
-    for (symbol, region) in symbols_introduced {
-        if !output.references.has_lookup(symbol) {
-            env.problem(Problem::UnusedDef(symbol, region));
-        }
     }
 
     let mut defined_symbols: Vec<Symbol> = Vec::new();
@@ -1099,7 +1089,7 @@ pub fn can_defs_with_return<'a>(
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let (unsorted, mut scope, defs_output) = canonicalize_defs(
+    let (unsorted, mut scope, defs_output, symbols_introduced) = canonicalize_defs(
         env,
         Output::default(),
         var_store,
@@ -1116,6 +1106,14 @@ pub fn can_defs_with_return<'a>(
 
     output.rigids = output.rigids.union(defs_output.rigids);
     output.references = output.references.union(defs_output.references);
+
+    // Now that we've collected all the references, check to see if any of the new idents
+    // we defined went unused by the return expression. If any were unused, report it.
+    for (symbol, region) in symbols_introduced {
+        if !output.references.has_lookup(symbol) {
+            env.problem(Problem::UnusedDef(symbol, region));
+        }
+    }
 
     match can_defs {
         Ok(decls) => {
