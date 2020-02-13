@@ -676,8 +676,13 @@ fn canonicalize_when_branch<'a>(
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
     for (symbol, region) in scope.symbols() {
-        if !output.references.has_lookup(*symbol) && !original_scope.contains_symbol(*symbol) {
-            env.problem(Problem::UnusedDef(*symbol, *region));
+        let symbol = *symbol;
+
+        if !output.references.has_lookup(symbol)
+            && !branch_output.references.has_lookup(symbol)
+            && !original_scope.contains_symbol(symbol)
+        {
+            env.problem(Problem::UnusedDef(symbol, *region));
         }
     }
 
