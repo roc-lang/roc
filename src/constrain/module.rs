@@ -94,6 +94,7 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
                 Type::Variable(var)
             }
         }
+        Wildcard => Type::Variable(var_store.fresh()),
         Record { fields, ext } => {
             let mut new_fields = SendMap::default();
 
