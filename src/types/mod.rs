@@ -387,12 +387,51 @@ impl Type {
         }
     }
 
+    pub fn symbols(&self) -> ImSet<Symbol> {
+        let mut found_symbols = ImSet::default();
+        symbols_help(self, &mut found_symbols);
+
+        found_symbols
+    }
+
     /// a shallow dealias, continue until the first constructor is not an alias.
     pub fn shallow_dealias(&self) -> &Self {
         match self {
             Type::Alias(_, _, actual) => actual.shallow_dealias(),
             _ => self,
         }
+    }
+}
+
+fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
+    use Type::*;
+
+    match tipe {
+        Function(args, ret) => {
+            symbols_help(&ret, accum);
+            args.iter().for_each(|arg| symbols_help(arg, accum));
+        }
+        RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+            symbols_help(&ext, accum);
+            tags.iter()
+                .map(|v| v.1.iter())
+                .flatten()
+                .for_each(|arg| symbols_help(arg, accum));
+        }
+
+        Record(fields, ext) => {
+            symbols_help(&ext, accum);
+            fields.values().for_each(|arg| symbols_help(arg, accum));
+        }
+        Alias(alias_symbol, _, actual_type) => {
+            accum.insert(*alias_symbol);
+            symbols_help(&actual_type, accum);
+        }
+        Apply(symbol, args) => {
+            accum.insert(*symbol);
+            args.iter().for_each(|arg| symbols_help(arg, accum));
+        }
+        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
     }
 }
 

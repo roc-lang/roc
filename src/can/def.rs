@@ -244,6 +244,9 @@ pub fn sort_can_defs(
     defs: CanDefs,
     mut output: Output,
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
+    correct_resursive_aliases(defs);
+    panic!();
+
     let CanDefs {
         refs_by_symbol,
         can_defs_by_symbol,
@@ -1299,4 +1302,68 @@ fn pending_typed_body<'a>(
     );
 
     PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr)
+}
+
+/// Make aliases recursive
+fn correct_resursive_aliases(defs: CanDefs) {
+    let CanDefs {
+        refs_by_symbol,
+        can_defs_by_symbol,
+        aliases,
+        ..
+    } = defs;
+
+    let mut symbols_introduced = ImSet::default();
+
+    for key in aliases.keys() {
+        if defs.symbols_introduced.contains_key(key) {
+            symbols_introduced.insert(key);
+        }
+    }
+
+    let all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+        match aliases.get(symbol) {
+            Some(alias) => {
+                let mut loc_succ = alias.typ.symbols();
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| symbols_introduced.contains(key));
+
+                loc_succ
+            }
+            None => ImSet::default(),
+        }
+    };
+
+    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
+        match aliases.get(symbol) {
+            Some(alias) => {
+                let mut loc_succ = alias.typ.symbols();
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| symbols_introduced.contains(key));
+                loc_succ.remove(symbol);
+
+                loc_succ
+            }
+            None => ImSet::default(),
+        }
+    };
+
+    let defined_symbols: Vec<Symbol> = aliases.keys().map(|x| *x).collect();
+
+    // split into recursive and non-recursive aliases
+    match topological_sort_into_groups(defined_symbols.as_slice(), all_successors_with_self) {
+        Ok(_) => {
+            // none of the aliases is (self nor mutually) recursive
+        }
+        Err((_non_recursive, recursive_symbols)) => {
+            // split into self-recursive and mutually recursive
+            match topological_sort_into_groups(
+                recursive_symbols.as_slice(),
+                all_successors_without_self,
+            ) {
+                Ok(self_recursive_symbols) => {}
+                Err((self_recursive_symbols, mutually_recursive_symbols)) => {}
+            }
+        }
+    }
 }
