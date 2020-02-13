@@ -1,3 +1,4 @@
+use crate::can::ident::TagName;
 use crate::collections::{default_hasher, MutMap};
 use crate::module::symbol::Symbol;
 use crate::region::Region;
@@ -19,18 +20,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         // source .roc files! This can give nicer error messages.
         types.insert(symbol, (typ, Region::zero()));
     };
-
-    // Str module
-
-    // Str : [ @Str ]
-    add_type(
-        Symbol::STR_STR,
-        SolvedType::Alias(
-            Symbol::STR_STR,
-            Vec::new(),
-            Box::new(SolvedType::Apply(Symbol::STR_AT_STR, Vec::new())),
-        ),
-    );
 
     // Num module
 
@@ -118,6 +107,54 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // lowest : Float
     add_type(Symbol::FLOAT_LOWEST, float_type());
 
+    // Bool module
+
+    // Bool : [ True, False ]
+    add_type(
+        Symbol::BOOL_BOOL,
+        SolvedType::Alias(
+            Symbol::BOOL_BOOL,
+            Vec::new(),
+            Box::new(SolvedType::TagUnion(
+                vec![
+                    (TagName::Global("True".into()), Vec::new()),
+                    (TagName::Global("False".into()), Vec::new()),
+                ],
+                Box::new(SolvedType::EmptyTagUnion),
+            )),
+        ),
+    );
+
+    // and : Bool, Bool -> Bool
+    add_type(
+        Symbol::BOOL_AND,
+        SolvedType::Func(vec![bool_type(), bool_type()], Box::new(bool_type())),
+    );
+
+    // or : Bool, Bool -> Bool
+    add_type(
+        Symbol::BOOL_OR,
+        SolvedType::Func(vec![bool_type(), bool_type()], Box::new(bool_type())),
+    );
+
+    // Str module
+
+    // Str : [ @Str ]
+    add_type(
+        Symbol::STR_STR,
+        SolvedType::Alias(
+            Symbol::STR_STR,
+            Vec::new(),
+            Box::new(SolvedType::Apply(Symbol::STR_AT_STR, Vec::new())),
+        ),
+    );
+
+    // isEmpty : Str -> Bool
+    add_type(
+        Symbol::STR_ISEMPTY,
+        SolvedType::Func(vec![str_type()], Box::new(bool_type())),
+    );
+
     // List module
 
     // List elem : [ @List elem ]
@@ -133,6 +170,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // isEmpty : List * -> Bool
+    add_type(
+        Symbol::LIST_ISEMPTY,
+        SolvedType::Func(
+            vec![SolvedType::Apply(
+                Symbol::LIST_LIST,
+                vec![SolvedType::Wildcard],
+            )],
+            Box::new(bool_type()),
+        ),
+    );
+
     types
 }
 
@@ -144,4 +193,14 @@ fn float_type() -> SolvedType {
 #[inline(always)]
 fn int_type() -> SolvedType {
     SolvedType::Apply(Symbol::INT_INT, Vec::new())
+}
+
+#[inline(always)]
+fn bool_type() -> SolvedType {
+    SolvedType::Apply(Symbol::BOOL_BOOL, Vec::new())
+}
+
+#[inline(always)]
+fn str_type() -> SolvedType {
+    SolvedType::Apply(Symbol::STR_STR, Vec::new())
 }
