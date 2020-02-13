@@ -263,7 +263,7 @@ impl SolvedType {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BuiltinAlias {
     pub region: Region,
-    pub vars: Vec<Located<(Lowercase, VarId)>>,
+    pub vars: Vec<Located<Lowercase>>,
     pub typ: SolvedType,
 }
 

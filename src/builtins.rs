@@ -43,7 +43,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::NUM_NUM,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), ("range".into(), TVAR1))],
+            vars: vec![Located::at(Region::zero(), "range".into())],
             typ: single_private_tag(Symbol::NUM_AT_NUM, vec![Flex(TVAR1)]),
         },
     );
@@ -116,8 +116,8 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![
-                Located::at(Region::zero(), ("a".into(), TVAR1)),
-                Located::at(Region::zero(), ("e".into(), TVAR2)),
+                Located::at(Region::zero(), "a".into()),
+                Located::at(Region::zero(), "e".into()),
             ],
             typ: SolvedType::TagUnion(
                 vec![
@@ -134,7 +134,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::LIST_LIST,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), ("elem".into(), TVAR1))],
+            vars: vec![Located::at(Region::zero(), "elem".into())],
             typ: single_private_tag(Symbol::LIST_AT_LIST, vec![Flex(TVAR1)]),
         },
     );
