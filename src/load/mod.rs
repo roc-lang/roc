@@ -827,7 +827,7 @@ fn solve_module(
 
     let env = solve::Env {
         vars_by_symbol,
-        aliases: module.aliases.clone()
+        aliases: module.aliases
     };
 
     let mut subs = Subs::new(var_store.into());
