@@ -53,7 +53,8 @@ mod test_load {
         let loaded = load(src_dir, filename, subs_by_module).await;
         let loaded_module = loaded.expect("Test module failed to load");
 
-        assert_eq!(loaded_module.problems, Vec::new());
+        assert_eq!(loaded_module.can_problems, Vec::new());
+        assert_eq!(loaded_module.type_problems, Vec::new());
 
         let expected_name = loaded_module
             .interns
@@ -91,7 +92,8 @@ mod test_load {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
 
-        assert_eq!(loaded_module.problems, Vec::new());
+        assert_eq!(loaded_module.can_problems, Vec::new());
+        assert_eq!(loaded_module.type_problems, Vec::new());
 
         let num_decls = loaded_module.declarations.len();
 
@@ -144,7 +146,9 @@ mod test_load {
         test_async(async {
             let loaded = load(src_dir, filename, subs_by_module).await;
             let loaded_module = loaded.expect("Test module failed to load");
-            assert_eq!(loaded_module.problems, Vec::new());
+
+            assert_eq!(loaded_module.can_problems, Vec::new());
+            assert_eq!(loaded_module.type_problems, Vec::new());
 
             let def_count: usize = loaded_module
                 .declarations

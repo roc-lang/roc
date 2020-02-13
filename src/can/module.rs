@@ -5,7 +5,7 @@ use crate::can::ident::Ident;
 use crate::can::ident::Lowercase;
 use crate::can::operator::desugar_def;
 use crate::can::pattern::PatternType;
-use crate::can::problem::RuntimeError;
+use crate::can::problem::{Problem, RuntimeError};
 use crate::can::scope::Scope;
 use crate::collections::{MutMap, MutSet};
 use crate::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -22,6 +22,7 @@ pub struct ModuleOutput {
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
+    pub problems: Vec<Problem>,
     pub ident_ids: IdentIds,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
@@ -217,6 +218,7 @@ pub fn canonicalize_module_defs<'a>(
                 declarations,
                 references,
                 exposed_imports: can_exposed_imports,
+                problems: env.problems,
                 lookups,
                 exposed_vars_by_symbol,
                 ident_ids: env.ident_ids,
