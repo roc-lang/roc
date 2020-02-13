@@ -541,6 +541,8 @@ define_builtins! {
         1 INT_INTEGER: "Integer" // Int : Num Integer
         2 INT_AT_INTEGER: "@Integer" // the Int.@Integer private tag
         3 INT_DIV: "div"
+        4 INT_HIGHEST: "highest"
+        5 INT_LOWEST: "lowest"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" // the Float.Float type alias
