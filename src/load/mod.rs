@@ -6,6 +6,7 @@ use crate::collections::{default_hasher, insert_all, MutMap, MutSet, SendMap};
 use crate::constrain::module::{constrain_imported_values, constrain_module, Import};
 use crate::module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
+use crate::builtins;
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
@@ -200,7 +201,7 @@ pub async fn load<'a>(
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
     let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
-    let builtins = SolvedType::builtins();
+    let builtins = builtins::types();
 
     // TODO can be removed I think
     let vars_by_symbol = SendMap::default();
