@@ -39,6 +39,7 @@ pub struct Module {
     pub rigid_variables: MutMap<Lowercase, Variable>,
 }
 
+#[derive(Debug)]
 pub struct LoadedModule {
     pub module_id: ModuleId,
     pub interns: Interns,
