@@ -472,6 +472,13 @@ macro_rules! define_builtins {
         }
 
         impl ModuleId {
+            pub fn is_builtin(&self) -> bool {
+                // This is a builtin ModuleId iff it's below the
+                // total number of builtin modules, since they
+                // take up the first $total ModuleId numbers.
+                self.0 < $total
+            }
+
             $(
                 pub const $module_const: ModuleId = ModuleId($module_id);
             )+
@@ -521,20 +528,23 @@ define_builtins! {
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" // the Num.Num type alias
-        1 NUM_ABS: "abs"
-        2 NUM_ADD: "add"
-        3 NUM_SUB: "sub"
-        4 NUM_MUL: "mul"
+        1 NUM_NUM: "@Num" // the Num.@Num private tag
+        2 NUM_ABS: "abs"
+        3 NUM_ADD: "add"
+        4 NUM_SUB: "sub"
+        5 NUM_MUL: "mul"
     }
     2 INT: "Int" => {
         0 INT_INT: "Int" // the Int.Int type alias
         1 INT_INTEGER: "Integer" // Int : Num Integer
-        2 INT_DIV: "div"
+        2 INT_AT_INTEGER: "@Integer" // the Int.@Integer private tag
+        3 INT_DIV: "div"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" // the Float.Float type alias
         1 FLOAT_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
-        2 FLOAT_DIV: "div"
+        1 FLOAT_AT_FLOATINTPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
+        3 FLOAT_DIV: "div"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
@@ -543,11 +553,13 @@ define_builtins! {
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" // the Str.Str type alias
-        1 STR_ISEMPTY: "isEmpty"
+        1 STR_STR: "@Str" // the Str.@Str private tag
+        2 STR_ISEMPTY: "isEmpty"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" // the List.List type alias
-        1 LIST_ISEMPTY: "isEmpty"
+        1 LIST_AT_LIST: "List" // the List.@List private tag
+        2 LIST_ISEMPTY: "isEmpty"
     }
 
     num_modules: 7 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)

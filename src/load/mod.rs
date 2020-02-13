@@ -717,8 +717,23 @@ fn solve_module(
     for &symbol in module.references.iter() {
         let module_id = symbol.module_id();
 
-        // We already have constraints for our own symbols.
-        if module_id != home {
+        if module_id.is_builtin() {
+            // For builtin modules, we create imports from the
+            // hardcoded builtin map.
+            let (solved_type, region) = builtins.get(symbol).unwrap_or_else(|| {
+                panic!(
+                    "Could not find {:?} in builtins {:?}",
+                    loc_symbol.value, solved_types
+                )
+            });
+            let loc_symbol = Located { value: symbol, region };
+
+            imports.push(Import {
+                loc_symbol,
+                solved_type,
+            });
+        } else if module_id != home {
+            // We already have constraints for our own symbols.
             let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
             let loc_symbol = Located {
                 value: symbol,
@@ -727,7 +742,7 @@ fn solve_module(
 
             match exposed_types.get(&module_id) {
                 Some(ExposedModuleTypes::Valid(solved_types, new_aliases)) => {
-                    let solved_type = solved_types.get(&loc_symbol.value).unwrap_or_else(|| {
+                    let solved_type = solved_types.get(symbol).unwrap_or_else(|| {
                         panic!(
                             "Could not find {:?} in solved_types {:?}",
                             loc_symbol.value, solved_types
