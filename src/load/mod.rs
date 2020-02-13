@@ -1,3 +1,4 @@
+use crate::can;
 use crate::can::def::Declaration;
 use crate::can::ident::{Ident, Lowercase, ModuleName};
 use crate::can::module::{canonicalize_module_defs, ModuleOutput};
@@ -10,7 +11,7 @@ use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
 use crate::solve::{self, ExposedModuleTypes, Solved, SolvedType, SubsByModule};
 use crate::subs::{Subs, VarStore, Variable};
-use crate::types::{Alias, Constraint, Problem};
+use crate::types::{self, Alias, Constraint};
 use bumpalo::Bump;
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
@@ -41,7 +42,8 @@ pub struct LoadedModule {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub solved: Solved<Subs>,
-    pub problems: Vec<Problem>,
+    pub can_problems: Vec<can::problem::Problem>,
+    pub type_problems: Vec<types::Problem>,
     pub declarations: Vec<Declaration>,
 }
 
@@ -73,6 +75,7 @@ enum Msg {
         module: Module,
         constraint: Constraint,
         ident_ids: IdentIds,
+        problems: Vec<can::problem::Problem>,
         var_store: VarStore,
     },
     Solved {
@@ -80,7 +83,7 @@ enum Msg {
         solved_types: MutMap<Symbol, SolvedType>,
         aliases: MutMap<Symbol, Alias>,
         subs: Arc<Solved<Subs>>,
-        problems: Vec<Problem>,
+        problems: Vec<types::Problem>,
     },
 }
 
@@ -134,7 +137,8 @@ pub async fn load<'a>(
 ) -> Result<LoadedModule, LoadingProblem> {
     use self::MaybeShared::*;
 
-    let mut all_problems = Vec::new();
+    let mut type_problems = Vec::new();
+    let mut can_problems = Vec::new();
     let env = Env {
         src_dir: src_dir.clone(),
     };
@@ -324,8 +328,11 @@ pub async fn load<'a>(
                 module,
                 ident_ids,
                 constraint,
+                problems,
                 var_store,
             } => {
+                can_problems.extend(problems);
+
                 let module_id = module.module_id;
                 let waiting_for = waiting_for_solve.get_mut(&module_id).unwrap_or_else(|| {
                     panic!(
@@ -379,7 +386,7 @@ pub async fn load<'a>(
                 aliases,
                 ..
             } => {
-                all_problems.extend(problems);
+                type_problems.extend(problems);
 
                 if module_id == root_id {
                     // Once we've solved the originally requested module, we're done!
@@ -409,7 +416,8 @@ pub async fn load<'a>(
                         module_id: root_id,
                         interns,
                         solved,
-                        problems: all_problems,
+                        can_problems,
+                        type_problems,
                         declarations,
                     });
                 } else {
@@ -721,16 +729,18 @@ fn solve_module(
     for &symbol in module.references.iter() {
         let module_id = symbol.module_id();
 
+        dbg!(&module_id, module_id.is_builtin());
+
         if module_id.is_builtin() {
             // For builtin modules, we create imports from the
             // hardcoded builtin map.
             let (solved_type, region) = builtins.get(&symbol).unwrap_or_else(|| {
-                panic!(
-                    "Could not find {:?} in builtins {:?}",
-                    symbol, builtins
-                )
+                panic!("Could not find {:?} in builtins {:?}", symbol, builtins)
             });
-            let loc_symbol = Located { value: symbol, region: *region };
+            let loc_symbol = Located {
+                value: symbol,
+                region: *region,
+            };
 
             imports.push(Import {
                 loc_symbol,
@@ -768,7 +778,7 @@ fn solve_module(
                     // for everything imported from it.
                     imports.push(Import {
                         loc_symbol,
-                        solved_type: &SolvedType::Erroneous(Problem::InvalidModule),
+                        solved_type: &SolvedType::Erroneous(types::Problem::InvalidModule),
                     });
                 }
                 None => {
@@ -957,7 +967,7 @@ fn parse_and_constrain(
     let module_ids = (*arc_module_ids).lock().expect(
         "Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.",
     );
-    let (module, ident_ids, constraint) = match canonicalize_module_defs(
+    let (module, ident_ids, constraint, problems) = match canonicalize_module_defs(
         &arena,
         parsed_defs,
         module_id,
@@ -977,6 +987,7 @@ fn parse_and_constrain(
             references,
             aliases,
             rigid_variables,
+            problems,
             ..
         }) => {
             let constraint = constrain_module(module_id, &declarations, lookups);
@@ -991,7 +1002,7 @@ fn parse_and_constrain(
                 rigid_variables,
             };
 
-            (module, ident_ids, constraint)
+            (module, ident_ids, constraint, problems)
         }
         Err(_runtime_error) => {
             panic!("TODO gracefully handle module canonicalization error");
@@ -1006,6 +1017,7 @@ fn parse_and_constrain(
             module,
             ident_ids,
             constraint,
+            problems,
             var_store,
         })
         .await
