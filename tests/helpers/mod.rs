@@ -18,7 +18,6 @@ use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
 use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
-use roc::solve::{BuiltinAlias, SolvedType};
 use roc::subs::{Subs, VarStore, Variable};
 use roc::types::{Constraint, Expected, Type};
 use roc::unique_builtins;
@@ -62,13 +61,7 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 
 #[allow(dead_code)]
 pub fn can_expr(expr_str: &str) -> CanExprOut {
-    can_expr_with(
-        &Bump::new(),
-        test_home(),
-        expr_str,
-        &builtins::aliases(),
-        &builtins::types(),
-    )
+    can_expr_with(&Bump::new(), test_home(), expr_str)
 }
 
 #[allow(dead_code)]
@@ -111,13 +104,7 @@ pub fn uniq_expr_with(
         var,
         interns,
         ..
-    } = can_expr_with(
-        arena,
-        home,
-        expr_str,
-        &unique_builtins::aliases(),
-        &unique_builtins::types(),
-    );
+    } = can_expr_with(arena, home, expr_str);
 
     // double check
     let var_store = VarStore::new(old_var_store.fresh());
@@ -154,7 +141,6 @@ pub fn uniq_expr_with(
 
     constraint.instantiate_aliases(&var_store);
 
-    dbg!(&constraint);
     let subs2 = Subs::new(var_store.into());
 
     (output, problems, subs2, var, constraint, home, interns)
@@ -172,13 +158,7 @@ pub struct CanExprOut {
 }
 
 #[allow(dead_code)]
-pub fn can_expr_with(
-    arena: &Bump,
-    home: ModuleId,
-    expr_str: &str,
-    aliases: &MutMap<Symbol, BuiltinAlias>,
-    types: &MutMap<Symbol, (SolvedType, Region)>,
-) -> CanExprOut {
+pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
@@ -222,6 +202,8 @@ pub fn can_expr_with(
         expected,
     );
 
+    let types = builtins::types();
+
     let imports: Vec<_> = types
         .iter()
         .map(|(symbol, (solved_type, region))| Import {
@@ -236,7 +218,7 @@ pub fn can_expr_with(
 
     //load builtin types
     let mut constraint =
-        roc::constrain::module::load_builtin_aliases(aliases, constraint, &var_store);
+        roc::constrain::module::load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
 
     constraint.instantiate_aliases(&var_store);
 

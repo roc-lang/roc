@@ -73,7 +73,7 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(symbol, args, actual) => {
+            Type::Alias(symbol, args, _actual) => {
                 write!(f, "Alias {:?}", symbol)?;
 
                 for (_, arg) in args {
@@ -442,9 +442,6 @@ impl Type {
                     }
                 } else {
                     panic!("no alias for {:?}", symbol);
-                    for arg in args {
-                        arg.instantiate_aliases(aliases, var_store);
-                    }
                 }
             }
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
