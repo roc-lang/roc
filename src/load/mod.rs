@@ -40,6 +40,7 @@ pub struct Module {
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Lowercase, Variable>,
+    pub imported_modules: MutSet<ModuleId>
 }
 
 #[derive(Debug)]
@@ -68,6 +69,7 @@ struct ModuleHeader {
     module_name: ModuleName,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<ModuleName, ModuleId>,
+    imported_modules: MutSet<ModuleId>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     src: Box<str>,
@@ -447,8 +449,8 @@ pub async fn load<'a>(
                                 let (module, constraint, var_store) = unsolved_modules
                                     .remove(&listener_id)
                                     .expect("Could not find listener ID in unsolved_modules");
-
-                                solve_module(
+                                let home = module.module_id;
+                                let unused_modules = solve_module(
                                     module,
                                     constraint,
                                     var_store,
@@ -458,6 +460,10 @@ pub async fn load<'a>(
                                     &builtins,
                                     vars_by_symbol.clone(),
                                 );
+
+                                for _unused_module_id in unused_modules.iter() {
+                                    panic!("TODO gracefully report unused imports for {:?}, namely {:?}", home, unused_modules);
+                                }
                             }
                         }
                     }
@@ -543,6 +549,7 @@ fn send_interface_header<'a>(
 
     let mut imports: Vec<(ModuleName, Vec<Ident>, Region)> =
         Vec::with_capacity(header.imports.len());
+    let mut imported_modules: MutSet<ModuleId> = MutSet::default();
     let mut scope_size = 0;
 
     for loc_entry in header.imports {
@@ -588,6 +595,8 @@ fn send_interface_header<'a>(
                 let module_id = module_ids.get_or_insert(module_name.into());
 
                 deps_by_name.insert(module_name.clone(), module_id);
+
+                imported_modules.insert(module_id);
             }
 
             // For each of our imports, add any exposed values to scope.
@@ -634,6 +643,8 @@ fn send_interface_header<'a>(
                 let module_id = module_ids.get_or_insert(&module_name.clone().into());
 
                 deps_by_name.insert(module_name, module_id);
+
+                imported_modules.insert(module_id);
 
                 if !exposed.is_empty() {
                     add_exposed_to_scope(home, &mut scope, exposed, &mut ident_ids, region);
@@ -684,6 +695,7 @@ fn send_interface_header<'a>(
             module_id: home,
             exposed_ident_ids: ident_ids,
             module_name: declared_name,
+            imported_modules,
             deps_by_name,
             exposes,
             src,
@@ -725,30 +737,37 @@ fn solve_module(
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
     builtins: &MutMap<Symbol, (SolvedType, Region)>,
     mut vars_by_symbol: SendMap<Symbol, Variable>,
-) {
+) -> MutSet<ModuleId> /* returs a set of unused imports */ {
     let home = module.module_id;
-    let mut imports = Vec::with_capacity(module.references.len());
+    let mut imported_symbols = Vec::with_capacity(module.references.len());
     let mut aliases = MutMap::default();
+    let mut unused_imports = module.imported_modules; // We'll remove these as we encounter them.
+
 
     // Translate referenced symbols into constraints
     for &symbol in module.references.iter() {
         let module_id = symbol.module_id();
 
+        // We used this one, so clearly it is not unused!
+        unused_imports.remove(&module_id);
+
         if module_id.is_builtin() {
             // For builtin modules, we create imports from the
             // hardcoded builtin map.
-            if let Some((solved_type, region)) = builtins.get(&symbol) {
-                let loc_symbol = Located {
-                    value: symbol,
-                    region: *region,
-                };
+            match builtins.get(&symbol) {
+                Some((solved_type, region)) => {
+                    let loc_symbol = Located {
+                        value: symbol,
+                        region: *region,
+                    };
 
-                imports.push(Import {
-                    loc_symbol,
-                    solved_type,
-                });
-            } else {
-                // TODO panic in else
+                    imported_symbols.push(Import {
+                        loc_symbol,
+                        solved_type,
+                    });
+                } None => {
+                    panic!("Could not find {:?} in builtins {:?}", symbol, builtins)
+                }
             }
         } else if module_id != home {
             // We already have constraints for our own symbols.
@@ -772,7 +791,7 @@ fn solve_module(
                         aliases.insert(k, v);
                     }
 
-                    imports.push(Import {
+                    imported_symbols.push(Import {
                         loc_symbol,
                         solved_type,
                     });
@@ -780,7 +799,7 @@ fn solve_module(
                 Some(ExposedModuleTypes::Invalid) => {
                     // If that module was invalid, use True constraints
                     // for everything imported from it.
-                    imports.push(Import {
+                    imported_symbols.push(Import {
                         loc_symbol,
                         solved_type: &SolvedType::Erroneous(types::Problem::InvalidModule),
                     });
@@ -796,7 +815,7 @@ fn solve_module(
     }
 
     // Wrap the existing module constraint in these imported constraints.
-    let constraint = constrain_imported_values(imports, constraint, &var_store);
+    let constraint = constrain_imported_values(imported_symbols, constraint, &var_store);
     let constraint = constrain_imported_aliases(aliases, constraint, &var_store);
     let constraint = load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
 
@@ -895,6 +914,8 @@ fn solve_module(
             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
         });
     });
+
+    unused_imports
 }
 
 fn spawn_parse_and_constrain(
@@ -946,6 +967,12 @@ fn spawn_parse_and_constrain(
 
     waiting_for_solve.insert(module_id, solve_needed);
 
+    let module_ids = {
+        (*module_ids).lock().expect(
+            "Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.",
+        ).clone()
+    };
+
     // Now that we have waiting_for_solve populated, continue parsing,
     // canonicalizing, and constraining the module.
     spawn_blocking(move || {
@@ -956,7 +983,7 @@ fn spawn_parse_and_constrain(
 /// Parse the module, canonicalize it, and generate constraints for it.
 fn parse_and_constrain(
     header: ModuleHeader,
-    arc_module_ids: Arc<Mutex<ModuleIds>>,
+    module_ids: ModuleIds,
     dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,
     msg_tx: MsgSender,
@@ -970,9 +997,6 @@ fn parse_and_constrain(
         .parse(&arena, state)
         .expect("TODO gracefully handle parse error on module defs");
 
-    let module_ids = (*arc_module_ids).lock().expect(
-        "Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.",
-    );
     let (module, ident_ids, constraint, problems) = match canonicalize_module_defs(
         &arena,
         parsed_defs,
@@ -997,7 +1021,6 @@ fn parse_and_constrain(
             ..
         }) => {
             let constraint = constrain_module(module_id, &declarations, lookups);
-
             let module = Module {
                 module_id,
                 declarations,
@@ -1006,6 +1029,7 @@ fn parse_and_constrain(
                 references,
                 aliases,
                 rigid_variables,
+                imported_modules: header.imported_modules
             };
 
             (module, ident_ids, constraint, problems)

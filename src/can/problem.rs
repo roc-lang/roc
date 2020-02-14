@@ -1,6 +1,6 @@
 use crate::can::ident::Ident;
 use crate::can::pattern::PatternType;
-use crate::module::symbol::Symbol;
+use crate::module::symbol::{ModuleId, Symbol};
 use crate::operator::BinOp;
 use crate::region::{Located, Region};
 use crate::types;
@@ -11,6 +11,7 @@ use inlinable_string::InlinableString;
 pub enum Problem {
     // TODO use Symbol over Ident with these
     UnusedDef(Symbol, Region),
+    UnusedImport(ModuleId, Region),
     UnusedArgument(Symbol, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!

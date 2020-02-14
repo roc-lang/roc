@@ -2,7 +2,7 @@ interface Primary
     exposes [ blah, str, alwaysThree, identity, z, w, succeed, map, yay ]
     imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Result ]
 
-blah = {}
+blah = Dep2.two
 
 str = Dep1.str
 
