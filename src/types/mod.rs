@@ -219,31 +219,6 @@ impl fmt::Debug for Type {
 }
 
 impl Type {
-    pub fn num(args: Vec<Type>) -> Self {
-        Type::Apply(Symbol::NUM_NUM, args)
-    }
-
-    pub fn float() -> Self {
-        let floating_point = Type::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new());
-
-        Type::num(vec![floating_point])
-    }
-
-    pub fn int() -> Self {
-        let integer = Type::Apply(Symbol::INT_INTEGER, Vec::new());
-
-        Type::num(vec![integer])
-    }
-
-    pub fn string() -> Self {
-        Type::Apply(Symbol::STR_STR, Vec::new())
-    }
-
-    /// This is needed to constrain `if` conditionals
-    pub fn bool() -> Self {
-        Type::Apply(Symbol::BOOL_BOOL, Vec::new())
-    }
-
     pub fn arity(&self) -> usize {
         if let Type::Function(args, _) = self {
             args.len()

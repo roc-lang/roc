@@ -115,7 +115,13 @@ fn constrain_pattern(
                 Constraint::Pattern(
                     pattern.region,
                     PatternCategory::Str,
-                    attr_type(Bool::variable(uniq_var), Type::string()),
+                    builtins::builtin_type(
+                        Symbol::ATTR_ATTR,
+                        vec![
+                            Type::Boolean(Bool::variable(uniq_var)),
+                            builtins::builtin_type(Symbol::STR_STR, vec![]),
+                        ],
+                    ),
                     expected,
                 ),
             ));
@@ -309,7 +315,13 @@ pub fn constrain_expr(
         }
         BlockStr(_) | Str(_) => {
             let uniq_type = var_store.fresh();
-            let inferred = attr_type(Bool::variable(uniq_type), Type::string());
+            let inferred = builtins::builtin_type(
+                Symbol::ATTR_ATTR,
+                vec![
+                    Type::Boolean(Bool::variable(uniq_type)),
+                    builtins::builtin_type(Symbol::STR_STR, vec![]),
+                ],
+            );
 
             exists(vec![uniq_type], Eq(inferred, expected, region))
         }
