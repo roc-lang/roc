@@ -1,5 +1,5 @@
 use crate::collections::arena_join;
-use crate::parse::ast::{Attempting, MaybeQualified};
+use crate::parse::ast::Attempting;
 use crate::parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -16,7 +16,10 @@ pub enum Ident<'a> {
     /// @Foo or @Bar
     PrivateTag(&'a str),
     /// foo or foo.bar or Foo.Bar.baz.qux
-    Access(MaybeQualified<'a, &'a [&'a str]>),
+    Access {
+        module_name: &'a str,
+        parts: &'a [&'a str],
+    },
     /// .foo
     AccessorFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
@@ -29,7 +32,20 @@ impl<'a> Ident<'a> {
 
         match self {
             GlobalTag(string) | PrivateTag(string) => string.len(),
-            Access(string) => string.len(),
+            Access { module_name, parts } => {
+                let mut len = if module_name.is_empty() {
+                    0
+                } else {
+                    module_name.len() + 1
+                    // +1 for the dot
+                };
+
+                for part in parts.iter() {
+                    len += part.len() + 1 // +1 for the dot
+                }
+
+                len - 1
+            }
             AccessorFunction(string) => string.len(),
             Malformed(string) => string.len(),
         }
@@ -250,10 +266,10 @@ where
         );
     } else {
         // We have multiple noncapitalized parts, so this must be field access.
-        Ident::Access(MaybeQualified {
-            module_parts: capitalized_parts.into_bump_slice(),
-            value: noncapitalized_parts.into_bump_slice(),
-        })
+        Ident::Access {
+            module_name: join_module_parts(arena, capitalized_parts.into_bump_slice()),
+            parts: noncapitalized_parts.into_bump_slice(),
+        }
     };
 
     let state = state.advance_without_indenting(chars_parsed)?;
@@ -379,4 +395,22 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
 
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
     global_tag_or_ident(|first_char| first_char.is_alphabetic())
+}
+
+pub fn join_module_parts<'a>(arena: &'a Bump, module_parts: &[&str]) -> &'a str {
+    let capacity = module_parts.len() * 3; // Module parts tend to be 3+ characters.
+    let mut buf = String::with_capacity_in(capacity, arena);
+    let mut any_parts_added = false;
+
+    for part in module_parts {
+        if any_parts_added {
+            buf.push('.');
+        } else {
+            any_parts_added = true;
+        }
+
+        buf.push_str(part);
+    }
+
+    buf.into_bump_str()
 }

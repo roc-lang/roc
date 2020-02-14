@@ -63,7 +63,7 @@ impl fmt::Debug for Region {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Located<T> {
     pub region: Region,
     pub value: T,

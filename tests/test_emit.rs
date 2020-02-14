@@ -10,8 +10,8 @@ extern crate roc;
 mod helpers;
 
 #[cfg(test)]
-mod test_emit {
-    use crate::helpers::can_expr;
+mod test_crane {
+    use crate::helpers::{can_expr, CanExprOut};
     use bumpalo::Bump;
     use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
     use cranelift_codegen::ir::InstBuilder;
@@ -44,10 +44,10 @@ mod test_emit {
             let mut ctx = module.make_context();
             let mut func_ctx = FunctionBuilderContext::new();
 
-            let (expr, _output, _problems, var_store, variable, constraint) = can_expr($src);
+            let CanExprOut { loc_expr, var_store, var, constraint, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
+            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
             let cfg = match isa::lookup(HOST) {
@@ -79,7 +79,7 @@ mod test_emit {
             };
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &env.subs, expr, &mut procs);
+            let mono_expr = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs);
             let mut scope = ImMap::default();
             let mut declared = Vec::with_capacity(procs.len());
 
@@ -169,10 +169,10 @@ mod test_emit {
     macro_rules! assert_llvm_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
             let arena = Bump::new();
-            let (expr, _output, _problems, var_store, variable, constraint) = can_expr($src);
+            let CanExprOut { loc_expr, var_store, var, constraint, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
+            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
             let context = Context::create();
             let module = context.create_module("app");
@@ -213,7 +213,7 @@ mod test_emit {
             };
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &env.subs, expr, &mut procs);
+            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs);
 
             // Add all the Procs to the module
             for (name, opt_proc) in procs.clone() {

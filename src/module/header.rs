@@ -28,6 +28,7 @@ impl<'a> ModuleName<'a> {
     }
 }
 
+// TODO is this all duplicated from parse::ast?
 #[derive(Clone, Debug, PartialEq)]
 pub struct InterfaceHeader<'a> {
     pub name: Loc<ModuleName<'a>>,

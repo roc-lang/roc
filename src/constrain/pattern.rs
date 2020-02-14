@@ -1,15 +1,102 @@
+use crate::can::ident::Lowercase;
 use crate::can::pattern::Pattern::{self, *};
 use crate::can::pattern::RecordDestruct;
-use crate::can::symbol::Symbol;
 use crate::collections::SendMap;
+use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
 use crate::subs::Variable;
-use crate::types::{Constraint, Expected, PExpected, PatternCategory, RecordFieldLabel, Type};
+use crate::types::{Constraint, Expected, PExpected, PatternCategory, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
+}
+
+/// If there is a type annotation, the pattern state headers can be optimized by putting the
+/// annotation in the headers. Normally
+///
+/// x = 4
+///
+/// Would add `x => <42>` to the headers (i.e., symbol points to a type variable). If the
+/// definition has an annotation, we instead now add `x => Int`.
+pub fn headers_from_annotation(
+    pattern: &Pattern,
+    annotation: &Located<Type>,
+) -> Option<SendMap<Symbol, Located<Type>>> {
+    let mut headers = SendMap::default();
+    // Check that the annotation structurally agrees with the pattern, preventing e.g. `{ x, y } : Int`
+    // in such incorrect cases we don't put the full annotation in headers, just a variable, and let
+    // inference generate a proper error.
+    let is_structurally_valid = headers_from_annotation_help(pattern, annotation, &mut headers);
+
+    if is_structurally_valid {
+        Some(headers)
+    } else {
+        None
+    }
+}
+
+pub fn headers_from_annotation_help(
+    pattern: &Pattern,
+    annotation: &Located<Type>,
+    headers: &mut SendMap<Symbol, Located<Type>>,
+) -> bool {
+    match pattern {
+        Identifier(symbol) => {
+            headers.insert(symbol.clone(), annotation.clone());
+            true
+        }
+        Underscore
+        | Shadowed(_, _)
+        | UnsupportedPattern(_)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_) => true,
+
+        RecordDestructure(_, destructs) => match annotation.value.shallow_dealias() {
+            Type::Record(fields, _) => {
+                for destruct in destructs {
+                    // NOTE ignores the .guard field.
+                    if let Some(field_type) = fields.get(&destruct.value.label) {
+                        headers.insert(
+                            destruct.value.symbol.clone(),
+                            Located::at(annotation.region, field_type.clone()),
+                        );
+                    } else {
+                        return false;
+                    }
+                }
+                true
+            }
+            Type::EmptyRec => destructs.is_empty(),
+            _ => false,
+        },
+
+        AppliedTag(_, tag_name, arguments) => match annotation.value.shallow_dealias() {
+            Type::TagUnion(tags, _) => {
+                if let Some((_, arg_types)) = tags.iter().find(|(name, _)| name == tag_name) {
+                    if !arguments.len() == arg_types.len() {
+                        return false;
+                    }
+
+                    arguments
+                        .iter()
+                        .zip(arg_types.iter())
+                        .all(|(arg_pattern, arg_type)| {
+                            headers_from_annotation_help(
+                                &arg_pattern.1.value,
+                                &Located::at(annotation.region, arg_type.clone()),
+                                headers,
+                            )
+                        })
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        },
+    }
 }
 
 /// This accepts PatternState (rather than returning it) so that the caller can
@@ -65,13 +152,17 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
-            let mut field_types: SendMap<RecordFieldLabel, Type> = SendMap::default();
+            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
 
-            for RecordDestruct {
-                var,
-                label,
-                symbol,
-                guard,
+            for Located {
+                value:
+                    RecordDestruct {
+                        var,
+                        label,
+                        symbol,
+                        guard,
+                    },
+                ..
             } in patterns
             {
                 let pat_type = Type::Variable(*var);
@@ -130,7 +221,7 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             state.constraints.push(tag_con);
         }
-        Shadowed(_) => {
+        Shadowed(_, _) => {
             panic!("TODO constrain Shadowed pattern");
         }
     }

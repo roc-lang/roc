@@ -1,8 +1,9 @@
-use crate::can::ident::{Lowercase, ModuleName, Uppercase};
-use crate::collections::{MutMap, MutSet};
+use crate::can::ident::{Lowercase, TagName};
+use crate::collections::{ImSet, MutMap, MutSet};
+use crate::module::symbol::{Interns, ModuleId, Symbol};
 use crate::subs::{Content, FlatType, Subs, Variable};
-use crate::types::{self, name_type_var};
-use crate::uniqueness::boolean_algebra::Bool;
+use crate::types::name_type_var;
+use crate::uniqueness::boolean_algebra::{Atom, Bool};
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -27,6 +28,11 @@ enum Parens {
     InFn,
     InTypeParam,
     Unnecessary,
+}
+
+struct Env<'a> {
+    home: ModuleId,
+    interns: &'a Interns,
 }
 
 /// How many times a root variable appeared in Subs.
@@ -56,6 +62,29 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
+    while let Some((recursive, _)) = subs.occurs(variable) {
+        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
+            let rec_var = subs.fresh_unnamed_flex_var();
+
+            let mut new_tags = MutMap::default();
+
+            for (label, args) in tags {
+                let new_args = args
+                    .clone()
+                    .into_iter()
+                    .map(|var| if var == recursive { rec_var } else { var })
+                    .collect();
+
+                new_tags.insert(label.clone(), new_args);
+            }
+
+            let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+            subs.set_content(recursive, Content::Structure(flat_type));
+        } else {
+            panic!("unfixable recursive type in pretty_print_types")
+        }
+    }
+
     match subs.get(variable).content {
         FlexVar(None) => {
             let root = subs.get_root_key(variable);
@@ -79,7 +108,7 @@ fn find_names_needed(
         FlexVar(Some(_)) => {
             // This root already has a name. Nothing to do here!
         }
-        Structure(Apply { args, .. }) => {
+        Structure(Apply(_, args)) => {
             for var in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
@@ -105,6 +134,14 @@ fn find_names_needed(
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
+        Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
+            for var in tags.values().flatten() {
+                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            }
+
+            find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
+        }
         Structure(Boolean(b)) => {
             for var in b.variables() {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
@@ -115,7 +152,7 @@ fn find_names_needed(
             // We must not accidentally generate names that collide with them!
             names_taken.insert(name);
         }
-        Alias(_, _, args, _actual) => {
+        Alias(_, args, _actual) => {
             // TODO should we also look in the actual variable?
             for (_, var) in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
@@ -175,50 +212,64 @@ fn set_root_name(root: Variable, name: &Lowercase, subs: &mut Subs) {
     }
 }
 
-pub fn content_to_string(content: Content, subs: &mut Subs) -> String {
+pub fn content_to_string(
+    content: Content,
+    subs: &mut Subs,
+    home: ModuleId,
+    interns: &Interns,
+) -> String {
     let mut buf = String::new();
+    let env = Env { home, interns };
 
-    write_content(content, subs, &mut buf, Parens::Unnecessary);
+    write_content(&env, content, subs, &mut buf, Parens::Unnecessary);
 
     buf
 }
 
-fn write_content(content: Content, subs: &mut Subs, buf: &mut String, parens: Parens) {
+fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String, parens: Parens) {
     use crate::subs::Content::*;
 
     match content {
         FlexVar(Some(name)) => buf.push_str(name.as_str()),
         FlexVar(None) => buf.push_str(WILDCARD),
         RigidVar(name) => buf.push_str(name.as_str()),
-        Structure(flat_type) => write_flat_type(flat_type, subs, buf, parens),
-        Alias(module_name, name, args, _actual) => {
-            buf.push_str(module_name.as_str());
-            buf.push('.');
-            buf.push_str(name.as_str());
+        Structure(flat_type) => write_flat_type(env, flat_type, subs, buf, parens),
+        Alias(symbol, args, _actual) => {
+            let write_parens = parens == Parens::InTypeParam && !args.is_empty();
+
+            if write_parens {
+                buf.push('(')
+            }
+
+            write_symbol(env, symbol, buf);
+
             for (_, var) in args {
                 buf.push(' ');
-                write_content(subs.get(var).content, subs, buf, parens);
+                write_content(env, subs.get(var).content, subs, buf, parens);
+            }
+
+            if write_parens {
+                buf.push(')')
             }
         }
         Error => buf.push_str("<type mismatch>"),
     }
 }
 
-fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    use crate::collections::ImMap;
-    use crate::subs::Content::Structure;
+fn write_flat_type(
+    env: &Env,
+    flat_type: FlatType,
+    subs: &mut Subs,
+    buf: &mut String,
+    parens: Parens,
+) {
     use crate::subs::FlatType::*;
-    use crate::uniqueness::boolean_algebra;
 
     match flat_type {
-        Apply {
-            module_name,
-            name,
-            args,
-        } => write_apply(module_name, name, args, subs, buf, parens),
+        Apply(symbol, args) => write_apply(env, symbol, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, ret) => write_fn(args, ret, subs, buf, parens),
+        Func(args, ret) => write_fn(env, args, ret, subs, buf, parens),
         Record(fields, ext_var) => {
             use crate::unify::gather_fields;
             use crate::unify::RecordStructure;
@@ -252,7 +303,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     buf.push_str(label.as_str());
 
                     buf.push_str(" : ");
-                    write_content(subs.get(field_var).content, subs, buf, parens);
+                    write_content(env, subs.get(field_var).content, subs, buf, parens);
                 }
 
                 buf.push_str(" }");
@@ -268,7 +319,7 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     //
                     // e.g. the "*" at the end of `{ x: Int }*`
                     // or the "r" at the end of `{ x: Int }r`
-                    write_content(content, subs, buf, parens)
+                    write_content(env, content, subs, buf, parens)
                 }
             }
         }
@@ -276,6 +327,9 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
             if tags.is_empty() {
                 buf.push_str(EMPTY_TAG_UNION)
             } else {
+                let interns = &env.interns;
+                let home = env.home;
+
                 buf.push_str("[ ");
 
                 // Sort the fields so they always end up in the same order.
@@ -285,7 +339,11 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     sorted_fields.push((label.clone(), vars));
                 }
 
-                sorted_fields.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+                sorted_fields.sort_by(|(a, _), (b, _)| {
+                    a.clone()
+                        .into_string(interns, home)
+                        .cmp(&b.clone().into_string(&interns, home))
+                });
 
                 let mut any_written_yet = false;
 
@@ -295,11 +353,12 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     } else {
                         any_written_yet = true;
                     }
-                    buf.push_str(label.as_str());
+
+                    buf.push_str(&label.into_string(&interns, home));
 
                     for var in vars {
                         buf.push(' ');
-                        write_content(subs.get(var).content, subs, buf, parens);
+                        write_content(env, subs.get(var).content, subs, buf, parens);
                     }
                 }
 
@@ -316,26 +375,66 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
                     //
                     // e.g. the "*" at the end of `{ x: Int }*`
                     // or the "r" at the end of `{ x: Int }r`
-                    write_content(content, subs, buf, parens)
+                    write_content(env, content, subs, buf, parens)
                 }
             }
         }
-        Boolean(b) => {
-            // push global substitutions into the boolean
-            let mut global_substitution = ImMap::default();
 
-            for v in b.variables() {
-                if let Structure(Boolean(replacement)) = subs.get(v).content {
-                    global_substitution.insert(v, replacement);
+        RecursiveTagUnion(rec_var, tags, ext_var) => {
+            if tags.is_empty() {
+                buf.push_str(EMPTY_TAG_UNION)
+            } else {
+                let interns = &env.interns;
+                let home = env.home;
+
+                buf.push_str("[ ");
+
+                // Sort the fields so they always end up in the same order.
+                let mut sorted_fields = Vec::with_capacity(tags.len());
+
+                for (label, vars) in tags {
+                    sorted_fields.push((label.clone(), vars));
+                }
+
+                // If the `ext` contains tags, merge them into the list of tags.
+                // this can occur when inferring mutually recursive tags
+                let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
+
+                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+                let mut any_written_yet = false;
+
+                for (label, vars) in sorted_fields {
+                    if any_written_yet {
+                        buf.push_str(", ");
+                    } else {
+                        any_written_yet = true;
+                    }
+                    buf.push_str(&label.into_string(&interns, home));
+
+                    for var in vars {
+                        buf.push(' ');
+                        write_content(env, subs.get(var).content, subs, buf, parens);
+                    }
+                }
+
+                buf.push_str(" ]");
+
+                if let Some(content) = ext_content {
+                    // This is an open tag union, so print the variable
+                    // right after the ']'
+                    //
+                    // e.g. the "*" at the end of `{ x: Int }*`
+                    // or the "r" at the end of `{ x: Int }r`
+                    write_content(env, content, subs, buf, parens)
                 }
             }
 
-            write_boolean(
-                boolean_algebra::simplify(b.substitute(&global_substitution)),
-                subs,
-                buf,
-                Parens::InTypeParam,
-            );
+            buf.push_str(" as ");
+            write_content(env, subs.get(rec_var).content, subs, buf, parens)
+        }
+        Boolean(b) => {
+            write_boolean(env, b, subs, buf, Parens::InTypeParam);
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
@@ -343,125 +442,184 @@ fn write_flat_type(flat_type: FlatType, subs: &mut Subs, buf: &mut String, paren
     }
 }
 
-fn write_boolean(boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    let is_atom = boolean.is_var() || boolean == Bool::Zero || boolean == Bool::One;
-    let write_parens = parens == Parens::InTypeParam && !is_atom;
+fn chase_ext_tag_union(
+    subs: &mut Subs,
+    var: Variable,
+    fields: &mut Vec<(TagName, Vec<Variable>)>,
+) -> Option<Content> {
+    use FlatType::*;
+    match subs.get(var).content {
+        Content::Structure(EmptyTagUnion) => None,
+        Content::Structure(TagUnion(tags, ext_var))
+        | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
+            for (label, vars) in tags {
+                fields.push((label.clone(), vars.to_vec()));
+            }
 
-    if write_parens {
-        buf.push_str("(");
+            chase_ext_tag_union(subs, ext_var, fields)
+        }
+
+        content => Some(content),
     }
+}
 
-    match boolean {
-        Bool::Variable(var) => write_content(subs.get(var).content, subs, buf, parens),
-        Bool::Or(p, q) => {
-            write_boolean(*p, subs, buf, Parens::InTypeParam);
-            buf.push_str(" | ");
-            write_boolean(*q, subs, buf, Parens::InTypeParam);
+fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
+    match boolean.simplify(subs) {
+        Err(atom) => write_boolean_atom(env, atom, subs, buf, parens),
+        Ok(variables) => {
+            let mut buffers_set = ImSet::default();
+
+            for v in variables {
+                let mut inner_buf: String = "".to_string();
+                write_content(env, subs.get(v).content, subs, &mut inner_buf, parens);
+                buffers_set.insert(inner_buf);
+            }
+
+            let mut buffers: Vec<String> = buffers_set.into_iter().collect();
+            buffers.sort();
+
+            let combined = buffers.join(" | ");
+
+            let write_parens = buffers.len() > 1;
+
+            if write_parens {
+                buf.push_str("(");
+            }
+            buf.push_str(&combined);
+            if write_parens {
+                buf.push_str(")");
+            }
         }
-        Bool::And(p, q) => {
-            write_boolean(*p, subs, buf, Parens::InTypeParam);
-            buf.push_str(" & ");
-            write_boolean(*q, subs, buf, Parens::InTypeParam);
-        }
-        Bool::Not(p) => {
-            buf.push_str("!");
-            write_boolean(*p, subs, buf, Parens::InTypeParam);
-        }
-        Bool::Zero => {
+    }
+}
+
+fn write_boolean_atom(env: &Env, atom: Atom, subs: &mut Subs, buf: &mut String, parens: Parens) {
+    match atom {
+        Atom::Variable(var) => write_content(env, subs.get(var).content, subs, buf, parens),
+        Atom::Zero => {
             buf.push_str("Attr.Shared");
         }
-        Bool::One => {
+        Atom::One => {
             buf.push_str("Attr.Unique");
         }
-    };
-
-    if write_parens {
-        buf.push_str(")");
     }
 }
 
 fn write_apply(
-    module_name: ModuleName,
-    type_name: Uppercase,
+    env: &Env,
+    symbol: Symbol,
     args: Vec<Variable>,
     subs: &mut Subs,
     buf: &mut String,
     parens: Parens,
 ) {
     let write_parens = parens == Parens::InTypeParam && !args.is_empty();
-    let module_name = module_name.as_str();
-    let type_name = type_name.as_str();
 
     // Hardcoded type aliases
-    if module_name == "Str" && type_name == "Str" {
-        buf.push_str("Str");
-    } else if module_name == ModuleName::NUM && type_name == types::TYPE_NUM {
-        let arg = args
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
-        let arg_content = subs.get(arg).content;
-        let mut arg_param = String::new();
+    match symbol {
+        Symbol::STR_STR => {
+            buf.push_str("Str");
+        }
+        Symbol::NUM_NUM => {
+            let arg = args
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
+            let arg_content = subs.get(arg).content;
+            let mut arg_param = String::new();
 
-        write_content(arg_content, subs, &mut arg_param, Parens::InTypeParam);
+            let mut default_case = |subs, content| {
+                if write_parens {
+                    buf.push_str("(");
+                }
 
-        if arg_param == "Int.Integer" {
-            buf.push_str("Int");
-        } else if arg_param == "Float.FloatingPoint" {
-            buf.push_str("Float");
-        } else {
+                write_content(env, content, subs, &mut arg_param, Parens::InTypeParam);
+                buf.push_str("Num ");
+                buf.push_str(&arg_param);
+
+                if write_parens {
+                    buf.push_str(")");
+                }
+            };
+
+            match &arg_content {
+                Content::Structure(FlatType::Apply(symbol, nested_args)) => match *symbol {
+                    Symbol::INT_INTEGER if nested_args.is_empty() => {
+                        buf.push_str("Int");
+                    }
+                    Symbol::FLOAT_FLOATINGPOINT if nested_args.is_empty() => {
+                        buf.push_str("Float");
+                    }
+                    Symbol::ATTR_ATTR => match nested_args
+                        .get(1)
+                        .map(|v| subs.get_without_compacting(*v).content)
+                    {
+                        Some(Content::Structure(FlatType::Apply(
+                            double_nested_symbol,
+                            double_nested_args,
+                        ))) => match double_nested_symbol {
+                            Symbol::INT_INTEGER if double_nested_args.is_empty() => {
+                                buf.push_str("Int");
+                            }
+                            Symbol::FLOAT_FLOATINGPOINT if double_nested_args.is_empty() => {
+                                buf.push_str("Float");
+                            }
+                            _ => default_case(subs, arg_content),
+                        },
+
+                        _ => default_case(subs, arg_content),
+                    },
+                    _ => default_case(subs, arg_content),
+                },
+                _ => default_case(subs, arg_content),
+            }
+        }
+        Symbol::LIST_LIST => {
             if write_parens {
                 buf.push_str("(");
             }
 
-            buf.push_str("Num ");
-            buf.push_str(&arg_param);
+            buf.push_str("List ");
+
+            let arg = args
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("List did not have any type parameters somehow."));
+            let arg_content = subs.get(arg).content;
+
+            write_content(env, arg_content, subs, buf, Parens::InTypeParam);
 
             if write_parens {
                 buf.push_str(")");
             }
         }
-    } else if module_name == "List" && type_name == "List" {
-        if write_parens {
-            buf.push_str("(");
-        }
+        _ => {
+            if write_parens {
+                buf.push_str("(");
+            }
 
-        buf.push_str("List ");
+            write_symbol(env, symbol, buf);
 
-        let arg = args
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("List did not have any type parameters somehow."));
-        let arg_content = subs.get(arg).content;
+            for arg in args {
+                buf.push_str(" ");
+                write_content(env, subs.get(arg).content, subs, buf, Parens::InTypeParam);
+            }
 
-        write_content(arg_content, subs, buf, Parens::InTypeParam);
-
-        if write_parens {
-            buf.push_str(")");
-        }
-    } else {
-        if write_parens {
-            buf.push_str("(");
-        }
-
-        if module_name.is_empty() {
-            buf.push_str(&type_name);
-        } else {
-            buf.push_str(&format!("{}.{}", module_name, type_name));
-        }
-
-        for arg in args {
-            buf.push_str(" ");
-            write_content(subs.get(arg).content, subs, buf, Parens::InTypeParam);
-        }
-
-        if write_parens {
-            buf.push_str(")");
+            if write_parens {
+                buf.push_str(")");
+            }
         }
     }
 }
 
-fn write_fn(args: Vec<Variable>, ret: Variable, subs: &mut Subs, buf: &mut String, parens: Parens) {
+fn write_fn(
+    env: &Env,
+    args: Vec<Variable>,
+    ret: Variable,
+    subs: &mut Subs,
+    buf: &mut String,
+    parens: Parens,
+) {
     let mut needs_comma = false;
     let use_parens = parens != Parens::Unnecessary;
 
@@ -476,13 +634,28 @@ fn write_fn(args: Vec<Variable>, ret: Variable, subs: &mut Subs, buf: &mut Strin
             needs_comma = true;
         }
 
-        write_content(subs.get(arg).content, subs, buf, Parens::InFn);
+        write_content(env, subs.get(arg).content, subs, buf, Parens::InFn);
     }
 
     buf.push_str(" -> ");
-    write_content(subs.get(ret).content, subs, buf, Parens::InFn);
+    write_content(env, subs.get(ret).content, subs, buf, Parens::InFn);
 
     if use_parens {
         buf.push_str(")");
+    }
+}
+
+fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
+    let interns = &env.interns;
+    let ident = symbol.ident_string(interns);
+    let module_id = symbol.module_id();
+
+    // Don't qualify the symbol if it's in our home module
+    if module_id == env.home {
+        buf.push_str(ident);
+    } else {
+        buf.push_str(module_id.to_string(&interns));
+        buf.push('.');
+        buf.push_str(ident);
     }
 }

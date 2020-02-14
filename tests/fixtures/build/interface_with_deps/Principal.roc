@@ -4,4 +4,4 @@ interface Principal
 
 identity = \a -> a
 
-intVal = identity 5
+intVal = identity "hi"

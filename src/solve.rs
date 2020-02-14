@@ -1,24 +1,270 @@
-use crate::can::ident::{Lowercase, ModuleName};
-use crate::can::symbol::Symbol;
+use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, MutMap, SendMap};
+use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::Located;
-use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
+use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, VarId, Variable};
+use crate::types::Alias;
 use crate::types::Constraint::{self, *};
 use crate::types::Problem;
 use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
-use crate::uniqueness::boolean_algebra;
-use std::sync::Arc;
+use crate::uniqueness::boolean_algebra::{self, Atom};
 
-pub type SubsByModule = MutMap<ModuleName, ModuleSubs>;
+// Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
+// https://github.com/elm/compiler
+// Thank you, Evan!
+
+pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
 #[derive(Clone, Debug)]
-pub enum ModuleSubs {
+pub enum ExposedModuleTypes {
     Invalid,
-    Valid(Arc<Solved<Subs>>),
+    Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
 }
 
-type Env = SendMap<Symbol, Variable>;
+/// This is a fully solved type, with no Variables remaining in it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SolvedType {
+    /// A function. The types of its arguments, then the type of its return value.
+    Func(Vec<SolvedType>, Box<SolvedType>),
+    /// Applying a type to some arguments (e.g. Map.Map String Int)
+    Apply(Symbol, Vec<SolvedType>),
+    /// A bound type variable, e.g. `a` in `(a -> a)`
+    Rigid(Lowercase),
+    Flex(VarId),
+    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    Record {
+        fields: Vec<(Lowercase, SolvedType)>,
+        /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
+        /// This is None if it's a closed record annotation like `{ name: Str }`.
+        ext: Box<SolvedType>,
+    },
+    EmptyRecord,
+    TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
+    RecursiveTagUnion(VarId, Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
+    EmptyTagUnion,
+    /// A type from an Invalid module
+    Erroneous(Problem),
+
+    /// A type alias
+    Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
+
+    /// a boolean algebra Bool
+    Boolean(boolean_algebra::Bool),
+
+    /// A type error
+    Error,
+}
+
+impl SolvedType {
+    pub fn new(solved_subs: &Solved<Subs>, var: Variable) -> Self {
+        Self::from_var(solved_subs.inner(), var)
+    }
+
+    pub fn from_type(solved_subs: &Solved<Subs>, typ: Type) -> Self {
+        use crate::types::Type::*;
+
+        match typ {
+            EmptyRec => SolvedType::EmptyRecord,
+            EmptyTagUnion => SolvedType::EmptyTagUnion,
+            Apply(symbol, types) => {
+                let mut solved_types = Vec::with_capacity(types.len());
+
+                for typ in types {
+                    let solved_type = Self::from_type(solved_subs, typ);
+
+                    solved_types.push(solved_type);
+                }
+
+                SolvedType::Apply(symbol, solved_types)
+            }
+            Function(args, box_ret) => {
+                let solved_ret = Self::from_type(solved_subs, *box_ret);
+                let mut solved_args = Vec::with_capacity(args.len());
+
+                for arg in args.into_iter() {
+                    let solved_arg = Self::from_type(solved_subs, arg);
+
+                    solved_args.push(solved_arg);
+                }
+
+                SolvedType::Func(solved_args, Box::new(solved_ret))
+            }
+            Record(fields, box_ext) => {
+                let solved_ext = Self::from_type(solved_subs, *box_ext);
+                let mut solved_fields = Vec::with_capacity(fields.len());
+                for (label, typ) in fields {
+                    let solved_type = Self::from_type(solved_subs, typ);
+
+                    solved_fields.push((label.clone(), solved_type));
+                }
+
+                SolvedType::Record {
+                    fields: solved_fields,
+                    ext: Box::new(solved_ext),
+                }
+            }
+            TagUnion(tags, box_ext) => {
+                let solved_ext = Self::from_type(solved_subs, *box_ext);
+                let mut solved_tags = Vec::with_capacity(tags.len());
+                for (tag_name, types) in tags {
+                    let mut solved_types = Vec::with_capacity(types.len());
+
+                    for typ in types {
+                        let solved_type = Self::from_type(solved_subs, typ);
+                        solved_types.push(solved_type);
+                    }
+
+                    solved_tags.push((tag_name.clone(), solved_types));
+                }
+
+                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
+            }
+            RecursiveTagUnion(rec_var, tags, box_ext) => {
+                let solved_ext = Self::from_type(solved_subs, *box_ext);
+                let mut solved_tags = Vec::with_capacity(tags.len());
+                for (tag_name, types) in tags {
+                    let mut solved_types = Vec::with_capacity(types.len());
+
+                    for typ in types {
+                        let solved_type = Self::from_type(solved_subs, typ);
+                        solved_types.push(solved_type);
+                    }
+
+                    solved_tags.push((tag_name.clone(), solved_types));
+                }
+
+                SolvedType::RecursiveTagUnion(
+                    VarId::from_var(rec_var),
+                    solved_tags,
+                    Box::new(solved_ext),
+                )
+            }
+            Erroneous(problem) => SolvedType::Erroneous(problem),
+            Alias(symbol, args, box_type) => {
+                let solved_type = Self::from_type(solved_subs, *box_type);
+                let mut solved_args = Vec::with_capacity(args.len());
+                for (name, typ) in args {
+                    let solved_type = Self::from_type(solved_subs, typ);
+
+                    solved_args.push((name.clone(), solved_type));
+                }
+
+                SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
+            }
+            Boolean(val) => SolvedType::Boolean(val),
+            Variable(var) => Self::from_var(solved_subs.inner(), var),
+        }
+    }
+
+    fn from_var(subs: &Subs, var: Variable) -> Self {
+        use Content::*;
+        match subs.get_without_compacting(var).content {
+            FlexVar(_) => SolvedType::Flex(VarId::from_var(var)),
+            RigidVar(name) => SolvedType::Rigid(name),
+            Structure(flat_type) => Self::from_flat_type(subs, flat_type),
+            Alias(symbol, args, actual_var) => {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for (arg_name, arg_var) in args {
+                    new_args.push((arg_name, Self::from_var(subs, arg_var)));
+                }
+
+                let aliased_to = Self::from_var(subs, actual_var);
+
+                SolvedType::Alias(symbol, new_args, Box::new(aliased_to))
+            }
+            Error => SolvedType::Error,
+        }
+    }
+
+    fn from_flat_type(subs: &Subs, flat_type: FlatType) -> Self {
+        use crate::subs::FlatType::*;
+
+        match flat_type {
+            Apply(symbol, args) => {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for var in args {
+                    new_args.push(Self::from_var(subs, var));
+                }
+
+                SolvedType::Apply(symbol, new_args)
+            }
+            Func(args, ret) => {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for var in args {
+                    new_args.push(Self::from_var(subs, var));
+                }
+
+                let ret = Self::from_var(subs, ret);
+
+                SolvedType::Func(new_args, Box::new(ret))
+            }
+            Record(fields, ext_var) => {
+                let mut new_fields = Vec::with_capacity(fields.len());
+
+                for (label, var) in fields {
+                    let field = Self::from_var(subs, var);
+
+                    new_fields.push((label, field));
+                }
+
+                let ext = Self::from_var(subs, ext_var);
+
+                SolvedType::Record {
+                    fields: new_fields,
+                    ext: Box::new(ext),
+                }
+            }
+            TagUnion(tags, ext_var) => {
+                let mut new_tags = Vec::with_capacity(tags.len());
+
+                for (tag_name, args) in tags {
+                    let mut new_args = Vec::with_capacity(args.len());
+
+                    for var in args {
+                        new_args.push(Self::from_var(subs, var));
+                    }
+
+                    new_tags.push((tag_name, new_args));
+                }
+
+                let ext = Self::from_var(subs, ext_var);
+
+                SolvedType::TagUnion(new_tags, Box::new(ext))
+            }
+            RecursiveTagUnion(rec_var, tags, ext_var) => {
+                let mut new_tags = Vec::with_capacity(tags.len());
+
+                for (tag_name, args) in tags {
+                    let mut new_args = Vec::with_capacity(args.len());
+
+                    for var in args {
+                        new_args.push(Self::from_var(subs, var));
+                    }
+
+                    new_tags.push((tag_name, new_args));
+                }
+
+                let ext = Self::from_var(subs, ext_var);
+
+                SolvedType::RecursiveTagUnion(VarId::from_var(rec_var), new_tags, Box::new(ext))
+            }
+            EmptyRecord => SolvedType::EmptyRecord,
+            EmptyTagUnion => SolvedType::EmptyTagUnion,
+            Boolean(val) => SolvedType::Boolean(val),
+            Erroneous(problem) => SolvedType::Erroneous(problem),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Env {
+    pub vars_by_symbol: SendMap<Symbol, Variable>,
+    pub aliases: SendMap<Symbol, Alias>,
+}
 
 const DEFAULT_POOLS: usize = 8;
 
@@ -71,9 +317,8 @@ impl Pools {
 
 #[derive(Clone)]
 struct State {
-    vars_by_symbol: Env,
+    env: Env,
     mark: Mark,
-    subs_by_module: SubsByModule,
 }
 
 /// A marker that a given Subs has been solved.
@@ -92,34 +337,26 @@ impl<T> Solved<T> {
 }
 
 pub fn run(
-    vars_by_symbol: &Env,
-    subs_by_module: SubsByModule,
+    env: &Env,
     problems: &mut Vec<Problem>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
     let mut pools = Pools::default();
     let state = State {
-        vars_by_symbol: vars_by_symbol.clone(),
+        env: env.clone(),
         mark: Mark::NONE.next(),
-        subs_by_module,
     };
     let rank = Rank::toplevel();
     let state = solve(
-        vars_by_symbol,
-        state,
-        rank,
-        &mut pools,
-        problems,
-        &mut subs,
-        constraint,
+        env, state, rank, &mut pools, problems, &mut subs, constraint,
     );
 
-    (Solved(subs), state.vars_by_symbol)
+    (Solved(subs), state.env)
 }
 
 fn solve(
-    vars_by_symbol: &Env,
+    env: &Env,
     state: State,
     rank: Rank,
     pools: &mut Pools,
@@ -132,13 +369,19 @@ fn solve(
         SaveTheEnvironment => {
             let mut copy = state;
 
-            copy.vars_by_symbol = vars_by_symbol.clone();
+            copy.env = env.clone();
 
             copy
         }
         Eq(typ, expected_type, _region) => {
-            let actual = type_to_var(subs, rank, pools, typ);
-            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
+            let actual = type_to_var(subs, rank, pools, &env.aliases, typ);
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                &env.aliases,
+                expected_type.get_type_ref(),
+            );
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -148,13 +391,13 @@ fn solve(
 
             state
         }
-        Lookup(module_name, symbol, expected_type, _region) => {
-            let var = *vars_by_symbol.get(&symbol).unwrap_or_else(|| {
+        Lookup(symbol, expected_type, _region) => {
+            let var = *env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
                 // a Problem ("module Foo does not expose `bar`") for later.
                 panic!(
                     "Could not find symbol {:?} in vars_by_symbol {:?}",
-                    symbol, vars_by_symbol
+                    symbol, env.vars_by_symbol
                 )
             });
 
@@ -179,18 +422,14 @@ fn solve(
             // then we copy from that module's Subs into our own. If the value
             // is being looked up in this module, then we use our Subs as both
             // the source and destination.
-            let actual = if module_name.is_empty() {
-                // If this Lookup has no module_name, that means it's the current module
-                deep_copy_local_var(subs, rank, pools, var)
-            } else {
-                let source_subs = state
-                    .subs_by_module
-                    .get(module_name)
-                    .unwrap_or_else(|| panic!("Could not find Subs for module {:?}", module_name));
-
-                deep_copy_foreign_var(source_subs, subs, rank, pools, var)
-            };
-            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
+            let actual = deep_copy_var(subs, rank, pools, var);
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                &env.aliases,
+                expected_type.get_type_ref(),
+            );
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -204,22 +443,14 @@ fn solve(
             let mut state = state;
 
             for sub_constraint in sub_constraints.iter() {
-                state = solve(
-                    vars_by_symbol,
-                    state,
-                    rank,
-                    pools,
-                    problems,
-                    subs,
-                    sub_constraint,
-                );
+                state = solve(env, state, rank, pools, problems, subs, sub_constraint);
             }
 
             state
         }
         Pattern(_region, _category, typ, expected) => {
-            let actual = type_to_var(subs, rank, pools, typ);
-            let expected = type_to_var(subs, rank, pools, expected.get_type_ref());
+            let actual = type_to_var(subs, rank, pools, &env.aliases, typ);
+            let expected = type_to_var(subs, rank, pools, &env.aliases, expected.get_type_ref());
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -234,10 +465,16 @@ fn solve(
                 True if let_con.rigid_vars.is_empty() => {
                     introduce(subs, rank, pools, &let_con.flex_vars);
 
+                    let mut new_env = env.clone();
+
+                    for (symbol, alias) in let_con.def_aliases.iter() {
+                        new_env.aliases.insert(*symbol, alias.clone());
+                    }
+
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(
-                        vars_by_symbol,
+                        &new_env,
                         state,
                         rank,
                         pools,
@@ -248,7 +485,7 @@ fn solve(
                 }
                 ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
                     let state = solve(
-                        vars_by_symbol,
+                        env,
                         state,
                         rank,
                         pools,
@@ -257,11 +494,17 @@ fn solve(
                         &let_con.defs_constraint,
                     );
 
+                    let mut new_env = env.clone();
+
+                    for (symbol, alias) in let_con.def_aliases.iter() {
+                        new_env.aliases.insert(*symbol, alias.clone());
+                    }
+
                     // Add a variable for each def to new_vars_by_env.
                     let mut local_def_vars = ImMap::default();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(subs, rank, pools, &loc_type.value);
+                        let var = type_to_var(subs, rank, pools, &new_env.aliases, &loc_type.value);
 
                         local_def_vars.insert(
                             symbol.clone(),
@@ -272,23 +515,13 @@ fn solve(
                         );
                     }
 
-                    let mut new_vars_by_symbol = vars_by_symbol.clone();
-
                     for (symbol, loc_var) in local_def_vars.iter() {
-                        if !new_vars_by_symbol.contains_key(&symbol) {
-                            new_vars_by_symbol.insert(symbol.clone(), loc_var.value);
+                        if !new_env.vars_by_symbol.contains_key(&symbol) {
+                            new_env.vars_by_symbol.insert(symbol.clone(), loc_var.value);
                         }
                     }
 
-                    let new_state = solve(
-                        &new_vars_by_symbol,
-                        state,
-                        rank,
-                        pools,
-                        problems,
-                        subs,
-                        ret_con,
-                    );
+                    let new_state = solve(&new_env, state, rank, pools, problems, subs, ret_con);
 
                     for (symbol, loc_var) in local_def_vars {
                         check_for_infinite_type(subs, problems, symbol, loc_var);
@@ -317,12 +550,26 @@ fn solve(
                         pool.extend(rigid_vars.iter());
                         pool.extend(flex_vars.iter());
 
+                        let mut new_env = env.clone();
+
+                        for (symbol, alias) in let_con.def_aliases.iter() {
+                            new_env.aliases.insert(*symbol, alias.clone());
+                        }
+
                         // Add a variable for each def to local_def_vars.
                         let mut local_def_vars = ImMap::default();
 
                         for (symbol, loc_type) in let_con.def_types.iter() {
                             let def_type = loc_type.value.clone();
-                            let var = type_to_var(subs, next_rank, next_pools, &def_type);
+
+                            // TODO should this use new aliases?
+                            let var = type_to_var(
+                                subs,
+                                next_rank,
+                                next_pools,
+                                &new_env.aliases,
+                                &def_type,
+                            );
 
                             local_def_vars.insert(
                                 symbol.clone(),
@@ -337,7 +584,7 @@ fn solve(
 
                         // Solve the assignments' constraints first.
                         let new_state = solve(
-                            vars_by_symbol,
+                            &new_env,
                             state,
                             next_rank,
                             next_pools,
@@ -370,36 +617,44 @@ fn solve(
                         next_pools.get_mut(next_rank).clear();
 
                         // check that things went well
-                        debug_assert!(rigid_vars
-                            .iter()
-                            .all(|&var| subs.get_without_compacting(var).rank == Rank::NONE));
+                        debug_assert!({
+                            // NOTE the `subs.redundant` check is added for the uniqueness
+                            // inference, and does not come from elm. It's unclear whether this is
+                            // a bug with uniqueness inference (something is redundant that
+                            // shouldn't be) or that it just never came up in elm.
+                            let failing: Vec<_> = rigid_vars
+                                .iter()
+                                .filter(|&var| {
+                                    !subs.redundant(*var)
+                                        && subs.get_without_compacting(*var).rank != Rank::NONE
+                                })
+                                .collect();
 
-                        let mut new_vars_by_symbol = vars_by_symbol.clone();
+                            if !failing.is_empty() {
+                                println!("Rigids {:?}", &rigid_vars);
+                                println!("Failing {:?}", failing);
+                            }
+
+                            failing.is_empty()
+                        });
 
                         for (symbol, loc_var) in local_def_vars.iter() {
-                            if !new_vars_by_symbol.contains_key(&symbol) {
-                                new_vars_by_symbol.insert(symbol.clone(), loc_var.value);
+                            if !new_env.vars_by_symbol.contains_key(&symbol) {
+                                new_env.vars_by_symbol.insert(symbol.clone(), loc_var.value);
                             }
                         }
 
                         // Note that this vars_by_symbol is the one returned by the
                         // previous call to solve()
                         let temp_state = State {
-                            vars_by_symbol: new_state.vars_by_symbol,
+                            env: new_state.env,
                             mark: final_mark,
-                            subs_by_module: new_state.subs_by_module,
                         };
 
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
                         let new_state = solve(
-                            &new_vars_by_symbol,
-                            temp_state,
-                            rank,
-                            next_pools,
-                            problems,
-                            subs,
-                            &ret_con,
+                            &new_env, temp_state, rank, next_pools, problems, subs, &ret_con,
                         );
 
                         for (symbol, loc_var) in local_def_vars {
@@ -421,38 +676,83 @@ fn solve(
     }
 }
 
-fn type_to_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) -> Variable {
-    type_to_variable(subs, rank, pools, &ImMap::default(), typ)
+fn type_to_var(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    aliases: &SendMap<Symbol, Alias>,
+    typ: &Type,
+) -> Variable {
+    type_to_variable(subs, rank, pools, aliases, typ)
 }
 
 fn type_to_variable(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    aliases: &ImMap<Lowercase, Variable>,
+    aliases: &SendMap<Symbol, Alias>,
     typ: &Type,
 ) -> Variable {
     match typ {
         Variable(var) => *var,
-        Apply {
-            module_name,
-            name,
-            args,
-        } => {
-            let mut arg_vars = Vec::with_capacity(args.len());
+        Apply(symbol, args) => {
+            if let Some(alias) = aliases.get(symbol) {
+                if args.len() != alias.vars.len() {
+                    panic!(
+                        "Alias {:?} applied to incorrect number of arguments",
+                        symbol
+                    );
+                }
 
-            for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
+                let mut actual = alias.typ.clone();
+                let mut substitution = ImMap::default();
+                let mut arg_vars = Vec::with_capacity(args.len());
+
+                for (
+                    tipe,
+                    Located {
+                        value: (lowercase, var),
+                        ..
+                    },
+                ) in args.iter().zip(alias.vars.iter())
+                {
+                    let new_var = type_to_variable(subs, rank, pools, aliases, tipe);
+                    substitution.insert(*var, Type::Variable(new_var));
+                    arg_vars.push((lowercase.clone(), new_var));
+                }
+
+                actual.substitute(&substitution);
+
+                // We must instantiate the recursion variable, otherwise all e.g. lists will be
+                // unified, List Int ~ List Float
+                if let Type::RecursiveTagUnion(rec_var, _, _) = actual {
+                    let new_rec_var = subs.fresh_unnamed_flex_var();
+                    substitution.clear();
+                    substitution.insert(rec_var, Type::Variable(new_rec_var));
+
+                    actual.substitute(&substitution);
+
+                    if let Type::RecursiveTagUnion(_, tags, ext_var) = actual {
+                        actual = Type::RecursiveTagUnion(new_rec_var, tags, ext_var);
+                    }
+                }
+
+                let alias_var = type_to_variable(subs, rank, pools, aliases, &actual);
+                let content = Content::Alias(*symbol, arg_vars, alias_var);
+
+                register(subs, rank, pools, content)
+            } else {
+                let mut arg_vars = Vec::with_capacity(args.len());
+
+                for arg in args {
+                    arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
+                }
+
+                let flat_type = FlatType::Apply(*symbol, arg_vars);
+                let content = Content::Structure(flat_type);
+
+                register(subs, rank, pools, content)
             }
-
-            let flat_type = FlatType::Apply {
-                module_name: module_name.clone(),
-                name: name.clone(),
-                args: arg_vars,
-            };
-            let content = Content::Structure(flat_type);
-
-            register(subs, rank, pools, content)
         }
         EmptyRec => {
             let content = Content::Structure(FlatType::EmptyRecord);
@@ -464,8 +764,9 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
-        // This case is important so e.g. `Bool::Variable(v) ~ Attr.Shared`
-        Boolean(boolean_algebra::Bool::Variable(var)) => *var,
+
+        // This case is important for the rank of boolean variables
+        Boolean(boolean_algebra::Bool(Atom::Variable(var), rest)) if rest.is_empty() => *var,
         Boolean(b) => {
             let content = Content::Structure(FlatType::Boolean(b.clone()));
 
@@ -516,23 +817,41 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
-        Alias(home, name, args, alias_type) => {
+        RecursiveTagUnion(rec_var, tags, ext) => {
+            let mut tag_vars = MutMap::default();
+
+            for (tag, tag_argument_types) in tags {
+                let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
+
+                for arg_type in tag_argument_types {
+                    tag_argument_vars.push(type_to_variable(subs, rank, pools, aliases, arg_type));
+                }
+
+                tag_vars.insert(tag.clone(), tag_argument_vars);
+            }
+
+            let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
+            let content =
+                Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, ext_var));
+
+            register(subs, rank, pools, content)
+        }
+        Alias(symbol, args, alias_type) => {
             let mut arg_vars = Vec::with_capacity(args.len());
             let mut new_aliases = ImMap::default();
 
-            for (arg, arg_var) in args {
-                let arg_var = *arg_var;
+            for (arg, arg_type) in args {
+                let arg_var = type_to_variable(subs, rank, pools, aliases, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
                 new_aliases.insert(arg.clone(), arg_var);
             }
 
-            let alias_var = type_to_variable(subs, rank, pools, &new_aliases, alias_type);
-            let content = Content::Alias(home.clone(), name.clone(), arg_vars, alias_var);
+            let alias_var = type_to_variable(subs, rank, pools, aliases, alias_type);
+            let content = Content::Alias(*symbol, arg_vars, alias_var);
 
             register(subs, rank, pools, content)
         }
-        As(_, _) => panic!("TODO turn As into a variable"),
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem.clone()));
 
@@ -549,14 +868,144 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    if subs.occurs(var) {
-        let error_type = subs.var_to_error_type(var);
-        let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+    let is_uniqueness_infer = match subs.get(var).content {
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, _)) => true,
+        _ => false,
+    };
 
-        subs.set_content(var, Content::Error);
+    while let Some((recursive, chain)) = subs.occurs(var) {
+        let description = subs.get(recursive);
+        let content = description.content;
 
-        problems.push(problem);
+        // try to make a tag union recursive, see if that helps
+        match content {
+            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                if !is_uniqueness_infer {
+                    let rec_var = subs.fresh_unnamed_flex_var();
+                    subs.set_rank(rec_var, description.rank);
+
+                    let mut new_tags = MutMap::default();
+
+                    for (label, args) in &tags {
+                        let new_args: Vec<_> = args
+                            .iter()
+                            .map(|var| subs.explicit_substitute(recursive, rec_var, *var))
+                            .collect();
+
+                        new_tags.insert(label.clone(), new_args);
+                    }
+
+                    let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
+
+                    let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+
+                    subs.set_content(recursive, Content::Structure(flat_type));
+                } else {
+                    // Sometimes, the recursion "starts" at the tag-union, not an `Attr`. Here we
+                    // We use the path that `occurs` took to find the recursion to go one step
+                    // forward in the recursion and find the `Attr` there.
+                    let index = 0;
+                    match subs.get(chain[index]).content {
+                        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+                            debug_assert!(args.len() == 2);
+                            debug_assert!(
+                                subs.get_root_key_without_compacting(recursive)
+                                    == subs.get_root_key_without_compacting(args[1])
+                            );
+
+                            // NOTE this ensures we use the same uniqueness var for the whole spine
+                            // that might add too much uniqueness restriction.
+                            // using `subs.fresh_unnamed_flex_var()` loosens it.
+                            let uniq_var = args[0];
+                            let tag_union_var = recursive;
+                            let recursive = chain[index];
+
+                            correct_recursive_attr(
+                                subs,
+                                recursive,
+                                uniq_var,
+                                tag_union_var,
+                                ext_var,
+                                &tags,
+                            );
+                        }
+                        _ => circular_error(subs, problems, symbol, &loc_var),
+                    }
+                }
+            }
+            Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+                debug_assert!(args.len() == 2);
+                let uniq_var = args[0];
+                let tag_union_var = args[1];
+                let nested_description = subs.get(tag_union_var);
+                match nested_description.content {
+                    Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                        correct_recursive_attr(
+                            subs,
+                            recursive,
+                            uniq_var,
+                            tag_union_var,
+                            ext_var,
+                            &tags,
+                        );
+                    }
+                    _ => circular_error(subs, problems, symbol, &loc_var),
+                }
+            }
+            _ => circular_error(subs, problems, symbol, &loc_var),
+        }
     }
+}
+
+fn correct_recursive_attr(
+    subs: &mut Subs,
+    recursive: Variable,
+    uniq_var: Variable,
+    tag_union_var: Variable,
+    ext_var: Variable,
+    tags: &MutMap<TagName, Vec<Variable>>,
+) {
+    let rec_var = subs.fresh_unnamed_flex_var();
+    let attr_var = subs.fresh_unnamed_flex_var();
+
+    subs.set_content(
+        attr_var,
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, rec_var])),
+    );
+
+    let mut new_tags = MutMap::default();
+
+    let new_ext_var = subs.explicit_substitute(recursive, attr_var, ext_var);
+    for (label, args) in tags {
+        let new_args: Vec<_> = args
+            .iter()
+            .map(|var| subs.explicit_substitute(recursive, attr_var, *var))
+            .collect();
+
+        new_tags.insert(label.clone(), new_args);
+    }
+
+    let new_tag_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+    subs.set_content(tag_union_var, Content::Structure(new_tag_type));
+
+    let new_recursive = FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, tag_union_var]);
+
+    subs.set_content(recursive, Content::Structure(new_recursive));
+}
+
+fn circular_error(
+    subs: &mut Subs,
+    problems: &mut Vec<Problem>,
+    symbol: Symbol,
+    loc_var: &Located<Variable>,
+) {
+    let var = loc_var.value;
+    let error_type = subs.var_to_error_type(var);
+    let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+
+    subs.set_content(var, Content::Error);
+
+    problems.push(problem);
 }
 
 fn generalize(
@@ -601,7 +1050,6 @@ fn generalize(
                 pools.get_mut(desc.rank).push(var);
             } else {
                 desc.rank = Rank::NONE;
-
                 subs.set(var, desc);
             }
         }
@@ -697,7 +1145,7 @@ fn adjust_rank_content(
 
         Structure(flat_type) => {
             match flat_type {
-                Apply { args, .. } => {
+                Apply(_, args) => {
                     let mut rank = Rank::toplevel();
 
                     for var in args {
@@ -745,6 +1193,20 @@ fn adjust_rank_content(
                     rank
                 }
 
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var);
+                    rank = rank.max(adjust_rank(
+                        subs, young_mark, visit_mark, group_rank, ext_var,
+                    ));
+
+                    for var in tags.values().flatten() {
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    }
+
+                    rank
+                }
+
                 Boolean(b) => {
                     let mut rank = Rank::toplevel();
                     for var in b.variables() {
@@ -758,7 +1220,7 @@ fn adjust_rank_content(
             }
         }
 
-        Alias(_, _, args, _) => {
+        Alias(_, args, _) => {
             let mut rank = Rank::toplevel();
 
             // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
@@ -783,15 +1245,15 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
     pool.extend(vars);
 }
 
-fn deep_copy_local_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
-    let copy = deep_copy_local_var_help(subs, rank, pools, var);
+fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
+    let copy = deep_copy_var_help(subs, rank, pools, var);
 
     subs.restore(var);
 
     copy
 }
 
-fn deep_copy_local_var_help(
+fn deep_copy_var_help(
     subs: &mut Subs,
     max_rank: Rank,
     pools: &mut Pools,
@@ -840,28 +1302,20 @@ fn deep_copy_local_var_help(
     match content {
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
-                Apply {
-                    module_name,
-                    name,
-                    args,
-                } => {
+                Apply(symbol, args) => {
                     let args = args
                         .into_iter()
-                        .map(|var| deep_copy_local_var_help(subs, max_rank, pools, var))
+                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
                         .collect();
 
-                    Apply {
-                        module_name,
-                        name,
-                        args,
-                    }
+                    Apply(symbol, args)
                 }
 
                 Func(arg_vars, ret_var) => {
-                    let new_ret_var = deep_copy_local_var_help(subs, max_rank, pools, ret_var);
+                    let new_ret_var = deep_copy_var_help(subs, max_rank, pools, ret_var);
                     let arg_vars = arg_vars
                         .into_iter()
-                        .map(|var| deep_copy_local_var_help(subs, max_rank, pools, var))
+                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
                         .collect();
 
                     Func(arg_vars, new_ret_var)
@@ -873,13 +1327,12 @@ fn deep_copy_local_var_help(
                     let mut new_fields = MutMap::default();
 
                     for (label, var) in fields {
-                        new_fields
-                            .insert(label, deep_copy_local_var_help(subs, max_rank, pools, var));
+                        new_fields.insert(label, deep_copy_var_help(subs, max_rank, pools, var));
                     }
 
                     Record(
                         new_fields,
-                        deep_copy_local_var_help(subs, max_rank, pools, ext_var),
+                        deep_copy_var_help(subs, max_rank, pools, ext_var),
                     )
                 }
 
@@ -889,19 +1342,34 @@ fn deep_copy_local_var_help(
                     for (tag, vars) in tags {
                         let new_vars: Vec<Variable> = vars
                             .into_iter()
-                            .map(|var| deep_copy_local_var_help(subs, max_rank, pools, var))
+                            .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
                             .collect();
                         new_tags.insert(tag, new_vars);
                     }
 
-                    TagUnion(
+                    TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let mut new_tags = MutMap::default();
+
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
+                            .collect();
+                        new_tags.insert(tag, new_vars);
+                    }
+
+                    RecursiveTagUnion(
+                        deep_copy_var_help(subs, max_rank, pools, rec_var),
                         new_tags,
-                        deep_copy_local_var_help(subs, max_rank, pools, ext_var),
+                        deep_copy_var_help(subs, max_rank, pools, ext_var),
                     )
                 }
 
                 Boolean(b) => {
-                    let mut mapper = |var| deep_copy_local_var_help(subs, max_rank, pools, var);
+                    let mut mapper = |var| deep_copy_var_help(subs, max_rank, pools, var);
 
                     Boolean(b.map_variables(&mut mapper))
                 }
@@ -920,224 +1388,15 @@ fn deep_copy_local_var_help(
             copy
         }
 
-        Alias(module_name, name, args, real_type_var) => {
+        Alias(symbol, args, real_type_var) => {
             let new_args = args
                 .into_iter()
-                .map(|(name, var)| (name, deep_copy_local_var_help(subs, max_rank, pools, var)))
+                .map(|(name, var)| (name, deep_copy_var_help(subs, max_rank, pools, var)))
                 .collect();
-            let new_real_type_var = deep_copy_local_var_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(module_name, name, new_args, new_real_type_var);
+            let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
+            let new_content = Alias(symbol, new_args, new_real_type_var);
 
             subs.set(copy, make_descriptor(new_content));
-
-            copy
-        }
-    }
-}
-
-fn deep_copy_foreign_var(
-    source_subs: &ModuleSubs,
-    dest_subs: &mut Subs,
-    rank: Rank,
-    pools: &mut Pools,
-    var: Variable,
-) -> Variable {
-    let copy = deep_copy_foreign_var_help(source_subs, dest_subs, rank, pools, var);
-
-    dest_subs.restore(var);
-
-    copy
-}
-
-fn deep_copy_foreign_var_help(
-    source_subs: &ModuleSubs,
-    dest_subs: &mut Subs,
-    max_rank: Rank,
-    pools: &mut Pools,
-    var: Variable,
-) -> Variable {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
-    use ModuleSubs::*;
-
-    let desc = match source_subs {
-        Valid(arc_solved) => (&arc_solved).inner().get_without_compacting(var),
-        Invalid => panic!("TODO gracefully handle lookups on invalid modules"),
-    };
-
-    if let Some(copy) = desc.copy.into_variable() {
-        return copy;
-    } else if desc.rank != Rank::NONE {
-        return var;
-    }
-
-    let make_descriptor = |content| Descriptor {
-        content,
-        rank: max_rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
-
-    let content = desc.content;
-    let copy = dest_subs.fresh(make_descriptor(content.clone()));
-
-    pools.get_mut(max_rank).push(copy);
-
-    // Link the original variable to the new variable. This lets us
-    // avoid making multiple copies of the variable we are instantiating.
-    //
-    // Need to do this before recursively copying to avoid looping.
-    dest_subs.set(
-        var,
-        Descriptor {
-            content: content.clone(),
-            rank: desc.rank,
-            mark: Mark::NONE,
-            copy: copy.into(),
-        },
-    );
-
-    // Now we recursively copy the content of the variable.
-    // We have already marked the variable as copied, so we
-    // will not repeat this work or crawl this variable again.
-    match content {
-        Structure(flat_type) => {
-            let new_flat_type = match flat_type {
-                Apply {
-                    module_name,
-                    name,
-                    args,
-                } => {
-                    let args = args
-                        .into_iter()
-                        .map(|var| {
-                            deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, var)
-                        })
-                        .collect();
-
-                    Apply {
-                        module_name,
-                        name,
-                        args,
-                    }
-                }
-
-                Func(arg_vars, ret_var) => {
-                    let new_ret_var = deep_copy_foreign_var_help(
-                        source_subs,
-                        dest_subs,
-                        max_rank,
-                        pools,
-                        ret_var,
-                    );
-                    let arg_vars = arg_vars
-                        .into_iter()
-                        .map(|var| {
-                            deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, var)
-                        })
-                        .collect();
-
-                    Func(arg_vars, new_ret_var)
-                }
-
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
-
-                Record(fields, ext_var) => {
-                    let mut new_fields = MutMap::default();
-
-                    for (label, var) in fields {
-                        new_fields.insert(
-                            label,
-                            deep_copy_foreign_var_help(
-                                source_subs,
-                                dest_subs,
-                                max_rank,
-                                pools,
-                                var,
-                            ),
-                        );
-                    }
-
-                    Record(
-                        new_fields,
-                        deep_copy_foreign_var_help(
-                            source_subs,
-                            dest_subs,
-                            max_rank,
-                            pools,
-                            ext_var,
-                        ),
-                    )
-                }
-
-                TagUnion(tags, ext_var) => {
-                    let mut new_tags = MutMap::default();
-
-                    for (tag, vars) in tags {
-                        let new_vars: Vec<Variable> = vars
-                            .into_iter()
-                            .map(|var| {
-                                deep_copy_foreign_var_help(
-                                    source_subs,
-                                    dest_subs,
-                                    max_rank,
-                                    pools,
-                                    var,
-                                )
-                            })
-                            .collect();
-                        new_tags.insert(tag, new_vars);
-                    }
-
-                    TagUnion(
-                        new_tags,
-                        deep_copy_foreign_var_help(
-                            source_subs,
-                            dest_subs,
-                            max_rank,
-                            pools,
-                            ext_var,
-                        ),
-                    )
-                }
-
-                Boolean(b) => {
-                    let mut mapper = |var| {
-                        deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, var)
-                    };
-
-                    Boolean(b.map_variables(&mut mapper))
-                }
-            };
-
-            dest_subs.set(copy, make_descriptor(Structure(new_flat_type)));
-
-            copy
-        }
-
-        FlexVar(_) | Error => copy,
-
-        RigidVar(name) => {
-            dest_subs.set(copy, make_descriptor(FlexVar(Some(name))));
-
-            copy
-        }
-
-        Alias(module_name, name, args, real_type_var) => {
-            let new_args = args
-                .into_iter()
-                .map(|(name, var)| {
-                    (
-                        name,
-                        deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, var),
-                    )
-                })
-                .collect();
-            let new_real_type_var =
-                deep_copy_foreign_var_help(source_subs, dest_subs, max_rank, pools, real_type_var);
-            let new_content = Alias(module_name, name, new_args, new_real_type_var);
-
-            dest_subs.set(copy, make_descriptor(new_content));
 
             copy
         }

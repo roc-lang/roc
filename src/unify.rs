@@ -1,11 +1,25 @@
-use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
-use crate::collections::{relative_complement, union, ImMap, MutMap};
+use crate::can::ident::{Lowercase, TagName};
+use crate::collections::{relative_complement, union, MutMap, SendSet};
+use crate::module::symbol::Symbol;
 use crate::subs::Content::{self, *};
 use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use crate::types::RecordFieldLabel;
 use crate::types::{Mismatch, Problem};
-use crate::uniqueness::boolean_algebra;
+use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use std::hash::Hash;
+
+macro_rules! mismatch {
+    () => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        vec![Mismatch::TypeMismatch]
+    }};
+}
 
 type Pool = Vec<Variable>;
 
@@ -17,7 +31,7 @@ struct Context {
 }
 
 pub struct RecordStructure {
-    pub fields: MutMap<RecordFieldLabel, Variable>,
+    pub fields: MutMap<Lowercase, Variable>,
     pub ext: Variable,
 }
 
@@ -69,15 +83,14 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
+    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content);
     match &ctx.first_desc.content {
-        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
+        FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
-        Alias(home, name, args, real_var) => {
-            unify_alias(subs, pool, &ctx, home, name, args, *real_var)
-        }
+        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, args, *real_var),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
@@ -90,8 +103,7 @@ fn unify_alias(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    home: &ModuleName,
-    name: &Uppercase,
+    symbol: Symbol,
     args: &[(Lowercase, Variable)],
     real_var: Variable,
 ) -> Outcome {
@@ -100,23 +112,22 @@ fn unify_alias(
     match other_content {
         FlexVar(_) => {
             // Alias wins
-            merge(
-                subs,
-                &ctx,
-                Alias(home.clone(), name.clone(), args.to_owned(), real_var),
-            )
+            merge(subs, &ctx, Alias(symbol, args.to_owned(), real_var))
         }
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
-        Alias(other_home, other_name, other_args, other_real_var) => {
-            if name == other_name && home == other_home {
+        Alias(other_symbol, other_args, other_real_var) => {
+            if symbol == *other_symbol {
                 if args.len() == other_args.len() {
+                    let mut problems = Vec::new();
                     for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
-                        unify_pool(subs, pool, *l_var, *r_var);
+                        problems.extend(unify_pool(subs, pool, *l_var, *r_var));
                     }
 
-                    merge(subs, &ctx, other_content.clone())
+                    problems.extend(merge(subs, &ctx, other_content.clone()));
+
+                    problems
                 } else {
-                    mismatch()
+                    mismatch!()
                 }
             } else {
                 unify_pool(subs, pool, real_var, *other_real_var)
@@ -137,18 +148,27 @@ fn unify_structure(
 ) -> Outcome {
     match other {
         FlexVar(_) => {
-            // If the other is flex, Structure wins!
-            merge(subs, ctx, Structure(flat_type.clone()))
+            // TODO special-case boolean here
+            match flat_type {
+                FlatType::Boolean(Bool(Atom::Variable(var), _rest)) => {
+                    unify_pool(subs, pool, *var, ctx.second)
+                }
+                _ => {
+                    // If the other is flex, Structure wins!
+                    merge(subs, ctx, Structure(flat_type.clone()))
+                }
+            }
         }
         RigidVar(_) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch()
+            mismatch!()
         }
+
         Structure(ref other_flat_type) => {
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
+        Alias(_, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
         Error => merge(subs, ctx, Error),
     }
 }
@@ -250,8 +270,8 @@ fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: MutMap<RecordFieldLabel, (Variable, Variable)>,
-    other_fields: MutMap<RecordFieldLabel, Variable>,
+    shared_fields: MutMap<Lowercase, (Variable, Variable)>,
+    other_fields: MutMap<Lowercase, Variable>,
     ext: Variable,
 ) -> Outcome {
     let mut matching_fields = MutMap::default();
@@ -270,7 +290,7 @@ fn unify_shared_fields(
 
         merge(subs, ctx, Structure(flat_type))
     } else {
-        mismatch()
+        mismatch!()
     }
 }
 
@@ -280,6 +300,7 @@ fn unify_tag_union(
     ctx: &Context,
     rec1: TagUnionStructure,
     rec2: TagUnionStructure,
+    recursion: (Option<Variable>, Option<Variable>),
 ) -> Outcome {
     let tags1 = rec1.tags;
     let tags2 = rec2.tags;
@@ -288,11 +309,27 @@ fn unify_tag_union(
     let unique_tags1 = relative_complement(&tags1, &tags2);
     let unique_tags2 = relative_complement(&tags2, &tags1);
 
+    let recursion_var = match recursion {
+        (None, None) => None,
+        (Some(v), None) | (None, Some(v)) => Some(v),
+        (Some(v1), Some(v2)) => {
+            unify_pool(subs, pool, v1, v2);
+            Some(v1)
+        }
+    };
+
     if unique_tags1.is_empty() {
         if unique_tags2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
-            let mut tag_problems =
-                unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), rec1.ext);
+            let mut tag_problems = unify_shared_tags(
+                subs,
+                pool,
+                ctx,
+                shared_tags,
+                MutMap::default(),
+                rec1.ext,
+                recursion_var,
+            );
 
             tag_problems.extend(ext_problems);
 
@@ -301,8 +338,15 @@ fn unify_tag_union(
             let flat_type = FlatType::TagUnion(unique_tags2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
-            let mut tag_problems =
-                unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), sub_record);
+            let mut tag_problems = unify_shared_tags(
+                subs,
+                pool,
+                ctx,
+                shared_tags,
+                MutMap::default(),
+                sub_record,
+                recursion_var,
+            );
 
             tag_problems.extend(ext_problems);
 
@@ -312,8 +356,15 @@ fn unify_tag_union(
         let flat_type = FlatType::TagUnion(unique_tags1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
-        let mut tag_problems =
-            unify_shared_tags(subs, pool, ctx, shared_tags, MutMap::default(), sub_record);
+        let mut tag_problems = unify_shared_tags(
+            subs,
+            pool,
+            ctx,
+            shared_tags,
+            MutMap::default(),
+            sub_record,
+            recursion_var,
+        );
 
         tag_problems.extend(ext_problems);
 
@@ -331,7 +382,8 @@ fn unify_tag_union(
         let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);
         let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
 
-        let mut tag_problems = unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext);
+        let mut tag_problems =
+            unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var);
 
         tag_problems.reserve(rec1_problems.len() + rec2_problems.len());
         tag_problems.extend(rec1_problems);
@@ -348,6 +400,7 @@ fn unify_shared_tags(
     shared_tags: MutMap<TagName, (Vec<Variable>, Vec<Variable>)>,
     other_tags: MutMap<TagName, Vec<Variable>>,
     ext: Variable,
+    recursion_var: Option<Variable>,
 ) -> Outcome {
     let mut matching_tags = MutMap::default();
     let num_shared_tags = shared_tags.len();
@@ -373,11 +426,15 @@ fn unify_shared_tags(
     }
 
     if num_shared_tags == matching_tags.len() {
-        let flat_type = FlatType::TagUnion(union(matching_tags, &other_tags), ext);
+        let flat_type = if let Some(rec) = recursion_var {
+            FlatType::RecursiveTagUnion(rec, union(matching_tags, &other_tags), ext)
+        } else {
+            FlatType::TagUnion(union(matching_tags, &other_tags), ext)
+        };
 
         merge(subs, ctx, Structure(flat_type))
     } else {
-        mismatch()
+        mismatch!()
     }
 }
 
@@ -423,61 +480,65 @@ fn unify_flat_type(
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
-            unify_tag_union(subs, pool, ctx, union1, union2)
+            unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
         }
 
-        (Boolean(b1_raw), Boolean(b2_raw)) => {
-            // first propagate Subs substitiutions into the booleans
-            let mut global_substitution = ImMap::default();
+        (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
-            for v in b1_raw
-                .variables()
+            unify_tag_union(
+                subs,
+                pool,
+                ctx,
+                union1,
+                union2,
+                (None, Some(*recursion_var)),
+            )
+        }
+
+        (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+
+            unify_tag_union(subs, pool, ctx, union1, union2, (Some(*rec1), Some(*rec2)))
+        }
+
+        (Boolean(Bool(free1, rest1)), Boolean(Bool(free2, rest2))) => {
+            // unify the free variables
+            let (new_free, mut free_var_problems) = unify_free_atoms(subs, pool, *free1, *free2);
+
+            let combined_rest: SendSet<Atom> = rest1
+                .clone()
                 .into_iter()
-                .chain(b2_raw.variables().into_iter())
-            {
-                if let Structure(Boolean(replacement)) = subs.get(v).content {
-                    global_substitution.insert(v, replacement);
+                .chain(rest2.clone().into_iter())
+                .collect::<SendSet<Atom>>();
+
+            let mut combined = if let Err(false) = chase_atom(subs, new_free) {
+                // if the container is shared, all elements must be shared too
+                for atom in combined_rest {
+                    let (_, atom_problems) = unify_free_atoms(subs, pool, atom, Atom::Zero);
+                    free_var_problems.extend(atom_problems);
                 }
-            }
-
-            let b1 = boolean_algebra::simplify(b1_raw.substitute(&global_substitution));
-            let b2 = boolean_algebra::simplify(b2_raw.substitute(&global_substitution));
-
-            if let Some(substitution) = boolean_algebra::try_unify(b1, b2) {
-                for (var, replacement) in substitution {
-                    subs.set_content(var, Structure(FlatType::Boolean(replacement)));
-                }
-
-                vec![]
+                Bool(Atom::Zero, SendSet::default())
             } else {
-                mismatch()
-            }
+                Bool(new_free, combined_rest)
+            };
+
+            combined.apply_subs(subs);
+
+            // force first and second to equal this new variable
+            let content = Content::Structure(FlatType::Boolean(combined));
+            merge(subs, ctx, content);
+
+            free_var_problems
         }
 
-        (
-            Apply {
-                module_name: l_module_name,
-                name: l_type_name,
-                args: l_args,
-            },
-            Apply {
-                module_name: r_module_name,
-                name: r_type_name,
-                args: r_args,
-            },
-        ) if l_module_name == r_module_name && l_type_name == r_type_name => {
+        (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
             let problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
 
             if problems.is_empty() {
-                merge(
-                    subs,
-                    ctx,
-                    Structure(Apply {
-                        module_name: (*r_module_name).clone(),
-                        name: (*r_type_name).clone(),
-                        args: (*r_args).clone(),
-                    }),
-                )
+                merge(subs, ctx, Structure(Apply(*r_symbol, (*r_args).clone())))
             } else {
                 problems
             }
@@ -496,7 +557,46 @@ fn unify_flat_type(
                 problems
             }
         }
-        _ => mismatch(),
+        (_other1, _other2) => {
+            // Can't unify other1 and other2
+            // dbg!(&_other1, &_other2);
+            mismatch!()
+        }
+    }
+}
+
+fn chase_atom(subs: &mut Subs, atom: Atom) -> Result<Variable, bool> {
+    match atom {
+        Atom::Zero => Err(false),
+        Atom::One => Err(true),
+        Atom::Variable(var) => match subs.get(var).content {
+            Content::Structure(FlatType::Boolean(Bool(first, rest))) => {
+                debug_assert!(rest.is_empty());
+                chase_atom(subs, first)
+            }
+            _ => Ok(var),
+        },
+    }
+}
+
+fn unify_free_atoms(subs: &mut Subs, pool: &mut Pool, b1: Atom, b2: Atom) -> (Atom, Vec<Mismatch>) {
+    match (b1, b2) {
+        (Atom::Variable(v1), Atom::Variable(v2)) => {
+            (Atom::Variable(v1), unify_pool(subs, pool, v1, v2))
+        }
+        (Atom::Variable(var), other) | (other, Atom::Variable(var)) => {
+            subs.set_content(
+                var,
+                Content::Structure(FlatType::Boolean(Bool(other, SendSet::default()))),
+            );
+
+            (other, vec![])
+        }
+        (Atom::Zero, Atom::Zero) => (Atom::Zero, vec![]),
+        (Atom::One, Atom::One) => (Atom::One, vec![]),
+        _ => unreachable!(
+            "invalid boolean unification. Because we never infer One, this should never happen!"
+        ),
     }
 }
 
@@ -506,7 +606,9 @@ where
 {
     let mut problems = Vec::new();
 
-    for (&l_var, &r_var) in left_iter.zip(right_iter) {
+    let it = left_iter.zip(right_iter);
+
+    for (&l_var, &r_var) in it {
         problems.extend(unify_pool(subs, pool, l_var, r_var));
     }
 
@@ -523,9 +625,9 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
         RigidVar(_) | Structure(_) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
-            mismatch()
+            mismatch!()
         }
-        Alias(_, _, _, _) => {
+        Alias(_, _, _) => {
             panic!("TODO unify_rigid Alias");
         }
         Error => {
@@ -538,6 +640,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
 #[inline(always)]
 fn unify_flex(
     subs: &mut Subs,
+    pool: &mut Pool,
     ctx: &Context,
     opt_name: &Option<Lowercase>,
     other: &Content,
@@ -547,18 +650,25 @@ fn unify_flex(
             // If both are flex, and only left has a name, keep the name around.
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
-        FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _, _) => {
+
+        Structure(FlatType::Boolean(Bool(Atom::Variable(var), _rest))) => {
+            unify_pool(subs, pool, ctx.first, *var)
+        }
+
+        FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _) => {
+            // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
             merge(subs, ctx, other.clone())
         }
+
         Error => merge(subs, ctx, Error),
     }
 }
 
 pub fn gather_fields(
     subs: &mut Subs,
-    fields: MutMap<RecordFieldLabel, Variable>,
+    fields: MutMap<Lowercase, Variable>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::FlatType::*;
@@ -568,7 +678,7 @@ pub fn gather_fields(
             gather_fields(subs, union(fields, &sub_fields), sub_ext)
         }
 
-        Alias(_, _, _, var) => {
+        Alias(_, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
             gather_fields(subs, fields, var)
         }
@@ -589,7 +699,7 @@ fn gather_tags(
             gather_tags(subs, union(tags, &sub_tags), sub_ext)
         }
 
-        Alias(_, _, _, var) => {
+        Alias(_, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
             gather_tags(subs, tags, var)
         }
@@ -631,9 +741,4 @@ fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> V
         },
         pool,
     )
-}
-
-#[inline(always)]
-fn mismatch() -> Outcome {
-    vec![Mismatch::TypeMismatch]
 }

@@ -3,6 +3,8 @@ use crate::fmt::pattern::fmt_pattern;
 use crate::fmt::spaces::{
     add_spaces, fmt_comments_only, fmt_if_spaces, fmt_spaces, is_comment, newline, INDENT,
 };
+use crate::operator;
+use crate::operator::BinOp;
 use crate::parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern};
 use crate::region::Located;
 use bumpalo::collections::{String, Vec};
@@ -43,13 +45,13 @@ pub fn fmt_expr<'a>(
             buf.push_str(string);
             buf.push('"');
         }
-        Var(module_parts, name) => {
-            for part in module_parts.iter() {
-                buf.push_str(part);
+        Var { module_name, ident } => {
+            if !module_name.is_empty() {
+                buf.push_str(module_name);
                 buf.push('.');
             }
 
-            buf.push_str(name);
+            buf.push_str(ident);
         }
         Apply(loc_expr, loc_args, _) => {
             if apply_needs_parens {
@@ -132,7 +134,7 @@ pub fn fmt_expr<'a>(
             // still print the return value.
             fmt_expr(buf, &ret.value, indent, false, true);
         }
-        If((loc_condition, loc_then, loc_else)) => {
+        If(loc_condition, loc_then, loc_else) => {
             fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
         When(loc_condition, branches) => {
@@ -190,7 +192,114 @@ pub fn fmt_expr<'a>(
         List(loc_items) => {
             fmt_list(buf, &loc_items, indent);
         }
+        BinOp((loc_left_side, bin_op, loc_right_side)) => fmt_bin_op(
+            buf,
+            loc_left_side,
+            bin_op,
+            loc_right_side,
+            false,
+            apply_needs_parens,
+            indent,
+        ),
+        UnaryOp(sub_expr, unary_op) => {
+            match &unary_op.value {
+                operator::UnaryOp::Negate => {
+                    buf.push('-');
+                }
+                operator::UnaryOp::Not => {
+                    buf.push('!');
+                }
+            }
+
+            fmt_expr(
+                buf,
+                &sub_expr.value,
+                indent,
+                apply_needs_parens,
+                format_newlines,
+            );
+        }
+        Nested(nested_expr) => {
+            fmt_expr(
+                buf,
+                nested_expr,
+                indent,
+                apply_needs_parens,
+                format_newlines,
+            );
+        }
+        AccessorFunction(key) => {
+            buf.push('.');
+            buf.push_str(key);
+        }
+        Access(expr, key) => {
+            fmt_expr(buf, expr, indent, apply_needs_parens, true);
+            buf.push('.');
+            buf.push_str(key);
+        }
         other => panic!("TODO implement Display for AST variant {:?}", other),
+    }
+}
+
+fn fmt_bin_op<'a>(
+    buf: &mut String<'a>,
+    loc_left_side: &'a Located<Expr<'a>>,
+    loc_bin_op: &'a Located<BinOp>,
+    loc_right_side: &'a Located<Expr<'a>>,
+    part_of_multi_line_bin_ops: bool,
+    apply_needs_parens: bool,
+    indent: u16,
+) {
+    fmt_expr(buf, &loc_left_side.value, indent, apply_needs_parens, false);
+
+    let is_multiline = is_multiline_expr(&loc_right_side.value)
+        || is_multiline_expr(&loc_left_side.value)
+        || part_of_multi_line_bin_ops;
+
+    if is_multiline {
+        newline(buf, indent + INDENT)
+    } else {
+        buf.push(' ');
+    }
+
+    match &loc_bin_op.value {
+        operator::BinOp::Caret => buf.push('^'),
+        operator::BinOp::Star => buf.push('*'),
+        operator::BinOp::Slash => buf.push('/'),
+        operator::BinOp::DoubleSlash => buf.push_str("//"),
+        operator::BinOp::Percent => buf.push('%'),
+        operator::BinOp::DoublePercent => buf.push_str("%%"),
+        operator::BinOp::Plus => buf.push('+'),
+        operator::BinOp::Minus => buf.push('-'),
+        operator::BinOp::Equals => buf.push_str("=="),
+        operator::BinOp::NotEquals => buf.push_str("!="),
+        operator::BinOp::LessThan => buf.push('<'),
+        operator::BinOp::GreaterThan => buf.push('>'),
+        operator::BinOp::LessThanOrEq => buf.push_str("<="),
+        operator::BinOp::GreaterThanOrEq => buf.push_str(">="),
+        operator::BinOp::And => buf.push_str("&&"),
+        operator::BinOp::Or => buf.push_str("||"),
+        operator::BinOp::Pizza => buf.push_str("|>"),
+    }
+
+    buf.push(' ');
+
+    match &loc_right_side.value {
+        Expr::BinOp((nested_left_side, nested_bin_op, nested_right_side)) => {
+            fmt_bin_op(
+                buf,
+                nested_left_side,
+                nested_bin_op,
+                nested_right_side,
+                is_multiline,
+                apply_needs_parens,
+                indent,
+            );
+        }
+
+        _ => {
+            fmt_expr(buf, &loc_right_side.value, indent, apply_needs_parens, true);
+        }
     }
 }
 
@@ -369,7 +478,7 @@ pub fn is_multiline_pattern<'a>(pattern: &'a Pattern<'a>) -> bool {
         | Pattern::BlockStrLiteral(_)
         | Pattern::Underscore
         | Pattern::Malformed(_)
-        | Pattern::QualifiedIdentifier(_) => false,
+        | Pattern::QualifiedIdentifier { .. } => false,
     }
 }
 
@@ -391,7 +500,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
         | Str(_)
         | Access(_, _)
         | AccessorFunction(_)
-        | Var(_, _)
+        | Var { .. }
         | MalformedIdent(_)
         | MalformedClosure
         | GlobalTag(_)
@@ -410,14 +519,21 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
                 || args.iter().any(|loc_arg| is_multiline_expr(&loc_arg.value))
         }
 
-        If((loc_cond, loc_if_true, loc_if_false)) => {
+        If(loc_cond, loc_if_true, loc_if_false) => {
             is_multiline_expr(&loc_cond.value)
                 || is_multiline_expr(&loc_if_true.value)
                 || is_multiline_expr(&loc_if_false.value)
         }
 
         BinOp((loc_left, _, loc_right)) => {
-            is_multiline_expr(&loc_left.value) || is_multiline_expr(&loc_right.value)
+            let next_is_multiline_bin_op: bool = match &loc_right.value {
+                Expr::BinOp((_, _, nested_loc_right)) => is_multiline_expr(&nested_loc_right.value),
+                _ => false,
+            };
+
+            is_multiline_expr(&loc_left.value)
+                || is_multiline_expr(&loc_right.value)
+                || next_is_multiline_bin_op
         }
 
         UnaryOp(loc_subexpr, _) | PrecedenceConflict(_, _, loc_subexpr) => {

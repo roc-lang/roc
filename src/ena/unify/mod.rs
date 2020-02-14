@@ -55,9 +55,9 @@ pub use self::backing_vec::Persistent;
 pub trait UnifyKey: Copy + Clone + Debug + PartialEq {
     type Value: Clone + Debug;
 
-    fn index(&self) -> usize;
+    fn index(&self) -> u32;
 
-    fn from_index(u: usize) -> Self;
+    fn from_index(u: u32) -> Self;
 
     fn tag() -> &'static str;
 
@@ -237,7 +237,7 @@ impl<S: UnificationStore> UnificationTable<S> {
 
     /// Creates a fresh key with the given value.
     pub fn new_key(&mut self, value: S::Value) -> S::Key {
-        let len = self.values.len();
+        let len = self.values.len() as u32;
         let key: S::Key = UnifyKey::from_index(len);
         self.values.push(VarValue::new_var(key, value));
         debug!("{}: created new key: {:?}", S::tag(), key);
@@ -255,7 +255,7 @@ impl<S: UnificationStore> UnificationTable<S> {
     /// the closure.
     pub fn reset_unifications(&mut self, mut value: impl FnMut(S::Key) -> S::Value) {
         self.values.reset_unifications(|i| {
-            let key = UnifyKey::from_index(i);
+            let key = UnifyKey::from_index(i as u32);
             let value = value(key);
             VarValue::new_var(key, value)
         });
@@ -274,7 +274,7 @@ impl<S: UnificationStore> UnificationTable<S> {
     /// Returns the keys of all variables created since the `snapshot`.
     pub fn vars_since_snapshot(&self, snapshot: &Snapshot<S>) -> Range<S::Key> {
         let range = self.values.values_since_snapshot(&snapshot.snapshot);
-        S::Key::from_index(range.start)..S::Key::from_index(range.end)
+        S::Key::from_index(range.start as u32)..S::Key::from_index(range.end as u32)
     }
 
     /// Obtains the current value for a particular key.
@@ -311,7 +311,7 @@ impl<S: UnificationStore> UnificationTable<S> {
         }
     }
 
-    pub fn is_redirect(&mut self, vid: S::Key) -> bool {
+    pub fn is_redirect(&self, vid: S::Key) -> bool {
         self.value(vid).raw_parent() != vid
     }
 

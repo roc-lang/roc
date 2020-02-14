@@ -239,13 +239,13 @@ pub fn build_expr<'a, B: Backend>(
             let ir_type = type_from_layout(cfg, layout, subs);
             builder.ins().stack_addr(ir_type, slot, Offset32::new(0))
         }
-        Access {
-            label,
-            field_layout,
-            struct_layout,
-        } => {
-            panic!("I don't yet know how to crane build {:?}", expr);
-        }
+        // Access {
+        //     label,
+        //     field_layout,
+        //     struct_layout,
+        // } => {
+        //     panic!("I don't yet know how to crane build {:?}", expr);
+        // }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
         }

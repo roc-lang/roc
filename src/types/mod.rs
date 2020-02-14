@@ -1,15 +1,15 @@
 pub mod builtins;
 
-use crate::can::ident::{Lowercase, ModuleName, TagName, Uppercase};
+use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::Pattern;
-use crate::can::symbol::Symbol;
-use crate::collections::{ImSet, MutSet, SendMap};
-use crate::ident::Ident;
+use crate::collections::{ImMap, ImSet, MutSet, SendMap};
+use crate::module::symbol::Symbol;
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
 use crate::region::Region;
 use crate::subs::Variable;
 use crate::uniqueness::boolean_algebra;
+use inlinable_string::InlinableString;
 use std::fmt;
 
 pub const TYPE_NUM: &str = "Num";
@@ -22,25 +22,18 @@ pub enum Type {
     EmptyTagUnion,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Record(SendMap<RecordFieldLabel, Type>, Box<Type>),
+    Record(SendMap<Lowercase, Type>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
-    Alias(ModuleName, Uppercase, Vec<(Lowercase, Variable)>, Box<Type>),
+    Alias(Symbol, Vec<(Lowercase, Type)>, Box<Type>),
+    RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
-    Apply {
-        module_name: ModuleName,
-        name: Uppercase,
-        args: Vec<Type>,
-    },
+    Apply(Symbol, Vec<Type>),
     /// Boolean type used in uniqueness inference
     Boolean(boolean_algebra::Bool),
     Variable(Variable),
-    /// recursive variants, e.g. [ Cons a r, Nil ] as r
-    As(Box<Type>, Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
-
-pub type RecordFieldLabel = Lowercase;
 
 impl fmt::Debug for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -66,20 +59,8 @@ impl fmt::Debug for Type {
             }
             Type::Variable(var) => write!(f, "<{:?}>", var),
 
-            Type::Apply {
-                module_name,
-                name,
-                args,
-            } => {
-                let module_name = module_name.as_str();
-
-                write!(f, "(")?;
-
-                if !module_name.is_empty() {
-                    write!(f, "{}.", module_name)?;
-                }
-
-                write!(f, "{}", name)?;
+            Type::Apply(symbol, args) => {
+                write!(f, "({:?}", symbol)?;
 
                 for arg in args {
                     write!(f, " {:?}", arg)?;
@@ -94,16 +75,17 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(module_name, name, args, _actual) => {
-                write!(f, "Alias {}.{}", module_name.as_str(), name,)?;
+            Type::Alias(symbol, args, actual) => {
+                write!(f, "Alias {:?}", symbol)?;
 
                 for (_, arg) in args {
                     write!(f, " {:?}", arg)?;
                 }
 
+                write!(f, "but really {:?}", actual)?;
+
                 Ok(())
             }
-            Type::As(inner, variable) => write!(f, "({:?} as {:?})", inner, variable),
             Type::Record(fields, ext) => {
                 write!(f, "{{")?;
 
@@ -160,7 +142,7 @@ impl fmt::Debug for Type {
                         any_written_yet = true;
                     }
 
-                    write!(f, "{}", label.as_str())?;
+                    write!(f, "{:?}", label)?;
 
                     for argument in arguments {
                         write!(f, " {:?}", argument)?;
@@ -188,6 +170,51 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::RecursiveTagUnion(rec, tags, ext) => {
+                write!(f, "[")?;
+
+                if !tags.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                let mut any_written_yet = false;
+
+                for (label, arguments) in tags {
+                    if any_written_yet {
+                        write!(f, ", ")?;
+                    } else {
+                        any_written_yet = true;
+                    }
+
+                    write!(f, "{:?}", label)?;
+
+                    for argument in arguments {
+                        write!(f, " {:?}", argument)?;
+                    }
+                }
+
+                if !tags.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                write!(f, "]")?;
+
+                match *ext.clone() {
+                    Type::EmptyTagUnion => {
+                        // This is a closed variant. We're done!
+                    }
+                    other => {
+                        // This is an open tag union, so print the variable
+                        // right after the ']'
+                        //
+                        // e.g. the "*" at the end of `[ Foo ]*`
+                        // or the "r" at the end of `[ DivByZero ]r`
+                        other.fmt(f)?;
+                    }
+                }
+
+                write!(f, " as <{:?}>", rec)
+            }
             Type::Boolean(b) => write!(f, "{:?}", b),
         }
     }
@@ -195,48 +222,28 @@ impl fmt::Debug for Type {
 
 impl Type {
     pub fn num(args: Vec<Type>) -> Self {
-        Type::Apply {
-            module_name: ModuleName::NUM.into(),
-            name: TYPE_NUM.into(),
-            args,
-        }
+        Type::Apply(Symbol::NUM_NUM, args)
     }
 
     pub fn float() -> Self {
-        let floating_point = Type::Apply {
-            module_name: ModuleName::FLOAT.into(),
-            name: "FloatingPoint".into(),
-            args: Vec::new(),
-        };
+        let floating_point = Type::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new());
 
         Type::num(vec![floating_point])
     }
 
     pub fn int() -> Self {
-        let integer = Type::Apply {
-            module_name: ModuleName::INT.into(),
-            name: "Integer".into(),
-            args: Vec::new(),
-        };
+        let integer = Type::Apply(Symbol::INT_INTEGER, Vec::new());
 
         Type::num(vec![integer])
     }
 
     pub fn string() -> Self {
-        Type::Apply {
-            module_name: ModuleName::STR.into(),
-            name: "Str".into(),
-            args: Vec::new(),
-        }
+        Type::Apply(Symbol::STR_STR, Vec::new())
     }
 
     /// This is needed to constrain `if` conditionals
     pub fn bool() -> Self {
-        Type::Apply {
-            module_name: ModuleName::BOOL.into(),
-            name: "Bool".into(),
-            args: Vec::new(),
-        }
+        Type::Apply(Symbol::BOOL_BOOL, Vec::new())
     }
 
     pub fn arity(&self) -> usize {
@@ -254,58 +261,139 @@ impl Type {
         result
     }
 
+    pub fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
+        use Type::*;
+
+        match self {
+            Variable(v) => {
+                if let Some(replacement) = substitutions.get(&v) {
+                    *self = replacement.clone();
+                }
+            }
+            Function(args, ret) => {
+                for arg in args {
+                    arg.substitute(substitutions);
+                }
+                ret.substitute(substitutions);
+            }
+            TagUnion(tags, ext) => {
+                for (_, args) in tags {
+                    for x in args {
+                        x.substitute(substitutions);
+                    }
+                }
+                ext.substitute(substitutions);
+            }
+            RecursiveTagUnion(_, tags, ext) => {
+                for (_, args) in tags {
+                    for x in args {
+                        x.substitute(substitutions);
+                    }
+                }
+                ext.substitute(substitutions);
+            }
+            Record(fields, ext) => {
+                for x in fields.iter_mut() {
+                    x.substitute(substitutions);
+                }
+                ext.substitute(substitutions);
+            }
+            Alias(_, zipped, actual_type) => {
+                for (_, value) in zipped.iter_mut() {
+                    value.substitute(substitutions);
+                }
+                actual_type.substitute(substitutions);
+            }
+            Apply(_, args) => {
+                for arg in args {
+                    arg.substitute(substitutions);
+                }
+            }
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => {}
+        }
+    }
+
     // swap Apply with Alias if their module and tag match
-    pub fn substitute_alias(
-        &mut self,
-        rep_module_name: &ModuleName,
-        rep_name: &Uppercase,
-        actual: &Type,
-    ) {
+    pub fn substitute_alias(&mut self, rep_symbol: Symbol, actual: &Type) {
         use Type::*;
 
         match self {
             Function(args, ret) => {
                 for arg in args {
-                    arg.substitute_alias(rep_module_name, rep_name, actual);
+                    arg.substitute_alias(rep_symbol, actual);
                 }
-                ret.substitute_alias(rep_module_name, rep_name, actual);
+                ret.substitute_alias(rep_symbol, actual);
             }
-            TagUnion(tags, ext) => {
+            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
-                        x.substitute_alias(rep_module_name, rep_name, actual);
+                        x.substitute_alias(rep_symbol, actual);
                     }
                 }
-                ext.substitute_alias(rep_module_name, rep_name, actual);
+                ext.substitute_alias(rep_symbol, actual);
             }
             Record(fields, ext) => {
                 for x in fields.iter_mut() {
-                    x.substitute_alias(rep_module_name, rep_name, actual);
+                    x.substitute_alias(rep_symbol, actual);
                 }
-                ext.substitute_alias(rep_module_name, rep_name, actual);
+                ext.substitute_alias(rep_symbol, actual);
             }
-            Alias(_, _, _, actual_type) => {
-                actual_type.substitute_alias(rep_module_name, rep_name, actual);
+            Alias(_, _, actual_type) => {
+                actual_type.substitute_alias(rep_symbol, actual);
             }
-            Apply {
-                module_name, name, ..
-            } if module_name == rep_module_name && name == rep_name => {
+            Apply(symbol, _) if *symbol == rep_symbol => {
                 *self = actual.clone();
 
-                if let Apply { args, .. } = self {
+                if let Apply(_, args) = self {
                     for arg in args {
-                        arg.substitute_alias(rep_module_name, rep_name, actual);
+                        arg.substitute_alias(rep_symbol, actual);
                     }
                 }
             }
-            Apply { args, .. } => {
+            Apply(_, args) => {
                 for arg in args {
-                    arg.substitute_alias(rep_module_name, rep_name, actual);
+                    arg.substitute_alias(rep_symbol, actual);
                 }
             }
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
+        }
+    }
 
-            As(_, _) => unreachable!("As should be canonicalized away at this point"),
+    pub fn contains_symbol(&self, rep_symbol: Symbol) -> bool {
+        use Type::*;
+
+        match self {
+            Function(args, ret) => {
+                ret.contains_symbol(rep_symbol)
+                    || args.iter().any(|arg| arg.contains_symbol(rep_symbol))
+            }
+            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+                ext.contains_symbol(rep_symbol)
+                    || tags
+                        .iter()
+                        .map(|v| v.1.iter())
+                        .flatten()
+                        .any(|arg| arg.contains_symbol(rep_symbol))
+            }
+
+            Record(fields, ext) => {
+                ext.contains_symbol(rep_symbol)
+                    || fields.values().any(|arg| arg.contains_symbol(rep_symbol))
+            }
+            Alias(alias_symbol, _, actual_type) => {
+                alias_symbol == &rep_symbol || actual_type.contains_symbol(rep_symbol)
+            }
+            Apply(symbol, _) if *symbol == rep_symbol => true,
+            Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => false,
+        }
+    }
+
+    /// a shallow dealias, continue until the first constructor is not an alias.
+    pub fn shallow_dealias(&self) -> &Self {
+        match self {
+            Type::Alias(_, _, actual) => actual.shallow_dealias(),
+            _ => self,
         }
     }
 }
@@ -343,18 +431,27 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(ext, accum);
         }
-        Alias(_, _, args, actual) => {
+        RecursiveTagUnion(rec, tags, ext) => {
+            for (_, args) in tags {
+                for x in args {
+                    variables_help(x, accum);
+                }
+            }
+            variables_help(ext, accum);
+
+            // just check that this is actually a recursive type
+            debug_assert!(accum.contains(rec));
+
+            // this rec var doesn't need to be in flex_vars or rigid_vars
+            accum.remove(rec);
+        }
+        Alias(_, args, actual) => {
             for (_, x) in args {
-                accum.insert(*x);
+                variables_help(x, accum);
             }
             variables_help(actual, accum);
         }
-        As(inner, variable) => {
-            variables_help(inner, accum);
-            // the `inner` type should contain the bound variable
-            debug_assert!(accum.contains(variable));
-        }
-        Apply { args, .. } => {
+        Apply(_, args) => {
             for x in args {
                 variables_help(x, accum);
             }
@@ -442,13 +539,13 @@ pub enum Reason {
     IfBranch { index: usize },
     ElemInList,
     RecordUpdateValue(Lowercase),
-    RecordUpdateKeys(Ident, SendMap<Lowercase, Type>),
+    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Region),
-    Lookup(ModuleName, Symbol, Expected<Type>, Region),
+    Lookup(Symbol, Expected<Type>, Region),
     Pattern(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
     SaveTheEnvironment,
@@ -474,8 +571,16 @@ pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
     pub def_types: SendMap<Symbol, Located<Type>>,
+    pub def_aliases: SendMap<Symbol, Alias>,
     pub defs_constraint: Constraint,
     pub ret_constraint: Constraint,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Alias {
+    pub region: Region,
+    pub vars: Vec<Located<(Lowercase, Variable)>>,
+    pub typ: Type,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -483,6 +588,9 @@ pub enum Problem {
     CanonicalizationProblem,
     Mismatch(Mismatch, ErrorType, ErrorType),
     CircularType(Symbol, ErrorType, Region),
+    UnrecognizedIdent(InlinableString),
+    Shadowed(Region, Located<Ident>),
+    InvalidModule,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -497,18 +605,14 @@ pub enum Mismatch {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ErrorType {
     Infinite,
-    Type(ModuleName, Uppercase, Vec<ErrorType>),
+    Type(Symbol, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    Record(SendMap<RecordFieldLabel, ErrorType>, TypeExt),
+    Record(SendMap<Lowercase, ErrorType>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
+    RecursiveTagUnion(Variable, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
-    Alias(
-        ModuleName,
-        Uppercase,
-        Vec<(Lowercase, ErrorType)>,
-        Box<ErrorType>,
-    ),
+    Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
     Boolean(boolean_algebra::Bool),
     Error,
 }
@@ -516,7 +620,7 @@ pub enum ErrorType {
 impl ErrorType {
     pub fn unwrap_alias(self) -> ErrorType {
         match self {
-            ErrorType::Alias(_, _, _, real) => real.unwrap_alias(),
+            ErrorType::Alias(_, _, real) => real.unwrap_alias(),
             real => real,
         }
     }

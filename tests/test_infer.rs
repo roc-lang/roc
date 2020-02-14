@@ -10,7 +10,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use crate::helpers::{assert_correct_variable_usage, can_expr, with_larger_debug_stack};
+    use crate::helpers::{assert_correct_variable_usage, can_expr, CanExprOut};
     use roc::infer::infer_expr;
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::subs::Subs;
@@ -18,25 +18,34 @@ mod test_infer {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
-        let (_expr, output, _, var_store, variable, constraint) = can_expr(src);
+        let CanExprOut {
+            output,
+            var_store,
+            var,
+            constraint,
+            home,
+            interns,
+            ..
+        } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
 
         assert_correct_variable_usage(&constraint);
 
-        for (var, name) in output.rigids {
+        for (name, var) in output.rigids {
             subs.rigid_var(var, name);
         }
 
         let mut unify_problems = Vec::new();
-        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
+        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
         let mut subs = solved.into_inner();
 
-        name_all_type_vars(variable, &mut subs);
+        name_all_type_vars(var, &mut subs);
 
-        let actual_str = content_to_string(content, &mut subs);
+        let actual_str = content_to_string(content, &mut subs, home, &interns);
 
         (unify_problems, actual_str)
     }
+
     fn infer_eq(src: &str, expected: &str) {
         let (_, actual) = infer_eq_help(src);
 
@@ -49,9 +58,7 @@ mod test_infer {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            println!("expected:\n{:?}\ninfered:\n{:?}", expected, actual);
-            dbg!(&problems);
-            assert_eq!(0, 1);
+            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());
     }
@@ -891,10 +898,9 @@ mod test_infer {
 
     #[test]
     fn record_with_bound_var() {
-        with_larger_debug_stack(|| {
-            infer_eq(
-                indoc!(
-                    r#"
+        infer_eq(
+            indoc!(
+                r#"
                 fn = \rec ->
                     x = rec.x
 
@@ -902,10 +908,9 @@ mod test_infer {
 
                 fn
             "#
-                ),
-                "{ x : a }b -> { x : a }b",
-            );
-        });
+            ),
+            "{ x : a }b -> { x : a }b",
+        );
     }
 
     #[test]
@@ -928,12 +933,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            foo: Int -> Bool
+            foo: Str -> {}
 
-            foo 2
+            foo "hi"
             "#
             ),
-            "Bool",
+            "{}",
         );
     }
 
@@ -961,25 +966,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            { x, y } : { x : (Int -> custom) , y : Int }
+            { x, y } : { x : ({} -> custom), y : {} }
 
             x
             "#
             ),
-            "Int -> custom",
-        );
-    }
-
-    #[test]
-    fn record_pattern_match_infer() {
-        infer_eq(
-            indoc!(
-                r#"
-                when foo is
-                    { x: 4 }-> x
-            "#
-            ),
-            "Int",
+            "{} -> custom",
         );
     }
 
@@ -1059,7 +1051,7 @@ mod test_infer {
                 r#"\@Foo -> 42
                 "#
             ),
-            "[ Test.@Foo ]* -> Int",
+            "[ @Foo ]* -> Int",
         );
     }
 
@@ -1095,26 +1087,24 @@ mod test_infer {
                 r#"@Foo "happy" 2020
                 "#
             ),
-            "[ Test.@Foo Str Int ]*",
+            "[ @Foo Str Int ]*",
         );
     }
 
     #[test]
     fn record_extraction() {
-        with_larger_debug_stack(|| {
-            infer_eq(
-                indoc!(
-                    r#"
+        infer_eq(
+            indoc!(
+                r#"
                 f = \x ->
                     when x is
                         { a, b } -> a
 
                 f
                 "#
-                ),
-                "{ a : a, b : * }* -> a",
-            );
-        });
+            ),
+            "{ a : a, b : * }* -> a",
+        );
     }
 
     #[test]
@@ -1159,11 +1149,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                    when Foo 4 is
+                    when Foo "blah" is
                         Foo x -> x
                 "#
             ),
-            "Int",
+            "Str",
         );
     }
 
@@ -1172,11 +1162,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                    when @Foo 4 is
+                    when @Foo "blah" is
                         @Foo x -> x
                 "#
             ),
-            "Int",
+            "Str",
         );
     }
 
@@ -1195,8 +1185,9 @@ mod test_infer {
     }
 
     #[test]
+    #[ignore] // TODO FIXME un-ignore this when Int is a builtin type alias
     fn annotation_using_num_used() {
-        // There was a problem where `int`, because it is only an annotation
+        // There was a problem where `Int`, because it is only an annotation
         // wasn't added to the vars_by_symbol.
         infer_eq_without_problem(
             indoc!(
@@ -1337,7 +1328,7 @@ mod test_infer {
     }
 
     #[test]
-    fn result_map() {
+    fn result_map_explicit() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -1351,6 +1342,26 @@ mod test_infer {
                        "#
             ),
             "(a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]",
+        );
+    }
+
+    #[test]
+    fn result_map_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    Result e a : [ Ok a, Err e ]
+
+                    map : (a -> b), Result e a -> Result e b
+                    map = \f, result ->
+                        when result is
+                            Ok v -> Ok (f v)
+                            Err e -> Err e
+
+                    map
+                       "#
+            ),
+            "(a -> b), Result e a -> Result e b",
         );
     }
 
@@ -1393,13 +1404,64 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo : Str.Str as Foo -> Test.Foo
+                    foo : Str.Str as Foo -> Foo
+                    foo = \x -> "foo"
+
+                    foo
+                "#
+            ),
+            "Foo -> Foo",
+        );
+    }
+
+    #[test]
+    fn use_alias_in_let() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo : Str.Str
+
+                foo : Foo -> Foo
                 foo = \x -> "foo"
 
                 foo
                 "#
             ),
-            "Test.Foo -> Test.Foo",
+            "Foo -> Foo",
+        );
+    }
+
+    #[test]
+    fn use_alias_with_argument_in_let() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo a : { foo : a }
+
+                v : Foo (Num.Num Int.Integer)
+                v = { foo: 42 }
+
+                v
+                "#
+            ),
+            "Foo Int",
+        );
+    }
+
+    #[test]
+    fn identity_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo a : { foo : a }
+
+                id : Foo a -> Foo a
+                id = \x -> x
+
+                id
+                "#
+            ),
+            "Foo a -> Foo a",
         );
     }
 
@@ -1414,36 +1476,51 @@ mod test_infer {
                     empty
                        "#
             ),
-            "Test.List a",
+            "List a",
         );
     }
 
     #[test]
     fn linked_list_singleton() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
-                    singleton : a -> [ Cons a (Test.List a), Nil ] as List a
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    singleton : a -> [ Cons a (List a), Nil ] as List a
                     singleton = \x -> Cons x Nil
 
                     singleton
                        "#
-                ),
-                "a -> Test.List a",
-            );
-        });
+            ),
+            "a -> List a",
+        );
     }
 
-    // currently fails, cyclic type
     #[test]
-    #[ignore]
+    fn peano_length() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    Peano : [ S Peano, Z ]
+
+                    length : Peano -> Num.Num Int.Integer
+                    length = \peano ->
+                        when peano is
+                            Z -> 0
+                            S v -> length v
+
+                    length
+                       "#
+            ),
+            "Peano -> Int",
+        );
+    }
+
+    #[test]
     fn peano_map() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
-                    map : [ S Test.Peano, Z ] as Peano -> Test.Peano
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    map : [ S Peano, Z ] as Peano -> Peano
                     map = \peano ->
                         when peano is
                             Z -> Z
@@ -1451,22 +1528,16 @@ mod test_infer {
 
                     map
                        "#
-                ),
-                "Test.Peano",
-            );
-        });
+            ),
+            "Peano -> Peano",
+        );
     }
 
-    // currently fails, cyclic type
-    // ending in `List b` will currently give a rigid unification error
     #[test]
-    #[ignore]
-    fn linked_list_map() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
-                    map : (a -> a), [ Cons a (Test.List a), Nil ] as List a -> Test.List a
+    fn infer_linked_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
                     map = \f, list ->
                         when list is
                             Nil -> Nil
@@ -1478,9 +1549,362 @@ mod test_infer {
 
                     map
                        "#
-                ),
-                "Attr.Attr * Int",
-            );
-        });
+            ),
+            "(a -> b), [ Cons a c, Nil ]* as c -> [ Cons b d, Nil ]* as d",
+        );
+    }
+
+    #[test]
+    fn typecheck_linked_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List a : [ Cons a (List a), Nil ]
+
+                    map : (a -> b), List a -> List b
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons x xs ->
+                                a = f x
+                                b = map f xs
+
+                                Cons a b
+
+                    map
+                       "#
+            ),
+            "(a -> b), List a -> List b",
+        );
+    }
+
+    #[test]
+    fn mismatch_in_alias_args_gets_reported() {
+        infer_eq(
+            indoc!(
+                r#"
+                Foo a : a
+
+                r : Foo {}
+                r = {}
+
+                s : Foo Str.Str
+                s = "bar"
+
+                when {} is
+                    _ -> s
+                    _ -> r
+                "#
+            ),
+            "<type mismatch>",
+        );
+    }
+
+    #[test]
+    fn mismatch_in_apply_gets_reported() {
+        infer_eq(
+            indoc!(
+                r#"
+                r : { x : (Num.Num Int.Integer) }
+                r = { x : 1 }
+
+                s : { left : { x : Num.Num Float.FloatingPoint } }
+                s = { left: { x : 3.14 } }
+
+                when 0 is
+                    1 -> s.left
+                    0 -> r
+                   "#
+            ),
+            "<type mismatch>",
+        );
+    }
+
+    #[test]
+    fn mismatch_in_tag_gets_reported() {
+        infer_eq(
+            indoc!(
+                r#"
+                r : [ Ok Str.Str ]
+                r = Ok 1
+
+                s : { left: [ Ok {} ] }
+                s = { left: Ok 3.14  }
+
+                when 0 is
+                    1 -> s.left
+                    0 -> r
+                   "#
+            ),
+            "<type mismatch>",
+        );
+    }
+    // doesn't currently print the error, but does report a problem
+    //    #[test]
+    //    fn nums() {
+    //        infer_eq_without_problem(
+    //            indoc!(
+    //                r#"
+    //                s : Num.Num a
+    //                s = 3.1
+    //
+    //                s
+    //                "#
+    //            ),
+    //            "<type mismatch>",
+    //        );
+    //    }
+    //
+    #[test]
+    fn manual_attr() {
+        infer_eq(
+            indoc!(
+                r#"
+                r = Attr unknown "bar"
+
+                s = Attr unknown2 { left : Attr Shared "foo" }
+
+                when True is
+                    _ -> { x : ((\Attr _ val -> val) s).left, y : r }
+                    _ -> { x : ((\Attr _ val -> val) s).left, y : ((\Attr _ val -> val) s).left }
+                   "#
+            ),
+            "{ x : [ Attr [ Shared ]* Str ]*, y : [ Attr [ Shared ]* Str ]* }",
+        );
+    }
+
+    #[test]
+    fn peano_map_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                map : Peano -> Peano
+                map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest ->
+                                map rest |> S
+
+
+                map
+                       "#
+            ),
+            "Peano -> Peano",
+        );
+    }
+
+    #[test]
+    fn rigid_in_letnonrec() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List a -> List a
+                toEmpty = \_ ->
+                    result : List a
+                    result = Nil
+
+                    result
+
+                toEmpty
+                   "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    #[test]
+    fn rigid_in_letrec() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List a -> List a
+                toEmpty = \_ ->
+                    result : List a
+                    result = Nil
+
+                    toEmpty result
+
+                toEmpty
+                   "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    #[test]
+    fn let_record_pattern_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+               { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn let_record_pattern_with_annotation_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+
+               { x, y } : Foo
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn peano_map_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest ->
+                                map rest |> S
+
+
+                map
+                       "#
+            ),
+            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+        );
+    }
+
+    #[test]
+    fn let_record_pattern_with_alias_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+
+               { x, y } : Foo
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Str",
+        );
+    }
+
+    //    #[test]
+    //    fn let_tag_pattern_with_annotation() {
+    //        infer_eq_without_problem(
+    //            indoc!(
+    //                r#"
+    //                UserId x : [ UserId Int ]
+    //                UserId x = UserId 42
+    //
+    //                x
+    //               "#
+    //            ),
+    //            "Int",
+    //        );
+    //    }
+
+    #[test]
+    fn typecheck_record_linked_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List q : [ Cons { x: q, xs: List q }, Nil ]
+
+                    map : (a -> b), List a -> List b
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons { x,  xs } ->
+                                Cons { x: f x, xs : map f xs }
+
+                    map
+                       "#
+            ),
+            "(a -> b), List a -> List b",
+        );
+    }
+
+    #[test]
+    fn infer_record_linked_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    map = \f, list ->
+                        when list is
+                            Nil -> Nil
+                            Cons { x,  xs } ->
+                                Cons { x: f x, xs : map f xs }
+
+                    map
+                       "#
+            ),
+            "(a -> b), [ Cons { x : a, xs : c }*, Nil ]* as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
+        );
+    }
+
+    // infinite loop in type_to_var
+    //    #[test]
+    //    fn typecheck_mutually_recursive_tag_union() {
+    //        infer_eq_without_problem(
+    //            indoc!(
+    //                r#"
+    //                   ListA a b : [ Cons a (ListB b a), Nil ]
+    //                   ListB a b : [ Cons a (ListA b a), Nil ]
+    //
+    //                   List q : [ Cons q (List q), Nil ]
+    //
+    //                   toAs : (b -> a), ListA a b -> List a
+    //                   toAs = \f, lista ->
+    //                        when lista is
+    //                            Nil -> Nil
+    //                            Cons a listb ->
+    //                                when listb is
+    //                                    Nil -> Nil
+    //                                    Cons b newLista ->
+    //                                        Cons a (Cons (f b) (toAs f newLista))
+    //
+    //                   toAs
+    //                  "#
+    //            ),
+    //            "(b -> a), ListA a b -> List a",
+    //        );
+    //    }
+
+    #[test]
+    fn infer_mutually_recursive_tag_union() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   toAs = \f, lista ->
+                        when lista is
+                            Nil -> Nil
+                            Cons a listb ->
+                                when listb is
+                                    Nil -> Nil
+                                    Cons b newLista ->
+                                        Cons a (Cons (f b) (toAs f newLista))
+
+                   toAs
+                  "#
+            ),
+            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+        );
     }
 }

@@ -1,17 +1,17 @@
-use crate::can::def::Declaration;
-use crate::can::def::Def;
+use crate::can::def::{Declaration, Def};
 use crate::can::expr::Expr::{self, *};
 use crate::can::expr::Field;
-use crate::can::ident::{Lowercase, ModuleName, TagName};
+use crate::can::ident::{Lowercase, TagName};
 use crate::can::pattern::Pattern;
-use crate::can::symbol::Symbol;
 use crate::collections::{ImMap, SendMap};
 use crate::constrain::builtins::{
     empty_list_type, float_literal, int_literal, list_type, str_type,
 };
 use crate::constrain::pattern::{constrain_pattern, PatternState};
+use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::Variable;
+use crate::types::Alias;
 use crate::types::AnnotationSource::{self, *};
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self, *};
@@ -43,6 +43,23 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
         rigid_vars: Vec::new(),
         flex_vars,
         def_types: SendMap::default(),
+        def_aliases: SendMap::default(),
+        defs_constraint: constraint,
+        ret_constraint: Constraint::True,
+    }))
+}
+
+#[inline(always)]
+pub fn exists_with_aliases(
+    aliases: SendMap<Symbol, Alias>,
+    flex_vars: Vec<Variable>,
+    constraint: Constraint,
+) -> Constraint {
+    Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars,
+        def_types: SendMap::default(),
+        def_aliases: aliases,
         defs_constraint: constraint,
         ret_constraint: Constraint::True,
     }))
@@ -52,8 +69,8 @@ pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
     /// for example `a` in the annotation `identity : a -> a`, we add it to this
     /// map so that expressions within that annotation can share these vars.
-    pub rigids: ImMap<Lowercase, Type>,
-    pub module_name: ModuleName,
+    pub rigids: ImMap<Lowercase, Variable>,
+    pub home: ModuleId,
 }
 
 pub fn constrain_expr(
@@ -111,9 +128,7 @@ pub fn constrain_expr(
         }
         Update {
             record_var,
-            module,
             ext_var,
-            ident,
             symbol,
             updates,
         } => {
@@ -139,10 +154,9 @@ pub fn constrain_expr(
             vars.push(*ext_var);
 
             let con = Lookup(
-                module.clone(),
-                symbol.clone(),
+                *symbol,
                 ForReason(
-                    Reason::RecordUpdateKeys(ident.clone(), fields),
+                    Reason::RecordUpdateKeys(*symbol, fields),
                     record_type,
                     region,
                 ),
@@ -241,11 +255,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Var {
-            symbol_for_lookup,
-            module,
-            ..
-        } => Lookup(module.clone(), symbol_for_lookup.clone(), expected, region),
+        Var(symbol) => Lookup(*symbol, expected, region),
         Closure(fn_var, _symbol, _recursive, args, boxed) => {
             let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
@@ -291,6 +301,7 @@ pub fn constrain_expr(
                         rigid_vars: Vec::new(),
                         flex_vars: state.vars,
                         def_types: state.headers,
+                        def_aliases: SendMap::default(),
                         defs_constraint,
                         ret_constraint,
                     })),
@@ -305,9 +316,8 @@ pub fn constrain_expr(
         If {
             cond_var,
             branch_var,
-            loc_cond,
-            loc_then,
-            loc_else,
+            branches,
+            final_else,
         } => {
             // TODO use Bool alias here, so we don't allocate this type every time
             let bool_type = Type::TagUnion(
@@ -318,72 +328,88 @@ pub fn constrain_expr(
                 Box::new(Type::EmptyTagUnion),
             );
             let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);
-
-            let cond_con = Eq(Type::Variable(*cond_var), expect_bool, loc_cond.region);
+            let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
 
             match expected {
                 FromAnnotation(name, arity, _, tipe) => {
-                    let then_con = constrain_expr(
-                        env,
-                        loc_then.region,
-                        &loc_then.value,
-                        FromAnnotation(
-                            name.clone(),
-                            arity,
-                            AnnotationSource::TypedIfBranch(0),
-                            tipe.clone(),
-                        ),
-                    );
+                    for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
+                        let cond_con = Eq(
+                            Type::Variable(*cond_var),
+                            expect_bool.clone(),
+                            loc_cond.region,
+                        );
+                        let then_con = constrain_expr(
+                            env,
+                            loc_body.region,
+                            &loc_body.value,
+                            FromAnnotation(
+                                name.clone(),
+                                arity,
+                                AnnotationSource::TypedIfBranch(index + 1),
+                                tipe.clone(),
+                            ),
+                        );
+
+                        branch_cons.push(cond_con);
+                        branch_cons.push(then_con);
+                    }
                     let else_con = constrain_expr(
                         env,
-                        loc_else.region,
-                        &loc_else.value,
+                        final_else.region,
+                        &final_else.value,
                         FromAnnotation(
                             name,
                             arity,
-                            AnnotationSource::TypedIfBranch(1),
+                            AnnotationSource::TypedIfBranch(branches.len() + 1),
                             tipe.clone(),
                         ),
                     );
 
                     let ast_con = Eq(Type::Variable(*branch_var), NoExpectation(tipe), region);
 
-                    exists(
-                        vec![*cond_var, *branch_var],
-                        And(vec![cond_con, then_con, else_con, ast_con]),
-                    )
+                    branch_cons.push(ast_con);
+                    branch_cons.push(else_con);
+
+                    exists(vec![*cond_var, *branch_var], And(branch_cons))
                 }
                 _ => {
-                    let then_con = constrain_expr(
-                        env,
-                        loc_then.region,
-                        &loc_then.value,
-                        ForReason(
-                            Reason::IfBranch { index: 0 },
-                            Type::Variable(*branch_var),
-                            region,
-                        ),
-                    );
+                    for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
+                        let cond_con = Eq(
+                            Type::Variable(*cond_var),
+                            expect_bool.clone(),
+                            loc_cond.region,
+                        );
+                        let then_con = constrain_expr(
+                            env,
+                            loc_body.region,
+                            &loc_body.value,
+                            ForReason(
+                                Reason::IfBranch { index: index + 1 },
+                                Type::Variable(*branch_var),
+                                region,
+                            ),
+                        );
+
+                        branch_cons.push(cond_con);
+                        branch_cons.push(then_con);
+                    }
                     let else_con = constrain_expr(
                         env,
-                        loc_else.region,
-                        &loc_else.value,
+                        final_else.region,
+                        &final_else.value,
                         ForReason(
-                            Reason::IfBranch { index: 1 },
+                            Reason::IfBranch {
+                                index: branches.len() + 1,
+                            },
                             Type::Variable(*branch_var),
                             region,
                         ),
                     );
 
-                    exists(
-                        vec![*cond_var, *branch_var],
-                        And(vec![
-                            cond_con,
-                            then_con,
-                            else_con,
-                            Eq(Type::Variable(*branch_var), expected, region),
-                        ]),
-                    )
+                    branch_cons.push(Eq(Type::Variable(*branch_var), expected, region));
+                    branch_cons.push(else_con);
+
+                    exists(vec![*cond_var, *branch_var], And(branch_cons))
                 }
             }
         }
@@ -496,7 +522,7 @@ pub fn constrain_expr(
 
             let constraint = constrain_expr(
                 &Env {
-                    module_name: env.module_name.clone(),
+                    home: env.home,
                     rigids: ImMap::default(),
                 },
                 region,
@@ -533,10 +559,11 @@ pub fn constrain_expr(
                 ),
             )
         }
-        LetRec(defs, loc_ret, var) => {
+        LetRec(defs, loc_ret, var, aliases) => {
             let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
-            exists(
+            exists_with_aliases(
+                aliases.clone(),
                 vec![*var],
                 And(vec![
                     constrain_recursive_defs(env, defs, body_con),
@@ -546,10 +573,11 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetNonRec(def, loc_ret, var) => {
+        LetNonRec(def, loc_ret, var, aliases) => {
             let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
-            exists(
+            exists_with_aliases(
+                aliases.clone(),
                 vec![*var],
                 And(vec![
                     constrain_def(env, def, body_con),
@@ -631,6 +659,7 @@ fn constrain_when_branch(
         rigid_vars: Vec::new(),
         flex_vars: state.vars,
         def_types: state.headers,
+        def_aliases: SendMap::default(),
         defs_constraint: Constraint::And(state.constraints),
         ret_constraint,
     }))
@@ -650,7 +679,7 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 }
 
 #[inline(always)]
-pub fn constrain_decls(module_name: ModuleName, decls: &[Declaration]) -> Constraint {
+pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
@@ -658,7 +687,7 @@ pub fn constrain_decls(module_name: ModuleName, decls: &[Declaration]) -> Constr
             Declaration::Declare(def) => {
                 constraint = constrain_def(
                     &Env {
-                        module_name: module_name.clone(),
+                        home,
                         rigids: ImMap::default(),
                     },
                     def,
@@ -668,7 +697,7 @@ pub fn constrain_decls(module_name: ModuleName, decls: &[Declaration]) -> Constr
             Declaration::DeclareRec(defs) => {
                 constraint = constrain_recursive_defs(
                     &Env {
-                        module_name: module_name.clone(),
+                        home,
                         rigids: ImMap::default(),
                     },
                     defs,
@@ -683,8 +712,6 @@ pub fn constrain_decls(module_name: ModuleName, decls: &[Declaration]) -> Constr
 }
 
 fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> PatternState {
-    // Exclude the current ident from shadowable_idents; you can't shadow yourself!
-    // (However, still include it in scope, because you *can* recursively refer to yourself.)
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
@@ -703,7 +730,7 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
     state
 }
 
-pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
+fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
@@ -711,40 +738,42 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
 
     pattern_state.vars.push(expr_var);
 
+    let mut def_aliases = SendMap::default();
     let mut new_rigids = Vec::new();
 
     let expr_con = match &def.annotation {
-        Some((annotation, free_vars)) => {
+        Some((annotation, free_vars, ann_def_aliases)) => {
+            def_aliases = ann_def_aliases.clone();
+            let arity = annotation.arity();
             let rigids = &env.rigids;
-            let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
+            let mut ftv = rigids.clone();
 
-            for (var, name) in free_vars {
-                // if the rigid is known already, nothing needs to happen
-                // otherwise register it.
-                if !rigids.contains_key(name) {
-                    // possible use this rigid in nested def's
-                    ftv.insert(name.clone(), Type::Variable(*var));
-
-                    new_rigids.push(*var);
-                }
-            }
+            let annotation = instantiate_rigids(
+                &annotation,
+                &free_vars,
+                &mut new_rigids,
+                &mut ftv,
+                &def.loc_pattern,
+                &mut pattern_state.headers,
+            );
 
             let annotation_expected = FromAnnotation(
                 def.loc_pattern.clone(),
-                annotation.arity(),
+                arity,
                 AnnotationSource::TypedBody,
-                annotation.clone(),
+                annotation,
             );
 
             pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
+                // TODO proper region
                 Region::zero(),
             ));
 
             constrain_expr(
                 &Env {
-                    module_name: env.module_name.clone(),
+                    home: env.home,
                     rigids: ftv,
                 },
                 def.loc_expr.region,
@@ -764,15 +793,56 @@ pub fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
         rigid_vars: new_rigids,
         flex_vars: pattern_state.vars,
         def_types: pattern_state.headers,
+        def_aliases,
         defs_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),        // always empty
             flex_vars: Vec::new(),         // empty, because our functions have no arguments
             def_types: SendMap::default(), // empty, because our functions have no arguments!
+            def_aliases: SendMap::default(),
             defs_constraint: And(pattern_state.constraints),
             ret_constraint: expr_con,
         })),
         ret_constraint: body_con,
     }))
+}
+
+fn instantiate_rigids(
+    annotation: &Type,
+    free_vars: &SendMap<Lowercase, Variable>,
+    new_rigids: &mut Vec<Variable>,
+    ftv: &mut ImMap<Lowercase, Variable>,
+    loc_pattern: &Located<Pattern>,
+    headers: &mut SendMap<Symbol, Located<Type>>,
+) -> Type {
+    let mut annotation = annotation.clone();
+    let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+
+    for (name, var) in free_vars {
+        if let Some(existing_rigid) = ftv.get(name) {
+            rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
+        } else {
+            // It's possible to use this rigid in nested defs
+            ftv.insert(name.clone(), *var);
+
+            new_rigids.push(*var);
+        }
+    }
+
+    // Instantiate rigid variables
+    if !rigid_substitution.is_empty() {
+        annotation.substitute(&rigid_substitution);
+    }
+
+    if let Some(new_headers) = crate::constrain::pattern::headers_from_annotation(
+        &loc_pattern.value,
+        &Located::at(loc_pattern.region, annotation.clone()),
+    ) {
+        for (k, v) in new_headers {
+            headers.insert(k, v);
+        }
+    }
+
+    annotation
 }
 
 fn constrain_recursive_defs(env: &Env, defs: &[Def], body_con: Constraint) -> Constraint {
@@ -792,6 +862,7 @@ pub fn rec_defs_help(
     mut rigid_info: Info,
     mut flex_info: Info,
 ) -> Constraint {
+    let mut def_aliases = SendMap::default();
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -828,6 +899,7 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
+                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -837,31 +909,32 @@ pub fn rec_defs_help(
                 flex_info.def_types.extend(pattern_state.headers);
             }
 
-            Some((annotation, seen_rigids)) => {
-                let rigids = &env.rigids;
-                let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
-
-                for (var, name) in seen_rigids {
-                    // if the rigid is known already, nothing needs to happen
-                    // otherwise register it.
-                    if !rigids.contains_key(name) {
-                        // possible use this rigid in nested def's
-                        ftv.insert(name.clone(), Type::Variable(*var));
-
-                        new_rigids.push(*var);
-                    }
+            Some((annotation, free_vars, ann_def_aliases)) => {
+                for (symbol, alias) in ann_def_aliases.clone() {
+                    def_aliases.insert(symbol, alias);
                 }
+                let arity = annotation.arity();
+                let mut ftv = env.rigids.clone();
+
+                let annotation = instantiate_rigids(
+                    annotation,
+                    &free_vars,
+                    &mut new_rigids,
+                    &mut ftv,
+                    &def.loc_pattern,
+                    &mut pattern_state.headers,
+                );
 
                 let annotation_expected = FromAnnotation(
                     def.loc_pattern.clone(),
-                    annotation.arity(),
+                    arity,
                     AnnotationSource::TypedBody,
                     annotation.clone(),
                 );
                 let expr_con = constrain_expr(
                     &Env {
                         rigids: ftv,
-                        module_name: env.module_name.clone(),
+                        home: env.home,
                     },
                     def.loc_expr.region,
                     &def.loc_expr.value,
@@ -880,6 +953,7 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
+                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -891,6 +965,7 @@ pub fn rec_defs_help(
                     rigid_vars: new_rigids,
                     flex_vars: Vec::new(),         // no flex vars introduced
                     def_types: SendMap::default(), // no headers introduced (at this level)
+                    def_aliases: SendMap::default(),
                     defs_constraint: def_con,
                     ret_constraint: True,
                 })));
@@ -903,15 +978,18 @@ pub fn rec_defs_help(
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
         def_types: rigid_info.def_types,
+        def_aliases,
         defs_constraint: True,
         ret_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
             flex_vars: flex_info.vars,
             def_types: flex_info.def_types.clone(),
+            def_aliases: SendMap::default(),
             defs_constraint: Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: Vec::new(),
                 def_types: flex_info.def_types,
+                def_aliases: SendMap::default(),
                 defs_constraint: True,
                 ret_constraint: And(flex_info.constraints),
             })),
