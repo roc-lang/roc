@@ -534,10 +534,10 @@ fn write_boolean_atom(env: &Env, atom: Atom, subs: &mut Subs, buf: &mut String, 
     match atom {
         Atom::Variable(var) => write_content(env, subs.get(var).content, subs, buf, parens),
         Atom::Zero => {
-            buf.push_str("Attr.Shared");
+            buf.push_str("Shared");
         }
         Atom::One => {
-            buf.push_str("Attr.Unique");
+            buf.push_str("Unique");
         }
     }
 }
