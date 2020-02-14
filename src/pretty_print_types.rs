@@ -261,17 +261,32 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
                     let content = subs.get(*arg_var).content;
 
                     match &content {
-                        Alias(nested, nested_args, _) => {
-                            debug_assert!(nested_args.is_empty());
-                            match *nested {
-                                Symbol::INT_INTEGER => buf.push_str("Int"),
-                                Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
-                                _ => write_parens!(write_parens, buf, {
-                                    buf.push_str("Num ");
-                                    write_content(env, content, subs, buf, parens);
-                                }),
+                        Alias(nested, nested_args, _) => match *nested {
+                            Symbol::INT_INTEGER => buf.push_str("Int"),
+                            Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
+                            Symbol::ATTR_ATTR => {
+                                let attr_content = subs.get(nested_args[1].1).content;
+                                match &attr_content {
+                                    Alias(nested, nested_args, _) => match *nested {
+                                        Symbol::INT_INTEGER => buf.push_str("Int"),
+                                        Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
+                                        _ => write_parens!(write_parens, buf, {
+                                            buf.push_str("Num ");
+                                            write_content(env, content, subs, buf, parens);
+                                        }),
+                                    },
+                                    _ => write_parens!(write_parens, buf, {
+                                        buf.push_str("Num ");
+                                        write_content(env, content, subs, buf, parens);
+                                    }),
+                                }
                             }
-                        }
+
+                            _ => write_parens!(write_parens, buf, {
+                                buf.push_str("Num ");
+                                write_content(env, content, subs, buf, parens);
+                            }),
+                        },
                         _ => write_parens!(write_parens, buf, {
                             buf.push_str("Num ");
                             write_content(env, content, subs, buf, parens);

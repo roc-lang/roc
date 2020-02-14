@@ -1859,4 +1859,16 @@ mod test_infer_uniq {
                 "Attr Shared (Attr Shared (Attr a b -> c), Attr d [ Cons (Attr e f) (Attr * [ Cons (Attr a b) (Attr d g), Nil ]*), Nil ]* as g -> Attr h [ Cons (Attr e f) (Attr * [ Cons c (Attr h i) ]*), Nil ]* as i)",
             );
     }
+
+    #[test]
+    fn addition() {
+        infer_eq(
+            indoc!(
+                r#"
+                4 + 4
+               "#
+            ),
+            "Attr * Int",
+        );
+    }
 }

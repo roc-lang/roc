@@ -11,14 +11,17 @@ use roc::can::problem::Problem;
 use roc::can::scope::Scope;
 use roc::collections::{ImMap, ImSet, MutMap, SendSet};
 use roc::constrain::expr::constrain_expr;
+use roc::constrain::module::Import;
 use roc::module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
 use roc::parse::blankspace::space0_before;
 use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
+use roc::solve::{BuiltinAlias, SolvedType};
 use roc::subs::{Subs, VarStore, Variable};
 use roc::types::{Constraint, Expected, Type};
+use roc::unique_builtins;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -59,7 +62,13 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 
 #[allow(dead_code)]
 pub fn can_expr(expr_str: &str) -> CanExprOut {
-    can_expr_with(&Bump::new(), test_home(), expr_str)
+    can_expr_with(
+        &Bump::new(),
+        test_home(),
+        expr_str,
+        &builtins::aliases(),
+        &builtins::types(),
+    )
 }
 
 #[allow(dead_code)]
@@ -98,28 +107,54 @@ pub fn uniq_expr_with(
         loc_expr,
         output,
         problems,
-        var_store: var_store1,
+        var_store: old_var_store,
         var,
         interns,
         ..
-    } = can_expr_with(arena, home, expr_str);
+    } = can_expr_with(
+        arena,
+        home,
+        expr_str,
+        &unique_builtins::aliases(),
+        &unique_builtins::types(),
+    );
 
     // double check
-    let var_store2 = VarStore::new(var_store1.fresh());
+    let var_store = VarStore::new(old_var_store.fresh());
 
     let expected2 = Expected::NoExpectation(Type::Variable(var));
-    let constraint2 = roc::uniqueness::constrain_declaration(
+    let constraint = roc::uniqueness::constrain_declaration(
         home,
-        &var_store2,
+        &var_store,
         Region::zero(),
         loc_expr,
         declared_idents,
         expected2,
     );
 
-    let subs2 = Subs::new(var_store2.into());
+    let types = unique_builtins::types();
+    let imports: Vec<_> = types
+        .iter()
+        .map(|(symbol, (solved_type, region))| Import {
+            loc_symbol: Located::at(*region, *symbol),
+            solved_type: solved_type,
+        })
+        .collect();
 
-    (output, problems, subs2, var, constraint2, home, interns)
+    // load builtin values
+    let constraint =
+        roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
+
+    // load builtin types
+    let constraint = roc::constrain::module::load_builtin_aliases(
+        &unique_builtins::aliases(),
+        constraint,
+        &var_store,
+    );
+
+    let subs2 = Subs::new(var_store.into());
+
+    (output, problems, subs2, var, constraint, home, interns)
 }
 
 pub struct CanExprOut {
@@ -134,7 +169,13 @@ pub struct CanExprOut {
 }
 
 #[allow(dead_code)]
-pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
+pub fn can_expr_with(
+    arena: &Bump,
+    home: ModuleId,
+    expr_str: &str,
+    aliases: &MutMap<Symbol, BuiltinAlias>,
+    types: &MutMap<Symbol, (SolvedType, Region)>,
+) -> CanExprOut {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
@@ -178,9 +219,20 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         expected,
     );
 
-    // load builtins
+    let imports: Vec<_> = types
+        .iter()
+        .map(|(symbol, (solved_type, region))| Import {
+            loc_symbol: Located::at(*region, *symbol),
+            solved_type: solved_type,
+        })
+        .collect();
+
+    // load builtin values
     let constraint =
-        roc::constrain::module::load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
+        roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
+
+    // load builtin types
+    let constraint = roc::constrain::module::load_builtin_aliases(aliases, constraint, &var_store);
 
     let mut all_ident_ids = MutMap::default();
 

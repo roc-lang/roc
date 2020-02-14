@@ -706,8 +706,8 @@ fn type_to_variable(
             if let Some(alias) = aliases.get(symbol) {
                 if args.len() != alias.vars.len() {
                     panic!(
-                        "Alias {:?} applied to incorrect number of arguments",
-                        symbol
+                        "Alias {:?} applied to incorrect number of arguments {:?} vs {:?}",
+                        symbol, alias.vars, args
                     );
                 }
 
