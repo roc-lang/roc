@@ -829,7 +829,6 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     let is_uniqueness_infer = match subs.get(var).content {
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, _)) => true,
         Content::Alias(Symbol::ATTR_ATTR, _, _) => true,
         _ => false,
     };
@@ -867,29 +866,6 @@ fn check_for_infinite_type(
                     // forward in the recursion and find the `Attr` there.
                     let index = 0;
                     match subs.get(chain[index]).content {
-                        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
-                            debug_assert!(args.len() == 2);
-                            debug_assert!(
-                                subs.get_root_key_without_compacting(recursive)
-                                    == subs.get_root_key_without_compacting(args[1])
-                            );
-
-                            // NOTE this ensures we use the same uniqueness var for the whole spine
-                            // that might add too much uniqueness restriction.
-                            // using `subs.fresh_unnamed_flex_var()` loosens it.
-                            let uniq_var = args[0];
-                            let tag_union_var = recursive;
-                            let recursive = chain[index];
-
-                            correct_recursive_attr(
-                                subs,
-                                recursive,
-                                uniq_var,
-                                tag_union_var,
-                                ext_var,
-                                &tags,
-                            );
-                        }
                         Content::Alias(Symbol::ATTR_ATTR, args, _actual) => {
                             debug_assert!(args.len() == 2);
                             debug_assert!(
@@ -921,25 +897,6 @@ fn check_for_infinite_type(
                 debug_assert!(args.len() == 2);
                 let uniq_var = args[0].1;
                 let tag_union_var = args[1].1;
-                let nested_description = subs.get(tag_union_var);
-                match nested_description.content {
-                    Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                        correct_recursive_attr(
-                            subs,
-                            recursive,
-                            uniq_var,
-                            tag_union_var,
-                            ext_var,
-                            &tags,
-                        );
-                    }
-                    _ => circular_error(subs, problems, symbol, &loc_var),
-                }
-            }
-            Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
-                debug_assert!(args.len() == 2);
-                let uniq_var = args[0];
-                let tag_union_var = args[1];
                 let nested_description = subs.get(tag_union_var);
                 match nested_description.content {
                     Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
