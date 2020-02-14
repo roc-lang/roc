@@ -1566,10 +1566,7 @@ mod test_infer {
                         when list is
                             Nil -> Nil
                             Cons x xs ->
-                                a = f x
-                                b = map f xs
-
-                                Cons a b
+                                Cons (f x) (map f xs)
 
                     map
                        "#

@@ -690,7 +690,7 @@ fn type_to_var(
     aliases: &MutMap<Symbol, Alias>,
     typ: &Type,
 ) -> Variable {
-    type_to_variable(subs, rank, pools, aliases, typ)
+    type_to_variable(subs, rank, pools, &MutMap::default(), typ)
 }
 
 fn type_to_variable(
@@ -703,63 +703,16 @@ fn type_to_variable(
     match typ {
         Variable(var) => *var,
         Apply(symbol, args) => {
-            if let Some(alias) = aliases.get(symbol) {
-                if args.len() != alias.vars.len() {
-                    panic!(
-                        "Alias {:?} applied to incorrect number of arguments {:?} vs {:?}",
-                        symbol, alias.vars, args
-                    );
-                }
+            let mut arg_vars = Vec::with_capacity(args.len());
 
-                let mut actual = alias.typ.clone();
-                let mut substitution = ImMap::default();
-                let mut arg_vars = Vec::with_capacity(args.len());
-
-                for (
-                    tipe,
-                    Located {
-                        value: (lowercase, var),
-                        ..
-                    },
-                ) in args.iter().zip(alias.vars.iter())
-                {
-                    let new_var = type_to_variable(subs, rank, pools, aliases, tipe);
-                    substitution.insert(*var, Type::Variable(new_var));
-                    arg_vars.push((lowercase.clone(), new_var));
-                }
-
-                actual.substitute(&substitution);
-
-                // We must instantiate the recursion variable, otherwise all e.g. lists will be
-                // unified, List Int ~ List Float
-                if let Type::RecursiveTagUnion(rec_var, _, _) = actual {
-                    let new_rec_var = subs.fresh_unnamed_flex_var();
-                    substitution.clear();
-                    substitution.insert(rec_var, Type::Variable(new_rec_var));
-
-                    actual.substitute(&substitution);
-
-                    if let Type::RecursiveTagUnion(_, tags, ext_var) = actual {
-                        actual = Type::RecursiveTagUnion(new_rec_var, tags, ext_var);
-                    }
-                }
-
-                let alias_var = type_to_variable(subs, rank, pools, aliases, &actual);
-                let content = Content::Alias(*symbol, arg_vars, alias_var);
-
-                register(subs, rank, pools, content)
-            } else {
-                let mut arg_vars = Vec::with_capacity(args.len());
-
-                for arg in args {
-                    arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
-                }
-
-                let flat_type = FlatType::Apply(*symbol, arg_vars);
-                let content = Content::Structure(flat_type);
-
-                register(subs, rank, pools, content)
+            for arg in args {
+                arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
             }
+
+            let flat_type = FlatType::Apply(*symbol, arg_vars);
+            let content = Content::Structure(flat_type);
+
+            register(subs, rank, pools, content)
         }
         EmptyRec => {
             let content = Content::Structure(FlatType::EmptyRecord);

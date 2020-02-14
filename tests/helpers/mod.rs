@@ -146,12 +146,15 @@ pub fn uniq_expr_with(
         roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
 
     // load builtin types
-    let constraint = roc::constrain::module::load_builtin_aliases(
+    let mut constraint = roc::constrain::module::load_builtin_aliases(
         &unique_builtins::aliases(),
         constraint,
         &var_store,
     );
 
+    constraint.instantiate_aliases(&var_store);
+
+    dbg!(&constraint);
     let subs2 = Subs::new(var_store.into());
 
     (output, problems, subs2, var, constraint, home, interns)
@@ -227,12 +230,15 @@ pub fn can_expr_with(
         })
         .collect();
 
-    // load builtin values
+    //load builtin values
     let constraint =
         roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
 
-    // load builtin types
-    let constraint = roc::constrain::module::load_builtin_aliases(aliases, constraint, &var_store);
+    //load builtin types
+    let mut constraint =
+        roc::constrain::module::load_builtin_aliases(aliases, constraint, &var_store);
+
+    constraint.instantiate_aliases(&var_store);
 
     let mut all_ident_ids = MutMap::default();
 
