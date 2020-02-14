@@ -1,6 +1,7 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
+use roc::builtins;
 use roc::can::env::Env;
 use roc::can::expr::Output;
 use roc::can::expr::{canonicalize_expr, Expr};
@@ -176,6 +177,10 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         &loc_expr.value,
         expected,
     );
+
+    // load builtins
+    let constraint =
+        roc::constrain::module::load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
 
     let mut all_ident_ids = MutMap::default();
 

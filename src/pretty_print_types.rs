@@ -30,6 +30,21 @@ enum Parens {
     Unnecessary,
 }
 
+macro_rules! write_parens {
+    ($insert_parens:expr, $buf:expr, $body:expr) => {{
+        if $insert_parens {
+            $buf.push('(');
+        }
+
+        $body
+
+        if $insert_parens {
+            $buf.push(')');
+        }
+    }
+    };
+}
+
 struct Env<'a> {
     home: ModuleId,
     interns: &'a Interns,
@@ -237,19 +252,41 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
         Alias(symbol, args, _actual) => {
             let write_parens = parens == Parens::InTypeParam && !args.is_empty();
 
-            if write_parens {
-                buf.push('(')
-            }
+            match symbol {
+                Symbol::NUM_NUM => {
+                    debug_assert!(args.len() == 1);
+                    let (_, arg_var) = args
+                        .get(0)
+                        .expect("Num was not applied to a type argument!");
+                    let content = subs.get(*arg_var).content;
 
-            write_symbol(env, symbol, buf);
+                    match &content {
+                        Alias(nested, nested_args, _) => {
+                            debug_assert!(nested_args.is_empty());
+                            match *nested {
+                                Symbol::INT_INTEGER => buf.push_str("Int"),
+                                Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
+                                _ => write_parens!(write_parens, buf, {
+                                    buf.push_str("Num ");
+                                    write_content(env, content, subs, buf, parens);
+                                }),
+                            }
+                        }
+                        _ => write_parens!(write_parens, buf, {
+                            buf.push_str("Num ");
+                            write_content(env, content, subs, buf, parens);
+                        }),
+                    }
+                }
 
-            for (_, var) in args {
-                buf.push(' ');
-                write_content(env, subs.get(var).content, subs, buf, parens);
-            }
+                _ => write_parens!(write_parens, buf, {
+                    write_symbol(env, symbol, buf);
 
-            if write_parens {
-                buf.push(')')
+                    for (_, var) in args {
+                        buf.push(' ');
+                        write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
+                    }
+                }),
             }
         }
         Error => buf.push_str("<type mismatch>"),
