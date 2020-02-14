@@ -50,31 +50,6 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
 }
 
 #[inline(always)]
-fn num_literal(
-    num_var: Variable,
-    literal_type: Type,
-    reason: Reason,
-    expected: Expected<Type>,
-    region: Region,
-) -> Constraint {
-    let num_type = Variable(num_var);
-    let expected_literal = ForReason(reason, literal_type, region);
-
-    exists(
-        vec![num_var],
-        And(vec![
-            Eq(num_type.clone(), expected_literal, region),
-            Eq(num_type, expected, region),
-        ]),
-    )
-}
-
-#[inline(always)]
-fn number_literal_type(symbol: Symbol) -> Type {
-    builtin_type(Symbol::NUM_NUM, vec![builtin_type(symbol, Vec::new())])
-}
-
-#[inline(always)]
 pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
     Type::Apply(symbol, args)
 }
