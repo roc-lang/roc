@@ -559,7 +559,7 @@ fn unify_flat_type(
         }
         (_other1, _other2) => {
             // Can't unify other1 and other2
-            dbg!(&_other1, &_other2);
+            // dbg!(&_other1, &_other2);
             mismatch!()
         }
     }

@@ -267,7 +267,7 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
                             Symbol::ATTR_ATTR => {
                                 let attr_content = subs.get(nested_args[1].1).content;
                                 match &attr_content {
-                                    Alias(nested, nested_args, _) => match *nested {
+                                    Alias(nested, _, _) => match *nested {
                                         Symbol::INT_INTEGER => buf.push_str("Int"),
                                         Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
                                         _ => write_parens!(write_parens, buf, {

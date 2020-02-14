@@ -18,7 +18,7 @@ use crate::types::PReason::{self};
 use crate::types::Reason;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::{Atom, Bool};
-use crate::uniqueness::builtins::{attr_type, float_literal, int_literal, list_type, str_type};
+use crate::uniqueness::builtins::{attr_type, list_type, str_type};
 use crate::uniqueness::sharing::{FieldAccess, ReferenceCount, VarUsage};
 
 pub use crate::can::expr::Expr::*;

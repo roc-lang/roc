@@ -1018,7 +1018,7 @@ mod test_infer_uniq {
                 \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr * (Attr (* | a | b) { left : (Attr a c), right : (Attr b d) }* -> Attr * { left : (Attr a c), right : (Attr b d) })",
+            "Attr * (Attr (* | a | b) { left : (Attr b c), right : (Attr a d) }* -> Attr * { left : (Attr b c), right : (Attr a d) })",
         );
     }
 
@@ -1060,7 +1060,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr * (Attr (* | a | b) [ Foo (Attr b c) (Attr a *) ]* -> Attr * [ Foo (Attr b c) (Attr * Str) ]*)",
+            "Attr * (Attr (* | a | b) [ Foo (Attr a c) (Attr b *) ]* -> Attr * [ Foo (Attr a c) (Attr * Str) ]*)",
         );
     }
 
@@ -1240,7 +1240,7 @@ mod test_infer_uniq {
                             p
                         "#
                     ),
-                "Attr * (Attr a { x : (Attr Shared b), y : (Attr Shared c) }d -> Attr a { x : (Attr Shared b), y : (Attr Shared c) }d)"
+                "Attr * (Attr Shared { x : (Attr Shared a), y : (Attr Shared b) }c -> Attr Shared { x : (Attr Shared a), y : (Attr Shared b) }c)"
                 );
     }
 
@@ -1302,7 +1302,7 @@ mod test_infer_uniq {
                     r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e)"
+            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e)"
         );
     }
 
@@ -1338,7 +1338,8 @@ mod test_infer_uniq {
 
                 "#
             ),
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (b | d | e) { tac : (Attr (b | d) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | e) { bar : (Attr (b | e) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | d) { tac : (Attr (b | d) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+           // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (b | d | e) { tac : (Attr (b | d) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
         );
     }
 
