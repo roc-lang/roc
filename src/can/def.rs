@@ -504,6 +504,7 @@ pub fn sort_can_defs(
 
                     // Sort them to make the report more helpful.
                     loc_idents_in_cycle.sort();
+                    regions.sort();
 
                     problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
                         loc_idents_in_cycle.clone(),
