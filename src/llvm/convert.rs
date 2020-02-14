@@ -30,19 +30,28 @@ pub fn content_to_basic_type<'ctx>(
 ) -> Result<BasicTypeEnum<'ctx>, String> {
     match content {
         Content::Structure(flat_type) => match flat_type {
-            Apply(symbol, args) => {
-                if *symbol == Symbol::NUM_NUM {
+            Apply(symbol, args) => match *symbol {
+                Symbol::INT_INT => {
+                    debug_assert!(args.is_empty());
+                    Ok(BasicTypeEnum::IntType(context.i64_type()))
+                }
+                Symbol::FLOAT_FLOAT => {
+                    debug_assert!(args.is_empty());
+                    Ok(BasicTypeEnum::FloatType(context.f64_type()))
+                }
+                Symbol::NUM_NUM => {
                     let arg = *args.iter().next().unwrap();
                     let arg_content = subs.get_without_compacting(arg).content;
 
                     num_to_basic_type(arg_content, context)
-                } else {
+                }
+                _ => {
                     panic!(
                         "TODO handle content_to_basic_type for FlatType::Apply of {:?} with args {:?}",
                         symbol, args
                     );
                 }
-            }
+            },
             Func(arg_vars, ret_var) => {
                 let ret_content = subs.get_without_compacting(*ret_var).content;
                 let ret_type = content_to_basic_type(&ret_content, subs, context)?;

@@ -17,19 +17,30 @@ pub fn type_from_var(var: Variable, subs: &Subs, cfg: TargetFrontendConfig) -> T
 pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConfig) -> Type {
     match content {
         Content::Structure(flat_type) => match flat_type {
-            Apply(symbol, args) => {
-                if *symbol == Symbol::NUM_NUM {
+            Apply(symbol, args) => match *symbol {
+                Symbol::INT_INT => {
+                    debug_assert!(args.is_empty());
+                    types::I64
+                }
+                Symbol::FLOAT_FLOAT => {
+                    debug_assert!(args.is_empty());
+                    types::F64
+                }
+                Symbol::NUM_NUM => {
+                    // It's also possible (although rare) that the non-aliased version
+                    // of (Num.Num Int.Integer) or (Num.Num Float.FloatingPoint) was used
                     let arg = *args.iter().next().unwrap();
                     let arg_content = subs.get_without_compacting(arg).content;
 
                     num_to_crane_type(arg_content)
-                } else {
-                    panic!(
-                        "TODO handle content_to_basic_type for FlatType::Apply of {:?} with args {:?}",
-                        symbol, args
-                    );
                 }
-            }
+                _ => {
+                    panic!(
+                            "TODO handle content_to_basic_type for FlatType::Apply of {:?} with args {:?}",
+                            symbol, args
+                        );
+                }
+            },
             Func(_, _) => cfg.pointer_type(),
             other => panic!("TODO handle type_from_content for {:?}", other),
         },
