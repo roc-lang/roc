@@ -1,8 +1,9 @@
 interface Primary
-    exposes [ blah, str, alwaysThree, identity, z, w, succeed, map, yay ]
+    exposes [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, map, yay ]
     imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Result ]
 
-blah = Dep2.two
+blah2 = Dep2.two
+blah3 = bar
 
 str = Dep1.str
 

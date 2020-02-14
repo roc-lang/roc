@@ -587,24 +587,28 @@ fn send_interface_header<'a>(
             // This can't possibly fail, because we just ensured it
             // has an entry with this key.
             let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
+            let mut imports_to_expose = Vec::with_capacity(imports.len());
 
             // For each of our imports, add an entry to deps_by_name
             //
             // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name
-            for (module_name, _, _) in imports.iter() {
-                let module_id = module_ids.get_or_insert(module_name.into());
+            for (module_name, exposed, region) in imports.into_iter() {
+                let cloned_module_name = module_name.clone();
+                let module_id = module_ids.get_or_insert(&module_name.into());
 
-                deps_by_name.insert(module_name.clone(), module_id);
+                deps_by_name.insert(cloned_module_name, module_id);
 
                 imported_modules.insert(module_id);
+
+                imports_to_expose.push((module_id, exposed, region));
             }
 
             // For each of our imports, add any exposed values to scope.
             //
             // e.g. for `imports [ Foo.{ bar } ]`, add `bar` to scope.
-            for (_, exposed, region) in imports.into_iter() {
+            for (module_id, exposed, region) in imports_to_expose.into_iter() {
                 if !exposed.is_empty() {
-                    add_exposed_to_scope(home, &mut scope, exposed, ident_ids, region);
+                    add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
                 }
             }
 
@@ -647,7 +651,7 @@ fn send_interface_header<'a>(
                 imported_modules.insert(module_id);
 
                 if !exposed.is_empty() {
-                    add_exposed_to_scope(home, &mut scope, exposed, &mut ident_ids, region);
+                    add_exposed_to_scope(module_id, &mut scope, exposed, &mut ident_ids, region);
                 }
             }
 

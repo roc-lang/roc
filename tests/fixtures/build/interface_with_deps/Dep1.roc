@@ -4,7 +4,7 @@ interface Dep1
 
 one = 1
 
-two = 2
+two = foo
 
 three = 3.0
 
