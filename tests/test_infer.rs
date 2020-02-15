@@ -78,8 +78,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                "type inference!"
-            "#
+                    "type inference!"
+                "#
             ),
             "Str",
         );
@@ -90,8 +90,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                ""
-            "#
+                    ""
+                "#
             ),
             "Str",
         );
@@ -117,8 +117,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                []
-            "#
+                    []
+                "#
             ),
             "List *",
         );
@@ -129,8 +129,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [[]]
-            "#
+                    [[]]
+                "#
             ),
             "List (List *)",
         );
@@ -141,8 +141,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [[[]]]
-            "#
+                    [[[]]]
+                "#
             ),
             "List (List (List *))",
         );
@@ -153,8 +153,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ [], [ [] ] ]
-            "#
+                    [ [], [ [] ] ]
+                "#
             ),
             "List (List (List *))",
         );
@@ -181,8 +181,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [42]
-            "#
+                    [42]
+                "#
             ),
             "List Int",
         );
@@ -193,8 +193,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [[[ 5 ]]]
-            "#
+                    [[[ 5 ]]]
+                "#
             ),
             "List (List (List Int))",
         );
@@ -205,8 +205,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ 1, 2, 3 ]
-            "#
+                    [ 1, 2, 3 ]
+                "#
             ),
             "List Int",
         );
@@ -217,8 +217,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ [ 1 ], [ 2, 3 ] ]
-            "#
+                    [ [ 1 ], [ 2, 3 ] ]
+                "#
             ),
             "List (List Int)",
         );
@@ -229,8 +229,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ "cowabunga" ]
-            "#
+                    [ "cowabunga" ]
+                "#
             ),
             "List Str",
         );
@@ -241,8 +241,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [[[ "foo" ]]]
-            "#
+                    [[[ "foo" ]]]
+                "#
             ),
             "List (List (List Str))",
         );
@@ -253,8 +253,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ "foo", "bar" ]
-            "#
+                    [ "foo", "bar" ]
+                "#
             ),
             "List Str",
         );
@@ -283,8 +283,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ "foo", 5 ]
-            "#
+                    [ "foo", 5 ]
+                "#
             ),
             "List <type mismatch>",
         );
@@ -295,8 +295,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ [ "foo", 5 ] ]
-            "#
+                    [ [ "foo", 5 ] ]
+                "#
             ),
             "List (List <type mismatch>)",
         );
@@ -321,8 +321,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                \_ -> {}
-            "#
+                    \_ -> {}
+                "#
             ),
             "* -> {}",
         );
@@ -333,8 +333,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                \_, _ -> 42
-            "#
+                    \_, _ -> 42
+                "#
             ),
             "*, * -> Int",
         );
@@ -345,8 +345,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                \_, _, _ -> "test!"
-            "#
+                    \_, _, _ -> "test!"
+                "#
             ),
             "*, *, * -> Str",
         );
@@ -359,10 +359,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                foo = {}
+                    foo = {}
 
-                foo
-            "#
+                    foo
+                "#
             ),
             "{}",
         );
@@ -373,10 +373,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                str = "thing"
+                    str = "thing"
 
-                str
-            "#
+                    str
+                "#
             ),
             "Str",
         );
@@ -387,10 +387,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                fn = \_ -> {}
+                    fn = \_ -> {}
 
-                fn
-            "#
+                    fn
+                "#
             ),
             "* -> {}",
         );
@@ -401,10 +401,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                func = \_, _ -> 42
+                    func = \_, _ -> 42
 
-                func
-            "#
+                    func
+                "#
             ),
             "*, * -> Int",
         );
@@ -415,10 +415,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                f = \_, _, _ -> "test!"
+                    f = \_, _, _ -> "test!"
 
-                f
-            "#
+                    f
+                "#
             ),
             "*, *, * -> Str",
         );
@@ -429,12 +429,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                a = \_, _, _ -> "test!"
+                    a = \_, _, _ -> "test!"
 
-                b = a
+                    b = a
 
-                b
-            "#
+                    b
+                "#
             ),
             "*, *, * -> Str",
         );
@@ -445,12 +445,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                a = "test!"
+                    a = "test!"
 
-                b = a
+                    b = a
 
-                b
-            "#
+                    b
+                "#
             ),
             "Str",
         );
@@ -461,14 +461,14 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                c = b
+                    c = b
 
-                b = a
+                    b = a
 
-                a = 42
+                    a = 42
 
-                c
-            "#
+                    c
+                "#
             ),
             "Int",
         );
@@ -479,15 +479,15 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                f = \z -> z
-                g = \z -> z
+                    f = \z -> z
+                    g = \z -> z
 
-                (\x ->
-                    a = f x
-                    b = g x
-                    x
-                )
-            "#
+                    (\x ->
+                        a = f x
+                        b = g x
+                        x
+                    )
+                "#
             ),
             "a -> a",
         );
@@ -500,9 +500,9 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                alwaysFive = \_ -> 5
+                    alwaysFive = \_ -> 5
 
-                alwaysFive "stuff"
+                    alwaysFive "stuff"
                 "#
             ),
             "Int",
@@ -514,9 +514,9 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                identity = \a -> a
+                    identity = \a -> a
 
-                identity "hi"
+                    identity "hi"
                 "#
             ),
             "Str",
@@ -528,11 +528,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                identity = \x -> x
+                    identity = \x -> x
 
-                y = identity 5
+                    y = identity 5
 
-                identity
+                    identity
                 "#
             ),
             "a -> a",
@@ -544,12 +544,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                identity = \a -> a
+                    identity = \a -> a
 
-                x = identity 5
-                y = identity "hi"
+                    x = identity 5
+                    y = identity "hi"
 
-                x
+                    x
                 "#
             ),
             "Int",
@@ -561,9 +561,9 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                enlist = \val -> [ val ]
+                    enlist = \val -> [ val ]
 
-                enlist 5
+                    enlist 5
                 "#
             ),
             "List Int",
@@ -590,7 +590,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                1 |> (\a -> a)
+                    1 |> (\a -> a)
                 "#
             ),
             "Int",
@@ -845,11 +845,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                if True then
-                    42
-                else
-                    24
-            "#
+                    if True then
+                        42
+                    else
+                        24
+                "#
             ),
             "Int",
         );
@@ -860,10 +860,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                when 1 is
-                 1 -> 2
-                 3 -> 4
-            "#
+                    when 1 is
+                    1 -> 2
+                    3 -> 4
+                "#
             ),
             "Int",
         );
@@ -1657,14 +1657,14 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                r = Attr unknown "bar"
+                    r = Attr unknown "bar"
 
-                s = Attr unknown2 { left : Attr Shared "foo" }
+                    s = Attr unknown2 { left : Attr Shared "foo" }
 
-                when True is
-                    _ -> { x : ((\Attr _ val -> val) s).left, y : r }
-                    _ -> { x : ((\Attr _ val -> val) s).left, y : ((\Attr _ val -> val) s).left }
-                   "#
+                    when True is
+                        _ -> { x : ((\Attr _ val -> val) s).left, y : r }
+                        _ -> { x : ((\Attr _ val -> val) s).left, y : ((\Attr _ val -> val) s).left }
+                "#
             ),
             "{ x : [ Attr [ Shared ]* Str ]*, y : [ Attr [ Shared ]* Str ]* }",
         );
@@ -1675,18 +1675,18 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                Peano : [ S Peano, Z ]
+                    Peano : [ S Peano, Z ]
 
-                map : Peano -> Peano
-                map = \peano ->
-                        when peano is
-                            Z -> Z
-                            S rest ->
-                                map rest |> S
+                    map : Peano -> Peano
+                    map = \peano ->
+                            when peano is
+                                Z -> Z
+                                S rest ->
+                                    map rest |> S
 
 
-                map
-                       "#
+                    map
+                "#
             ),
             "Peano -> Peano",
         );
@@ -1697,17 +1697,17 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List a : [ Cons a (List a), Nil ]
+                    List a : [ Cons a (List a), Nil ]
 
-                toEmpty : List a -> List a
-                toEmpty = \_ ->
-                    result : List a
-                    result = Nil
+                    toEmpty : List a -> List a
+                    toEmpty = \_ ->
+                        result : List a
+                        result = Nil
 
-                    result
+                        result
 
-                toEmpty
-                   "#
+                    toEmpty
+                "#
             ),
             "List a -> List a",
         );
@@ -1718,17 +1718,17 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List a : [ Cons a (List a), Nil ]
+                    List a : [ Cons a (List a), Nil ]
 
-                toEmpty : List a -> List a
-                toEmpty = \_ ->
-                    result : List a
-                    result = Nil
+                    toEmpty : List a -> List a
+                    toEmpty = \_ ->
+                        result : List a
+                        result = Nil
 
-                    toEmpty result
+                        toEmpty result
 
-                toEmpty
-                   "#
+                    toEmpty
+                "#
             ),
             "List a -> List a",
         );
@@ -1739,11 +1739,11 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-               { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
-               { x, y } = { x : "foo", y : 3.14 }
+                    { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    { x, y } = { x : "foo", y : 3.14 }
 
-               x
-               "#
+                    x
+                "#
             ),
             "Str",
         );
@@ -1754,13 +1754,13 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
 
-               { x, y } : Foo
-               { x, y } = { x : "foo", y : 3.14 }
+                    { x, y } : Foo
+                    { x, y } = { x : "foo", y : 3.14 }
 
-               x
-               "#
+                    x
+                "#
             ),
             "Str",
         );
@@ -1771,15 +1771,15 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                map = \peano ->
-                        when peano is
-                            Z -> Z
-                            S rest ->
-                                map rest |> S
+                    map = \peano ->
+                            when peano is
+                                Z -> Z
+                                S rest ->
+                                    map rest |> S
 
 
-                map
-                       "#
+                    map
+                "#
             ),
             "[ S a, Z ]* as a -> [ S b, Z ]* as b",
         );
@@ -1790,12 +1790,12 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
 
-               { x, y } : Foo
-               { x, y } = { x : "foo", y : 3.14 }
+                    { x, y } : Foo
+                    { x, y } = { x : "foo", y : 3.14 }
 
-               x
+                    x
                "#
             ),
             "Str",
@@ -1832,7 +1832,7 @@ mod test_infer {
                                 Cons { x: f x, xs : map f xs }
 
                     map
-                       "#
+                "#
             ),
             "(a -> b), List a -> List b",
         );
@@ -1850,7 +1850,7 @@ mod test_infer {
                                 Cons { x: f x, xs : map f xs }
 
                     map
-                       "#
+                "#
             ),
             "(a -> b), [ Cons { x : a, xs : c }*, Nil ]* as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
         );
@@ -1899,7 +1899,7 @@ mod test_infer {
                                         Cons a (Cons (f b) (toAs f newLista))
 
                    toAs
-                  "#
+                "#
             ),
             "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
         );
