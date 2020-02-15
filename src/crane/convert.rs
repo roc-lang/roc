@@ -16,6 +16,14 @@ pub fn type_from_var(var: Variable, subs: &Subs, cfg: TargetFrontendConfig) -> T
 
 pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConfig) -> Type {
     match content {
+        Content::Alias(Symbol::INT_INT, args, _) => {
+            debug_assert!(args.is_empty());
+            types::I64
+        }
+        Content::Alias(Symbol::FLOAT_FLOAT, args, _) => {
+            debug_assert!(args.is_empty());
+            types::F64
+        }
         Content::Structure(flat_type) => match flat_type {
             Apply(symbol, args) => match *symbol {
                 Symbol::INT_INT => {

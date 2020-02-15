@@ -41,6 +41,15 @@ impl<'a> Layout<'a> {
                 panic!("Layout::from_content encountered an unresolved {:?}", var);
             }
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs),
+
+            Alias(Symbol::INT_INT, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int64))
+            }
+            Alias(Symbol::FLOAT_FLOAT, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Float64))
+            }
             Alias(_, _, _) => {
                 panic!("TODO recursively resolve type aliases in Layout::from_content");
             }
