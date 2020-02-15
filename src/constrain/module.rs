@@ -128,11 +128,11 @@ pub fn load_builtin_aliases(
 
 #[derive(Debug, Clone, Default)]
 pub struct FreeVars {
-    rigid_vars: ImMap<Lowercase, Variable>,
-    flex_vars: ImMap<VarId, Variable>,
+    pub rigid_vars: ImMap<Lowercase, Variable>,
+    pub flex_vars: ImMap<VarId, Variable>,
 }
 
-fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
+pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
     use crate::solve::SolvedType::*;
 
     match solved_type {

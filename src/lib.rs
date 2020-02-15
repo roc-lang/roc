@@ -22,6 +22,7 @@ pub mod uniqueness;
 pub mod string;
 
 pub mod builtins;
+pub mod unique_builtins;
 
 pub mod constrain;
 pub mod crane;

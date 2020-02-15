@@ -2,6 +2,7 @@ use crate::can::ident::Lowercase;
 use crate::can::pattern::Pattern::{self, *};
 use crate::can::pattern::RecordDestruct;
 use crate::collections::SendMap;
+use crate::constrain::builtins;
 use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
 use crate::subs::Variable;
@@ -125,7 +126,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Int,
-                Type::int(),
+                builtins::builtin_type(Symbol::INT_INT, vec![]),
                 expected,
             ));
         }
@@ -134,7 +135,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                Type::float(),
+                builtins::builtin_type(Symbol::FLOAT_FLOAT, vec![]),
                 expected,
             ));
         }
@@ -143,7 +144,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Str,
-                Type::string(),
+                builtins::str_type(),
                 expected,
             ));
         }
