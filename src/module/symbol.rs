@@ -1,7 +1,6 @@
 use crate::collections::{default_hasher, MutMap};
 use inlinable_string::InlinableString;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::{fmt, u32};
 
 // TODO: benchmark this as { ident_id: u32, module_id: u32 } and see if perf stays the same
@@ -369,14 +368,6 @@ impl IdentIds {
         ident_id
     }
 
-    /// This is the same as ModuleId::get_or_insert, but with a different name
-    /// because for idents this should only ever be used for private tags!
-    ///
-    /// All other module-scoped idents should only ever be added once, because
-    /// otherwise they will either be shadowing or reusing the Ident from
-    /// something in a sibling scope - both of which can cause bugs.
-    ///
-    /// Thus, only ever call this for private tags!
     pub fn get_or_insert(&mut self, name: &InlinableString) -> IdentId {
         match self.by_ident.get(name) {
             Some(id) => *id,
@@ -433,7 +424,7 @@ macro_rules! define_builtins {
         num_modules: $total:literal
     } => {
         impl IdentIds {
-            pub fn exposed_builtins() -> MutMap<ModuleId, Arc<IdentIds>> {
+            pub fn exposed_builtins() -> MutMap<ModuleId, IdentIds> {
                 let mut exposed_idents_by_module = MutMap::default();
 
                 $(
@@ -470,7 +461,7 @@ macro_rules! define_builtins {
 
                     exposed_idents_by_module.insert(
                         ModuleId($module_id),
-                        Arc::new(ident_ids)
+                        ident_ids
                     );
                 )+
 

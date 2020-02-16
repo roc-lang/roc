@@ -571,8 +571,16 @@ pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
     pub def_types: SendMap<Symbol, Located<Type>>,
+    pub def_aliases: SendMap<Symbol, Alias>,
     pub defs_constraint: Constraint,
     pub ret_constraint: Constraint,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Alias {
+    pub region: Region,
+    pub vars: Vec<Located<(Lowercase, Variable)>>,
+    pub typ: Type,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

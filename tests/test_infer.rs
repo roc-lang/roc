@@ -31,7 +31,7 @@ mod test_infer {
 
         assert_correct_variable_usage(&constraint);
 
-        for (var, name) in output.rigids {
+        for (name, var) in output.rigids {
             subs.rigid_var(var, name);
         }
 
@@ -58,7 +58,6 @@ mod test_infer {
         if !problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            dbg!(&problems);
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
         assert_eq!(actual, expected.to_string());
@@ -1560,7 +1559,7 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List q : [ Cons q (List q), Nil ]
+                    List a : [ Cons a (List a), Nil ]
 
                     map : (a -> b), List a -> List b
                     map = \f, list ->
@@ -1675,27 +1674,6 @@ mod test_infer {
     }
 
     #[test]
-    fn rigid_in_let() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                        List q : [ Cons q (List q), Nil ]
-
-                        toEmpty : List a -> List a
-                        toEmpty = \_ ->
-                            result : List a
-                            result = Nil
-
-                            result
-
-                        toEmpty
-                           "#
-            ),
-            "List a -> List a",
-        );
-    }
-
-    #[test]
     fn peano_map_alias() {
         infer_eq(
             indoc!(
@@ -1718,11 +1696,70 @@ mod test_infer {
     }
 
     #[test]
+    fn rigid_in_letnonrec() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List a -> List a
+                toEmpty = \_ ->
+                    result : List a
+                    result = Nil
+
+                    result
+
+                toEmpty
+                   "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    #[test]
+    fn rigid_in_letrec() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List a : [ Cons a (List a), Nil ]
+
+                toEmpty : List a -> List a
+                toEmpty = \_ ->
+                    result : List a
+                    result = Nil
+
+                    toEmpty result
+
+                toEmpty
+                   "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    #[test]
     fn let_record_pattern_with_annotation() {
         infer_eq_without_problem(
             indoc!(
                 r#"
                { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn let_record_pattern_with_annotation_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+
+               { x, y } : Foo
                { x, y } = { x : "foo", y : 3.14 }
 
                x
@@ -1822,25 +1859,52 @@ mod test_infer {
         );
     }
 
-    // fails the variable usage check
+    // infinite loop in type_to_var
     //    #[test]
-    //    fn rigid_in_let() {
+    //    fn typecheck_mutually_recursive_tag_union() {
     //        infer_eq_without_problem(
     //            indoc!(
     //                r#"
-    //                    List q : [ Cons q (List q), Nil ]
+    //                   ListA a b : [ Cons a (ListB b a), Nil ]
+    //                   ListB a b : [ Cons a (ListA b a), Nil ]
     //
-    //                    toEmpty : List a -> List a
-    //                    toEmpty = \_ ->
-    //                        result : List a
-    //                        result = Nil
+    //                   List q : [ Cons q (List q), Nil ]
     //
-    //                        result
+    //                   toAs : (b -> a), ListA a b -> List a
+    //                   toAs = \f, lista ->
+    //                        when lista is
+    //                            Nil -> Nil
+    //                            Cons a listb ->
+    //                                when listb is
+    //                                    Nil -> Nil
+    //                                    Cons b newLista ->
+    //                                        Cons a (Cons (f b) (toAs f newLista))
     //
-    //                    toEmpty
-    //                       "#
+    //                   toAs
+    //                  "#
     //            ),
-    //            "(a -> b), List a -> List b",
+    //            "(b -> a), ListA a b -> List a",
     //        );
     //    }
+
+    #[test]
+    fn infer_mutually_recursive_tag_union() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                   toAs = \f, lista ->
+                        when lista is
+                            Nil -> Nil
+                            Cons a listb ->
+                                when listb is
+                                    Nil -> Nil
+                                    Cons b newLista ->
+                                        Cons a (Cons (f b) (toAs f newLista))
+
+                   toAs
+                  "#
+            ),
+            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+        );
+    }
 }

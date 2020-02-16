@@ -5,10 +5,11 @@ use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::collections::{ImMap, ImSet, SendMap};
 use crate::constrain::builtins;
-use crate::constrain::expr::{exists, Env, Info};
+use crate::constrain::expr::{exists, exists_with_aliases, Info};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
+use crate::types::Alias;
 use crate::types::AnnotationSource::{self, *};
 use crate::types::Constraint::{self, *};
 use crate::types::Expected::{self};
@@ -24,6 +25,14 @@ pub use crate::can::expr::Expr::*;
 
 pub mod boolean_algebra;
 pub mod sharing;
+
+pub struct Env {
+    /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
+    /// for example `u` and `a` in the annotation `identity : Attr u a -> Attr u a`, we add it to this
+    /// map so that expressions within that annotation can share these vars.
+    pub rigids: ImMap<Lowercase, (Variable, Variable)>,
+    pub home: ModuleId,
+}
 
 pub fn attr_type(uniq: Bool, typ: Type) -> Type {
     crate::constrain::builtins::builtin_type(Symbol::ATTR_ATTR, vec![Type::Boolean(uniq), typ])
@@ -45,7 +54,7 @@ pub fn constrain_declaration(
 
     let mut applied_usage_constraint = ImSet::default();
     constrain_expr(
-        &crate::constrain::expr::Env {
+        &Env {
             rigids: ImMap::default(),
             home,
         },
@@ -85,27 +94,17 @@ fn constrain_pattern(
         }
 
         IntLiteral(_) => {
-            let uniq_var = var_store.fresh();
+            let (num_uvar, int_uvar, num_type) = unique_int(var_store);
             state.constraints.push(exists(
-                vec![uniq_var],
-                Constraint::Pattern(
-                    pattern.region,
-                    PatternCategory::Int,
-                    attr_type(Bool::variable(uniq_var), Type::int()),
-                    expected,
-                ),
+                vec![num_uvar, int_uvar],
+                Constraint::Pattern(pattern.region, PatternCategory::Int, num_type, expected),
             ));
         }
         FloatLiteral(_) => {
-            let uniq_var = var_store.fresh();
+            let (num_uvar, float_uvar, num_type) = unique_float(var_store);
             state.constraints.push(exists(
-                vec![uniq_var],
-                Constraint::Pattern(
-                    pattern.region,
-                    PatternCategory::Float,
-                    attr_type(Bool::variable(uniq_var), Type::float()),
-                    expected,
-                ),
+                vec![num_uvar, float_uvar],
+                Constraint::Pattern(pattern.region, PatternCategory::Float, num_type, expected),
             ));
         }
 
@@ -246,6 +245,27 @@ fn constrain_pattern(
     }
 }
 
+fn unique_num(var_store: &VarStore, symbol: Symbol) -> (Variable, Variable, Type) {
+    let num_uvar = var_store.fresh();
+    let val_uvar = var_store.fresh();
+
+    let val_type = Type::Apply(symbol, Vec::new());
+    let val_utype = attr_type(Bool::variable(val_uvar), val_type);
+
+    let num_utype = Type::Apply(Symbol::NUM_NUM, vec![val_utype]);
+    let num_type = attr_type(Bool::variable(num_uvar), num_utype);
+
+    (num_uvar, val_uvar, num_type)
+}
+
+fn unique_int(var_store: &VarStore) -> (Variable, Variable, Type) {
+    unique_num(var_store, Symbol::INT_INTEGER)
+}
+
+fn unique_float(var_store: &VarStore) -> (Variable, Variable, Type) {
+    unique_num(var_store, Symbol::FLOAT_FLOATINGPOINT)
+}
+
 pub fn constrain_expr(
     env: &Env,
     var_store: &VarStore,
@@ -259,19 +279,14 @@ pub fn constrain_expr(
 
     match expr {
         Int(var, _) => {
-            let uniq_var = var_store.fresh();
-            let bvar = Bool::variable(uniq_var);
+            let (num_uvar, int_uvar, num_type) = unique_int(var_store);
 
             exists(
-                vec![*var, uniq_var],
+                vec![*var, num_uvar, int_uvar],
                 And(vec![
                     Eq(
                         Type::Variable(*var),
-                        Expected::ForReason(
-                            Reason::IntLiteral,
-                            attr_type(bvar, Type::int()),
-                            region,
-                        ),
+                        Expected::ForReason(Reason::IntLiteral, num_type, region),
                         region,
                     ),
                     Eq(Type::Variable(*var), expected, region),
@@ -279,17 +294,13 @@ pub fn constrain_expr(
             )
         }
         Float(var, _) => {
-            let uniq_var = var_store.fresh();
+            let (num_uvar, float_uvar, num_type) = unique_float(var_store);
             exists(
-                vec![*var, uniq_var],
+                vec![*var, num_uvar, float_uvar],
                 And(vec![
                     Eq(
                         Type::Variable(*var),
-                        Expected::ForReason(
-                            Reason::FloatLiteral,
-                            attr_type(Bool::variable(uniq_var), Type::float()),
-                            region,
-                        ),
+                        Expected::ForReason(Reason::FloatLiteral, num_type, region),
                         region,
                     ),
                     Eq(Type::Variable(*var), expected, region),
@@ -524,6 +535,7 @@ pub fn constrain_expr(
                         rigid_vars: Vec::new(),
                         flex_vars: state.vars,
                         def_types: state.headers,
+                        def_aliases: SendMap::default(),
                         defs_constraint,
                         ret_constraint,
                     })),
@@ -615,7 +627,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetRec(defs, loc_ret, var) => {
+        LetRec(defs, loc_ret, var, unlifted_aliases) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -627,7 +639,12 @@ pub fn constrain_expr(
                 &loc_ret.value,
                 expected.clone(),
             );
-            exists(
+
+            let mut aliases = unlifted_aliases.clone();
+            aliases_to_attr_type(var_store, &mut aliases);
+
+            exists_with_aliases(
+                aliases,
                 vec![*var],
                 And(vec![
                     constrain_recursive_defs(
@@ -644,7 +661,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetNonRec(def, loc_ret, var) => {
+        LetNonRec(def, loc_ret, var, unlifted_aliases) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -657,7 +674,11 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            exists(
+            let mut aliases = unlifted_aliases.clone();
+            aliases_to_attr_type(var_store, &mut aliases);
+
+            exists_with_aliases(
+                aliases,
                 vec![*var],
                 And(vec![
                     constrain_def(
@@ -1212,6 +1233,7 @@ fn constrain_when_branch(
         rigid_vars: Vec::new(),
         flex_vars: state.vars,
         def_types: state.headers,
+        def_aliases: SendMap::default(),
         defs_constraint: Constraint::And(state.constraints),
         ret_constraint,
     }))
@@ -1238,11 +1260,36 @@ fn constrain_def_pattern(
 }
 
 /// Turn e.g. `Int` into `Attr.Attr * Int`
-fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, Type) {
+fn annotation_to_attr_type(
+    var_store: &VarStore,
+    ann: &Type,
+    rigids: &mut ImMap<Variable, Variable>,
+    change_var_kind: bool,
+) -> (Vec<Variable>, Type) {
     use crate::types::Type::*;
 
     match ann {
-        Variable(_) | Boolean(_) | Erroneous(_) => (vec![], ann.clone()),
+        Variable(var) => {
+            if change_var_kind {
+                if let Some(uvar) = rigids.get(var) {
+                    (
+                        vec![],
+                        attr_type(Bool::variable(*uvar), Type::Variable(*var)),
+                    )
+                } else {
+                    let uvar = var_store.fresh();
+                    rigids.insert(*var, uvar);
+                    (
+                        vec![],
+                        attr_type(Bool::variable(uvar), Type::Variable(*var)),
+                    )
+                }
+            } else {
+                (vec![], Type::Variable(*var))
+            }
+        }
+
+        Boolean(_) | Erroneous(_) => (vec![], ann.clone()),
         EmptyRec | EmptyTagUnion => {
             let uniq_var = var_store.fresh();
             (
@@ -1253,8 +1300,10 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
 
         Function(arguments, result) => {
             let uniq_var = var_store.fresh();
-            let (mut arg_vars, args_lifted) = annotation_to_attr_type_many(var_store, arguments);
-            let (result_vars, result_lifted) = annotation_to_attr_type(var_store, result);
+            let (mut arg_vars, args_lifted) =
+                annotation_to_attr_type_many(var_store, arguments, rigids, change_var_kind);
+            let (result_vars, result_lifted) =
+                annotation_to_attr_type(var_store, result, rigids, change_var_kind);
 
             arg_vars.extend(result_vars);
             arg_vars.push(uniq_var);
@@ -1268,39 +1317,35 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             )
         }
 
+        Apply(Symbol::ATTR_ATTR, args) => {
+            let uniq_type = args[0].clone();
+
+            // A rigid behind an attr has already been lifted, don't do it again!
+            let (result_vars, result_lifted) = match args[1] {
+                Type::Variable(_) => match uniq_type {
+                    Type::Boolean(Bool(Atom::Variable(urigid), _)) => {
+                        (vec![urigid], args[1].clone())
+                    }
+                    _ => (vec![], args[1].clone()),
+                },
+                _ => annotation_to_attr_type(var_store, &args[1], rigids, change_var_kind),
+            };
+
+            let result = Apply(Symbol::ATTR_ATTR, vec![uniq_type, result_lifted]);
+
+            (result_vars, result)
+        }
+
         Apply(symbol, args) => {
             let uniq_var = var_store.fresh();
 
-            if *symbol == Symbol::NUM_NUM {
-                let arg = args
-                    .iter()
-                    .next()
-                    .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
-
-                match arg {
-                    Apply(symbol, _) if *symbol == Symbol::INT_INTEGER => {
-                        return (
-                            vec![uniq_var],
-                            attr_type(Bool::variable(uniq_var), Type::int()),
-                        )
-                    }
-                    Apply(symbol, _) if *symbol == Symbol::FLOAT_FLOATINGPOINT => {
-                        return (
-                            vec![uniq_var],
-                            attr_type(Bool::variable(uniq_var), Type::float()),
-                        )
-                    }
-                    _ => {}
-                }
-            }
-            let (mut arg_vars, args_lifted) = annotation_to_attr_type_many(var_store, args);
+            let (mut arg_vars, args_lifted) =
+                annotation_to_attr_type_many(var_store, args, rigids, change_var_kind);
+            let result = attr_type(Bool::variable(uniq_var), Type::Apply(*symbol, args_lifted));
 
             arg_vars.push(uniq_var);
 
-            (
-                arg_vars,
-                attr_type(Bool::variable(uniq_var), Type::Apply(*symbol, args_lifted)),
-            )
+            (arg_vars, result)
         }
 
         Record(fields, ext_type) => {
@@ -1309,7 +1354,8 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             let mut lifted_fields = SendMap::default();
 
             for (label, tipe) in fields.clone() {
-                let (new_vars, lifted_field) = annotation_to_attr_type(var_store, &tipe);
+                let (new_vars, lifted_field) =
+                    annotation_to_attr_type(var_store, &tipe, rigids, change_var_kind);
                 vars.extend(new_vars);
                 lifted_fields.insert(label, lifted_field);
             }
@@ -1331,7 +1377,8 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             let mut lifted_tags = Vec::with_capacity(tags.len());
 
             for (tag, fields) in tags {
-                let (new_vars, lifted_fields) = annotation_to_attr_type_many(var_store, fields);
+                let (new_vars, lifted_fields) =
+                    annotation_to_attr_type_many(var_store, fields, rigids, change_var_kind);
                 vars.extend(new_vars);
                 lifted_tags.push((tag.clone(), lifted_fields));
             }
@@ -1352,7 +1399,8 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
             let mut lifted_tags = Vec::with_capacity(tags.len());
 
             for (tag, fields) in tags {
-                let (new_vars, lifted_fields) = annotation_to_attr_type_many(var_store, fields);
+                let (new_vars, lifted_fields) =
+                    annotation_to_attr_type_many(var_store, fields, rigids, change_var_kind);
                 vars.extend(new_vars);
                 lifted_tags.push((tag.clone(), lifted_fields));
             }
@@ -1369,7 +1417,8 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
         }
 
         Alias(symbol, fields, actual) => {
-            let (actual_vars, lifted_actual) = annotation_to_attr_type(var_store, actual);
+            let (mut actual_vars, lifted_actual) =
+                annotation_to_attr_type(var_store, actual, rigids, change_var_kind);
 
             if let Type::Apply(attr_symbol, args) = lifted_actual {
                 debug_assert!(attr_symbol == Symbol::ATTR_ATTR);
@@ -1377,7 +1426,17 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
                 let uniq_type = args[0].clone();
                 let actual_type = args[1].clone();
 
-                let alias = Type::Alias(*symbol, fields.clone(), Box::new(actual_type));
+                let mut new_fields = Vec::with_capacity(fields.len());
+                for (name, tipe) in fields {
+                    let (lifted_vars, lifted) =
+                        annotation_to_attr_type(var_store, tipe, rigids, change_var_kind);
+
+                    actual_vars.extend(lifted_vars);
+
+                    new_fields.push((name.clone(), lifted));
+                }
+
+                let alias = Type::Alias(*symbol, new_fields, Box::new(actual_type));
 
                 (
                     actual_vars,
@@ -1393,10 +1452,16 @@ fn annotation_to_attr_type(var_store: &VarStore, ann: &Type) -> (Vec<Variable>, 
     }
 }
 
-fn annotation_to_attr_type_many(var_store: &VarStore, anns: &[Type]) -> (Vec<Variable>, Vec<Type>) {
+fn annotation_to_attr_type_many(
+    var_store: &VarStore,
+    anns: &[Type],
+    rigids: &mut ImMap<Variable, Variable>,
+    change_var_kind: bool,
+) -> (Vec<Variable>, Vec<Type>) {
     anns.iter()
         .fold((Vec::new(), Vec::new()), |(mut vars, mut types), value| {
-            let (new_vars, tipe) = annotation_to_attr_type(var_store, value);
+            let (new_vars, tipe) =
+                annotation_to_attr_type(var_store, value, rigids, change_var_kind);
             vars.extend(new_vars);
             types.push(tipe);
 
@@ -1404,11 +1469,34 @@ fn annotation_to_attr_type_many(var_store: &VarStore, anns: &[Type]) -> (Vec<Var
         })
 }
 
-pub fn constrain_def(
+fn aliases_to_attr_type(var_store: &VarStore, aliases: &mut SendMap<Symbol, Alias>) {
+    for alias in aliases.iter_mut() {
+        // ensure
+        //
+        // Identity a : [ Identity a ]
+        //
+        // does not turn into
+        //
+        // Identity a : [ Identity (Attr u a) ]
+        //
+        // That would give a double attr wrapper on the type arguments.
+        // The `change_var_kind` flag set to false ensures type variables remain of kind *
+        let (_, new) = annotation_to_attr_type(var_store, &alias.typ, &mut ImMap::default(), false);
+
+        // remove the outer Attr, because when this occurs in a signature it'll already be wrapped in one
+        match new {
+            Type::Apply(Symbol::ATTR_ATTR, args) => {
+                alias.typ = args[1].clone();
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn constrain_def(
     env: &Env,
     var_store: &VarStore,
     var_usage: &VarUsage,
-
     applied_usage_constraint: &mut ImSet<Symbol>,
     def: &Def,
     body_con: Constraint,
@@ -1420,30 +1508,27 @@ pub fn constrain_def(
 
     pattern_state.vars.push(expr_var);
 
+    let mut def_aliases = SendMap::default();
     let mut new_rigids = Vec::new();
 
     let expr_con = match &def.annotation {
-        Some((annotation, free_vars)) => {
-            let rigids = &env.rigids;
-            let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
-            let (uniq_vars, annotation) = annotation_to_attr_type(var_store, annotation);
-
-            pattern_state.vars.extend(uniq_vars);
-
-            for (var, name) in free_vars {
-                // if the rigid is known already, nothing needs to happen
-                // otherwise register it.
-                if !rigids.contains_key(name) {
-                    // possible use this rigid in nested def's
-                    ftv.insert(name.clone(), Type::Variable(*var));
-
-                    new_rigids.push(*var);
-                }
-            }
+        Some((annotation, free_vars, ann_def_aliases)) => {
+            def_aliases = ann_def_aliases.clone();
+            let arity = annotation.arity();
+            let mut ftv = env.rigids.clone();
+            let annotation = instantiate_rigids(
+                var_store,
+                annotation,
+                &free_vars,
+                &mut new_rigids,
+                &mut ftv,
+                &def.loc_pattern,
+                &mut pattern_state.headers,
+            );
 
             let annotation_expected = Expected::FromAnnotation(
                 def.loc_pattern.clone(),
-                annotation.arity(),
+                arity,
                 AnnotationSource::TypedBody,
                 annotation,
             );
@@ -1478,19 +1563,90 @@ pub fn constrain_def(
         ),
     };
 
+    // Lift aliases to Attr types
+    aliases_to_attr_type(var_store, &mut def_aliases);
+
     Let(Box::new(LetConstraint {
         rigid_vars: new_rigids,
         flex_vars: pattern_state.vars,
         def_types: pattern_state.headers,
+        def_aliases,
         defs_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),        // always empty
             flex_vars: Vec::new(),         // empty, because our functions have no arguments
             def_types: SendMap::default(), // empty, because our functions have no arguments!
+            def_aliases: SendMap::default(),
             defs_constraint: And(pattern_state.constraints),
             ret_constraint: expr_con,
         })),
         ret_constraint: body_con,
     }))
+}
+
+fn instantiate_rigids(
+    var_store: &VarStore,
+    annotation: &Type,
+    free_vars: &SendMap<Lowercase, Variable>,
+    new_rigids: &mut Vec<Variable>,
+    ftv: &mut ImMap<Lowercase, (Variable, Variable)>,
+    loc_pattern: &Located<Pattern>,
+    headers: &mut SendMap<Symbol, Located<Type>>,
+) -> Type {
+    let unlifed_annotation = annotation.clone();
+    let mut annotation = annotation.clone();
+
+    let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+
+    for (name, var) in free_vars {
+        if let Some((existing_rigid, existing_uvar)) = ftv.get(&name) {
+            rigid_substitution.insert(
+                *var,
+                attr_type(
+                    Bool::variable(*existing_uvar),
+                    Type::Variable(*existing_rigid),
+                ),
+            );
+        } else {
+            // possible use this rigid in nested def's
+            let uvar = var_store.fresh();
+            ftv.insert(name.clone(), (*var, uvar));
+
+            new_rigids.push(*var);
+        }
+    }
+
+    // Instantiate rigid variables
+    if !rigid_substitution.is_empty() {
+        annotation.substitute(&rigid_substitution);
+    }
+
+    let mut new_rigid_pairs = ImMap::default();
+    let (mut uniq_vars, annotation) =
+        annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs, true);
+
+    if let Pattern::Identifier(symbol) = loc_pattern.value {
+        headers.insert(symbol, Located::at(loc_pattern.region, annotation.clone()));
+    } else if let Some(new_headers) = crate::constrain::pattern::headers_from_annotation(
+        &loc_pattern.value,
+        &Located::at(loc_pattern.region, unlifed_annotation),
+    ) {
+        for (k, v) in new_headers {
+            let (new_uniq_vars, attr_annotation) =
+                annotation_to_attr_type(var_store, &v.value, &mut new_rigid_pairs, true);
+
+            uniq_vars.extend(new_uniq_vars);
+
+            headers.insert(k, Located::at(loc_pattern.region, attr_annotation));
+        }
+    }
+
+    new_rigids.extend(uniq_vars);
+
+    for (_, v) in new_rigid_pairs {
+        new_rigids.push(v);
+    }
+
+    annotation
 }
 
 fn constrain_recursive_defs(
@@ -1524,6 +1680,7 @@ pub fn rec_defs_help(
     mut rigid_info: Info,
     mut flex_info: Info,
 ) -> Constraint {
+    let mut def_aliases = SendMap::default();
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -1545,6 +1702,7 @@ pub fn rec_defs_help(
             pattern_expected,
         );
 
+        // TODO see where aliases should go
         let mut new_rigids = Vec::new();
         match &def.annotation {
             None => {
@@ -1563,6 +1721,7 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
+                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -1572,63 +1731,24 @@ pub fn rec_defs_help(
                 flex_info.def_types.extend(pattern_state.headers);
             }
 
-            Some((annotation, seen_rigids)) => {
-                let (uniq_vars, annotation) = annotation_to_attr_type(var_store, annotation);
-
-                // TODO also do this for more complex patterns
-                if let Pattern::Identifier(symbol) = def.loc_pattern.value {
-                    pattern_state.headers.insert(
-                        symbol,
-                        Located::at(def.loc_pattern.region, annotation.clone()),
-                    );
+            Some((annotation, free_vars, ann_def_aliases)) => {
+                for (symbol, alias) in ann_def_aliases.clone() {
+                    def_aliases.insert(symbol, alias);
                 }
-
-                let rigids = &env.rigids;
-                let mut ftv: ImMap<Lowercase, Type> = rigids.clone();
-
-                for (var, name) in seen_rigids {
-                    // if the rigid is known already, nothing needs to happen
-                    // otherwise register it.
-                    if !rigids.contains_key(name) {
-                        // possible use this rigid in nested def's
-                        ftv.insert(name.clone(), Type::Variable(*var));
-
-                        new_rigids.push(*var);
-                    }
-                }
-
-                // NOTE uniqueness rigids can lead to type errors I think
-                //
-                // foo : a -> b
-                //
-                //      x : a
-                //      x = ...
-                //
-                // Turns into
-                //
-                // foo : Attr u1 a -> Attr u2 b
-                //
-                //      x : Attr u3 a
-                //      x = ...
-                //
-                // Now u1 /~ u3! Unsure how to fix this at the moment.
-                // Something to try is to register the uniqueness vars in flex_vars.
-                // That seems to work
-                for (i, var) in uniq_vars.iter().enumerate() {
-                    // generate a name (unique in this annotation) for the new uniqueness vars
-                    let name: Lowercase = format!("$u{}", i).into();
-
-                    if !rigids.contains_key(&name) {
-                        // possible use this rigid in nested def's
-                        ftv.insert(name.clone(), Type::Variable(*var));
-
-                        new_rigids.push(*var);
-                    }
-                }
-
+                let arity = annotation.arity();
+                let mut ftv = env.rigids.clone();
+                let annotation = instantiate_rigids(
+                    var_store,
+                    annotation,
+                    &free_vars,
+                    &mut new_rigids,
+                    &mut ftv,
+                    &def.loc_pattern,
+                    &mut pattern_state.headers,
+                );
                 let annotation_expected = Expected::FromAnnotation(
                     def.loc_pattern.clone(),
-                    annotation.arity(),
+                    arity,
                     AnnotationSource::TypedBody,
                     annotation.clone(),
                 );
@@ -1657,6 +1777,7 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
+                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -1668,6 +1789,7 @@ pub fn rec_defs_help(
                     rigid_vars: new_rigids,
                     flex_vars: Vec::new(),         // no flex vars introduced
                     def_types: SendMap::default(), // no headers introduced (at this level)
+                    def_aliases: SendMap::default(),
                     defs_constraint: def_con,
                     ret_constraint: True,
                 })));
@@ -1676,19 +1798,25 @@ pub fn rec_defs_help(
         }
     }
 
+    // list aliases to Attr types
+    aliases_to_attr_type(var_store, &mut def_aliases);
+
     Let(Box::new(LetConstraint {
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
         def_types: rigid_info.def_types,
+        def_aliases,
         defs_constraint: True,
         ret_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
             flex_vars: flex_info.vars,
             def_types: flex_info.def_types.clone(),
+            def_aliases: SendMap::default(),
             defs_constraint: Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: Vec::new(),
                 def_types: flex_info.def_types,
+                def_aliases: SendMap::default(),
                 defs_constraint: True,
                 ret_constraint: And(flex_info.constraints),
             })),

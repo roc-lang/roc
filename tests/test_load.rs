@@ -92,7 +92,8 @@ mod test_load {
         let mut subs = loaded_module.solved.into_inner();
 
         assert_eq!(loaded_module.problems, Vec::new());
-        assert_eq!(expected_types.len(), loaded_module.declarations.len());
+
+        let num_decls = loaded_module.declarations.len();
 
         for decl in loaded_module.declarations {
             let def = match decl {
@@ -128,6 +129,8 @@ mod test_load {
                 assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
             }
         }
+
+        assert_eq!(expected_types.len(), num_decls);
     }
 
     // TESTS
@@ -156,7 +159,7 @@ mod test_load {
                 .expect("Test ModuleID not found in module_ids");
 
             assert_eq!(expected_name, &InlinableString::from("Primary"));
-            assert_eq!(def_count, 5);
+            assert_eq!(def_count, 9);
         });
     }
 
@@ -283,6 +286,30 @@ mod test_load {
                 hashmap! {
                     "intVal" => "Str",
                     "identity" => "a -> a",
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn load_dep_types() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module =
+                load_without_builtins("interface_with_deps", "Primary", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "blah" => "{}",
+                    "str" => "Str",
+                    "alwaysThree" => "* -> Str",
+                    "identity" => "a -> a",
+                    "z" => "Dep1.Unit",
+                    "w" => "Dep1.Identity {}",
+                    "succeed" => "a -> Dep1.Identity a",
+                    "yay" => "Result.Result e {}",
+                    "map" => "Result.Result * a, a -> a",
                 },
             );
         });

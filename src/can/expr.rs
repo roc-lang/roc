@@ -16,6 +16,7 @@ use crate::operator::CalledVia;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
+use crate::types::Alias;
 use std::fmt::Debug;
 use std::i64;
 use std::ops::Neg;
@@ -24,7 +25,8 @@ use std::ops::Neg;
 pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
-    pub rigids: SendMap<Variable, Lowercase>,
+    pub rigids: SendMap<Lowercase, Variable>,
+    pub aliases: SendMap<Symbol, Alias>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,8 +58,8 @@ pub enum Expr {
     },
 
     // Let
-    LetRec(Vec<Def>, Box<Located<Expr>>, Variable),
-    LetNonRec(Box<Def>, Box<Located<Expr>>, Variable),
+    LetRec(Vec<Def>, Box<Located<Expr>>, Variable, Aliases),
+    LetNonRec(Box<Def>, Box<Located<Expr>>, Variable, Aliases),
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
@@ -113,6 +115,8 @@ pub enum Expr {
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
+
+type Aliases = SendMap<Symbol, Alias>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Field {

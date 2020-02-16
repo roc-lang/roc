@@ -2,6 +2,7 @@ use crate::can::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::can::env::Env;
 use crate::can::expr::Output;
 use crate::can::ident::Ident;
+use crate::can::ident::Lowercase;
 use crate::can::operator::desugar_def;
 use crate::can::pattern::PatternType;
 use crate::can::problem::RuntimeError;
@@ -11,25 +12,32 @@ use crate::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
+use crate::types::Alias;
 use bumpalo::Bump;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct ModuleOutput {
+    pub aliases: MutMap<Symbol, Alias>,
+    pub rigid_variables: MutMap<Lowercase, Variable>,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub ident_ids: IdentIds,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
 }
 
+// TODO trim these down
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
     loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
     home: ModuleId,
     module_ids: &ModuleIds,
-    dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
+    exposed_ident_ids: IdentIds,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
+    mut exposed_symbols: MutSet<Symbol>,
     var_store: &VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
@@ -53,8 +61,9 @@ pub fn canonicalize_module_defs<'a>(
         }));
     }
 
-    let mut env = Env::new(home, dep_idents, module_ids, IdentIds::default());
+    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let mut lookups = Vec::with_capacity(num_deps);
+    let mut rigid_variables = MutMap::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
@@ -90,42 +99,126 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
         } else {
-            // TODO add type aliases to type alias dictionary, based on exposed types
+            panic!("TODO add type aliases to type alias dictionary, based on exposed types");
         }
     }
 
-    let mut output = Output::default();
-    let (defs, _) = canonicalize_defs(
+    let (defs, scope, output) = canonicalize_defs(
         &mut env,
-        &mut output.rigids,
+        Output::default(),
         var_store,
         &scope,
         &desugared,
         PatternType::TopLevelDef,
     );
 
+    for (var, lowercase) in output.rigids.clone() {
+        rigid_variables.insert(var, lowercase);
+    }
+
+    let mut references = MutSet::default();
+
+    // Gather up all the symbols that were referenced across all the defs.
+    for symbol in output.references.lookups.iter() {
+        references.insert(*symbol);
+    }
+
+    // Gather up all the symbols that were referenced from other modules.
+    for symbol in env.referenced_symbols.iter() {
+        references.insert(*symbol);
+    }
+
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(declarations), output) => {
-            // TODO examine the patterns, extract toplevel identifiers from them,
-            // and verify that everything in the `exposes` list is actually present in
-            // that set of identifiers. You can't expose it if it wasn't defined!
+            use crate::can::def::Declaration::*;
+
+            let mut exposed_vars_by_symbol = Vec::with_capacity(exposed_symbols.len());
+
+            for decl in declarations.iter() {
+                match decl {
+                    Declare(def) => {
+                        // TODO if this doesn't work, try def.expr_var
+                        for (symbol, variable) in def.pattern_vars.iter() {
+                            if exposed_symbols.contains(symbol) {
+                                // This is one of our exposed symbols;
+                                // record the corresponding variable!
+                                exposed_vars_by_symbol.push((*symbol, *variable));
+
+                                // Remove this from exposed_symbols,
+                                // so that at the end of the process,
+                                // we can see if there were any
+                                // exposed symbols which did not have
+                                // corresponding defs.
+                                exposed_symbols.remove(symbol);
+                            }
+                        }
+                    }
+                    DeclareRec(defs) => {
+                        for def in defs {
+                            for (symbol, variable) in def.pattern_vars.iter() {
+                                if exposed_symbols.contains(symbol) {
+                                    // This is one of our exposed symbols;
+                                    // record the corresponding variable!
+                                    exposed_vars_by_symbol.push((*symbol, *variable));
+
+                                    // Remove this from exposed_symbols,
+                                    // so that at the end of the process,
+                                    // we can see if there were any
+                                    // exposed symbols which did not have
+                                    // corresponding defs.
+                                    exposed_symbols.remove(symbol);
+                                }
+                            }
+                        }
+                    }
+
+                    InvalidCycle(identifiers, _) => {
+                        panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs {:?}" , identifiers);
+                    }
+                }
+            }
+
+            let mut aliases = MutMap::default();
+
+            for (symbol, alias) in scope.into_aliases() {
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_symbols.remove(&symbol);
+
+                // TODO store aliases as a MutMap inside Scope
+                // (and manually remove them when exiting a scope)
+                // and we can use it directly instead of rebuilding it
+                // piece by piece like this.
+                aliases.insert(symbol, alias);
+            }
+
+            // By this point, all exposed symbols should have been removed from
+            // exposed_symbols and added to exposed_vars_by_symbol. If any were
+            // not, that means they were declared as exposed but there was
+            // no actual declaration with that name!
+            if !exposed_symbols.is_empty() {
+                panic!("TODO gracefully handle invalid `exposes` entry (or entries) which had no corresponding definition: {:?}", exposed_symbols);
+            }
 
             // TODO incorporate rigids into here (possibly by making this be a Let instead
             // of an And)
 
-            let mut references = MutSet::default();
-
-            // TODO instead of doing this conversion, store References as a MutMap
-            // and replace .union() behavior with in-place mutation
-            for reference in output.references.lookups {
-                references.insert(reference);
+            // Incorporate any remaining output.lookups entries into references.
+            for symbol in output.references.lookups {
+                references.insert(symbol);
             }
 
             Ok(ModuleOutput {
+                aliases,
+                rigid_variables,
                 declarations,
                 references,
                 exposed_imports: can_exposed_imports,
                 lookups,
+                exposed_vars_by_symbol,
                 ident_ids: env.ident_ids,
             })
         }

@@ -4,7 +4,6 @@ use crate::collections::{MutMap, MutSet};
 use crate::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use crate::region::Region;
 use inlinable_string::InlinableString;
-use std::sync::Arc;
 
 /// The canonicalization environment for a particular module.
 pub struct Env<'a> {
@@ -12,7 +11,7 @@ pub struct Env<'a> {
     /// are assumed to be relative to this path.
     pub home: ModuleId,
 
-    pub dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
+    pub dep_idents: MutMap<ModuleId, IdentIds>,
 
     pub module_ids: &'a ModuleIds,
 
@@ -28,26 +27,30 @@ pub struct Env<'a> {
     /// Modules which were referenced by lookups.
     /// Any modules which were imported but not used
     /// are unused imports.
-    pub referenced: MutSet<ModuleId>,
+    pub referenced_modules: MutSet<ModuleId>,
+    pub referenced_symbols: MutSet<Symbol>,
 
     pub ident_ids: IdentIds,
+    pub exposed_ident_ids: IdentIds,
 }
 
 impl<'a> Env<'a> {
     pub fn new(
         home: ModuleId,
-        dep_idents: MutMap<ModuleId, Arc<IdentIds>>,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         module_ids: &'a ModuleIds,
-        home_ident_ids: IdentIds,
+        exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
         Env {
             home,
             dep_idents,
             module_ids,
-            ident_ids: home_ident_ids,
+            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
+            exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
-            referenced: MutSet::default(),
+            referenced_modules: MutSet::default(),
+            referenced_symbols: MutSet::default(),
             tailcallable_symbol: None,
         }
     }
@@ -79,7 +82,8 @@ impl<'a> Env<'a> {
                     Some(ident_id) => {
                         let symbol = Symbol::new(module_id, *ident_id);
 
-                        self.referenced.insert(module_id);
+                        self.referenced_modules.insert(module_id);
+                        self.referenced_symbols.insert(symbol);
 
                         Ok(symbol)
                     }

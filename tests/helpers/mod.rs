@@ -181,8 +181,8 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     // When pretty printing types, we may need the exposed builtins,
     // so include them in the Interns we'll ultimately return.
-    for (module_id, arc_ident_ids) in IdentIds::exposed_builtins() {
-        all_ident_ids.insert(module_id, (*arc_ident_ids).clone());
+    for (module_id, ident_ids) in IdentIds::exposed_builtins() {
+        all_ident_ids.insert(module_id, ident_ids);
     }
 
     all_ident_ids.insert(home, env.ident_ids);

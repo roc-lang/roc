@@ -311,7 +311,7 @@ impl<S: UnificationStore> UnificationTable<S> {
         }
     }
 
-    pub fn is_redirect(&mut self, vid: S::Key) -> bool {
+    pub fn is_redirect(&self, vid: S::Key) -> bool {
         self.value(vid).raw_parent() != vid
     }
 

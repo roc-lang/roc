@@ -171,8 +171,6 @@ mod test_usage_analysis {
         let mut usage = VarUsage::default();
         annotate_usage(&loc_expr.value, &mut usage);
 
-        dbg!(&usage);
-
         assert_eq!(usage, get_expected(interns))
     }
 
