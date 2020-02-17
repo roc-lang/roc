@@ -1273,15 +1273,52 @@ mod test_format {
         ));
     }
 
-    //    fn multi_line_application() {
-    //        expr_formats_same(indoc!(
-    //            r#"
-    //            combine
-    //                peanutButter
-    //                chocolate
-    //            "#
-    //        ));
-    //    }
+    #[test]
+    fn multi_line_application() {
+        expr_formats_same(indoc!(
+            r#"
+            combine
+                peanutButter
+                chocolate
+            "#
+        ));
+    }
+
+    #[test]
+    fn partial_multi_line_application() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                mix vodka
+                    tonic
+                "#
+            ),
+            indoc!(
+                r#"
+                mix
+                    vodka
+                    tonic
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                f
+                    a b c
+                "#
+            ),
+            indoc!(
+                r#"
+                f
+                    a
+                    b
+                    c
+                "#
+            ),
+        );
+    }
 
     // WHEN
 
