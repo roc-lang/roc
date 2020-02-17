@@ -1,11 +1,11 @@
 use crate::fmt::def::fmt_def;
 use crate::fmt::pattern::fmt_pattern;
 use crate::fmt::spaces::{
-    add_spaces, fmt_comments_only, fmt_if_spaces, fmt_spaces, is_comment, newline, INDENT,
+    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, is_comment, newline, INDENT,
 };
 use crate::operator;
 use crate::operator::BinOp;
-use crate::parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern};
+use crate::parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};
 use crate::region::Located;
 use bumpalo::collections::{String, Vec};
 
@@ -137,58 +137,7 @@ pub fn fmt_expr<'a>(
         If(loc_condition, loc_then, loc_else) => {
             fmt_if(buf, loc_condition, loc_then, loc_else, indent);
         }
-        When(loc_condition, branches) => {
-            buf.push_str(
-                "\
-                 when ",
-            );
-            fmt_expr(buf, &loc_condition.value, indent, false, true);
-            buf.push_str(" is\n");
-
-            let mut it = branches.iter().peekable();
-            while let Some(branch) = it.next() {
-                let patterns = &branch.patterns;
-                let expr = &branch.value;
-                add_spaces(buf, indent + INDENT);
-                let (first_pattern, rest) = patterns.split_first().unwrap();
-                let is_multiline = match rest.last() {
-                    None => false,
-                    Some(last_pattern) => {
-                        first_pattern.region.start_line != last_pattern.region.end_line
-                    }
-                };
-
-                fmt_pattern(buf, &first_pattern.value, indent + INDENT, false, true);
-                for when_pattern in rest {
-                    if is_multiline {
-                        buf.push_str("\n");
-                        add_spaces(buf, indent + INDENT);
-                        buf.push_str("| ");
-                    } else {
-                        buf.push_str(" | ");
-                    }
-                    fmt_pattern(buf, &when_pattern.value, indent + INDENT, false, true);
-                }
-
-                buf.push_str(" ->\n");
-
-                add_spaces(buf, indent + (INDENT * 2));
-                match expr.value {
-                    Expr::SpaceBefore(nested, spaces) => {
-                        fmt_comments_only(buf, spaces.iter(), indent + (INDENT * 2));
-                        fmt_expr(buf, &nested, indent + (INDENT * 2), false, true);
-                    }
-                    _ => {
-                        fmt_expr(buf, &expr.value, indent + (INDENT * 2), false, true);
-                    }
-                }
-
-                if it.peek().is_some() {
-                    buf.push('\n');
-                    buf.push('\n');
-                }
-            }
-        }
+        When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
         List(loc_items) => {
             fmt_list(buf, &loc_items, indent);
         }
@@ -335,7 +284,7 @@ pub fn fmt_list<'a>(
                                 buf.push(',');
                             }
 
-                            fmt_if_spaces(buf, spaces_below_expr.iter(), item_indent);
+                            fmt_condition_spaces(buf, spaces_below_expr.iter(), item_indent);
                         }
                         _ => {
                             fmt_expr(buf, expr_below, item_indent, false, false);
@@ -355,7 +304,7 @@ pub fn fmt_list<'a>(
                         buf.push(',');
                     }
 
-                    fmt_if_spaces(buf, spaces.iter(), item_indent);
+                    fmt_condition_spaces(buf, spaces.iter(), item_indent);
                 }
 
                 _ => {
@@ -567,6 +516,89 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
     }
 }
 
+fn fmt_when<'a>(
+    buf: &mut String<'a>,
+    loc_condition: &'a Located<Expr<'a>>,
+    branches: &'a Vec<'a, &'a WhenBranch<'a>>,
+    indent: u16,
+) {
+    let is_multiline_condition = is_multiline_expr(&loc_condition.value);
+    buf.push_str(
+        "\
+         when",
+    );
+    if is_multiline_condition {
+        let condition_indent = indent + INDENT;
+
+        match &loc_condition.value {
+            Expr::SpaceBefore(expr_below, spaces_above_expr) => {
+                fmt_condition_spaces(buf, spaces_above_expr.iter(), condition_indent);
+                newline(buf, condition_indent);
+                match &expr_below {
+                    Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                        fmt_expr(buf, &expr_above, condition_indent, false, false);
+                        fmt_condition_spaces(buf, spaces_below_expr.iter(), condition_indent);
+                        newline(buf, indent);
+                    }
+                    _ => {
+                        fmt_expr(buf, &expr_below, condition_indent, false, false);
+                    }
+                }
+            }
+            _ => {
+                fmt_expr(buf, &loc_condition.value, condition_indent, false, false);
+            }
+        }
+    } else {
+        buf.push(' ');
+        fmt_expr(buf, &loc_condition.value, indent, false, true);
+        buf.push(' ');
+    }
+    buf.push_str("is\n");
+
+    let mut it = branches.iter().peekable();
+    while let Some(branch) = it.next() {
+        let patterns = &branch.patterns;
+        let expr = &branch.value;
+        add_spaces(buf, indent + INDENT);
+        let (first_pattern, rest) = patterns.split_first().unwrap();
+        let is_multiline = match rest.last() {
+            None => false,
+            Some(last_pattern) => first_pattern.region.start_line != last_pattern.region.end_line,
+        };
+
+        fmt_pattern(buf, &first_pattern.value, indent + INDENT, false, true);
+        for when_pattern in rest {
+            if is_multiline {
+                buf.push_str("\n");
+                add_spaces(buf, indent + INDENT);
+                buf.push_str("| ");
+            } else {
+                buf.push_str(" | ");
+            }
+            fmt_pattern(buf, &when_pattern.value, indent + INDENT, false, true);
+        }
+
+        buf.push_str(" ->\n");
+
+        add_spaces(buf, indent + (INDENT * 2));
+        match expr.value {
+            Expr::SpaceBefore(nested, spaces) => {
+                fmt_comments_only(buf, spaces.iter(), indent + (INDENT * 2));
+                fmt_expr(buf, &nested, indent + (INDENT * 2), false, true);
+            }
+            _ => {
+                fmt_expr(buf, &expr.value, indent + (INDENT * 2), false, true);
+            }
+        }
+
+        if it.peek().is_some() {
+            buf.push('\n');
+            buf.push('\n');
+        }
+    }
+}
+
 fn fmt_if<'a>(
     buf: &mut String<'a>,
     loc_condition: &'a Located<Expr<'a>>,
@@ -590,13 +622,13 @@ fn fmt_if<'a>(
     if is_multiline_condition {
         match &loc_condition.value {
             Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                fmt_if_spaces(buf, spaces_above_expr.iter(), return_indent);
+                fmt_condition_spaces(buf, spaces_above_expr.iter(), return_indent);
                 newline(buf, return_indent);
 
                 match &expr_below {
                     Expr::SpaceAfter(expr_above, spaces_below_expr) => {
                         fmt_expr(buf, &expr_above, return_indent, false, false);
-                        fmt_if_spaces(buf, spaces_below_expr.iter(), return_indent);
+                        fmt_condition_spaces(buf, spaces_below_expr.iter(), return_indent);
                         newline(buf, indent);
                     }
 
@@ -626,7 +658,7 @@ fn fmt_if<'a>(
                     newline(buf, return_indent);
                 }
 
-                fmt_if_spaces(buf, spaces_below.iter(), return_indent);
+                fmt_condition_spaces(buf, spaces_below.iter(), return_indent);
 
                 if any_comments_below {
                     newline(buf, return_indent);
@@ -636,7 +668,7 @@ fn fmt_if<'a>(
                     Expr::SpaceAfter(expr_above, spaces_above) => {
                         fmt_expr(buf, &expr_above, return_indent, false, false);
 
-                        fmt_if_spaces(buf, spaces_above.iter(), return_indent);
+                        fmt_condition_spaces(buf, spaces_above.iter(), return_indent);
                         newline(buf, indent);
                     }
 
