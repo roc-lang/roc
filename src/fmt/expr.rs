@@ -58,8 +58,6 @@ pub fn fmt_expr<'a>(
                 buf.push('(');
             }
 
-            dbg!(&loc_expr.value);
-
             fmt_expr(buf, &loc_expr.value, indent, true, true);
 
             let multiline_args = loc_args
@@ -70,7 +68,6 @@ pub fn fmt_expr<'a>(
                 let arg_indent = indent + INDENT;
 
                 for loc_arg in loc_args {
-                    dbg!(&loc_arg.value);
                     newline(buf, arg_indent);
                     fmt_expr(buf, &loc_arg.value, arg_indent, true, false);
                 }
