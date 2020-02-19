@@ -1576,11 +1576,28 @@ mod test_format {
         expr_formats_same(indoc!(
             r#"
             when maybeScore is
-                Just score if isTwentyOne score ->
+                Just score if score > 21 ->
                     win
 
                 _ ->
                     nextRound
+            "#
+        ));
+    }
+
+    #[test]
+    fn when_guard_using_function() {
+        expr_formats_same(indoc!(
+            r#"
+            when authenticationResponse is
+                Ok user if hasPermission user ->
+                    loadPage route user
+
+                Ok user ->
+                    PageNotFound
+
+                Err _ ->
+                    ErrorPage
             "#
         ));
     }

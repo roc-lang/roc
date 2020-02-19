@@ -1,6 +1,10 @@
 use crate::collections::arena_join;
 use crate::parse::ast::Attempting;
-use crate::parse::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
+use crate::parse::keyword;
+use crate::parse::parser::{
+    unexpected, unexpected_eof, Fail, FailReason, ParseResult, Parser, State,
+};
+use crate::region::Region;
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -390,7 +394,30 @@ where
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str> {
-    global_tag_or_ident(|first_char| first_char.is_lowercase())
+    move |arena, state| {
+        let (ident, state) =
+            global_tag_or_ident(|first_char| first_char.is_lowercase()).parse(arena, state)?;
+
+        if (ident == keyword::IF)
+            || (ident == keyword::THEN)
+            || (ident == keyword::ELSE)
+            || (ident == keyword::WHEN)
+            || (ident == keyword::IS)
+            || (ident == keyword::AS)
+        {
+            // TODO Calculate the correct region based on state
+            let region = Region::zero();
+            Err((
+                Fail {
+                    reason: FailReason::ReservedKeyword(region),
+                    attempting: Attempting::Identifier,
+                },
+                state,
+            ))
+        } else {
+            Ok((ident, state))
+        }
+    }
 }
 
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str> {
