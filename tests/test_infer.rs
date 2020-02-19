@@ -1884,7 +1884,7 @@ mod test_infer {
     }
 
     #[test]
-    fn typecheck_mutually_recursive_tag_union2() {
+    fn typecheck_mutually_recursive_tag_union_listabc() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -1892,13 +1892,13 @@ mod test_infer {
                       ListB a : [ Cons a (ListC a) ]
                       ListC a : [ Cons a (ListA a), Nil ]
     
-                      val : ListC a
-                      val = Nil
+                      val : ListC Int.Int
+                      val = Cons 1 (Cons 2 (Cons 3 Nil))
 
                       val
                      "#
             ),
-            "(b -> a), ListA a b -> List a",
+            "ListC Int",
         );
     }
 

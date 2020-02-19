@@ -1813,32 +1813,32 @@ mod test_infer_uniq {
     //        );
     //    }
 
-    // infinite loop in type_to_var
+    // boolean variables introduced by the alias are not bound (by the alias) and thus not instantiated
     //    #[test]
     //    fn typecheck_mutually_recursive_tag_union() {
     //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                      ListA a b : [ Cons a (ListB b a), Nil ]
-    //                      ListB a b : [ Cons a (ListA b a), Nil ]
+    //                indoc!(
+    //                    r#"
+    //                          ListA a b : [ Cons a (ListB b a), Nil ]
+    //                          ListB a b : [ Cons a (ListA b a), Nil ]
     //
-    //                      List q : [ Cons q (List q), Nil ]
+    //                          List q : [ Cons q (List q), Nil ]
     //
-    //                      toAs : (q -> p), ListA p q -> List p
-    //                      toAs = \f, lista ->
-    //                           when lista is
-    //                               Nil -> Nil
-    //                               Cons a listb ->
-    //                                   when listb is
-    //                                       Nil -> Nil
-    //                                       Cons b newLista ->
-    //                                           Cons a (Cons (f b) (toAs f newLista))
+    //                          toAs : (q -> p), ListA p q -> List p
+    //                          toAs = \f, lista ->
+    //                               when lista is
+    //                                   Nil -> Nil
+    //                                   Cons a listb ->
+    //                                       when listb is
+    //                                           Nil -> Nil
+    //                                           Cons b newLista ->
+    //                                               Cons a (Cons (f b) (toAs f newLista))
     //
-    //                      toAs
-    //                     "#
-    //            ),
-    //            "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr * (ListA (Attr b p) (Attr a q)) -> Attr * (List (Attr b p)))"
-    //        );
+    //                          toAs
+    //                         "#
+    //                ),
+    //                "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr * (ListA (Attr b p) (Attr a q)) -> Attr * (List (Attr b p)))"
+    //            );
     //    }
 
     #[test]

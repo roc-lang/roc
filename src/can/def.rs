@@ -12,14 +12,13 @@ use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError;
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
-use crate::collections::{default_hasher, ImSet, MutMap, MutSet, SendMap};
+use crate::collections::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::graph::{strongly_connected_components, topological_sort_into_groups};
 use crate::module::symbol::Symbol;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use crate::types::{Alias, Type};
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -179,10 +178,6 @@ pub fn canonicalize_defs<'a>(
     if cfg!(debug_assertions) {
         env.home.register_debug_idents(&env.ident_ids);
     }
-    let aliases_first = |x: &PendingDef<'_>, _: &PendingDef<'_>| match x {
-        PendingDef::Alias { .. } => Ordering::Less,
-        _ => Ordering::Greater,
-    };
 
     let mut aliases = SendMap::default();
     let mut value_defs = Vec::new();
@@ -214,16 +209,7 @@ pub fn canonicalize_defs<'a>(
                 }
 
                 if can_ann.typ.contains_symbol(symbol) {
-                    // the alias is recursive. If it's a tag union, we attempt to fix this
-                    if let Type::TagUnion(tags, ext) = can_ann.typ {
-                        // re-canonicalize the alias with the alias already in scope
-                        let rec_var = var_store.fresh();
-                        let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
-                        rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
-                        can_ann.typ = rec_type_union;
-                    } else {
-                        panic!("recursion in type alias that is not behind a Tag");
-                    }
+                    make_tag_union_recursive(symbol, &mut can_ann.typ, var_store);
                 }
 
                 let alias = crate::types::Alias {
@@ -291,9 +277,8 @@ pub fn canonicalize_defs<'a>(
 #[inline(always)]
 pub fn sort_can_defs(
     env: &mut Env<'_>,
-    mut defs: CanDefs,
+    defs: CanDefs,
     mut output: Output,
-    var_store: &VarStore,
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
     let CanDefs {
         refs_by_symbol,
@@ -1154,15 +1139,7 @@ pub fn can_defs_with_return<'a>(
     // Use its output as a starting point because its tail_call already has the right answer!
     let (ret_expr, output) =
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
-    let (can_defs, mut output) = sort_can_defs(env, unsorted, output, var_store);
-
-    // Now that we've collected all the references, check to see if any of the new idents
-    // we defined went unused by the return expression. If any were unused, report it.
-    for (symbol, region) in symbols_introduced {
-        if !output.references.has_lookup(symbol) {
-            env.problem(Problem::UnusedDef(symbol, region));
-        }
-    }
+    let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
 
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
@@ -1382,6 +1359,23 @@ fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var
         }
     };
 
+    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
+        match aliases.get(symbol) {
+            Some(alias) => {
+                let mut loc_succ = alias.typ.symbols();
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| symbols_introduced.contains(key));
+                loc_succ.remove(&symbol);
+
+                loc_succ
+            }
+            None => ImSet::default(),
+        }
+    };
+
+    let originals = aliases.clone();
+
+    // TODO investigate should this be in a loop?
     let defined_symbols: Vec<Symbol> = aliases.keys().copied().collect();
 
     // split into self-recursive and mutually recursive
@@ -1390,10 +1384,39 @@ fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var
             // no mutual recursion in any alias
         }
         Err((_, mutually_recursive_symbols)) => {
-            panic!(
-                "TODO mutually recursive tag unions {:?}",
-                mutually_recursive_symbols
-            );
+            for cycle in strongly_connected_components(
+                &mutually_recursive_symbols,
+                all_successors_without_self,
+            ) {
+                // TODO use itertools to be more efficient here
+                for rec in &cycle {
+                    let mut to_instantiate = ImMap::default();
+                    for other in &cycle {
+                        if rec != other {
+                            if let Some(alias) = originals.get(other) {
+                                to_instantiate.insert(*other, alias.clone());
+                            }
+                        }
+                    }
+
+                    if let Some(alias) = aliases.get_mut(rec) {
+                        alias.typ.instantiate_aliases(&to_instantiate, var_store);
+                        make_tag_union_recursive(*rec, &mut alias.typ, var_store);
+                    }
+                }
+            }
         }
+    }
+}
+
+fn make_tag_union_recursive(symbol: Symbol, typ: &mut Type, var_store: &VarStore) {
+    match typ {
+        Type::TagUnion(tags, ext) => {
+            let rec_var = var_store.fresh();
+            *typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
+            typ.substitute_alias(symbol, &Type::Variable(rec_var));
+        }
+        Type::Alias(_, _, actual) => make_tag_union_recursive(symbol, actual, var_store),
+        _ => panic!("recursion in type alias is not behind a Tag"),
     }
 }

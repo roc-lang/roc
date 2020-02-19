@@ -80,6 +80,9 @@ impl fmt::Debug for Type {
                     write!(f, " {:?}", arg)?;
                 }
 
+                // Sometimes it's useful to see the expansion of the alias
+                // write!(f, "[ but actually {:?} ]", _actual)?;
+
                 Ok(())
             }
             Type::Record(fields, ext) => {
@@ -448,7 +451,7 @@ impl Type {
                         *self = Type::Alias(*symbol, named_args, Box::new(actual));
                     }
                 } else {
-                    panic!("no alias for {:?}", symbol);
+                    // do nothing, maybe this alias gets instantiated later?
                 }
             }
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
