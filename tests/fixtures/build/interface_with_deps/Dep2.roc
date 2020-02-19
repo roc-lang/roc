@@ -4,7 +4,7 @@ interface Dep2
 
 one = 1
 
-blah = "foo"
+blah = foo
 
 two = 2.0
 

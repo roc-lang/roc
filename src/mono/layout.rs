@@ -41,6 +41,15 @@ impl<'a> Layout<'a> {
                 panic!("Layout::from_content encountered an unresolved {:?}", var);
             }
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs),
+
+            Alias(Symbol::INT_INT, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int64))
+            }
+            Alias(Symbol::FLOAT_FLOAT, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Float64))
+            }
             Alias(_, _, _) => {
                 panic!("TODO recursively resolve type aliases in Layout::from_content");
             }
@@ -102,16 +111,27 @@ fn layout_from_flat_type<'a>(
 
     match flat_type {
         Apply(symbol, args) => {
-            if symbol == Symbol::NUM_NUM {
-                // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
-                debug_assert!(args.len() == 1);
+            match symbol {
+                Symbol::INT_INT => {
+                    debug_assert!(args.is_empty());
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                Symbol::FLOAT_FLOAT => {
+                    debug_assert!(args.is_empty());
+                    Ok(Layout::Builtin(Builtin::Float64))
+                }
+                Symbol::NUM_NUM => {
+                    // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
+                    debug_assert!(args.len() == 1);
 
-                let var = args.iter().next().unwrap();
-                let content = subs.get_without_compacting(*var).content;
+                    let var = args.iter().next().unwrap();
+                    let content = subs.get_without_compacting(*var).content;
 
-                layout_from_num_content(content)
-            } else {
-                panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
+                    layout_from_num_content(content)
+                }
+                _ => {
+                    panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
+                }
             }
         }
         Func(args, ret_var) => {

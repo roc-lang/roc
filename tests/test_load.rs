@@ -151,7 +151,7 @@ mod test_load {
                 .expect("Test ModuleID not found in module_ids");
 
             assert_eq!(expected_name, &InlinableString::from("Primary"));
-            assert_eq!(def_count, 9);
+            assert_eq!(def_count, 10);
         });
     }
 
@@ -223,7 +223,8 @@ mod test_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "blah" => "{}",
+                    "blah2" => "Float",
+                    "blah3" => "Str",
                     "str" => "Str",
                     "alwaysThree" => "* -> Str",
                     // "identity" => "a -> a",

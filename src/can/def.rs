@@ -555,6 +555,7 @@ pub fn sort_can_defs(
 
                     // Sort them to make the report more helpful.
                     loc_idents_in_cycle.sort();
+                    regions.sort();
 
                     problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
                         loc_idents_in_cycle.clone(),
@@ -1154,6 +1155,14 @@ pub fn can_defs_with_return<'a>(
     let (ret_expr, output) =
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
     let (can_defs, mut output) = sort_can_defs(env, unsorted, output, var_store);
+
+    // Now that we've collected all the references, check to see if any of the new idents
+    // we defined went unused by the return expression. If any were unused, report it.
+    for (symbol, region) in symbols_introduced {
+        if !output.references.has_lookup(symbol) {
+            env.problem(Problem::UnusedDef(symbol, region));
+        }
+    }
 
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.

@@ -559,14 +559,14 @@ mod test_crane {
         assert_evals_to!(
             indoc!(
                 r#"
-                        limitedNegate = \num ->
-                            when num is
-                                1 -> -1
-                                -1 -> 1
-                                _ -> num
+                    limitedNegate = \num ->
+                        when num is
+                            1 -> -1
+                            -1 -> 1
+                            _ -> num
 
-                        limitedNegate 1
-                    "#
+                    limitedNegate 1
+                "#
             ),
             -1,
             i64
@@ -596,7 +596,7 @@ mod test_crane {
                         (\a -> a)
 
                     (alwaysIdentity 2) 3.14
-                    "#
+                "#
             ),
             3.14,
             f64

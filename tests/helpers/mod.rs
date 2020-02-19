@@ -1,6 +1,7 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
+use roc::builtins;
 use roc::can::env::Env;
 use roc::can::expr::Output;
 use roc::can::expr::{canonicalize_expr, Expr};
@@ -10,6 +11,7 @@ use roc::can::problem::Problem;
 use roc::can::scope::Scope;
 use roc::collections::{ImMap, ImSet, MutMap, SendSet};
 use roc::constrain::expr::constrain_expr;
+use roc::constrain::module::Import;
 use roc::module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc::parse;
 use roc::parse::ast::{self, Attempting};
@@ -18,6 +20,7 @@ use roc::parse::parser::{loc, Fail, Parser, State};
 use roc::region::{Located, Region};
 use roc::subs::{Subs, VarStore, Variable};
 use roc::types::{Constraint, Expected, Type};
+use roc::unique_builtins;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -97,28 +100,50 @@ pub fn uniq_expr_with(
         loc_expr,
         output,
         problems,
-        var_store: var_store1,
+        var_store: old_var_store,
         var,
         interns,
         ..
     } = can_expr_with(arena, home, expr_str);
 
     // double check
-    let var_store2 = VarStore::new(var_store1.fresh());
+    let var_store = VarStore::new(old_var_store.fresh());
 
     let expected2 = Expected::NoExpectation(Type::Variable(var));
-    let constraint2 = roc::uniqueness::constrain_declaration(
+    let constraint = roc::uniqueness::constrain_declaration(
         home,
-        &var_store2,
+        &var_store,
         Region::zero(),
         loc_expr,
         declared_idents,
         expected2,
     );
 
-    let subs2 = Subs::new(var_store2.into());
+    let types = unique_builtins::types();
+    let imports: Vec<_> = types
+        .iter()
+        .map(|(symbol, (solved_type, region))| Import {
+            loc_symbol: Located::at(*region, *symbol),
+            solved_type: solved_type,
+        })
+        .collect();
 
-    (output, problems, subs2, var, constraint2, home, interns)
+    // load builtin values
+    let constraint =
+        roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
+
+    // load builtin types
+    let mut constraint = roc::constrain::module::load_builtin_aliases(
+        &unique_builtins::aliases(),
+        constraint,
+        &var_store,
+    );
+
+    constraint.instantiate_aliases(&var_store);
+
+    let subs2 = Subs::new(var_store.into());
+
+    (output, problems, subs2, var, constraint, home, interns)
 }
 
 pub struct CanExprOut {
@@ -176,6 +201,26 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         &loc_expr.value,
         expected,
     );
+
+    let types = builtins::types();
+
+    let imports: Vec<_> = types
+        .iter()
+        .map(|(symbol, (solved_type, region))| Import {
+            loc_symbol: Located::at(*region, *symbol),
+            solved_type: solved_type,
+        })
+        .collect();
+
+    //load builtin values
+    let constraint =
+        roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
+
+    //load builtin types
+    let mut constraint =
+        roc::constrain::module::load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
+
+    constraint.instantiate_aliases(&var_store);
 
     let mut all_ident_ids = MutMap::default();
 

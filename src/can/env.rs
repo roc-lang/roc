@@ -24,10 +24,7 @@ pub struct Env<'a> {
     /// current tail-callable symbol
     pub tailcallable_symbol: Option<Symbol>,
 
-    /// Modules which were referenced by lookups.
-    /// Any modules which were imported but not used
-    /// are unused imports.
-    pub referenced_modules: MutSet<ModuleId>,
+    /// Symbols which were referenced by qualified lookups.
     pub referenced_symbols: MutSet<Symbol>,
 
     pub ident_ids: IdentIds,
@@ -49,7 +46,6 @@ impl<'a> Env<'a> {
             exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
-            referenced_modules: MutSet::default(),
             referenced_symbols: MutSet::default(),
             tailcallable_symbol: None,
         }
@@ -82,7 +78,6 @@ impl<'a> Env<'a> {
                     Some(ident_id) => {
                         let symbol = Symbol::new(module_id, *ident_id);
 
-                        self.referenced_modules.insert(module_id);
                         self.referenced_symbols.insert(symbol);
 
                         Ok(symbol)
