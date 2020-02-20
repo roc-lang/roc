@@ -838,8 +838,9 @@ fn instantiate_rigids(
         &loc_pattern.value,
         &Located::at(loc_pattern.region, annotation.clone()),
     ) {
-        for (k, v) in new_headers {
-            headers.insert(k, v);
+        for (symbol, loc_type) in new_headers {
+            new_rigids.extend(loc_type.value.variables());
+            headers.insert(symbol, loc_type);
         }
     }
 
