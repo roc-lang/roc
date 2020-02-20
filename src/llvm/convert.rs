@@ -1,6 +1,7 @@
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{BasicType, FunctionType};
+use inkwell::AddressSpace;
 
 use crate::mono::layout::Layout;
 
@@ -27,8 +28,18 @@ pub fn basic_type_from_layout<'ctx>(
     use crate::mono::layout::Layout::*;
 
     match layout {
-        FunctionPointer(_arg_layouts, _ret_layout) => {
-            panic!("TODO function poitner");
+        FunctionPointer(args, ret_layout) => {
+            let ret_type = basic_type_from_layout(context, &ret_layout);
+            let mut arg_basic_types = Vec::with_capacity(args.len());
+
+            for arg_layout in args.iter() {
+                arg_basic_types.push(basic_type_from_layout(context, arg_layout));
+            }
+
+            let fn_type = get_fn_type(&ret_type, arg_basic_types.as_slice());
+            let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
+
+            ptr_type.as_basic_type_enum()
         }
         Struct(_fields) => {
             panic!("TODO layout_to_basic_type for Struct");
