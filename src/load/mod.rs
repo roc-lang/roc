@@ -846,13 +846,6 @@ fn solve_module(
     declarations_by_id.insert(home, module.declarations);
 
     let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
-
-    let mut aliases = MutMap::default();
-
-    for (symbol, alias) in module.aliases.iter() {
-        aliases.insert(*symbol, alias.clone());
-    }
-
     let env = solve::Env {
         vars_by_symbol,
         aliases: module.aliases,
@@ -910,7 +903,7 @@ fn solve_module(
                 subs: Arc::new(solved_subs),
                 solved_types,
                 problems,
-                aliases,
+                aliases: env.aliases,
             })
             .await
             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
