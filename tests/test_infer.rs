@@ -160,21 +160,21 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // fn concat_different_types() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             empty = []
-    //             one = List.concat [ 1 ] empty
-    //             str = List.concat [ "blah" ] empty
+    #[test]
+    fn concat_different_types() {
+        infer_eq(
+            indoc!(
+                r#"
+                empty = []
+                one = List.concat [ 1 ] empty
+                str = List.concat [ "blah" ] empty
 
-    //             empty
-    //         "#
-    //         ),
-    //         "List *",
-    //     );
-    // }
+                empty
+            "#
+            ),
+            "List *",
+        );
+    }
 
     #[test]
     fn list_of_one_int() {
@@ -1184,24 +1184,23 @@ mod test_infer {
         );
     }
 
-    #[test]
-    #[ignore] // TODO FIXME un-ignore this when Int is a builtin type alias
-    fn annotation_using_num_used() {
-        // There was a problem where `Int`, because it is only an annotation
-        // wasn't added to the vars_by_symbol.
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                   int : Num.Num Int.Integer
+    // #[test]
+    // fn annotation_using_num_used() {
+    //     // There was a problem where `Int`, because it is only an annotation
+    //     // wasn't added to the vars_by_symbol.
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                int : Int
 
-                   p = (\x -> x) int
+    //                p = (\x -> x) int
 
-                   p
-                   "#
-            ),
-            "Int",
-        );
-    }
+    //                p
+    //                "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
 
     #[test]
     fn num_identity() {
@@ -1636,22 +1635,24 @@ mod test_infer {
             "<type mismatch>",
         );
     }
-    // doesn't currently print the error, but does report a problem
-    //    #[test]
-    //    fn nums() {
-    //        infer_eq_without_problem(
-    //            indoc!(
-    //                r#"
-    //                s : Num.Num a
-    //                s = 3.1
+
+    // TODO As intended, this fails, but it fails with the wrong error!
     //
-    //                s
-    //                "#
-    //            ),
-    //            "<type mismatch>",
-    //        );
-    //    }
-    //
+    // #[test]
+    // fn nums() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                 s : Num *
+    //                 s = 3.1
+
+    //                 s
+    //                 "#
+    //         ),
+    //         "<Type Mismatch: _____________>",
+    //     );
+    // }
+
     #[test]
     fn manual_attr() {
         infer_eq(
@@ -1802,20 +1803,20 @@ mod test_infer {
         );
     }
 
-    //    #[test]
-    //    fn let_tag_pattern_with_annotation() {
-    //        infer_eq_without_problem(
-    //            indoc!(
-    //                r#"
-    //                UserId x : [ UserId Int ]
-    //                UserId x = UserId 42
-    //
-    //                x
-    //               "#
-    //            ),
-    //            "Int",
-    //        );
-    //    }
+    // #[test]
+    // fn let_tag_pattern_with_annotation() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                 UserId x : [ UserId Int ]
+    //                 UserId x = UserId 42
+
+    //                 x
+    //             "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
 
     #[test]
     fn typecheck_record_linked_list_map() {
