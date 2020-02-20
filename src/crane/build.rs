@@ -13,7 +13,7 @@ use cranelift_module::{Backend, FuncId, Linkage, Module};
 use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
-use crate::crane::convert::{sig_from_layout, type_from_layout, type_from_var};
+use crate::crane::convert::{sig_from_layout, type_from_layout};
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::{Builtin, Layout};
 use crate::subs::{Subs, Variable};
@@ -75,7 +75,11 @@ pub fn build_expr<'a, B: Backend>(
             ret_var,
             cond_var,
         } => {
-            let ret_type = type_from_var(*ret_var, &env.subs, env.cfg);
+            let subs = env.subs;
+            let ret_content = subs.get_without_compacting(*ret_var).content;
+            let ret_layout = Layout::from_content(env.arena, ret_content, &subs)
+                .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_expr here!"));
+            let ret_type = type_from_layout(env.cfg, &ret_layout);
             let switch_args = SwitchArgs {
                 cond_var: *cond_var,
                 cond_expr: cond,
@@ -97,7 +101,7 @@ pub fn build_expr<'a, B: Backend>(
                 let content = subs.get_without_compacting(*var).content;
                 let layout = Layout::from_content(arena, content, subs)
                     .unwrap_or_else(|()| panic!("TODO generate a runtime error for this Store!"));
-                let expr_type = type_from_layout(cfg, &layout, subs);
+                let expr_type = type_from_layout(cfg, &layout);
 
                 let slot = builder.create_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
@@ -228,9 +232,13 @@ fn build_branch2<'a, B: Backend>(
     let subs = &env.subs;
     let cfg = env.cfg;
 
+    let subs = env.subs;
+    let ret_content = subs.get_without_compacting(branch.ret_var).content;
+    let ret_layout = Layout::from_content(env.arena, ret_content, &subs)
+        .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_branch2 here!"));
+    let ret_type = type_from_layout(env.cfg, &ret_layout);
     // Declare a variable which each branch will mutate to be the value of that branch.
     // At the end of the expression, we will evaluate to this.
-    let ret_type = type_from_var(branch.ret_var, subs, cfg);
     let ret = cranelift::frontend::Variable::with_u32(0);
 
     // The block we'll jump to once the switch has completed.
@@ -390,8 +398,11 @@ pub fn declare_proc<'a, B: Backend>(
     let args = proc.args;
     let subs = &env.subs;
     let cfg = env.cfg;
-    // TODO this rtype_from_var is duplicated when building this Proc
-    let ret_type = type_from_var(proc.ret_var, subs, env.cfg);
+    // TODO this Layout::from_content is duplicated when building this Proc
+    let ret_content = subs.get_without_compacting(proc.ret_var).content;
+    let ret_layout = Layout::from_content(env.arena, ret_content, subs)
+        .unwrap_or_else(|_| panic!("TODO generate a runtime error in declare_proc here!"));
+    let ret_type = type_from_layout(cfg, &ret_layout);
 
     // Create a signature for the function
     let mut sig = module.make_signature();
@@ -401,7 +412,7 @@ pub fn declare_proc<'a, B: Backend>(
 
     // Add params to the signature
     for (layout, _name, _var) in args.iter() {
-        let arg_type = type_from_layout(cfg, &layout, subs);
+        let arg_type = type_from_layout(cfg, &layout);
 
         sig.params.push(AbiParam::new(arg_type));
     }
@@ -451,9 +462,10 @@ pub fn define_proc_body<'a, B: Backend>(
             let content = subs.get_without_compacting(*var).content;
             // TODO this Layout::from_content is duplicated when building this Proc
             //
-            let layout = Layout::from_content(arena, content, subs)
-                .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));
-            let expr_type = type_from_layout(cfg, &layout, subs);
+            let layout = Layout::from_content(arena, content, subs).unwrap_or_else(|()| {
+                panic!("TODO generate a runtime error in define_proc_body here!")
+            });
+            let expr_type = type_from_layout(cfg, &layout);
 
             scope.insert(arg_name.clone(), ScopeEntry::Arg { expr_type, param });
         }
