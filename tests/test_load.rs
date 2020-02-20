@@ -154,7 +154,7 @@ mod test_load {
     }
 
     #[test]
-    fn load_and_infer() {
+    fn load_and_typecheck() {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
@@ -177,7 +177,7 @@ mod test_load {
     }
 
     #[test]
-    fn load_and_infer_quicksort() {
+    fn load_and_typecheck_quicksort() {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
