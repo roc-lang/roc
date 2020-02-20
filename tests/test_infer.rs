@@ -1233,13 +1233,13 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num Integer
-                   float = 5.5
+                   int : Num Integer
+                   int = 5.5
 
-                   float
+                   int
                 "#
             ),
-            "Float",
+            "Int",
         );
     }
 
@@ -1277,7 +1277,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                   float : Float FloatingPoint
+                   float : Num FloatingPoint
 
                    float
                 "#
@@ -1511,9 +1511,9 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Result e a : [ Ok a, Err e ]
+                    Res e a : [ Ok a, Err e ]
 
-                    map : (a -> b), Result e a -> Result e b
+                    map : (a -> b), Res e a -> Res e b
                     map = \f, result ->
                         when result is
                             Ok v -> Ok (f v)
@@ -1522,7 +1522,7 @@ mod test_infer {
                     map
                        "#
             ),
-            "(a -> b), Result e a -> Result e b",
+            "(a -> b), Res e a -> Res e b",
         );
     }
 
@@ -1631,13 +1631,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    empty : [ Cons a (List a), Nil ] as List a
+                    empty : [ Cons a (ConsList a), Nil ] as ConsList a
                     empty = Nil
 
                     empty
                        "#
             ),
-            "List a",
+            "ConsList a",
         );
     }
 
@@ -1646,13 +1646,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    singleton : a -> [ Cons a (List a), Nil ] as List a
+                    singleton : a -> [ Cons a (ConsList a), Nil ] as ConsList a
                     singleton = \x -> Cons x Nil
 
                     singleton
                        "#
             ),
-            "a -> List a",
+            "a -> ConsList a",
         );
     }
 
@@ -1720,9 +1720,9 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                    map : (a -> b), List a -> List b
+                    map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
                         when list is
                             Nil -> Nil
@@ -1732,7 +1732,7 @@ mod test_infer {
                     map
                        "#
             ),
-            "(a -> b), List a -> List b",
+            "(a -> b), ConsList a -> ConsList b",
         );
     }
 
@@ -1860,11 +1860,11 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                    toEmpty : List a -> List a
+                    toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
-                        result : List a
+                        result : ConsList a
                         result = Nil
 
                         result
@@ -1872,7 +1872,7 @@ mod test_infer {
                     toEmpty
                 "#
             ),
-            "List a -> List a",
+            "ConsList a -> ConsList a",
         );
     }
 
@@ -1881,11 +1881,11 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                    toEmpty : List a -> List a
+                    toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
-                        result : List a
+                        result : ConsList a
                         result = Nil
 
                         toEmpty result
@@ -1893,7 +1893,7 @@ mod test_infer {
                     toEmpty
                 "#
             ),
-            "List a -> List a",
+            "ConsList a -> ConsList a",
         );
     }
 
@@ -1985,9 +1985,9 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List q : [ Cons { x: q, xs: List q }, Nil ]
+                    ConsList q : [ Cons { x: q, xs: ConsList q }, Nil ]
 
-                    map : (a -> b), List a -> List b
+                    map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
                         when list is
                             Nil -> Nil
@@ -1997,7 +1997,7 @@ mod test_infer {
                     map
                 "#
             ),
-            "(a -> b), List a -> List b",
+            "(a -> b), ConsList a -> ConsList b",
         );
     }
 

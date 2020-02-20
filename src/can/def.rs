@@ -1270,7 +1270,7 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err(_err) => panic!("TODO shadowing of type alias"),
+                Err(_err) => panic!("TODO gracefully handle shadowing of type alias"),
             }
         }
 
