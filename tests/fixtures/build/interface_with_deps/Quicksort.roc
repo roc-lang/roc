@@ -40,7 +40,7 @@ partition = \low, high, initialList ->
                     Pair i list
 
             when go (low - 1) low initialList is
-                Pair newI newList -> 
+                Pair newI newList ->
                     Pair (newI + 1) (swap (newI + 1) high newList)
 
         Err _ ->

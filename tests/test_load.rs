@@ -189,8 +189,8 @@ mod test_load {
                 loaded_module,
                 hashmap! {
                     "swap" => "Int, Int, List a -> List a",
-                    "partition" => "Num Integer, Int, List a -> [ Pair Num Integer List a ]*",
-                    "quicksort" => "List a, Num Integer, Num Integer -> List a",
+                    "partition" => "Int, Int, List a -> [ Pair Int (List a) ]*",
+                    "quicksort" => "List a, Int, Int -> List a",
                 },
             );
         });
