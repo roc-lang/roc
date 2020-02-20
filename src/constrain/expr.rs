@@ -744,12 +744,13 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_con = match &def.annotation {
         Some((annotation, free_vars, ann_def_aliases)) => {
             def_aliases = ann_def_aliases.clone();
+
             let arity = annotation.arity();
             let rigids = &env.rigids;
             let mut ftv = rigids.clone();
 
             let annotation = instantiate_rigids(
-                &annotation,
+                annotation,
                 &free_vars,
                 &mut new_rigids,
                 &mut ftv,
@@ -913,6 +914,7 @@ pub fn rec_defs_help(
                 for (symbol, alias) in ann_def_aliases.clone() {
                     def_aliases.insert(symbol, alias);
                 }
+
                 let arity = annotation.arity();
                 let mut ftv = env.rigids.clone();
 
