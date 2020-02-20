@@ -744,7 +744,7 @@ fn solve_module(
 ) -> MutSet<ModuleId> /* returs a set of unused imports */ {
     let home = module.module_id;
     let mut imported_symbols = Vec::with_capacity(module.references.len());
-    let mut aliases = MutMap::default();
+    let mut imported_aliases = MutMap::default();
     let mut unused_imports = module.imported_modules; // We'll remove these as we encounter them.
 
     // Translate referenced symbols into constraints
@@ -790,7 +790,7 @@ fn solve_module(
 
                     // TODO should this be a union?
                     for (k, v) in new_aliases.clone() {
-                        aliases.insert(k, v);
+                        imported_aliases.insert(k, v);
                     }
 
                     imported_symbols.push(Import {
@@ -818,7 +818,7 @@ fn solve_module(
 
     // Wrap the existing module constraint in these imported constraints.
     let constraint = constrain_imported_values(imported_symbols, constraint, &var_store);
-    let constraint = constrain_imported_aliases(aliases, constraint, &var_store);
+    let constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
     let constraint = load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
 
     // All the exposed imports should be available in the solver's vars_by_symbol
