@@ -29,13 +29,8 @@ pub fn content_to_basic_type<'ctx>(
     context: &'ctx Context,
 ) -> Result<BasicTypeEnum<'ctx>, String> {
     match content {
-        Content::Alias(Symbol::INT_INT, args, _) => {
-            debug_assert!(args.is_empty());
-            Ok(BasicTypeEnum::IntType(context.i64_type()))
-        }
-        Content::Alias(Symbol::FLOAT_FLOAT, args, _) => {
-            debug_assert!(args.is_empty());
-            Ok(BasicTypeEnum::FloatType(context.f64_type()))
+        Content::Alias(_, _, var) => {
+            content_to_basic_type(&subs.get_without_compacting(*var).content, subs, context)
         }
         Content::Structure(flat_type) => match flat_type {
             Apply(symbol, args) => match *symbol {

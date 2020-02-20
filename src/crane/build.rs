@@ -449,7 +449,7 @@ pub fn define_proc_body<'a, B: Backend>(
         // Add args to scope
         for (&param, (_, arg_name, var)) in builder.ebb_params(block).iter().zip(args) {
             let content = subs.get_without_compacting(*var).content;
-            // TODO this type_from_content is duplicated when building this Proc
+            // TODO this Layout::from_content is duplicated when building this Proc
             //
             let layout = Layout::from_content(arena, content, subs)
                 .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));

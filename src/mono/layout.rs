@@ -50,8 +50,8 @@ impl<'a> Layout<'a> {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
-            Alias(_, _, _) => {
-                panic!("TODO recursively resolve type aliases in Layout::from_content");
+            Alias(_, _, var) => {
+                Self::from_content(arena, subs.get_without_compacting(var).content, subs)
             }
             Error => Err(()),
         }

@@ -1,12 +1,13 @@
 use cranelift::prelude::AbiParam;
 use cranelift_codegen::ir::{types, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
+use cranelift_module::{Backend, Module};
 
+use crate::can::ident::TagName;
 use crate::module::symbol::Symbol;
 use crate::mono::layout::Layout;
 use crate::subs::FlatType::*;
 use crate::subs::{Content, Subs, Variable};
-use cranelift_module::{Backend, Module};
 
 pub fn type_from_var(var: Variable, subs: &Subs, cfg: TargetFrontendConfig) -> Type {
     let content = subs.get_without_compacting(var).content;
@@ -24,7 +25,70 @@ pub fn type_from_content(content: &Content, subs: &Subs, cfg: TargetFrontendConf
             debug_assert!(args.is_empty());
             types::F64
         }
+        Content::Alias(_, _, var) => {
+            let content = subs.get_without_compacting(*var).content;
+
+            type_from_content(&content, subs, cfg)
+        }
         Content::Structure(flat_type) => match flat_type {
+            TagUnion(tags, _ext_var /* TODO resolve ext_var */) => {
+                match tags.len() {
+                    0 => {
+                        panic!("TODO gracefully handle trying to instantiate Never");
+                    }
+                    1 => {
+                        // This is a wrapper. Unwrap it!
+                        let (tag, args) = tags.into_iter().next().unwrap();
+
+                        match tag {
+                            TagName::Private(Symbol::NUM_AT_NUM) if args.len() == 1 => {
+                                let var = args.into_iter().next().unwrap();
+
+                                match subs.get_without_compacting(*var).content {
+                                    Content::Structure(flat_type) => match flat_type {
+                                        _ => {
+                                            panic!(
+                                                "TODO handle Num.@Num flat_type {:?}",
+                                                flat_type
+                                            );
+                                        }
+                                    },
+                                    Content::Alias(Symbol::INT_INTEGER, args, _) => {
+                                        debug_assert!(args.is_empty());
+                                        types::I64
+                                    }
+                                    Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+                                        debug_assert!(args.is_empty());
+                                        types::F64
+                                    }
+                                    other => {
+                                        panic!("TODO non structure Num.@Num flat_type {:?}", other);
+                                    } // Symbol::INT_INT => {
+                                      //     debug_assert!(args.is_empty());
+                                      //     types::I64
+                                      // }
+                                      // Symbol::FLOAT_FLOAT => {
+                                      //     debug_assert!(args.is_empty());
+                                      //     types::F64
+                                      // }
+                                      // tag => {
+                                      //     panic!("TODO gracefully handle unrecognized Num.Num variant {:?} {:?}", tag, args);
+                                      // }
+                                }
+                            }
+                            TagName::Private(symbol) => {
+                                panic!("TODO emit wrapped private tag for {:?} {:?}", symbol, args);
+                            }
+                            TagName::Global(ident) => {
+                                panic!("TODO emit wrapped global tag for {:?} {:?}", ident, args);
+                            }
+                        }
+                    }
+                    _ => {
+                        panic!("TODO handle a tag union with mutliple tags.");
+                    }
+                }
+            }
             Apply(symbol, args) => match *symbol {
                 Symbol::INT_INT => {
                     debug_assert!(args.is_empty());
