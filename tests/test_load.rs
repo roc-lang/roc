@@ -154,6 +154,22 @@ mod test_load {
     }
 
     #[test]
+    fn import_alias() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module =
+                load_fixture("interface_with_deps", "ImportAlias", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "unit" => "Dep1.Unit",
+                },
+            );
+        });
+    }
+
+    #[test]
     fn load_and_typecheck() {
         test_async(async {
             let subs_by_module = MutMap::default();
