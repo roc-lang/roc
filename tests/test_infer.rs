@@ -1332,6 +1332,91 @@ mod test_infer {
     }
 
     #[test]
+    fn fake_result_ok() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Res a e : [ Okay a, Error e ]
+
+                    ok : Res Int *
+                    ok = Okay 5
+
+                    ok
+                "#
+            ),
+            "Res Int *",
+        );
+    }
+
+    #[test]
+    fn fake_result_err() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Res a e : [ Okay a, Error e ]
+
+                    err : Res * Str
+                    err = Error "blah"
+
+                    err
+                "#
+            ),
+            "Res * Str",
+        );
+    }
+
+    #[test]
+    fn basic_result_ok() {
+        infer_eq(
+            indoc!(
+                r#"
+                    ok : Result Int *
+                    ok = Ok 5
+
+                    ok
+                "#
+            ),
+            "Result Int *",
+        );
+    }
+
+    #[test]
+    fn basic_result_err() {
+        infer_eq(
+            indoc!(
+                r#"
+                    err : Result * Str
+                    err = Err "blah"
+
+                    err
+                "#
+            ),
+            "Result * Str",
+        );
+    }
+
+    #[test]
+    fn basic_result_conditional() {
+        infer_eq(
+            indoc!(
+                r#"
+                    ok : Result Int *
+                    ok = Ok 5
+
+                    err : Result * Str
+                    err = Err "blah"
+
+                    if 1 > 0 then
+                        ok
+                    else
+                        err
+                "#
+            ),
+            "Result Int Str",
+        );
+    }
+
+    #[test]
     fn qualified_annotated_num_floatingpoint() {
         infer_eq(
             indoc!(
