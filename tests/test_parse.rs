@@ -2186,6 +2186,26 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    // PARSE ERROR
+
+    // TODO this should be parse error, but isn't!
+    // fn trailing_paren() {
+    //     assert_parses_to(
+    //         indoc!(
+    //             r#"
+    //                 r = "foo"
+    //                 s = { left : "foo" }
+
+    //                 when 0 is
+    //                     1 -> { x: s.left, y: s.left }
+    //                     0 -> { x: s.left, y: r }
+    //                     )
+    //             "#
+    //         ),
+    //         Str(""),
+    //     );
+    // }
+
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
     //
     // TODO test for non-ASCII variables
