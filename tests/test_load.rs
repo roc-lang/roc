@@ -231,7 +231,7 @@ mod test_load {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
-                load_fixture("interface_with_deps", "Principal", subs_by_module).await;
+                load_fixture("no_deps", "Principal", subs_by_module).await;
 
             expect_types(
                 loaded_module,
