@@ -1941,6 +1941,23 @@ mod test_infer {
     }
 
     #[test]
+    fn unit_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Unit : [ Unit ]
+
+                    unit : Unit
+                    unit = Unit
+
+                    unit
+                "#
+            ),
+            "Unit",
+        );
+    }
+
+    #[test]
     fn rigid_in_letnonrec() {
         infer_eq_without_problem(
             indoc!(
