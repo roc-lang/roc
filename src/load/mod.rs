@@ -40,7 +40,7 @@ pub struct Module {
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Lowercase, Variable>,
-    pub imported_modules: MutSet<ModuleId>
+    pub imported_modules: MutSet<ModuleId>,
 }
 
 #[derive(Debug)]
@@ -747,7 +747,6 @@ fn solve_module(
     let mut aliases = MutMap::default();
     let mut unused_imports = module.imported_modules; // We'll remove these as we encounter them.
 
-
     // Translate referenced symbols into constraints
     for &symbol in module.references.iter() {
         let module_id = symbol.module_id();
@@ -769,9 +768,8 @@ fn solve_module(
                         loc_symbol,
                         solved_type,
                     });
-                } None => {
-                    panic!("Could not find {:?} in builtins {:?}", symbol, builtins)
                 }
+                None => panic!("Could not find {:?} in builtins {:?}", symbol, builtins),
             }
         } else if module_id != home {
             // We already have constraints for our own symbols.
@@ -1033,7 +1031,7 @@ fn parse_and_constrain(
                 references,
                 aliases,
                 rigid_variables,
-                imported_modules: header.imported_modules
+                imported_modules: header.imported_modules,
             };
 
             (module, ident_ids, constraint, problems)

@@ -75,9 +75,9 @@ pub fn build_expr<'a, B: Backend>(
             ret_var,
             cond_var,
         } => {
-            let subs = env.subs;
+            let subs = &env.subs;
             let ret_content = subs.get_without_compacting(*ret_var).content;
-            let ret_layout = Layout::from_content(env.arena, ret_content, &subs)
+            let ret_layout = Layout::from_content(env.arena, ret_content, subs)
                 .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_expr here!"));
             let ret_type = type_from_layout(env.cfg, &ret_layout);
             let switch_args = SwitchArgs {
@@ -179,7 +179,7 @@ pub fn build_expr<'a, B: Backend>(
             let content = subs.get_without_compacting(*fn_var).content;
             let layout = Layout::from_content(env.arena, content, &subs)
                 .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));
-            let sig = sig_from_layout(env.cfg, module, layout, &subs);
+            let sig = sig_from_layout(env.cfg, module, layout);
             let callee = build_expr(env, scope, module, builder, sub_expr, procs);
             let sig_ref = builder.import_signature(sig);
             let call = builder.ins().call_indirect(sig_ref, callee, &arg_vals);
@@ -230,11 +230,8 @@ fn build_branch2<'a, B: Backend>(
     procs: &Procs<'a>,
 ) -> Value {
     let subs = &env.subs;
-    let cfg = env.cfg;
-
-    let subs = env.subs;
     let ret_content = subs.get_without_compacting(branch.ret_var).content;
-    let ret_layout = Layout::from_content(env.arena, ret_content, &subs)
+    let ret_layout = Layout::from_content(env.arena, ret_content, subs)
         .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_branch2 here!"));
     let ret_type = type_from_layout(env.cfg, &ret_layout);
     // Declare a variable which each branch will mutate to be the value of that branch.

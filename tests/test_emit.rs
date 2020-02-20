@@ -10,7 +10,7 @@ extern crate roc;
 mod helpers;
 
 #[cfg(test)]
-mod test_crane {
+mod test_gen {
     use crate::helpers::{can_expr, CanExprOut};
     use bumpalo::Bump;
     use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
@@ -27,11 +27,12 @@ mod test_crane {
     use inkwell::OptimizationLevel;
     use roc::collections::{ImMap, MutMap};
     use roc::crane::build::{declare_proc, define_proc_body, ScopeEntry};
-    use roc::crane::convert::type_from_content;
+    use roc::crane::convert::type_from_layout;
     use roc::infer::infer_expr;
     use roc::llvm::build::build_proc;
-    use roc::llvm::convert::content_to_basic_type;
+    use roc::llvm::convert::basic_type_from_layout;
     use roc::mono::expr::Expr;
+    use roc::mono::layout::Layout;
     use roc::subs::Subs;
     use std::mem;
     use target_lexicon::HOST;
@@ -67,8 +68,10 @@ mod test_crane {
             let main_fn_name = "$Test.main";
 
             // Compute main_fn_ret_type before moving subs to Env
-            let mut subs = solved.into_inner();
-            let main_ret_type = type_from_content(&content, &mut subs, cfg);
+            let subs = solved.into_inner();
+            let layout = Layout::from_content(&arena, content, &subs)
+        .unwrap_or_else(|err| panic!("Code gen error in test: could not convert content to layout. Err was {:?} and Subs were {:?}", err, subs));
+            let main_ret_type = type_from_layout(cfg, &layout);
 
             // Compile and add all the Procs before adding main
             let mut procs = MutMap::default();
@@ -196,9 +199,10 @@ mod test_crane {
             fpm.initialize();
 
             // Compute main_fn_type before moving subs to Env
-            let mut subs = solved.into_inner();
-            let main_fn_type = content_to_basic_type(&content, &mut subs, &context)
-                .expect("Unable to infer type for test expr")
+            let subs = solved.into_inner();
+            let layout = Layout::from_content(&arena, content, &subs)
+        .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
+            let main_fn_type = basic_type_from_layout( &context, &layout)
                 .fn_type(&[], false);
             let main_fn_name = "$Test.main";
 

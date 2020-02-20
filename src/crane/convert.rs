@@ -4,7 +4,6 @@ use cranelift_codegen::isa::TargetFrontendConfig;
 use cranelift_module::{Backend, Module};
 
 use crate::mono::layout::Layout;
-use crate::subs::Subs;
 
 pub fn type_from_layout(cfg: TargetFrontendConfig, layout: &Layout<'_>) -> Type {
     use crate::mono::layout::Builtin::*;
@@ -29,11 +28,10 @@ pub fn sig_from_layout<B: Backend>(
     cfg: TargetFrontendConfig,
     module: &mut Module<B>,
     layout: Layout,
-    subs: &Subs,
 ) -> Signature {
     match layout {
         Layout::FunctionPointer(args, ret) => {
-            let ret_type = type_from_layout(cfg, &ret, subs);
+            let ret_type = type_from_layout(cfg, &ret);
             let mut sig = module.make_signature();
 
             // Add return type to the signature
@@ -41,7 +39,7 @@ pub fn sig_from_layout<B: Backend>(
 
             // Add params to the signature
             for layout in args.iter() {
-                let arg_type = type_from_layout(cfg, &layout, subs);
+                let arg_type = type_from_layout(cfg, &layout);
 
                 sig.params.push(AbiParam::new(arg_type));
             }
