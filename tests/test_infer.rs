@@ -1171,16 +1171,178 @@ mod test_infer {
     }
 
     #[test]
-    fn annotation_using_num() {
-        infer_eq_without_problem(
+    fn annotation_using_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Int
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotation_using_num_integer() {
+        infer_eq(
             indoc!(
                 r#"
                    int : Num.Num Int.Integer
 
                    int
-                   "#
+                "#
             ),
             "Int",
+        );
+    }
+
+    #[test]
+    fn annotated_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Int
+                   int = 5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Int.Int
+                   int = 5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotated_num_integer() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num Integer
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_num_integer() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Num.Num Int.Integer
+                   int = 5.5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotation_using_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotation_using_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float FloatingPoint
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float.Float
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotated_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotated_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num FloatingPoint
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num.Num Float.FloatingPoint
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
         );
     }
 
