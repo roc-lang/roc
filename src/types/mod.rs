@@ -80,6 +80,9 @@ impl fmt::Debug for Type {
                     write!(f, " {:?}", arg)?;
                 }
 
+                // Sometimes it's useful to see the expansion of the alias
+                // write!(f, "[ but actually {:?} ]", _actual)?;
+
                 Ok(())
             }
             Type::Record(fields, ext) => {
@@ -360,6 +363,13 @@ impl Type {
         }
     }
 
+    pub fn symbols(&self) -> ImSet<Symbol> {
+        let mut found_symbols = ImSet::default();
+        symbols_help(self, &mut found_symbols);
+
+        found_symbols
+    }
+
     /// a shallow dealias, continue until the first constructor is not an alias.
     pub fn shallow_dealias(&self) -> &Self {
         match self {
@@ -441,11 +451,43 @@ impl Type {
                         *self = Type::Alias(*symbol, named_args, Box::new(actual));
                     }
                 } else {
-                    panic!("no alias for {:?}", symbol);
+                    // do nothing, maybe this alias gets instantiated later?
                 }
             }
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
         }
+    }
+}
+
+fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
+    use Type::*;
+
+    match tipe {
+        Function(args, ret) => {
+            symbols_help(&ret, accum);
+            args.iter().for_each(|arg| symbols_help(arg, accum));
+        }
+        RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+            symbols_help(&ext, accum);
+            tags.iter()
+                .map(|v| v.1.iter())
+                .flatten()
+                .for_each(|arg| symbols_help(arg, accum));
+        }
+
+        Record(fields, ext) => {
+            symbols_help(&ext, accum);
+            fields.values().for_each(|arg| symbols_help(arg, accum));
+        }
+        Alias(alias_symbol, _, actual_type) => {
+            accum.insert(*alias_symbol);
+            symbols_help(&actual_type, accum);
+        }
+        Apply(symbol, args) => {
+            accum.insert(*symbol);
+            args.iter().for_each(|arg| symbols_help(arg, accum));
+        }
+        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
     }
 }
 

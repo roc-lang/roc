@@ -12,14 +12,13 @@ use crate::can::problem::Problem;
 use crate::can::problem::RuntimeError;
 use crate::can::procedure::References;
 use crate::can::scope::Scope;
-use crate::collections::{default_hasher, ImSet, MutMap, MutSet, SendMap};
+use crate::collections::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use crate::graph::{strongly_connected_components, topological_sort_into_groups};
 use crate::module::symbol::Symbol;
 use crate::parse::ast;
 use crate::region::{Located, Region};
 use crate::subs::{VarStore, Variable};
 use crate::types::{Alias, Type};
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -180,18 +179,55 @@ pub fn canonicalize_defs<'a>(
         env.home.register_debug_idents(&env.ident_ids);
     }
 
-    let aliases_first = |x: &PendingDef<'_>, _: &PendingDef<'_>| match x {
-        PendingDef::Alias { .. } => Ordering::Less,
-        _ => Ordering::Greater,
-    };
-
-    pending.sort_by(aliases_first);
-
     let mut aliases = SendMap::default();
+    let mut value_defs = Vec::new();
+
+    for pending_def in pending.into_iter() {
+        match pending_def {
+            PendingDef::Alias { name, vars, ann } =>
+            //        name: Located<Symbol>,
+            //        vars: Vec<Located<Lowercase>>,
+            //        ann: &'a Located<ast::TypeAnnotation<'a>>,
+            {
+                let symbol = name.value;
+                let mut can_ann =
+                    canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+
+                let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
+                    Vec::with_capacity(vars.len());
+
+                for loc_lowercase in vars {
+                    if let Some(var) = can_ann.rigids.get(&loc_lowercase.value) {
+                        // This is a valid lowercase rigid var for the alias.
+                        can_vars.push(Located {
+                            value: (loc_lowercase.value.clone(), *var),
+                            region: loc_lowercase.region,
+                        });
+                    } else {
+                        panic!("TODO handle phantom type variables, they are not allowed!");
+                    }
+                }
+
+                if can_ann.typ.contains_symbol(symbol) {
+                    make_tag_union_recursive(symbol, &mut can_ann.typ, var_store);
+                }
+
+                let alias = crate::types::Alias {
+                    region: ann.region,
+                    vars: can_vars,
+                    typ: can_ann.typ,
+                };
+                aliases.insert(symbol, alias);
+            }
+            other => value_defs.push(other),
+        }
+    }
+
+    correct_mutual_recursive_type_alias(&mut aliases, &var_store);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
-    for pending_def in pending.into_iter() {
+    for pending_def in value_defs.into_iter() {
         output = canonicalize_pending_def(
             env,
             pending_def,
@@ -1311,4 +1347,87 @@ fn pending_typed_body<'a>(
     );
 
     PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr)
+}
+
+/// Make aliases recursive
+fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var_store: &VarStore) {
+    let mut symbols_introduced = ImSet::default();
+
+    for (key, _) in aliases.iter() {
+        symbols_introduced.insert(*key);
+    }
+
+    let all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+        match aliases.get(symbol) {
+            Some(alias) => {
+                let mut loc_succ = alias.typ.symbols();
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| symbols_introduced.contains(key));
+
+                loc_succ
+            }
+            None => ImSet::default(),
+        }
+    };
+
+    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
+        match aliases.get(symbol) {
+            Some(alias) => {
+                let mut loc_succ = alias.typ.symbols();
+                // remove anything that is not defined in the current block
+                loc_succ.retain(|key| symbols_introduced.contains(key));
+                loc_succ.remove(&symbol);
+
+                loc_succ
+            }
+            None => ImSet::default(),
+        }
+    };
+
+    let originals = aliases.clone();
+
+    // TODO investigate should this be in a loop?
+    let defined_symbols: Vec<Symbol> = aliases.keys().copied().collect();
+
+    // split into self-recursive and mutually recursive
+    match topological_sort_into_groups(&defined_symbols, all_successors_with_self) {
+        Ok(_) => {
+            // no mutual recursion in any alias
+        }
+        Err((_, mutually_recursive_symbols)) => {
+            for cycle in strongly_connected_components(
+                &mutually_recursive_symbols,
+                all_successors_without_self,
+            ) {
+                // TODO use itertools to be more efficient here
+                for rec in &cycle {
+                    let mut to_instantiate = ImMap::default();
+                    for other in &cycle {
+                        if rec != other {
+                            if let Some(alias) = originals.get(other) {
+                                to_instantiate.insert(*other, alias.clone());
+                            }
+                        }
+                    }
+
+                    if let Some(alias) = aliases.get_mut(rec) {
+                        alias.typ.instantiate_aliases(&to_instantiate, var_store);
+                        make_tag_union_recursive(*rec, &mut alias.typ, var_store);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn make_tag_union_recursive(symbol: Symbol, typ: &mut Type, var_store: &VarStore) {
+    match typ {
+        Type::TagUnion(tags, ext) => {
+            let rec_var = var_store.fresh();
+            *typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
+            typ.substitute_alias(symbol, &Type::Variable(rec_var));
+        }
+        Type::Alias(_, _, actual) => make_tag_union_recursive(symbol, actual, var_store),
+        _ => panic!("recursion in type alias is not behind a Tag"),
+    }
 }

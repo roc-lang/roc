@@ -2132,33 +2132,51 @@ mod test_infer {
         );
     }
 
-    // infinite loop in type_to_var
-    //    #[test]
-    //    fn typecheck_mutually_recursive_tag_union() {
-    //        infer_eq_without_problem(
-    //            indoc!(
-    //                r#"
-    //                   ListA a b : [ Cons a (ListB b a), Nil ]
-    //                   ListB a b : [ Cons a (ListA b a), Nil ]
-    //
-    //                   List q : [ Cons q (List q), Nil ]
-    //
-    //                   toAs : (b -> a), ListA a b -> List a
-    //                   toAs = \f, lista ->
-    //                        when lista is
-    //                            Nil -> Nil
-    //                            Cons a listb ->
-    //                                when listb is
-    //                                    Nil -> Nil
-    //                                    Cons b newLista ->
-    //                                        Cons a (Cons (f b) (toAs f newLista))
-    //
-    //                   toAs
-    //                  "#
-    //            ),
-    //            "(b -> a), ListA a b -> List a",
-    //        );
-    //    }
+    #[test]
+    fn typecheck_mutually_recursive_tag_union() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                      ListA a b : [ Cons a (ListB b a), Nil ]
+                      ListB a b : [ Cons a (ListA b a), Nil ]
+    
+                      List q : [ Cons q (List q), Nil ]
+    
+                      toAs : (b -> a), ListA a b -> List a
+                      toAs = \f, lista ->
+                           when lista is
+                               Nil -> Nil
+                               Cons a listb ->
+                                   when listb is
+                                       Nil -> Nil
+                                       Cons b newLista ->
+                                           Cons a (Cons (f b) (toAs f newLista))
+    
+                      toAs
+                     "#
+            ),
+            "(b -> a), ListA a b -> List a",
+        );
+    }
+
+    #[test]
+    fn typecheck_mutually_recursive_tag_union_listabc() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                      ListA a : [ Cons a (ListB a) ]
+                      ListB a : [ Cons a (ListC a) ]
+                      ListC a : [ Cons a (ListA a), Nil ]
+    
+                      val : ListC Int.Int
+                      val = Cons 1 (Cons 2 (Cons 3 Nil))
+
+                      val
+                     "#
+            ),
+            "ListC Int",
+        );
+    }
 
     #[test]
     fn infer_mutually_recursive_tag_union() {
