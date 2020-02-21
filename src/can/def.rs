@@ -138,7 +138,7 @@ pub fn canonicalize_defs<'a>(
     while let Some(loc_def) = iter.next() {
         // Any time we have an Annotation followed immediately by a Body,
         // check to see if their patterns are equivalent. If they are,
-        // turn it into a TypedBody. Otherwies, give an error.
+        // turn it into a TypedBody. Otherwise, give an error.
         let pending_def = match &loc_def.value {
             Annotation(pattern, annotation) | Nested(Annotation(pattern, annotation)) => {
                 match iter.peek() {
@@ -1137,9 +1137,11 @@ pub fn can_defs_with_return<'a>(
 
     // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
-    let (ret_expr, output) =
+    let (ret_expr, mut output) =
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
-    let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
+
+    output.rigids = output.rigids.union(defs_output.rigids);
+    output.references = output.references.union(defs_output.references);
 
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
@@ -1149,8 +1151,7 @@ pub fn can_defs_with_return<'a>(
         }
     }
 
-    output.rigids = output.rigids.union(defs_output.rigids);
-    output.references = output.references.union(defs_output.references);
+    let (can_defs, output) = sort_can_defs(env, unsorted, output);
 
     match can_defs {
         Ok(decls) => {
@@ -1306,7 +1307,7 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err(_err) => panic!("TODO shadowing of type alias"),
+                Err(_err) => panic!("TODO gracefully handle shadowing of type alias"),
             }
         }
 

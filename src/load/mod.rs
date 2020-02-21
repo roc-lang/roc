@@ -40,7 +40,7 @@ pub struct Module {
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Lowercase, Variable>,
-    pub imported_modules: MutSet<ModuleId>
+    pub imported_modules: MutSet<ModuleId>,
 }
 
 #[derive(Debug)]
@@ -744,9 +744,8 @@ fn solve_module(
 ) -> MutSet<ModuleId> /* returs a set of unused imports */ {
     let home = module.module_id;
     let mut imported_symbols = Vec::with_capacity(module.references.len());
-    let mut aliases = MutMap::default();
+    let mut imported_aliases = MutMap::default();
     let mut unused_imports = module.imported_modules; // We'll remove these as we encounter them.
-
 
     // Translate referenced symbols into constraints
     for &symbol in module.references.iter() {
@@ -769,9 +768,8 @@ fn solve_module(
                         loc_symbol,
                         solved_type,
                     });
-                } None => {
-                    panic!("Could not find {:?} in builtins {:?}", symbol, builtins)
                 }
+                None => panic!("Could not find {:?} in builtins {:?}", symbol, builtins),
             }
         } else if module_id != home {
             // We already have constraints for our own symbols.
@@ -792,7 +790,7 @@ fn solve_module(
 
                     // TODO should this be a union?
                     for (k, v) in new_aliases.clone() {
-                        aliases.insert(k, v);
+                        imported_aliases.insert(k, v);
                     }
 
                     imported_symbols.push(Import {
@@ -820,7 +818,7 @@ fn solve_module(
 
     // Wrap the existing module constraint in these imported constraints.
     let constraint = constrain_imported_values(imported_symbols, constraint, &var_store);
-    let constraint = constrain_imported_aliases(aliases, constraint, &var_store);
+    let constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
     let constraint = load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
 
     // All the exposed imports should be available in the solver's vars_by_symbol
@@ -848,13 +846,6 @@ fn solve_module(
     declarations_by_id.insert(home, module.declarations);
 
     let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
-
-    let mut aliases = MutMap::default();
-
-    for (symbol, alias) in module.aliases.iter() {
-        aliases.insert(*symbol, alias.clone());
-    }
-
     let env = solve::Env {
         vars_by_symbol,
         aliases: module.aliases,
@@ -912,7 +903,7 @@ fn solve_module(
                 subs: Arc::new(solved_subs),
                 solved_types,
                 problems,
-                aliases,
+                aliases: env.aliases,
             })
             .await
             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
@@ -1033,7 +1024,7 @@ fn parse_and_constrain(
                 references,
                 aliases,
                 rigid_variables,
-                imported_modules: header.imported_modules
+                imported_modules: header.imported_modules,
             };
 
             (module, ident_ids, constraint, problems)

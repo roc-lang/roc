@@ -1,6 +1,6 @@
 interface Primary
     exposes [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, map, yay ]
-    imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Result ]
+    imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Res ]
 
 blah2 = Dep2.two
 blah3 = bar
@@ -24,12 +24,12 @@ w = Identity {}
 succeed : a -> Dep1.Identity a
 succeed = \x -> Identity x
 
-map = Result.withDefault
+map = Res.withDefault
 
-yay : Result.Result e {}
+yay : Res.Res e {}
 yay =
     v = Ok "foo"
 
     f = \_ -> {}
 
-    Result.map v f
+    Res.map v f

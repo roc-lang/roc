@@ -146,7 +146,6 @@ pub fn canonicalize_module_defs<'a>(
             for decl in declarations.iter() {
                 match decl {
                     Declare(def) => {
-                        // TODO if this doesn't work, try def.expr_var
                         for (symbol, variable) in def.pattern_vars.iter() {
                             if exposed_symbols.contains(symbol) {
                                 // This is one of our exposed symbols;

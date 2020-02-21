@@ -17,7 +17,13 @@ mod test_infer {
 
     // HELPERS
 
-    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+    fn infer_eq_help(
+        src: &str,
+    ) -> (
+        Vec<roc::types::Problem>,
+        Vec<roc::can::problem::Problem>,
+        String,
+    ) {
         let CanExprOut {
             output,
             var_store,
@@ -25,6 +31,7 @@ mod test_infer {
             constraint,
             home,
             interns,
+            problems: can_problems,
             ..
         } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
@@ -43,19 +50,23 @@ mod test_infer {
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
 
-        (unify_problems, actual_str)
+        (unify_problems, can_problems, actual_str)
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, actual) = infer_eq_help(src);
+        let (_, can_problems, actual) = infer_eq_help(src);
+
+        assert_eq!(can_problems, Vec::new());
 
         assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq_without_problem(src: &str, expected: &str) {
-        let (problems, actual) = infer_eq_help(src);
+        let (type_problems, can_problems, actual) = infer_eq_help(src);
 
-        if !problems.is_empty() {
+        assert_eq!(can_problems, Vec::new());
+
+        if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
@@ -160,21 +171,21 @@ mod test_infer {
         );
     }
 
-    // #[test]
-    // fn concat_different_types() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             empty = []
-    //             one = List.concat [ 1 ] empty
-    //             str = List.concat [ "blah" ] empty
+    #[test]
+    fn concat_different_types() {
+        infer_eq(
+            indoc!(
+                r#"
+                empty = []
+                one = List.concat [ 1 ] empty
+                str = List.concat [ "blah" ] empty
 
-    //             empty
-    //         "#
-    //         ),
-    //         "List *",
-    //     );
-    // }
+                empty
+            "#
+            ),
+            "List *",
+        );
+    }
 
     #[test]
     fn list_of_one_int() {
@@ -1171,37 +1182,283 @@ mod test_infer {
     }
 
     #[test]
-    fn annotation_using_num() {
-        infer_eq_without_problem(
+    fn annotation_using_int() {
+        infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Int.Integer
+                   int : Int
 
                    int
-                   "#
+                "#
             ),
             "Int",
         );
     }
 
     #[test]
-    #[ignore] // TODO FIXME un-ignore this when Int is a builtin type alias
-    fn annotation_using_num_used() {
-        // There was a problem where `Int`, because it is only an annotation
-        // wasn't added to the vars_by_symbol.
-        infer_eq_without_problem(
+    fn annotation_using_num_integer() {
+        infer_eq(
             indoc!(
                 r#"
                    int : Num.Num Int.Integer
 
-                   p = (\x -> x) int
-
-                   p
-                   "#
+                   int
+                "#
             ),
             "Int",
         );
     }
+
+    #[test]
+    fn annotated_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Int
+                   int = 5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Int.Int
+                   int = 5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotated_num_integer() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Num Integer
+                   int = 5.5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_num_integer() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Num.Num Int.Integer
+                   int = 5.5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotation_using_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotation_using_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num FloatingPoint
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float.Float
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotated_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotated_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num FloatingPoint
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn fake_result_ok() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Res a e : [ Okay a, Error e ]
+
+                    ok : Res Int *
+                    ok = Okay 5
+
+                    ok
+                "#
+            ),
+            "Res Int *",
+        );
+    }
+
+    #[test]
+    fn fake_result_err() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Res a e : [ Okay a, Error e ]
+
+                    err : Res * Str
+                    err = Error "blah"
+
+                    err
+                "#
+            ),
+            "Res * Str",
+        );
+    }
+
+    #[test]
+    fn basic_result_ok() {
+        infer_eq(
+            indoc!(
+                r#"
+                    ok : Result Int *
+                    ok = Ok 5
+
+                    ok
+                "#
+            ),
+            "Result Int *",
+        );
+    }
+
+    #[test]
+    fn basic_result_err() {
+        infer_eq(
+            indoc!(
+                r#"
+                    err : Result * Str
+                    err = Err "blah"
+
+                    err
+                "#
+            ),
+            "Result * Str",
+        );
+    }
+
+    #[test]
+    fn basic_result_conditional() {
+        infer_eq(
+            indoc!(
+                r#"
+                    ok : Result Int *
+                    ok = Ok 5
+
+                    err : Result * Str
+                    err = Err "blah"
+
+                    if 1 > 0 then
+                        ok
+                    else
+                        err
+                "#
+            ),
+            "Result Int Str",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num.Num Float.FloatingPoint
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    // #[test]
+    // fn annotation_using_num_used() {
+    //     // There was a problem where `Int`, because it is only an annotation
+    //     // wasn't added to the vars_by_symbol.
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                int : Int
+
+    //                p = (\x -> x) int
+
+    //                p
+    //                "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
 
     #[test]
     fn num_identity() {
@@ -1350,9 +1607,9 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Result e a : [ Ok a, Err e ]
+                    Res e a : [ Ok a, Err e ]
 
-                    map : (a -> b), Result e a -> Result e b
+                    map : (a -> b), Res e a -> Res e b
                     map = \f, result ->
                         when result is
                             Ok v -> Ok (f v)
@@ -1361,7 +1618,7 @@ mod test_infer {
                     map
                        "#
             ),
-            "(a -> b), Result e a -> Result e b",
+            "(a -> b), Res e a -> Res e b",
         );
     }
 
@@ -1470,13 +1727,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    empty : [ Cons a (List a), Nil ] as List a
+                    empty : [ Cons a (ConsList a), Nil ] as ConsList a
                     empty = Nil
 
                     empty
                        "#
             ),
-            "List a",
+            "ConsList a",
         );
     }
 
@@ -1485,13 +1742,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    singleton : a -> [ Cons a (List a), Nil ] as List a
+                    singleton : a -> [ Cons a (ConsList a), Nil ] as ConsList a
                     singleton = \x -> Cons x Nil
 
                     singleton
                        "#
             ),
-            "a -> List a",
+            "a -> ConsList a",
         );
     }
 
@@ -1559,9 +1816,9 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                    map : (a -> b), List a -> List b
+                    map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
                         when list is
                             Nil -> Nil
@@ -1571,7 +1828,7 @@ mod test_infer {
                     map
                        "#
             ),
-            "(a -> b), List a -> List b",
+            "(a -> b), ConsList a -> ConsList b",
         );
     }
 
@@ -1636,22 +1893,24 @@ mod test_infer {
             "<type mismatch>",
         );
     }
-    // doesn't currently print the error, but does report a problem
-    //    #[test]
-    //    fn nums() {
-    //        infer_eq_without_problem(
-    //            indoc!(
-    //                r#"
-    //                s : Num.Num a
-    //                s = 3.1
+
+    // TODO As intended, this fails, but it fails with the wrong error!
     //
-    //                s
-    //                "#
-    //            ),
-    //            "<type mismatch>",
-    //        );
-    //    }
-    //
+    // #[test]
+    // fn nums() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                 s : Num *
+    //                 s = 3.1
+
+    //                 s
+    //                 "#
+    //         ),
+    //         "<Type Mismatch: _____________>",
+    //     );
+    // }
+
     #[test]
     fn manual_attr() {
         infer_eq(
@@ -1693,15 +1952,32 @@ mod test_infer {
     }
 
     #[test]
+    fn unit_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Unit : [ Unit ]
+
+                    unit : Unit
+                    unit = Unit
+
+                    unit
+                "#
+            ),
+            "Unit",
+        );
+    }
+
+    #[test]
     fn rigid_in_letnonrec() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                    toEmpty : List a -> List a
+                    toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
-                        result : List a
+                        result : ConsList a
                         result = Nil
 
                         result
@@ -1709,7 +1985,7 @@ mod test_infer {
                     toEmpty
                 "#
             ),
-            "List a -> List a",
+            "ConsList a -> ConsList a",
         );
     }
 
@@ -1718,11 +1994,11 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                    toEmpty : List a -> List a
+                    toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
-                        result : List a
+                        result : ConsList a
                         result = Nil
 
                         toEmpty result
@@ -1730,7 +2006,7 @@ mod test_infer {
                     toEmpty
                 "#
             ),
-            "List a -> List a",
+            "ConsList a -> ConsList a",
         );
     }
 
@@ -1802,29 +2078,29 @@ mod test_infer {
         );
     }
 
-    //    #[test]
-    //    fn let_tag_pattern_with_annotation() {
-    //        infer_eq_without_problem(
-    //            indoc!(
-    //                r#"
-    //                UserId x : [ UserId Int ]
-    //                UserId x = UserId 42
-    //
-    //                x
-    //               "#
-    //            ),
-    //            "Int",
-    //        );
-    //    }
+    // #[test]
+    // fn let_tag_pattern_with_annotation() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                 UserId x : [ UserId Int ]
+    //                 UserId x = UserId 42
+
+    //                 x
+    //             "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
 
     #[test]
     fn typecheck_record_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List q : [ Cons { x: q, xs: List q }, Nil ]
+                    ConsList q : [ Cons { x: q, xs: ConsList q }, Nil ]
 
-                    map : (a -> b), List a -> List b
+                    map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
                         when list is
                             Nil -> Nil
@@ -1834,7 +2110,7 @@ mod test_infer {
                     map
                 "#
             ),
-            "(a -> b), List a -> List b",
+            "(a -> b), ConsList a -> ConsList b",
         );
     }
 

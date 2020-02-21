@@ -182,8 +182,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     let mut scope = Scope::new(home);
     let dep_idents = IdentIds::exposed_builtins(0);
-    let home_ident_ids = IdentIds::default();
-    let mut env = Env::new(home, dep_idents, &module_ids, home_ident_ids);
+    let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &var_store,
@@ -339,7 +338,7 @@ pub fn assert_correct_variable_usage(constraint: &Constraint) {
 
         println!("difference: {:?}", &diff);
 
-        assert_eq!(0, 1);
+        panic!("variable usage problem (see stdout for details)");
     }
 }
 

@@ -28,7 +28,7 @@ impl Scope {
     pub fn new(home: ModuleId) -> Scope {
         Scope {
             home,
-            idents: ImMap::default(),
+            idents: Symbol::default_in_scope(),
             symbols: ImMap::default(),
             aliases: ImMap::default(),
         }

@@ -1,7 +1,5 @@
-// #[macro_use]
-// extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
+#[macro_use]
+extern crate pretty_assertions;
 #[macro_use]
 extern crate maplit;
 
@@ -156,7 +154,39 @@ mod test_load {
     }
 
     #[test]
-    fn load_and_infer() {
+    fn load_unit() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module =
+                load_fixture("no_deps", "Unit", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "unit" => "Unit.Unit",
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn import_alias() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module =
+                load_fixture("interface_with_deps", "ImportAlias", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "unit" => "Dep1.Unit",
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn load_and_typecheck() {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
@@ -179,7 +209,7 @@ mod test_load {
     }
 
     #[test]
-    fn load_and_infer_quicksort() {
+    fn load_and_typecheck_quicksort() {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
@@ -189,8 +219,8 @@ mod test_load {
                 loaded_module,
                 hashmap! {
                     "swap" => "Int, Int, List a -> List a",
-                    "partition" => "Num Integer, Int, List a -> [ Pair Num Integer List a ]*",
-                    "quicksort" => "List a, Num Integer, Num Integer -> List a",
+                    "partition" => "Int, Int, List a -> [ Pair Int (List a) ]*",
+                    "quicksort" => "List a, Int, Int -> List a",
                 },
             );
         });
@@ -201,7 +231,7 @@ mod test_load {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
-                load_fixture("interface_with_deps", "Principal", subs_by_module).await;
+                load_fixture("no_deps", "Principal", subs_by_module).await;
 
             expect_types(
                 loaded_module,
@@ -231,8 +261,8 @@ mod test_load {
                     "z" => "Dep1.Unit",
                     "w" => "Dep1.Identity {}",
                     "succeed" => "a -> Dep1.Identity a",
-                    "yay" => "Result.Result e {}",
-                    "map" => "Result.Result * a, a -> a",
+                    "yay" => "Res.Res e {}",
+                    "map" => "Res.Res * a, a -> a",
                 },
             );
         });

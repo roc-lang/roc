@@ -38,7 +38,7 @@ pub fn headers_from_annotation(
     }
 }
 
-pub fn headers_from_annotation_help(
+fn headers_from_annotation_help(
     pattern: &Pattern,
     annotation: &Located<Type>,
     headers: &mut SendMap<Symbol, Located<Type>>,
