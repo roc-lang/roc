@@ -17,7 +17,13 @@ mod test_infer {
 
     // HELPERS
 
-    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+    fn infer_eq_help(
+        src: &str,
+    ) -> (
+        Vec<roc::types::Problem>,
+        Vec<roc::can::problem::Problem>,
+        String,
+    ) {
         let CanExprOut {
             output,
             var_store,
@@ -25,6 +31,7 @@ mod test_infer {
             constraint,
             home,
             interns,
+            problems: can_problems,
             ..
         } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
@@ -43,19 +50,23 @@ mod test_infer {
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
 
-        (unify_problems, actual_str)
+        (unify_problems, can_problems, actual_str)
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, actual) = infer_eq_help(src);
+        let (_, can_problems, actual) = infer_eq_help(src);
+
+        assert_eq!(can_problems, Vec::new());
 
         assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq_without_problem(src: &str, expected: &str) {
-        let (problems, actual) = infer_eq_help(src);
+        let (type_problems, can_problems, actual) = infer_eq_help(src);
 
-        if !problems.is_empty() {
+        assert_eq!(can_problems, Vec::new());
+
+        if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
