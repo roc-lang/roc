@@ -170,6 +170,11 @@ pub fn fmt_expr<'a>(
                     fmt_pattern(buf, &when_pattern.value, indent + INDENT, false, true);
                 }
 
+                if let Some(guard_expr) = &branch.guard {
+                    buf.push_str(" if ");
+                    fmt_expr(buf, &guard_expr.value, indent + INDENT, false, true);
+                }
+
                 buf.push_str(" ->\n");
 
                 add_spaces(buf, indent + (INDENT * 2));
@@ -237,7 +242,7 @@ pub fn fmt_expr<'a>(
             buf.push('.');
             buf.push_str(key);
         }
-        other => panic!("TODO implement Display for AST variant {:?}", other),
+        other => panic!("TODO implement Fmt for AST variant {:?}", other),
     }
 }
 

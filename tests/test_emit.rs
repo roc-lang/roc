@@ -606,4 +606,42 @@ mod test_gen {
             f64
         );
     }
+
+    // #[test]
+    // fn basic_record() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 point = { x: 15, y: 17, z: 19 }
+
+    //                 point.x
+    //             "#
+    //         ),
+    //         15,
+    //         i64
+    //     );
+
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 point = { x: 15, y: 17, z: 19 }
+
+    //                 point.y
+    //             "#
+    //         ),
+    //         17,
+    //         i64
+    //     );
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 point = { x: 15, y: 17, z: 19 }
+
+    //                 point.z
+    //             "#
+    //         ),
+    //         19,
+    //         i64
+    //     );
+    // }
 }

@@ -1,3 +1,5 @@
+use std::convert::TryFrom;
+
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use cranelift::frontend::Switch;
@@ -206,6 +208,47 @@ pub fn build_expr<'a, B: Backend>(
             }
             None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
         },
+        Struct { layout, fields } => {
+            let cfg = env.cfg;
+
+            // Sort the fields
+            let mut sorted_fields = Vec::with_capacity_in(fields.len(), env.arena);
+            for field in fields.iter() {
+                sorted_fields.push(field);
+            }
+            sorted_fields.sort_by_key(|k| &k.0);
+
+            // Create a slot
+            let slot = builder.create_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                layout.stack_size(cfg),
+            ));
+
+            // Create instructions for storing each field's expression
+            for (index, (_, ref inner_expr)) in sorted_fields.iter().enumerate() {
+                let val = build_expr(env, &scope, module, builder, inner_expr, procs);
+
+                // Is there an existing function for this?
+                let field_size = match inner_expr {
+                    Int(_) => std::mem::size_of::<i64>(),
+                    _ => panic!("I don't yet know how to calculate the offset for {:?} when building a cranelift struct", val),
+                };
+                let offset = i32::try_from(index * field_size)
+                    .expect("TODO handle field size conversion to i32");
+
+                builder.ins().stack_store(val, slot, Offset32::new(offset));
+            }
+
+            let ir_type = type_from_layout(cfg, layout);
+            builder.ins().stack_addr(ir_type, slot, Offset32::new(0))
+        }
+        // Access {
+        //     label,
+        //     field_layout,
+        //     struct_layout,
+        // } => {
+        //     panic!("I don't yet know how to crane build {:?}", expr);
+        // }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
         }

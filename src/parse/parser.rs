@@ -189,6 +189,7 @@ pub enum FailReason {
     TooManyLines,
     Eof(Region),
     InvalidPattern,
+    ReservedKeyword(Region),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

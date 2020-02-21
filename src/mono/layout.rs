@@ -5,13 +5,12 @@ use crate::subs::{Content, FlatType, Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use cranelift_codegen::isa::TargetFrontendConfig;
-use inlinable_string::InlinableString;
 
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
-    Struct(&'a [(InlinableString, Layout<'a>)]),
+    Struct(&'a [(Lowercase, Layout<'a>)]),
     Pointer(&'a Layout<'a>),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
@@ -155,8 +154,47 @@ fn layout_from_flat_type<'a>(
         }
         Record(mut fields, ext_var) => {
             flatten_record(&mut fields, ext_var, subs);
+            let ext_content = subs.get_without_compacting(ext_var).content;
+            let ext_layout = match Layout::from_content(arena, ext_content, subs) {
+                Ok(layout) => layout,
+                Err(()) => {
+                    // Invalid record!
+                    panic!("TODO gracefully handle record with invalid ext_var");
+                }
+            };
 
-            panic!("TODO make Layout for non-empty Record");
+            let mut field_layouts;
+
+            match ext_layout {
+                Layout::Struct(more_fields) => {
+                    field_layouts = Vec::with_capacity_in(fields.len() + more_fields.len(), arena);
+
+                    for (label, field) in more_fields {
+                        field_layouts.push((label.clone(), field.clone()));
+                    }
+                }
+                _ => {
+                    panic!(
+                        "TODO handle Layout for invalid record extension, specifically {:?}",
+                        ext_layout
+                    );
+                }
+            }
+
+            for (label, field_var) in fields {
+                let field_content = subs.get_without_compacting(field_var).content;
+                let field_layout = match Layout::from_content(arena, field_content, subs) {
+                    Ok(layout) => layout,
+                    Err(()) => {
+                        // Invalid field!
+                        panic!("TODO gracefully handle record with invalid field.var");
+                    }
+                };
+
+                field_layouts.push((label.clone(), field_layout));
+            }
+
+            Ok(Layout::Struct(field_layouts.into_bump_slice()))
         }
         TagUnion(mut tags, ext_var) => {
             // Recursively inject the contents of ext_var into tags
