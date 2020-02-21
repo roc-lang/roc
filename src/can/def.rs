@@ -702,14 +702,17 @@ fn canonicalize_pending_def<'a>(
 
     match pending_def {
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
-            // TODO we have ann.references here, which includes information about
-            // which symbols were referenced in type annotations, but we never
-            // use them. We discard them!
-
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
             let ann =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
+
+            // Record all the annotation's references in output.references.lookups
+            let lookups = &mut output.references.lookups;
+
+            for symbol in ann.references {
+                lookups.insert(symbol);
+            }
 
             for (symbol, alias) in ann.aliases.clone() {
                 aliases.insert(symbol, alias);
@@ -798,6 +801,13 @@ fn canonicalize_pending_def<'a>(
             let symbol = name.value;
             let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
 
+            // Record all the annotation's references in output.references.lookups
+            let lookups = &mut output.references.lookups;
+
+            for symbol in can_ann.references {
+                lookups.insert(symbol);
+            }
+
             let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
 
             for loc_lowercase in vars {
@@ -831,22 +841,22 @@ fn canonicalize_pending_def<'a>(
             let alias = scope.lookup_alias(symbol).expect("alias was not added");
             aliases.insert(symbol, alias.clone());
 
-            // TODO should probably incorporate can_ann.references here - possibly by
-            // inserting them into refs_by_symbol?
-
             // aliases cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
             for (k, v) in can_ann.rigids {
                 output.rigids.insert(k, v);
             }
         }
-
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
-            // TODO we have ann.references here, which includes information about
-            // which symbols were referenced in type annotations, but we never
-            // use them. We discard them!
             let ann =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
+
+            // Record all the annotation's references in output.references.lookups
+            let lookups = &mut output.references.lookups;
+
+            for symbol in ann.references {
+                lookups.insert(symbol);
+            }
 
             let typ = ann.typ;
 
