@@ -1101,9 +1101,11 @@ pub fn can_defs_with_return<'a>(
 
     // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
-    let (ret_expr, output) =
+    let (ret_expr, mut output) =
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
-    let (can_defs, mut output) = sort_can_defs(env, unsorted, output);
+
+    output.rigids = output.rigids.union(defs_output.rigids);
+    output.references = output.references.union(defs_output.references);
 
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
@@ -1113,8 +1115,7 @@ pub fn can_defs_with_return<'a>(
         }
     }
 
-    output.rigids = output.rigids.union(defs_output.rigids);
-    output.references = output.references.union(defs_output.references);
+    let (can_defs, output) = sort_can_defs(env, unsorted, output);
 
     match can_defs {
         Ok(decls) => {
