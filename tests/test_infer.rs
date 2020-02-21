@@ -54,17 +54,13 @@ mod test_infer {
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, can_problems, actual) = infer_eq_help(src);
-
-        assert_eq!(can_problems, Vec::new());
+        let (_, _can_problems, actual) = infer_eq_help(src);
 
         assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq_without_problem(src: &str, expected: &str) {
-        let (type_problems, can_problems, actual) = infer_eq_help(src);
-
-        assert_eq!(can_problems, Vec::new());
+        let (type_problems, _, actual) = infer_eq_help(src);
 
         if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
@@ -912,13 +908,13 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                fn = \rec ->
-                    x = rec.x
+                    fn = \rec ->
+                        x = rec.x
 
-                    rec
+                        rec
 
-                fn
-            "#
+                    fn
+                "#
             ),
             "{ x : a }b -> { x : a }b",
         );
@@ -929,11 +925,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            bar : custom -> custom
-            bar = \x -> x
+                    bar : custom -> custom
+                    bar = \x -> x
 
-            bar
-            "#
+                    bar
+                "#
             ),
             "custom -> custom",
         );
@@ -944,10 +940,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            foo: Str -> {}
+                    foo: Str -> {}
 
-            foo "hi"
-            "#
+                    foo "hi"
+                "#
             ),
             "{}",
         );
@@ -958,10 +954,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            foo : Int -> custom
+                    foo : Int -> custom
 
-            foo 2
-            "#
+                    foo 2
+                "#
             ),
             "custom",
         );
@@ -977,10 +973,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            { x, y } : { x : ({} -> custom), y : {} }
+                    { x, y } : { x : ({} -> custom), y : {} }
 
-            x
-            "#
+                    x
+                "#
             ),
             "{} -> custom",
         );
@@ -991,13 +987,13 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                # technically, an empty record can be destructured
-                {} = {}
-                bar = \{} -> 42
+                    # technically, an empty record can be destructured
+                    {} = {}
+                    bar = \{} -> 42
 
-                when foo is
-                    { x: {} } -> x
-            "#
+                    when foo is
+                        { x: {} } -> x
+                "#
             ),
             "{}*",
         );
@@ -1107,11 +1103,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                f = \x ->
-                    when x is
-                        { a, b } -> a
+                    f = \x ->
+                        when x is
+                            { a, b: _ } -> a
 
-                f
+                    f
                 "#
             ),
             "{ a : a, b : * }* -> a",
@@ -1555,13 +1551,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo = \rec ->
+                    foo = \rec ->
                         when rec is
-                            { x } -> "1"
-                            { y } -> "2"
+                            { x: _ } -> "1"
+                            { y: _ } -> "2"
 
-                foo
-                      "#
+                    foo
+                "#
             ),
             "{ x : *, y : * }* -> Str",
         );
@@ -1662,7 +1658,7 @@ mod test_infer {
             indoc!(
                 r#"
                     foo : Str.Str as Foo -> Foo
-                    foo = \x -> "foo"
+                    foo = \_ -> "foo"
 
                     foo
                 "#
@@ -1676,12 +1672,12 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Foo : Str.Str
+                    Foo : Str.Str
 
-                foo : Foo -> Foo
-                foo = \x -> "foo"
+                    foo : Foo -> Foo
+                    foo = \_ -> "foo"
 
-                foo
+                    foo
                 "#
             ),
             "Foo -> Foo",
@@ -2164,15 +2160,15 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                      ListA a : [ Cons a (ListB a) ]
-                      ListB a : [ Cons a (ListC a) ]
-                      ListC a : [ Cons a (ListA a), Nil ]
+                    ListA a : [ Cons a (ListB a) ]
+                    ListB a : [ Cons a (ListC a) ]
+                    ListC a : [ Cons a (ListA a), Nil ]
 
-                      val : ListC Int.Int
-                      val = Cons 1 (Cons 2 (Cons 3 Nil))
+                    val : ListC Int.Int
+                    val = Cons 1 (Cons 2 (Cons 3 Nil))
 
-                      val
-                     "#
+                    val
+                "#
             ),
             "ListC Int",
         );
