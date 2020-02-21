@@ -139,7 +139,7 @@ pub fn canonicalize_defs<'a>(
     while let Some(loc_def) = iter.next() {
         // Any time we have an Annotation followed immediately by a Body,
         // check to see if their patterns are equivalent. If they are,
-        // turn it into a TypedBody. Otherwies, give an error.
+        // turn it into a TypedBody. Otherwise, give an error.
         let pending_def = match &loc_def.value {
             Annotation(pattern, annotation) | Nested(Annotation(pattern, annotation)) => {
                 match iter.peek() {
