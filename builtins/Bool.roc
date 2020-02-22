@@ -8,10 +8,19 @@ Bool : [ False, True ]
 ## Returns #False when given #True, and vice versa.
 not : Bool -> Bool
 
-## Returns #True when given #True for *both arguments*, and #False if either
-## argument is #False.
+## Returns #True when given #True and #True, and #False when either argument is #False.
 ##
-## ### Performance Notes
+## `a && b` is shorthand for `Bool.and a b`
+##
+## >>> True && True
+##
+## >>> True && False
+##
+## >>> False && True
+##
+## >>> False && False
+##
+## ## Performance Notes
 ##
 ## In dev builds, this works exactly as described. In release builds, as a
 ## performance optimization, the compiler translates calls to #Bool.and
@@ -54,10 +63,19 @@ not : Bool -> Bool
 and : Bool, Bool -> Bool
 
 
-## Returns #True when given #True for *either argument*, and #False only if
-## both arguments are #False.
+## Returns #True when given #True for either argument, and #False only when given #False and #False.
 ##
-## ### Performance Notes
+## `a || b` is shorthand for `Bool.or a b`.
+##
+## >>> True || True
+#
+## >>> True || False
+#
+## >>> False || True
+##
+## >>> False || False
+##
+## ## Performance Notes
 ##
 ## #Bool.or does the same "compile to a conditional in release mode" optimization
 ## that #Bool.and does, except it short-circuits when the first argument is
