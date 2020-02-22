@@ -265,7 +265,7 @@ pub fn build_expr<'a, B: Backend>(
 
             let offset = sorted_fields
                 .iter()
-                .take(target_index)
+                .take(target_index + 1)
                 .map(|(_, layout)| match layout {
                     Layout::Builtin(Builtin::Int64) => std::mem::size_of::<i64>(),
                     _ => panic!(
