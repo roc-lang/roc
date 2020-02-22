@@ -184,11 +184,7 @@ pub fn canonicalize_defs<'a>(
 
     for pending_def in pending.into_iter() {
         match pending_def {
-            PendingDef::Alias { name, vars, ann } =>
-            //        name: Located<Symbol>,
-            //        vars: Vec<Located<Lowercase>>,
-            //        ann: &'a Located<ast::TypeAnnotation<'a>>,
-            {
+            PendingDef::Alias { name, vars, ann } => {
                 let symbol = name.value;
                 let mut can_ann =
                     canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
