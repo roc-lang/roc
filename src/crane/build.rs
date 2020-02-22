@@ -205,6 +205,7 @@ pub fn build_expr<'a, B: Backend>(
             None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
         },
         Struct { layout, fields } => {
+            let subs = &env.subs;
             let cfg = env.cfg;
 
             // Sort the fields
@@ -235,9 +236,8 @@ pub fn build_expr<'a, B: Backend>(
                 builder.ins().stack_store(val, slot, Offset32::new(offset));
             }
 
-            builder
-                .ins()
-                .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
+            let ir_type = type_from_layout(cfg, layout, subs);
+            builder.ins().stack_load(ir_type, slot, Offset32::new(0))
         }
         Access {
             label,
