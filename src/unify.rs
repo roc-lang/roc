@@ -621,13 +621,10 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
             // If the other is flex, rigid wins!
             merge(subs, ctx, RigidVar(name.clone()))
         }
-        RigidVar(_) | Structure(_) => {
+        RigidVar(_) | Structure(_) | Alias(_, _, _) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!()
-        }
-        Alias(_, _, _) => {
-            panic!("TODO unify_rigid Alias");
         }
         Error => {
             // Error propagates.
