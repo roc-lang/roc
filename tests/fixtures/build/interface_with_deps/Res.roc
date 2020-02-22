@@ -2,7 +2,7 @@ interface Res
     exposes [ Res, withDefault, map, andThen, ConsList ]
     imports []
 
-Res e a : [ Ok a, Err e ]
+Res ok err : [ Ok ok, Err err ]
 
 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -13,20 +13,20 @@ ConsList a : [ Cons a (ConsList a), Nil ]
         # Nil -> Nil
         # Cons x xs -> Cons (f x) (listMap xs f)
 
-map : Res e a, (a -> b) -> Res e b
-map = \result, f ->
+map : Res a err, (a -> b) -> Res b err
+map = \result, transform ->
     when result is
-        Ok v -> Ok (f v)
-        Err e -> Err e
+        Ok ok -> Ok (transform ok)
+        Err err -> Err err
 
-withDefault : Res x a, a -> a
+withDefault : Res ok err, ok -> ok
 withDefault = \result, default ->
     when result is
-        Ok v -> v
+        Ok ok -> ok
         Err _ -> default
 
-andThen : Res e a, (a -> Res e b) -> Res e b
-andThen = \result, f ->
+andThen : Res a err, (a -> Res b err) -> Res b err
+andThen = \result, transform ->
     when result is
-        Ok v -> f v
-        Err e -> Err e
+        Ok ok -> transform ok
+        Err err -> Err err

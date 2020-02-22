@@ -26,10 +26,10 @@ succeed = \x -> Identity x
 
 map = Res.withDefault
 
-yay : Res.Res e {}
+yay : Res.Res {} err
 yay =
-    v = Ok "foo"
+    ok = Ok "foo"
 
     f = \_ -> {}
 
-    Res.map v f
+    Res.map ok f

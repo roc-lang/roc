@@ -259,8 +259,8 @@ mod test_load {
                     "z" => "Dep1.Unit",
                     "w" => "Dep1.Identity {}",
                     "succeed" => "a -> Dep1.Identity a",
-                    "yay" => "Res.Res e {}",
-                    "map" => "Res.Res * a, a -> a",
+                    "yay" => "Res.Res {} err",
+                    "map" => "Res.Res a *, a -> a",
                 },
             );
         });
