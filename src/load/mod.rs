@@ -13,7 +13,7 @@ use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceH
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
-use crate::solve::{self, ExposedModuleTypes, Solved, SolvedType, SubsByModule};
+use crate::solve::{self, ExposedModuleTypes, Solved, BuiltinAlias, SolvedType, SubsByModule};
 use crate::subs::{Subs, VarStore, Variable};
 use crate::types::{self, Alias, Constraint};
 use bumpalo::Bump;
@@ -208,6 +208,7 @@ pub async fn load<'a>(
 
     let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
     let builtins = builtins::types();
+    let builtin_aliases = builtins::aliases();
 
     // TODO can be removed I think
     let vars_by_symbol = SendMap::default();
@@ -368,6 +369,7 @@ pub async fn load<'a>(
                         &mut exposed_types,
                         &mut declarations_by_id,
                         &builtins,
+                        &builtin_aliases,
                         vars_by_symbol.clone(),
                     );
                 } else {
@@ -458,6 +460,7 @@ pub async fn load<'a>(
                                     &mut exposed_types,
                                     &mut declarations_by_id,
                                     &builtins,
+                                    &builtin_aliases,
                                     vars_by_symbol.clone(),
                                 );
 
@@ -740,6 +743,7 @@ fn solve_module(
     exposed_types: &mut SubsByModule,
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
     builtins: &MutMap<Symbol, (SolvedType, Region)>,
+    builtin_aliases: &MutMap<Symbol, BuiltinAlias>,
     mut vars_by_symbol: SendMap<Symbol, Variable>,
 ) -> MutSet<ModuleId> /* returs a set of unused imports */ {
     let home = module.module_id;
@@ -769,7 +773,21 @@ fn solve_module(
                         solved_type,
                     });
                 }
-                None => panic!("Could not find {:?} in builtins {:?}", symbol, builtins),
+                // This wasn't a builtin value; maybe it was a builtin alias.
+                None => match builtin_aliases.get(&symbol) {
+                    Some(BuiltinAlias { region, typ, .. }) => {
+                        let loc_symbol = Located {
+                            value: symbol,
+                            region: *region,
+                        };
+
+                        imported_symbols.push(Import {
+                            loc_symbol,
+                            solved_type: typ,
+                        });
+                    }
+                    None => panic!("Could not find {:?} in builtins {:?} or in builtin_aliases {:?}", symbol, builtins, builtin_aliases),
+                }
             }
         } else if module_id != home {
             // We already have constraints for our own symbols.
