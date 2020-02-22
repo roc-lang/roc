@@ -157,13 +157,12 @@ mod test_load {
     fn load_unit() {
         test_async(async {
             let subs_by_module = MutMap::default();
-            let loaded_module =
-                load_fixture("no_deps", "Unit", subs_by_module).await;
+            let loaded_module = load_fixture("no_deps", "Unit", subs_by_module).await;
 
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "unit" => "Unit.Unit",
+                    "unit" => "Unit",
                 },
             );
         });
@@ -230,8 +229,7 @@ mod test_load {
     fn load_principal_types() {
         test_async(async {
             let subs_by_module = MutMap::default();
-            let loaded_module =
-                load_fixture("no_deps", "Principal", subs_by_module).await;
+            let loaded_module = load_fixture("no_deps", "Principal", subs_by_module).await;
 
             expect_types(
                 loaded_module,

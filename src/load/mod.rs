@@ -819,7 +819,10 @@ fn solve_module(
     // Wrap the existing module constraint in these imported constraints.
     let constraint = constrain_imported_values(imported_symbols, constraint, &var_store);
     let constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
-    let constraint = load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
+    let mut constraint = load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
+
+    // Turn Apply into Alias
+    constraint.instantiate_aliases(&var_store);
 
     // All the exposed imports should be available in the solver's vars_by_symbol
     for (symbol, expr_var) in module.exposed_imports.iter() {
