@@ -290,6 +290,12 @@ mod test_canonicalize {
         } = can_expr_with(&arena, test_home(), src);
 
         // There should be two UnusedDef problems: one for h, and one for p
+        if true {
+            panic!(
+            "FIXME this should always be [UnusedDef(h), UnusedDef(p)], but instead it alternates between UnusedDef(g, h, or p) nondeterministically: {:?}",
+            problems
+        );
+        }
         assert_eq!(problems.len(), 2);
         assert!(problems.iter().all(|problem| match problem {
             Problem::UnusedDef(_, _) => true,
