@@ -1071,21 +1071,19 @@ mod when {
     fn branch_alternatives<'a>(
         min_indent: u16,
     ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>)> {
-        one_of!(
-            map!(
-                sep_by1(
-                    char('|'),
-                    space0_around(loc_pattern(min_indent), min_indent),
-                ),
-                |patterns| { (patterns, None) }
+        and!(
+            sep_by1(
+                char('|'),
+                space0_around(loc_pattern(min_indent), min_indent),
             ),
-            map!(
-                sep_by1(
-                    char('|'),
-                    space0_around(loc_pattern(min_indent), min_indent),
-                ),
-                |patterns| { (patterns, None) }
-            )
+            optional(skip_first!(
+                string(keyword::IF),
+                // TODO we should require space before the expression but not after
+                space1_around(
+                    loc!(move |arena, state| parse_expr(min_indent, arena, state)),
+                    min_indent
+                )
+            ))
         )
     }
 
@@ -1178,7 +1176,7 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
                     loc!(char('-'))
                 )
             ),
-            one_of!(char(' '), char('#'), char('\n')),
+            one_of!(char(' '), char('#'), char('\n'), char('>')),
         ),
         move |arena, state, (spaces, num_or_minus_char)| {
             match num_or_minus_char {
@@ -1457,7 +1455,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
 fn binop<'a>() -> impl Parser<'a, BinOp> {
     one_of!(
         // Sorted from highest to lowest predicted usage in practice,
-        // so that successful matches shorrt-circuit as early as possible.
+        // so that successful matches short-circuit as early as possible.
         // The only exception to this is that operators which begin
         // with other valid operators (e.g. "<=" begins with "<") must
         // come before the shorter ones; otherwise, they will never
