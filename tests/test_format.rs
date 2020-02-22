@@ -1525,6 +1525,37 @@ mod test_format {
         );
     }
 
+    #[test]
+    fn multi_line_when_condition() {
+        expr_formats_same(indoc!(
+            r#"
+            when
+                complexFunction a b c
+            is
+                1 ->
+                    Nothing
+
+                _ ->
+                    Just True
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            when
+                # this is quite complicated
+                complexFunction a b c
+                # Watch out
+            is
+                Complex x y ->
+                    simplify x y
+
+                Simple z ->
+                    z
+            "#
+        ));
+    }
+
     // NEWLINES
 
     #[test]
