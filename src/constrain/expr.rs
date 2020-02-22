@@ -865,6 +865,7 @@ pub fn rec_defs_help(
     mut flex_info: Info,
 ) -> Constraint {
     let mut def_aliases = SendMap::default();
+
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);

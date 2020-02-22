@@ -1006,7 +1006,6 @@ fn parse_and_constrain(
         Ok(ModuleOutput {
             declarations,
             exposed_imports,
-            lookups,
             ident_ids,
             exposed_vars_by_symbol,
             references,
@@ -1015,7 +1014,7 @@ fn parse_and_constrain(
             problems,
             ..
         }) => {
-            let constraint = constrain_module(module_id, &declarations, lookups);
+            let constraint = constrain_module(module_id, &declarations);
             let module = Module {
                 module_id,
                 declarations,

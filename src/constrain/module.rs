@@ -3,7 +3,7 @@ use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::constrain::expr::constrain_decls;
 use crate::module::symbol::{ModuleId, Symbol};
-use crate::region::{Located, Region};
+use crate::region::Located;
 use crate::solve::{BuiltinAlias, SolvedType};
 use crate::subs::{VarId, VarStore, Variable};
 use crate::types::{Alias, Constraint, LetConstraint, Type};
@@ -12,9 +12,7 @@ use crate::types::{Alias, Constraint, LetConstraint, Type};
 pub fn constrain_module(
     home: ModuleId,
     decls: &[Declaration],
-    _lookups: Vec<(Symbol, Variable, Region)>,
 ) -> Constraint {
-    // NOTE lookups are now not included!
     constrain_decls(home, &decls)
 }
 
@@ -84,6 +82,7 @@ pub fn load_builtin_aliases(
     // Load all builtin aliases.
     // TODO load only the ones actually used in this module
     let mut def_aliases = SendMap::default();
+
     for (symbol, builtin_alias) in aliases {
         let mut free_vars = FreeVars::default();
 
@@ -280,6 +279,7 @@ pub fn constrain_imported_aliases(
     for (symbol, imported_alias) in aliases {
         let mut vars = Vec::with_capacity(imported_alias.vars.len());
         let mut substitution = ImMap::default();
+
         for Located {
             region,
             value: (lowercase, old_var),
@@ -291,6 +291,7 @@ pub fn constrain_imported_aliases(
         }
 
         let mut actual = imported_alias.typ.clone();
+
         actual.substitute(&substitution);
 
         let alias = Alias {
