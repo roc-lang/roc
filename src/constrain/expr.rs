@@ -51,7 +51,7 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
 
 #[inline(always)]
 pub fn exists_with_aliases(
-    aliases: SendMap<Symbol, Alias>,
+    def_aliases: SendMap<Symbol, Alias>,
     flex_vars: Vec<Variable>,
     constraint: Constraint,
 ) -> Constraint {
@@ -59,7 +59,7 @@ pub fn exists_with_aliases(
         rigid_vars: Vec::new(),
         flex_vars,
         def_types: SendMap::default(),
-        def_aliases: aliases,
+        def_aliases,
         defs_constraint: constraint,
         ret_constraint: Constraint::True,
     }))
