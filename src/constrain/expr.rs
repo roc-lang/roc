@@ -678,6 +678,7 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
     Eq(EmptyRec, expected, region)
 }
 
+/// Constrain top-level module declarations
 #[inline(always)]
 pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
