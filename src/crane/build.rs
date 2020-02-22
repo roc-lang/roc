@@ -205,7 +205,6 @@ pub fn build_expr<'a, B: Backend>(
             None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
         },
         Struct { layout, fields } => {
-            let subs = &env.subs;
             let cfg = env.cfg;
 
             // Sort the fields
@@ -236,16 +235,54 @@ pub fn build_expr<'a, B: Backend>(
                 builder.ins().stack_store(val, slot, Offset32::new(offset));
             }
 
-            let ir_type = type_from_layout(cfg, layout, subs);
-            builder.ins().stack_addr(ir_type, slot, Offset32::new(0))
+            builder
+                .ins()
+                .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
-        // Access {
-        //     label,
-        //     field_layout,
-        //     struct_layout,
-        // } => {
-        //     panic!("I don't yet know how to crane build {:?}", expr);
-        // }
+        Access {
+            label,
+            field_layout,
+            struct_layout: Layout::Struct(fields),
+        } => {
+            let cfg = env.cfg;
+
+            // Reconstruct and sort the struct. Why does the struct_layout not contain all the fields?
+            let mut fields = Vec::with_capacity_in(fields.len() + 1, env.arena);
+            fields.push((label, field_layout));
+
+            // Sort them, TODO: refactor duplicated code here and in the Record pattern above
+            let mut sorted_fields = Vec::with_capacity_in(fields.len(), env.arena);
+            for field in fields.iter() {
+                sorted_fields.push(field);
+            }
+            sorted_fields.sort_by_key(|k| &k.0);
+
+            // Get index of the field to access
+            let target_index = sorted_fields
+                .iter()
+                .position(|(k, v)| k == &label)
+                .expect("TODO: gracefully handle field label index not found");
+
+            let offset = sorted_fields
+                .iter()
+                .take(target_index)
+                .map(|(_, layout)| match layout {
+                    Layout::Builtin(Builtin::Int64) => std::mem::size_of::<i64>(),
+                    _ => panic!(
+                        "Missing struct field size in offset calculation for struct access for {:?}",
+                        layout
+                    ),
+                })
+                .sum();
+
+            let offset = i32::try_from(offset)
+                .expect("TODO gracefully handle usize -> i32 conversion in struct access");
+
+            // Todo -> where do I get the stack from?
+            builder
+                .ins()
+                .stack_load(cfg.pointer_type(), slot, Offset32::new(offset))
+        }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
         }
