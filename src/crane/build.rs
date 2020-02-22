@@ -278,7 +278,7 @@ pub fn build_expr<'a, B: Backend>(
             let offset = i32::try_from(offset)
                 .expect("TODO gracefully handle usize -> i32 conversion in struct access");
 
-            // Todo -> where do I get the stack from?
+            // Todo -> where do I get the slot from?
             builder
                 .ins()
                 .stack_load(cfg.pointer_type(), slot, Offset32::new(offset))
