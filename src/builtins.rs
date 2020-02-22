@@ -13,6 +13,7 @@ const NUM_BUILTIN_IMPORTS: usize = 7;
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const TVAR1: VarId = VarId::from_u32(1);
 const TVAR2: VarId = VarId::from_u32(2);
+const TVAR3: VarId = VarId::from_u32(3);
 
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
     use SolvedType::Flex;
@@ -189,6 +190,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // abs : Num a -> Num a
+    add_type(
+        Symbol::NUM_ABS,
+        SolvedType::Func(vec![num_type(Flex(TVAR1))], Box::new(num_type(Flex(TVAR1)))),
+    );
+
+    // neg : Num a -> Num a
+    add_type(
+        Symbol::NUM_NEG,
+        SolvedType::Func(vec![num_type(Flex(TVAR1))], Box::new(num_type(Flex(TVAR1)))),
+    );
+
     // isLt or (<) : Num a, Num a -> Bool
     add_type(
         Symbol::NUM_LT,
@@ -207,6 +220,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // isGt or (>) : Num a, Num a -> Bool
+    add_type(
+        Symbol::NUM_GT,
+        SolvedType::Func(
+            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            Box::new(bool_type()),
+        ),
+    );
+
+    // isGte or (>=) : Num a, Num a -> Bool
+    add_type(
+        Symbol::NUM_GE,
+        SolvedType::Func(
+            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            Box::new(bool_type()),
+        ),
+    );
+
     // Int module
 
     // highest : Int
@@ -215,12 +246,47 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // lowest : Int
     add_type(Symbol::INT_LOWEST, int_type());
 
+    let div_by_zero = SolvedType::TagUnion(
+        vec![(TagName::Global("DivByZero".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    // div : Int, Int -> Result Int [ DivByZero ]*
+    add_type(
+        Symbol::INT_DIV,
+        SolvedType::Func(
+            vec![int_type(), int_type()],
+            Box::new(result_type(SolvedType::Flex(TVAR1), div_by_zero.clone())),
+        ),
+    );
+
+    // mod : Int, Int -> Result Int [ DivByZero ]*
+    add_type(
+        Symbol::INT_MOD,
+        SolvedType::Func(
+            vec![int_type(), int_type()],
+            Box::new(result_type(SolvedType::Flex(TVAR1), div_by_zero)),
+        ),
+    );
+
     // Float module
 
     // div : Float, Float -> Float
     add_type(
         Symbol::FLOAT_DIV,
         SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
+    );
+
+    // mod : Float, Float -> Float
+    add_type(
+        Symbol::FLOAT_MOD,
+        SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
+    );
+
+    // sqrt : Float -> Float
+    add_type(
+        Symbol::FLOAT_SQRT,
+        SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
     // highest : Float
@@ -289,6 +355,41 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Flex(TVAR1),
             ],
             Box::new(list_type(SolvedType::Flex(TVAR1))),
+        ),
+    );
+
+    // map : List a, (a -> b) -> List b
+    add_type(
+        Symbol::LIST_MAP,
+        SolvedType::Func(
+            vec![
+                list_type(SolvedType::Flex(TVAR1)),
+                SolvedType::Func(
+                    vec![SolvedType::Flex(TVAR1)],
+                    Box::new(SolvedType::Flex(TVAR2)),
+                ),
+            ],
+            Box::new(list_type(SolvedType::Flex(TVAR2))),
+        ),
+    );
+
+    // Result module
+
+    // map : Result a err, (a -> b) -> Result b err
+    add_type(
+        Symbol::RESULT_MAP,
+        SolvedType::Func(
+            vec![
+                result_type(SolvedType::Flex(TVAR1), SolvedType::Flex(TVAR3)),
+                SolvedType::Func(
+                    vec![SolvedType::Flex(TVAR1)],
+                    Box::new(SolvedType::Flex(TVAR2)),
+                ),
+            ],
+            Box::new(result_type(
+                SolvedType::Flex(TVAR2),
+                SolvedType::Flex(TVAR3),
+            )),
         ),
     );
 

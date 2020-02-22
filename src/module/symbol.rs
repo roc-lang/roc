@@ -560,27 +560,33 @@ define_builtins! {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
         1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
         2 NUM_ABS: "abs"
-        3 NUM_ADD: "add"
-        4 NUM_SUB: "sub"
-        5 NUM_MUL: "mul"
-        6 NUM_LT: "isLt"
-        7 NUM_LE: "isLte"
+        3 NUM_NEG: "neg"
+        4 NUM_ADD: "add"
+        5 NUM_SUB: "sub"
+        6 NUM_MUL: "mul"
+        7 NUM_LT: "isLt"
+        8 NUM_LE: "isLte"
+        9 NUM_GT: "isGt"
+        10 NUM_GE: "isGte"
     }
     2 INT: "Int" => {
         0 INT_INT: "Int" imported // the Int.Int type alias
         1 INT_INTEGER: "Integer" imported // Int : Num Integer
         2 INT_AT_INTEGER: "@Integer" // the Int.@Integer private tag
         3 INT_DIV: "div"
-        4 INT_HIGHEST: "highest"
-        5 INT_LOWEST: "lowest"
+        4 INT_MOD: "mod"
+        5 INT_HIGHEST: "highest"
+        6 INT_LOWEST: "lowest"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
         1 FLOAT_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
         2 FLOAT_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
         3 FLOAT_DIV: "div"
-        4 FLOAT_HIGHEST: "highest"
-        5 FLOAT_LOWEST: "lowest"
+        4 FLOAT_MOD: "mod"
+        5 FLOAT_SQRT: "sqrt"
+        6 FLOAT_HIGHEST: "highest"
+        7 FLOAT_LOWEST: "lowest"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -588,8 +594,8 @@ define_builtins! {
         2 BOOL_OR: "or"
         3 BOOL_NOT: "not"
         4 BOOL_XOR: "xor"
-        5 BOOL_EQ: "equal"
-        6 BOOL_NEQ: "notEqual"
+        5 BOOL_EQ: "isEq"
+        6 BOOL_NEQ: "isNotEq"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
@@ -602,9 +608,11 @@ define_builtins! {
         2 LIST_ISEMPTY: "isEmpty"
         3 LIST_GET: "get"
         4 LIST_SET: "set"
+        5 LIST_MAP: "map"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
+        1 RESULT_MAP: "map"
     }
 
     num_modules: 8 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
