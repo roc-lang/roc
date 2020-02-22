@@ -680,29 +680,42 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 
 /// Constrain top-level module declarations
 #[inline(always)]
-pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
+pub fn constrain_decls(
+    home: ModuleId,
+    decls: &[Declaration],
+    aliases: SendMap<Symbol, Alias>,
+) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
+
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
         match decl {
             Declaration::Declare(def) => {
-                constraint = constrain_def(
-                    &Env {
-                        home,
-                        rigids: ImMap::default(),
-                    },
-                    def,
-                    constraint,
+                constraint = exists_with_aliases(
+                    aliases.clone(),
+                    Vec::new(),
+                    constrain_def(
+                        &Env {
+                            home,
+                            rigids: ImMap::default(),
+                        },
+                        def,
+                        constraint,
+                    ),
                 );
             }
             Declaration::DeclareRec(defs) => {
-                constraint = constrain_recursive_defs(
-                    &Env {
-                        home,
-                        rigids: ImMap::default(),
-                    },
-                    defs,
-                    constraint,
+                constraint = exists_with_aliases(
+                    aliases.clone(),
+                    Vec::new(),
+                    constrain_recursive_defs(
+                        &Env {
+                            home,
+                            rigids: ImMap::default(),
+                        },
+                        defs,
+                        constraint,
+                    ),
                 );
             }
             Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),

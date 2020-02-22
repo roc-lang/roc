@@ -12,8 +12,15 @@ use crate::types::{Alias, Constraint, LetConstraint, Type};
 pub fn constrain_module(
     home: ModuleId,
     decls: &[Declaration],
+    aliases: &MutMap<Symbol, Alias>,
 ) -> Constraint {
-    constrain_decls(home, &decls)
+    let mut send_aliases = SendMap::default();
+
+    for (symbol, alias) in aliases {
+        send_aliases.insert(*symbol, alias.clone());
+    }
+
+    constrain_decls(home, decls, send_aliases)
 }
 
 #[derive(Debug, Clone)]
