@@ -286,7 +286,7 @@ pub fn sort_can_defs(
         aliases,
     } = defs;
 
-    for (symbol, alias) in aliases.clone() {
+    for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
     }
 
