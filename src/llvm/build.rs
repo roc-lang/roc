@@ -7,10 +7,10 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
-use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
 use crate::llvm::convert::{basic_type_from_layout, get_fn_type};
+use crate::module::symbol::Symbol;
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::Layout;
 use crate::subs::{Subs, Variable};
@@ -23,7 +23,7 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
-type Scope<'ctx> = ImMap<InlinableString, (Variable, PointerValue<'ctx>)>;
+type Scope<'ctx> = ImMap<Symbol, (Variable, PointerValue<'ctx>)>;
 
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
@@ -93,14 +93,14 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let subs = &env.subs;
             let context = &env.context;
 
-            for (name, var, expr) in stores.iter() {
+            for (symbol, var, expr) in stores.iter() {
                 let content = subs.get_without_compacting(*var).content;
                 let layout = Layout::from_content(env.arena, content, &subs).unwrap_or_else(|_| {
                     panic!("TODO generate a runtime error in build_branch2 here!")
                 });
                 let val = build_expr(env, &scope, parent, &expr, procs);
                 let expr_bt = basic_type_from_layout(context, &layout);
-                let alloca = create_entry_block_alloca(env, parent, expr_bt, &name);
+                let alloca = create_entry_block_alloca(env, parent, expr_bt, &symbol.emit());
 
                 env.builder.build_store(alloca, val);
 
@@ -111,22 +111,19 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // access itself!
                 scope = im_rc::HashMap::clone(&scope);
 
-                scope.insert(name.clone(), (*var, alloca));
+                scope.insert(*symbol, (*var, alloca));
             }
 
             build_expr(env, &scope, parent, ret, procs)
         }
-        CallByName(ref name, ref args) => {
-            // TODO try one of these alternative strategies (preferably the latter):
-            //
-            // 1. use SIMD string comparison to compare these strings faster
-            // 2. pre-register Bool.or using module.add_function, and see if LLVM inlines it
-            // 3. intern all these strings
-            if name == "Bool.or" {
+        CallByName(ref symbol, ref args) => match *symbol {
+            Symbol::BOOL_OR => {
                 panic!("TODO create a phi node for ||");
-            } else if name == "Bool.and" {
+            }
+            Symbol::BOOL_AND => {
                 panic!("TODO create a phi node for &&");
-            } else {
+            }
+            _ => {
                 let mut arg_vals: Vec<BasicValueEnum> =
                     Vec::with_capacity_in(args.len(), env.arena);
 
@@ -136,23 +133,21 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 let fn_val = env
                     .module
-                    .get_function(name)
-                    .unwrap_or_else(|| panic!("Unrecognized function: {:?}", name));
+                    .get_function(&symbol.emit())
+                    .unwrap_or_else(|| panic!("Unrecognized function: {:?}", symbol));
 
                 let call = env.builder.build_call(fn_val, arg_vals.as_slice(), "tmp");
 
                 call.try_as_basic_value().left().unwrap_or_else(|| {
-                    panic!("LLVM error: Invalid call by name for name {:?}", name)
+                    panic!("LLVM error: Invalid call by name for name {:?}", symbol)
                 })
             }
-        }
-        FunctionPointer(ref fn_name) => {
+        },
+        FunctionPointer(ref symbol) => {
             let ptr = env
                 .module
-                .get_function(fn_name)
-                .unwrap_or_else(|| {
-                    panic!("Could not get pointer to unknown function {:?}", fn_name)
-                })
+                .get_function(&symbol.emit())
+                .unwrap_or_else(|| panic!("Could not get pointer to unknown function {:?}", symbol))
                 .as_global_value()
                 .as_pointer_value();
 
@@ -183,7 +178,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
 
         Load(name) => match scope.get(name) {
-            Some((_, ptr)) => env.builder.build_load(*ptr, name),
+            Some((_, ptr)) => env.builder.build_load(*ptr, &name.emit()),
             None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
         },
         _ => {
@@ -400,7 +395,7 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
 
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    name: InlinableString,
+    name: Symbol,
     proc: Proc<'a>,
     procs: &Procs<'a>,
 ) -> FunctionValue<'ctx> {
@@ -427,7 +422,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     let fn_val = env
         .module
-        .add_function(&name, fn_type, Some(Linkage::Private));
+        .add_function(&name.emit(), fn_type, Some(Linkage::Private));
 
     // Add a basic block for the entry point
     let entry = context.append_basic_block(fn_val, "entry");
@@ -441,9 +436,9 @@ pub fn build_proc<'a, 'ctx, 'env>(
     for ((arg_val, arg_type), (_, arg_name, var)) in
         fn_val.get_param_iter().zip(arg_basic_types).zip(args)
     {
-        set_name(arg_val, arg_name);
+        set_name(arg_val, &arg_name.emit());
 
-        let alloca = create_entry_block_alloca(env, fn_val, arg_type, arg_name);
+        let alloca = create_entry_block_alloca(env, fn_val, arg_type, &arg_name.emit());
 
         builder.build_store(alloca, arg_val);
 
