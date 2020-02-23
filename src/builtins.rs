@@ -16,7 +16,6 @@ const TVAR2: VarId = VarId::from_u32(2);
 const TVAR3: VarId = VarId::from_u32(3);
 
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
-    use SolvedType::Flex;
     let mut aliases = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
 
     let mut add_alias = |symbol, alias| {
@@ -45,7 +44,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Located::at(Region::zero(), "range".into())],
-            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![Flex(TVAR1)]),
+            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![flex(TVAR1)]),
         },
     );
 
@@ -122,8 +121,8 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             ],
             typ: SolvedType::TagUnion(
                 vec![
-                    (TagName::Global("Ok".into()), vec![Flex(TVAR1)]),
-                    (TagName::Global("Err".into()), vec![Flex(TVAR2)]),
+                    (TagName::Global("Ok".into()), vec![flex(TVAR1)]),
+                    (TagName::Global("Err".into()), vec![flex(TVAR2)]),
                 ],
                 Box::new(SolvedType::EmptyTagUnion),
             ),
@@ -136,7 +135,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Located::at(Region::zero(), "elem".into())],
-            typ: single_private_tag(Symbol::LIST_AT_LIST, vec![Flex(TVAR1)]),
+            typ: single_private_tag(Symbol::LIST_AT_LIST, vec![flex(TVAR1)]),
         },
     );
 
@@ -154,7 +153,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
 }
 
 pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
-    use SolvedType::Flex;
     let mut types = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
 
     let mut add_type = |symbol, typ| {
@@ -176,8 +174,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_ADD,
         SolvedType::Func(
-            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
-            Box::new(num_type(Flex(TVAR1))),
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(num_type(flex(TVAR1))),
         ),
     );
 
@@ -185,28 +183,28 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_SUB,
         SolvedType::Func(
-            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
-            Box::new(num_type(Flex(TVAR1))),
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(num_type(flex(TVAR1))),
         ),
     );
 
     // abs : Num a -> Num a
     add_type(
         Symbol::NUM_ABS,
-        SolvedType::Func(vec![num_type(Flex(TVAR1))], Box::new(num_type(Flex(TVAR1)))),
+        SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(num_type(flex(TVAR1)))),
     );
 
     // neg : Num a -> Num a
     add_type(
         Symbol::NUM_NEG,
-        SolvedType::Func(vec![num_type(Flex(TVAR1))], Box::new(num_type(Flex(TVAR1)))),
+        SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(num_type(flex(TVAR1)))),
     );
 
     // isLt or (<) : Num a, Num a -> Bool
     add_type(
         Symbol::NUM_LT,
         SolvedType::Func(
-            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
             Box::new(bool_type()),
         ),
     );
@@ -215,7 +213,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_LE,
         SolvedType::Func(
-            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
             Box::new(bool_type()),
         ),
     );
@@ -224,7 +222,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_GT,
         SolvedType::Func(
-            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
             Box::new(bool_type()),
         ),
     );
@@ -233,7 +231,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_GE,
         SolvedType::Func(
-            vec![num_type(Flex(TVAR1)), num_type(Flex(TVAR1))],
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
             Box::new(bool_type()),
         ),
     );
@@ -256,7 +254,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::INT_DIV,
         SolvedType::Func(
             vec![int_type(), int_type()],
-            Box::new(result_type(SolvedType::Flex(TVAR1), div_by_zero.clone())),
+            Box::new(result_type(flex(TVAR1), div_by_zero.clone())),
         ),
     );
 
@@ -265,7 +263,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::INT_MOD,
         SolvedType::Func(
             vec![int_type(), int_type()],
-            Box::new(result_type(SolvedType::Flex(TVAR1), div_by_zero)),
+            Box::new(result_type(flex(TVAR1), div_by_zero)),
         ),
     );
 
@@ -340,8 +338,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_GET,
         SolvedType::Func(
-            vec![list_type(SolvedType::Flex(TVAR1)), int_type()],
-            Box::new(result_type(SolvedType::Flex(TVAR1), index_out_of_bounds)),
+            vec![list_type(flex(TVAR1)), int_type()],
+            Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
         ),
     );
 
@@ -349,12 +347,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_SET,
         SolvedType::Func(
-            vec![
-                list_type(SolvedType::Flex(TVAR1)),
-                int_type(),
-                SolvedType::Flex(TVAR1),
-            ],
-            Box::new(list_type(SolvedType::Flex(TVAR1))),
+            vec![list_type(flex(TVAR1)), int_type(), flex(TVAR1)],
+            Box::new(list_type(flex(TVAR1))),
         ),
     );
 
@@ -363,13 +357,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_MAP,
         SolvedType::Func(
             vec![
-                list_type(SolvedType::Flex(TVAR1)),
-                SolvedType::Func(
-                    vec![SolvedType::Flex(TVAR1)],
-                    Box::new(SolvedType::Flex(TVAR2)),
-                ),
+                list_type(flex(TVAR1)),
+                SolvedType::Func(vec![flex(TVAR1)], Box::new(flex(TVAR2))),
             ],
-            Box::new(list_type(SolvedType::Flex(TVAR2))),
+            Box::new(list_type(flex(TVAR2))),
         ),
     );
 
@@ -380,20 +371,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::RESULT_MAP,
         SolvedType::Func(
             vec![
-                result_type(SolvedType::Flex(TVAR1), SolvedType::Flex(TVAR3)),
-                SolvedType::Func(
-                    vec![SolvedType::Flex(TVAR1)],
-                    Box::new(SolvedType::Flex(TVAR2)),
-                ),
+                result_type(flex(TVAR1), flex(TVAR3)),
+                SolvedType::Func(vec![flex(TVAR1)], Box::new(flex(TVAR2))),
             ],
-            Box::new(result_type(
-                SolvedType::Flex(TVAR2),
-                SolvedType::Flex(TVAR3),
-            )),
+            Box::new(result_type(flex(TVAR2), flex(TVAR3))),
         ),
     );
 
     types
+}
+
+#[inline(always)]
+fn flex(tvar: VarId) -> SolvedType {
+    SolvedType::Flex(tvar)
 }
 
 #[inline(always)]

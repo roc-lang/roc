@@ -23,7 +23,6 @@ const UVAR3: VarId = VarId::from_u32(1003);
 const UVAR4: VarId = VarId::from_u32(1004);
 
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
-    use SolvedType::Flex;
     let mut aliases = builtins::aliases();
 
     let mut add_alias = |symbol, alias| {
@@ -55,7 +54,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 Located::at(Region::zero(), "u".into()),
                 Located::at(Region::zero(), "a".into()),
             ],
-            typ: single_private_tag(Symbol::ATTR_AT_ATTR, vec![Flex(TVAR1), Flex(TVAR2)]),
+            typ: single_private_tag(Symbol::ATTR_AT_ATTR, vec![flex(TVAR1), flex(TVAR2)]),
         },
     );
 
@@ -174,11 +173,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_GET,
         unique_function(
             vec![list_type(UVAR1, TVAR1), int_type(UVAR2)],
-            result_type(
-                UVAR3,
-                SolvedType::Flex(TVAR1),
-                lift(UVAR4, index_out_of_bounds),
-            ),
+            result_type(UVAR3, flex(TVAR1), lift(UVAR4, index_out_of_bounds)),
         ),
     );
 
@@ -186,11 +181,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_SET,
         unique_function(
-            vec![
-                list_type(UVAR1, TVAR1),
-                int_type(UVAR2),
-                SolvedType::Flex(TVAR1),
-            ],
+            vec![list_type(UVAR1, TVAR1), int_type(UVAR2), flex(TVAR1)],
             list_type(UVAR3, TVAR1),
         ),
     );
@@ -199,28 +190,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 }
 
 #[inline(always)]
+fn flex(tvar: VarId) -> SolvedType {
+    SolvedType::Flex(tvar)
+}
+
+#[inline(always)]
 fn unique_function(args: Vec<SolvedType>, ret: SolvedType) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![
-            SolvedType::Flex(FUVAR),
-            SolvedType::Func(args, Box::new(ret)),
-        ],
+        vec![flex(FUVAR), SolvedType::Func(args, Box::new(ret))],
     )
 }
 
 #[allow(dead_code)]
 #[inline(always)]
 fn attr_type(u: VarId, a: VarId) -> SolvedType {
-    SolvedType::Apply(
-        Symbol::ATTR_ATTR,
-        vec![SolvedType::Flex(u), SolvedType::Flex(a)],
-    )
+    SolvedType::Apply(Symbol::ATTR_ATTR, vec![flex(u), flex(a)])
 }
 
 #[inline(always)]
 fn lift(u: VarId, a: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::ATTR_ATTR, vec![SolvedType::Flex(u), a])
+    SolvedType::Apply(Symbol::ATTR_ATTR, vec![flex(u), a])
 }
 
 #[inline(always)]
@@ -232,10 +222,7 @@ fn float_type() -> SolvedType {
 fn int_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![
-            SolvedType::Flex(u),
-            SolvedType::Apply(Symbol::INT_INT, Vec::new()),
-        ],
+        vec![flex(u), SolvedType::Apply(Symbol::INT_INT, Vec::new())],
     )
 }
 
@@ -243,10 +230,7 @@ fn int_type(u: VarId) -> SolvedType {
 fn bool_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![
-            SolvedType::Flex(u),
-            SolvedType::Apply(Symbol::BOOL_BOOL, Vec::new()),
-        ],
+        vec![flex(u), SolvedType::Apply(Symbol::BOOL_BOOL, Vec::new())],
     )
 }
 
@@ -260,10 +244,7 @@ fn str_type() -> SolvedType {
 fn num_type(u: VarId, a: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![
-            SolvedType::Flex(u),
-            SolvedType::Apply(Symbol::NUM_NUM, vec![SolvedType::Flex(a)]),
-        ],
+        vec![flex(u), SolvedType::Apply(Symbol::NUM_NUM, vec![flex(a)])],
     )
 }
 
@@ -272,7 +253,7 @@ fn result_type(u: VarId, a: SolvedType, e: SolvedType) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![
-            SolvedType::Flex(u),
+            flex(u),
             SolvedType::Apply(Symbol::RESULT_RESULT, vec![a, e]),
         ],
     )
@@ -282,9 +263,6 @@ fn result_type(u: VarId, a: SolvedType, e: SolvedType) -> SolvedType {
 fn list_type(u: VarId, a: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![
-            SolvedType::Flex(u),
-            SolvedType::Apply(Symbol::LIST_LIST, vec![SolvedType::Flex(a)]),
-        ],
+        vec![flex(u), SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)])],
     )
 }
