@@ -54,7 +54,8 @@ where
 }
 
 /// Similar to fmt_comments_only, but does not finish with a newline()
-pub fn fmt_if_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
+/// Used to format when and if statement conditions
+pub fn fmt_condition_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
 where
     I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
