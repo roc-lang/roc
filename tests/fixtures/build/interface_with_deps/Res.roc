@@ -19,7 +19,7 @@ map = \result, transform ->
         Ok ok -> Ok (transform ok)
         Err err -> Err err
 
-withDefault : Res ok err, ok -> ok
+withDefault : Res a err, a -> a
 withDefault = \result, default ->
     when result is
         Ok ok -> ok

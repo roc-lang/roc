@@ -13,7 +13,7 @@ use crate::parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceH
 use crate::parse::module::{self, module_defs};
 use crate::parse::parser::{Fail, Parser, State};
 use crate::region::{Located, Region};
-use crate::solve::{self, ExposedModuleTypes, Solved, BuiltinAlias, SolvedType, SubsByModule};
+use crate::solve::{self, BuiltinAlias, ExposedModuleTypes, Solved, SolvedType, SubsByModule};
 use crate::subs::{Subs, VarStore, Variable};
 use crate::types::{self, Alias, Constraint};
 use bumpalo::Bump;
@@ -786,8 +786,11 @@ fn solve_module(
                             solved_type: typ,
                         });
                     }
-                    None => panic!("Could not find {:?} in builtins {:?} or in builtin_aliases {:?}", symbol, builtins, builtin_aliases),
-                }
+                    None => panic!(
+                        "Could not find {:?} in builtins {:?} or in builtin_aliases {:?}",
+                        symbol, builtins, builtin_aliases
+                    ),
+                },
             }
         } else if module_id != home {
             // We already have constraints for our own symbols.
@@ -873,8 +876,9 @@ fn solve_module(
     };
 
     let mut subs = Subs::new(var_store.into());
-    for (var, name) in module.rigid_variables {
-        subs.rigid_var(name, var);
+
+    for (name, var) in module.rigid_variables {
+        subs.rigid_var(var, name);
     }
 
     // Start solving this module in the background.
@@ -892,10 +896,10 @@ fn solve_module(
             let mut args = Vec::with_capacity(alias.vars.len());
 
             for Located {
-                value: (name, _), ..
+                value: (name, var), ..
             } in alias.vars.iter()
             {
-                args.push(name.clone());
+                args.push((name.clone(), SolvedType::new(&solved_subs, *var)));
             }
 
             let solved_type = SolvedType::from_type(&solved_subs, alias.typ);

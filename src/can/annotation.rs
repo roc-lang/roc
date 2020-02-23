@@ -66,6 +66,7 @@ pub fn canonicalize_annotation(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn can_annotation_help(
     env: &mut Env,
     annotation: &crate::parse::ast::TypeAnnotation,
@@ -160,7 +161,8 @@ fn can_annotation_help(
         }
         BoundVariable(v) => {
             let name = Lowercase::from(*v);
-            let typ = match rigids.get(&name) {
+
+            match rigids.get(&name) {
                 Some(var) => Type::Variable(*var),
                 None => {
                     let var = var_store.fresh();
@@ -169,9 +171,7 @@ fn can_annotation_help(
 
                     Type::Variable(var)
                 }
-            };
-
-            typ
+            }
         }
         As(loc_inner, _spaces, loc_as) => match loc_as.value {
             TypeAnnotation::Apply(module_name, ident, loc_vars) if module_name.is_empty() => {

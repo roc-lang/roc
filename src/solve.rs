@@ -48,7 +48,7 @@ pub enum SolvedType {
     Erroneous(Problem),
 
     /// A type alias
-    Alias(Symbol, Vec<Lowercase>, Box<SolvedType>),
+    Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
 
     /// a boolean algebra Bool
     Boolean(boolean_algebra::Bool),
@@ -146,8 +146,8 @@ impl SolvedType {
                 let solved_type = Self::from_type(solved_subs, *box_type);
                 let mut solved_args = Vec::with_capacity(args.len());
 
-                for (name, _) in args {
-                    solved_args.push(name.clone());
+                for (name, var) in args {
+                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
                 }
 
                 SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
@@ -160,14 +160,14 @@ impl SolvedType {
     fn from_var(subs: &Subs, var: Variable) -> Self {
         use Content::*;
         match subs.get_without_compacting(var).content {
-            FlexVar(_) => SolvedType::Flex(VarId::from_var(var)),
+            FlexVar(_opt_name) => SolvedType::Flex(VarId::from_var(var)),
             RigidVar(name) => SolvedType::Rigid(name),
             Structure(flat_type) => Self::from_flat_type(subs, flat_type),
             Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for (arg_name, _) in args {
-                    new_args.push(arg_name);
+                for (arg_name, arg_var) in args {
+                    new_args.push((arg_name, Self::from_var(subs, arg_var)));
                 }
 
                 let aliased_to = Self::from_var(subs, actual_var);
