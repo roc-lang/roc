@@ -622,7 +622,14 @@ fn send_interface_header<'a>(
             // We must *not* add them to scope yet, or else the Defs will
             // incorrectly think they're shadowing them!
             for loc_exposed in header.exposes.iter() {
-                let ident_id = ident_ids.add(loc_exposed.value.as_str().into());
+                // Use get_or_insert here because the ident_ids may already
+                // created an IdentId for this, when it was imported exposed
+                // in a dependent module.
+                //
+                // For example, if module A has [ B.{ foo } ], then
+                // when we get here for B, `foo` will already have
+                // an IdentId. We must reuse that!
+                let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
                 let symbol = Symbol::new(home, ident_id);
 
                 exposes.push(symbol);
@@ -640,8 +647,6 @@ fn send_interface_header<'a>(
             // and won't need to pay locking costs.
             home = module_ids.get_or_insert(declared_name.as_inline_str());
 
-            let mut ident_ids = IdentIds::default();
-
             // For each of our imports, add it to deps_by_name,
             // and also add any exposed values to scope.
             //
@@ -654,9 +659,15 @@ fn send_interface_header<'a>(
                 imported_modules.insert(module_id);
 
                 if !exposed.is_empty() {
+                    let mut ident_ids = IdentIds::default();
+
                     add_exposed_to_scope(module_id, &mut scope, exposed, &mut ident_ids, region);
+
+                    ident_ids_by_module.insert(module_id, ident_ids);
                 }
             }
+
+            let mut ident_ids = IdentIds::default();
 
             // Generate IdentIds entries for all values this module exposes.
             // This way, when we encounter them in Defs later, they already
