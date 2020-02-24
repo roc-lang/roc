@@ -116,14 +116,14 @@ impl Scope {
         ident: Ident,
         symbol: Symbol,
         region: Region,
-    ) -> Result<Symbol, (Symbol, Region)> {
+    ) -> Result<(), (Symbol, Region)> {
         match self.idents.get(&ident) {
             Some(shadowed) => Err(*shadowed),
             None => {
                 self.symbols.insert(symbol, region);
                 self.idents.insert(ident, (symbol, region));
 
-                Ok(symbol)
+                Ok(())
             }
         }
     }

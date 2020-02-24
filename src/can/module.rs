@@ -84,7 +84,7 @@ pub fn canonicalize_module_defs<'a>(
             let expr_var = var_store.fresh();
 
             match scope.import(ident, symbol, region) {
-                Ok(symbol) => {
+                Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
                     // exposes [ Bar.{ baz } ] then insert Foo.baz as the key, so when
