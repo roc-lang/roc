@@ -838,8 +838,6 @@ fn instantiate_rigids(
         } else {
             // It's possible to use this rigid in nested defs
             ftv.insert(name.clone(), *var);
-
-            new_rigids.push(*var);
         }
     }
 

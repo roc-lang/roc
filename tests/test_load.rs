@@ -218,8 +218,8 @@ mod test_load {
                 loaded_module,
                 hashmap! {
                     "swap" => "Int, Int, List a -> List a",
-                    "partition" => "Int, Int, List a -> [ Pair Int (List a) ]*",
-                    "quicksort" => "List a, Int, Int -> List a",
+                    "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
+                    "quicksort" => "List (Num a), Int, Int -> List (Num a)",
                 },
             );
         });
@@ -270,8 +270,7 @@ mod test_load {
     fn imported_dep_regression() {
         test_async(async {
             let subs_by_module = MutMap::default();
-            let loaded_module =
-                load_fixture("interface_with_deps", "OneDep", subs_by_module).await;
+            let loaded_module = load_fixture("interface_with_deps", "OneDep", subs_by_module).await;
 
             expect_types(
                 loaded_module,
@@ -281,7 +280,6 @@ mod test_load {
             );
         });
     }
-
 
     // #[test]
     // fn load_records() {

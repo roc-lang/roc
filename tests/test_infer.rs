@@ -2215,4 +2215,71 @@ mod test_infer {
             "Int, Int, List Int -> [ Pair Int (List Int) ]",
         );
     }
+
+    #[test]
+    fn quicksort_partition() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                swap : Int, Int, List a -> List a
+                swap = \i, j, list ->
+                    when Pair (List.get list i) (List.get list j) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+    
+                        _ ->
+                            list
+    
+                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+                partition = \low, high, initialList ->
+                    when List.get initialList high is
+                        Ok pivot ->
+                            go = \i, j, list ->
+                                if j < high then
+                                    when List.get list j is
+                                        Ok value ->
+                                            if value <= pivot then
+                                                go (i + 1) (j + 1) (swap (i + 1) j list)
+                                            else
+                                                go i (j + 1) list
+    
+                                        Err _ ->
+                                            Pair i list
+                                else
+                                    Pair i list
+    
+                            when go (low - 1) low initialList is
+                                Pair newI newList ->
+                                    Pair (newI + 1) (swap (newI + 1) high newList)
+    
+                        Err _ ->
+                            Pair (low - 1) initialList
+    
+                partition
+            "#
+            ),
+            "Int, Int, List Int -> [ Pair Int (List Int) ]",
+        );
+    }
+
+    #[test]
+    fn identity_list() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                idList : List a -> List a
+                idList = \list -> list
+
+                foo : List Int -> List Int
+                foo = \initialList -> idList initialList
+
+
+                foo
+            "#
+            ),
+            "List Int -> List Int",
+        );
+    }
 }

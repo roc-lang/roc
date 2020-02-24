@@ -2,13 +2,14 @@ interface Quicksort
     exposes [ swap, partition, quicksort ]
     imports []
 
-quicksort : List Int, Int, Int -> List Int
+quicksort : List (Num a), Int, Int -> List (Num a)
 quicksort = \list, low, high ->
     when partition low high list is
         Pair partitionIndex partitioned ->
             partitioned
                 |> quicksort low (partitionIndex - 1)
                 |> quicksort (partitionIndex + 1) high
+
 
 swap : Int, Int, List a -> List a
 swap = \i, j, list ->
@@ -21,7 +22,8 @@ swap = \i, j, list ->
         _ ->
             list
 
-partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+
+partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
 partition = \low, high, initialList ->
     when List.get initialList high is
         Ok pivot ->
@@ -45,5 +47,3 @@ partition = \low, high, initialList ->
 
         Err _ ->
             Pair (low - 1) initialList
-
-
