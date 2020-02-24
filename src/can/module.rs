@@ -207,9 +207,6 @@ pub fn canonicalize_module_defs<'a>(
                 panic!("TODO gracefully handle invalid `exposes` entry (or entries) which had no corresponding definition: {:?}", exposed_symbols);
             }
 
-            // TODO incorporate rigids into here (possibly by making this be a Let instead
-            // of an And)
-
             // Incorporate any remaining output.lookups entries into references.
             for symbol in output.references.lookups {
                 references.insert(symbol);
