@@ -20,7 +20,7 @@ swap = \i, j, list ->
                 |> List.set j atI
 
         _ ->
-            list
+            []
 
 
 partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]

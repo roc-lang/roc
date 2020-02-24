@@ -34,14 +34,15 @@ pub fn uniqueness_stdlib() -> StdLib {
 }
 
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
-    let mut aliases = builtins::aliases();
+    // let mut aliases = builtins::aliases();
+    let mut aliases = MutMap::default();
 
     let mut add_alias = |symbol, alias| {
-        //        debug_assert!(
-        //            !aliases.contains_key(&symbol),
-        //            "Duplicate alias definition for {:?}",
-        //            symbol
-        //        );
+        debug_assert!(
+            !aliases.contains_key(&symbol),
+            "Duplicate alias definition for {:?}",
+            symbol
+        );
 
         // TODO instead of using Region::zero for all of these,
         // instead use the Region where they were defined in their
@@ -69,6 +70,16 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Num : Num Integer
+    add_alias(
+        Symbol::NUM_NUM,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![Located::at(Region::zero(), "a".into())],
+            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![flex(TVAR1)]),
+        },
+    );
+
     // Int : Num Integer
     add_alias(
         Symbol::INT_INT,
@@ -82,6 +93,32 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                     SolvedType::Apply(Symbol::INT_INTEGER, Vec::new()),
                 )],
             ),
+        },
+    );
+
+    // Float : Num FloatingPoint
+    add_alias(
+        Symbol::FLOAT_FLOAT,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: SolvedType::Apply(
+                Symbol::NUM_NUM,
+                vec![lift(
+                    UVAR1,
+                    SolvedType::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new()),
+                )],
+            ),
+        },
+    );
+
+    // List a : [ @List a ]
+    add_alias(
+        Symbol::LIST_LIST,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![Located::at(Region::zero(), "elem".into())],
+            typ: single_private_tag(Symbol::LIST_AT_LIST, vec![flex(TVAR1)]),
         },
     );
 
@@ -150,19 +187,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // lowest : Int
     add_type(Symbol::INT_LOWEST, int_type(UVAR1));
 
+    add_type(
+        Symbol::INT_DIV,
+        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
+    );
+
     // Float module
 
     // div : Float, Float -> Float
     add_type(
         Symbol::FLOAT_DIV,
-        SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
+        unique_function(
+            vec![float_type(UVAR1), float_type(UVAR2)],
+            float_type(UVAR3),
+        ),
     );
 
     // highest : Float
-    add_type(Symbol::FLOAT_HIGHEST, float_type());
+    add_type(Symbol::FLOAT_HIGHEST, float_type(UVAR1));
 
     // lowest : Float
-    add_type(Symbol::FLOAT_LOWEST, float_type());
+    add_type(Symbol::FLOAT_LOWEST, float_type(UVAR1));
 
     // Bool module
 
@@ -225,8 +270,11 @@ fn lift(u: VarId, a: SolvedType) -> SolvedType {
 }
 
 #[inline(always)]
-fn float_type() -> SolvedType {
-    SolvedType::Apply(Symbol::FLOAT_FLOAT, Vec::new())
+fn float_type(u: VarId) -> SolvedType {
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![flex(u), SolvedType::Apply(Symbol::FLOAT_FLOAT, Vec::new())],
+    )
 }
 
 #[inline(always)]
