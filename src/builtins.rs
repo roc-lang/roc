@@ -6,6 +6,26 @@ use crate::solve::{BuiltinAlias, SolvedType};
 use crate::subs::VarId;
 use std::collections::HashMap;
 
+#[derive(Clone, Copy)]
+pub enum Mode {
+    Standard,
+    Uniqueness,
+}
+
+pub struct StdLib {
+    pub mode: Mode,
+    pub types: MutMap<Symbol, (SolvedType, Region)>,
+    pub aliases: MutMap<Symbol, BuiltinAlias>,
+}
+
+pub fn standard_stdlib() -> StdLib {
+    StdLib {
+        mode: Mode::Standard,
+        types: types(),
+        aliases: aliases(),
+    }
+}
+
 /// Keep this up to date by hand!
 ///
 const NUM_BUILTIN_IMPORTS: usize = 7;

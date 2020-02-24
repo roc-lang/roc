@@ -1,3 +1,4 @@
+use crate::builtins;
 use crate::can::def::Declaration;
 use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, MutMap, SendMap};
@@ -7,20 +8,27 @@ use crate::region::Located;
 use crate::solve::{BuiltinAlias, SolvedType};
 use crate::subs::{VarId, VarStore, Variable};
 use crate::types::{Alias, Constraint, LetConstraint, Type};
+use crate::uniqueness;
 
 #[inline(always)]
 pub fn constrain_module(
     home: ModuleId,
+    mode: builtins::Mode,
     decls: &[Declaration],
     aliases: &MutMap<Symbol, Alias>,
 ) -> Constraint {
+    use builtins::Mode::*;
+
     let mut send_aliases = SendMap::default();
 
     for (symbol, alias) in aliases {
         send_aliases.insert(*symbol, alias.clone());
     }
 
-    constrain_decls(home, decls, send_aliases)
+    match mode {
+        Standard => constrain_decls(home, decls, send_aliases),
+        Uniqueness => uniqueness::constrain_decls(home, decls, send_aliases),
+    }
 }
 
 #[derive(Debug, Clone)]

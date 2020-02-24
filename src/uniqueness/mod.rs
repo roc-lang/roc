@@ -1,4 +1,4 @@
-use crate::can::def::Def;
+use crate::can::def::{Declaration, Def};
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
 use crate::can::ident::{Ident, Lowercase, TagName};
@@ -62,6 +62,62 @@ pub fn constrain_declaration(
         &loc_expr.value,
         expected,
     )
+}
+
+/// Constrain top-level module declarations
+#[inline(always)]
+pub fn constrain_decls(
+    home: ModuleId,
+    decls: &[Declaration],
+    aliases: SendMap<Symbol, Alias>,
+) -> Constraint {
+    let mut constraint = Constraint::SaveTheEnvironment;
+
+    let var_store = VarStore::default();
+    let var_usage = VarUsage::default();
+
+    for decl in decls.iter().rev() {
+        // NOTE: rigids are empty because they are not shared between top-level definitions
+        match decl {
+            Declaration::Declare(def) => {
+                constraint = exists_with_aliases(
+                    aliases.clone(),
+                    Vec::new(),
+                    constrain_def(
+                        &Env {
+                            home,
+                            rigids: ImMap::default(),
+                        },
+                        &var_store,
+                        &var_usage,
+                        &mut ImSet::default(),
+                        def,
+                        constraint,
+                    ),
+                );
+            }
+            Declaration::DeclareRec(defs) => {
+                constraint = exists_with_aliases(
+                    aliases.clone(),
+                    Vec::new(),
+                    constrain_recursive_defs(
+                        &Env {
+                            home,
+                            rigids: ImMap::default(),
+                        },
+                        &var_store,
+                        &var_usage,
+                        &mut ImSet::default(),
+                        defs,
+                        constraint,
+                    ),
+                );
+            }
+            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+        }
+    }
+
+    constraint
 }
 
 pub struct PatternState {

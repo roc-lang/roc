@@ -13,6 +13,7 @@ mod helpers;
 mod test_load {
     use crate::helpers::fixtures_dir;
     use inlinable_string::InlinableString;
+    use roc::builtins;
     use roc::can::def::Declaration::*;
     use roc::can::def::Def;
     use roc::collections::MutMap;
@@ -42,7 +43,13 @@ mod test_load {
     ) -> LoadedModule {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
-        let loaded = load(src_dir, filename, subs_by_module).await;
+        let loaded = load(
+            &builtins::standard_stdlib(),
+            src_dir,
+            filename,
+            subs_by_module,
+        )
+        .await;
         let loaded_module = loaded.expect("Test module failed to load");
 
         assert_eq!(loaded_module.can_problems, Vec::new());
@@ -130,7 +137,13 @@ mod test_load {
         let filename = src_dir.join("Primary.roc");
 
         test_async(async {
-            let loaded = load(src_dir, filename, subs_by_module).await;
+            let loaded = load(
+                &builtins::standard_stdlib(),
+                src_dir,
+                filename,
+                subs_by_module,
+            )
+            .await;
             let loaded_module = loaded.expect("Test module failed to load");
 
             assert_eq!(loaded_module.can_problems, Vec::new());
