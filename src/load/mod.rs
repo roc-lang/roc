@@ -3,7 +3,7 @@ use crate::can;
 use crate::can::def::Declaration;
 use crate::can::ident::{Ident, Lowercase, ModuleName};
 use crate::can::module::{canonicalize_module_defs, ModuleOutput};
-use crate::collections::{default_hasher, insert_all, MutMap, MutSet, SendMap};
+use crate::collections::{default_hasher, MutMap, MutSet, SendMap};
 use crate::constrain::module::{
     constrain_imported_aliases, constrain_imported_values, constrain_module, load_builtin_aliases,
     Import,
@@ -210,9 +210,6 @@ pub async fn load<'a>(
     let builtins = builtins::types();
     let builtin_aliases = builtins::aliases();
 
-    // TODO can be removed I think
-    let vars_by_symbol = SendMap::default();
-
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {
         use self::Msg::*;
@@ -370,7 +367,6 @@ pub async fn load<'a>(
                         &mut declarations_by_id,
                         &builtins,
                         &builtin_aliases,
-                        vars_by_symbol.clone(),
                     );
                 } else {
                     // We will have to wait for our dependencies to be solved.
@@ -461,7 +457,6 @@ pub async fn load<'a>(
                                     &mut declarations_by_id,
                                     &builtins,
                                     &builtin_aliases,
-                                    vars_by_symbol.clone(),
                                 );
 
                                 for _unused_module_id in unused_modules.iter() {
@@ -755,7 +750,6 @@ fn solve_module(
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
     builtins: &MutMap<Symbol, (SolvedType, Region)>,
     builtin_aliases: &MutMap<Symbol, BuiltinAlias>,
-    mut _vars_by_symbol: SendMap<Symbol, Variable>,
 ) -> MutSet<ModuleId> /* returs a set of unused imports */ {
     let home = module.module_id;
     let mut imported_symbols = Vec::with_capacity(module.references.len());
