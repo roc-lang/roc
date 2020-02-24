@@ -70,10 +70,10 @@ pub fn constrain_decls(
     home: ModuleId,
     decls: &[Declaration],
     aliases: SendMap<Symbol, Alias>,
+    var_store: &VarStore,
 ) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
 
-    let var_store = VarStore::default();
     let var_usage = VarUsage::default();
 
     for decl in decls.iter().rev() {

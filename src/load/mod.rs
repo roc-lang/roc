@@ -1031,7 +1031,7 @@ fn parse_and_constrain(
             problems,
             ..
         }) => {
-            let constraint = constrain_module(module_id, mode, &declarations, &aliases);
+            let constraint = constrain_module(module_id, mode, &declarations, &aliases, &var_store);
             let module = Module {
                 module_id,
                 declarations,
