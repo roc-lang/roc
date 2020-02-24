@@ -755,7 +755,7 @@ fn solve_module(
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
     builtins: &MutMap<Symbol, (SolvedType, Region)>,
     builtin_aliases: &MutMap<Symbol, BuiltinAlias>,
-    mut vars_by_symbol: SendMap<Symbol, Variable>,
+    mut _vars_by_symbol: SendMap<Symbol, Variable>,
 ) -> MutSet<ModuleId> /* returs a set of unused imports */ {
     let home = module.module_id;
     let mut imported_symbols = Vec::with_capacity(module.references.len());
@@ -856,33 +856,11 @@ fn solve_module(
     // Turn Apply into Alias
     constraint.instantiate_aliases(&var_store);
 
-    // All the exposed imports should be available in the solver's vars_by_symbol
-    for (symbol, expr_var) in module.exposed_imports.iter() {
-        vars_by_symbol.insert(*symbol, *expr_var);
-    }
-
-    // All the top-level defs should also be available in vars_by_symbol
-    for decl in &module.declarations {
-        use Declaration::*;
-
-        match decl {
-            Declare(def) => {
-                insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
-            }
-            DeclareRec(defs) => {
-                for def in defs {
-                    insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
-                }
-            }
-            InvalidCycle(_, _) => panic!("TODO handle invalid cycles"),
-        }
-    }
-
     declarations_by_id.insert(home, module.declarations);
 
     let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
     let env = solve::Env {
-        vars_by_symbol,
+        vars_by_symbol: SendMap::default(),
         aliases: module.aliases,
     };
 

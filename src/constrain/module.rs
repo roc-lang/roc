@@ -61,6 +61,10 @@ pub fn constrain_imported_values(
                 for (_, var) in free_vars.rigid_vars {
                     rigid_vars.push(var);
                 }
+
+                for (_, var) in free_vars.flex_vars {
+                    rigid_vars.push(var);
+                }
             }
         }
     }
