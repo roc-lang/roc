@@ -613,6 +613,19 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_add_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 + 2
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
     fn return_unnamed_fn() {
         assert_evals_to!(
             indoc!(
