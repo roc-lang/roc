@@ -2194,4 +2194,25 @@ mod test_infer {
             "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
         );
     }
+
+    #[test]
+    fn type_more_general_than_signature() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+                partition = \low, high, initialList ->
+                    when List.get initialList high is
+                        Ok _ ->
+                            Pair 0 []
+
+                        Err _ ->
+                            Pair (low - 1) initialList
+
+                partition
+                            "#
+            ),
+            "Int, Int, List Int -> [ Pair Int (List Int) ]",
+        );
+    }
 }

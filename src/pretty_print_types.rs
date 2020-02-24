@@ -410,7 +410,7 @@ fn write_flat_type(
 
                     for var in vars {
                         buf.push(' ');
-                        write_content(env, subs.get(var).content, subs, buf, parens);
+                        write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
                     }
                 }
 
@@ -466,7 +466,7 @@ fn write_flat_type(
 
                     for var in vars {
                         buf.push(' ');
-                        write_content(env, subs.get(var).content, subs, buf, parens);
+                        write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
                     }
                 }
 
