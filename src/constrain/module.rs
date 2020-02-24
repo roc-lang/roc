@@ -72,12 +72,8 @@ pub fn constrain_imported_values(
     }
 
     Let(Box::new(LetConstraint {
-        // rigids from other modules should not be treated as rigid
-        // within this module; rather, they should be treated as flex
         rigid_vars,
         flex_vars: Vec::new(),
-        // Importing a value doesn't constrain this module at all.
-        // All it does is introduce variables and provide def_types for lookups
         def_types,
         def_aliases: SendMap::default(),
         defs_constraint: True,
@@ -125,12 +121,8 @@ pub fn load_builtin_aliases(
     }
 
     Let(Box::new(LetConstraint {
-        // rigids from other modules should not be treated as rigid
-        // within this module; rather, they should be treated as flex
         rigid_vars: Vec::new(),
         flex_vars: Vec::new(),
-        // Importing a value doesn't constrain this module at all.
-        // All it does is introduce variables and provide def_types for lookups
         def_types: SendMap::default(),
         def_aliases,
         defs_constraint: True,
@@ -293,12 +285,8 @@ pub fn constrain_imported_aliases(
     }
 
     Let(Box::new(LetConstraint {
-        // rigids from other modules should not be treated as rigid
-        // within this module; rather, they should be treated as flex
         rigid_vars: Vec::new(),
         flex_vars: Vec::new(),
-        // Importing a value doesn't constrain this module at all.
-        // All it does is introduce variables and provide def_types for lookups
         def_types: SendMap::default(),
         def_aliases,
         defs_constraint: True,
