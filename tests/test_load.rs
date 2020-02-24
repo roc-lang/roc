@@ -266,6 +266,23 @@ mod test_load {
         });
     }
 
+    #[test]
+    fn imported_dep_regression() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module =
+                load_fixture("interface_with_deps", "OneDep", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "str" => "Str",
+                },
+            );
+        });
+    }
+
+
     // #[test]
     // fn load_records() {
     //     test_async(async {
