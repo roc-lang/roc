@@ -1,9 +1,10 @@
 use crate::builtins;
+use crate::builtins::StdLib;
 use crate::can;
 use crate::can::def::Declaration;
 use crate::can::ident::{Ident, Lowercase, ModuleName};
 use crate::can::module::{canonicalize_module_defs, ModuleOutput};
-use crate::collections::{default_hasher, insert_all, MutMap, MutSet, SendMap};
+use crate::collections::{default_hasher, MutMap, MutSet, SendMap};
 use crate::constrain::module::{
     constrain_imported_aliases, constrain_imported_values, constrain_module, load_builtin_aliases,
     Import,
@@ -138,6 +139,7 @@ type MsgReceiver = mpsc::Receiver<Msg>;
 /// the standard modules themselves.
 #[allow(clippy::cognitive_complexity)]
 pub async fn load<'a>(
+    stdlib: &StdLib,
     src_dir: PathBuf,
     filename: PathBuf,
     mut exposed_types: SubsByModule,
@@ -207,11 +209,6 @@ pub async fn load<'a>(
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
     let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
-    let builtins = builtins::types();
-    let builtin_aliases = builtins::aliases();
-
-    // TODO can be removed I think
-    let vars_by_symbol = SendMap::default();
 
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {
@@ -267,6 +264,7 @@ pub async fn load<'a>(
 
                             spawn_parse_and_constrain(
                                 header,
+                                stdlib.mode,
                                 Arc::clone(&arc_modules),
                                 Arc::clone(&ident_ids_by_module),
                                 &exposed_types,
@@ -306,6 +304,7 @@ pub async fn load<'a>(
 
                     spawn_parse_and_constrain(
                         header,
+                        stdlib.mode,
                         Arc::clone(&arc_modules),
                         Arc::clone(&ident_ids_by_module),
                         &exposed_types,
@@ -368,9 +367,7 @@ pub async fn load<'a>(
                         msg_tx.clone(),
                         &mut exposed_types,
                         &mut declarations_by_id,
-                        &builtins,
-                        &builtin_aliases,
-                        vars_by_symbol.clone(),
+                        stdlib,
                     );
                 } else {
                     // We will have to wait for our dependencies to be solved.
@@ -459,9 +456,7 @@ pub async fn load<'a>(
                                     msg_tx.clone(),
                                     &mut exposed_types,
                                     &mut declarations_by_id,
-                                    &builtins,
-                                    &builtin_aliases,
-                                    vars_by_symbol.clone(),
+                                    stdlib,
                                 );
 
                                 for _unused_module_id in unused_modules.iter() {
@@ -753,9 +748,7 @@ fn solve_module(
     msg_tx: MsgSender,
     exposed_types: &mut SubsByModule,
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
-    builtins: &MutMap<Symbol, (SolvedType, Region)>,
-    builtin_aliases: &MutMap<Symbol, BuiltinAlias>,
-    mut vars_by_symbol: SendMap<Symbol, Variable>,
+    stdlib: &StdLib,
 ) -> MutSet<ModuleId> /* returs a set of unused imports */ {
     let home = module.module_id;
     let mut imported_symbols = Vec::with_capacity(module.references.len());
@@ -772,7 +765,7 @@ fn solve_module(
         if module_id.is_builtin() {
             // For builtin modules, we create imports from the
             // hardcoded builtin map.
-            match builtins.get(&symbol) {
+            match stdlib.types.get(&symbol) {
                 Some((solved_type, region)) => {
                     let loc_symbol = Located {
                         value: symbol,
@@ -785,7 +778,7 @@ fn solve_module(
                     });
                 }
                 // This wasn't a builtin value; maybe it was a builtin alias.
-                None => match builtin_aliases.get(&symbol) {
+                None => match stdlib.aliases.get(&symbol) {
                     Some(BuiltinAlias { region, typ, .. }) => {
                         let loc_symbol = Located {
                             value: symbol,
@@ -798,8 +791,8 @@ fn solve_module(
                         });
                     }
                     None => panic!(
-                        "Could not find {:?} in builtins {:?} or in builtin_aliases {:?}",
-                        symbol, builtins, builtin_aliases
+                        "Could not find {:?} in builtin types {:?} or aliases {:?}",
+                        symbol, stdlib.types, stdlib.aliases
                     ),
                 },
             }
@@ -851,38 +844,16 @@ fn solve_module(
     // Wrap the existing module constraint in these imported constraints.
     let constraint = constrain_imported_values(imported_symbols, constraint, &var_store);
     let constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
-    let mut constraint = load_builtin_aliases(&builtins::aliases(), constraint, &var_store);
+    let mut constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
 
     // Turn Apply into Alias
     constraint.instantiate_aliases(&var_store);
-
-    // All the exposed imports should be available in the solver's vars_by_symbol
-    for (symbol, expr_var) in module.exposed_imports.iter() {
-        vars_by_symbol.insert(*symbol, *expr_var);
-    }
-
-    // All the top-level defs should also be available in vars_by_symbol
-    for decl in &module.declarations {
-        use Declaration::*;
-
-        match decl {
-            Declare(def) => {
-                insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
-            }
-            DeclareRec(defs) => {
-                for def in defs {
-                    insert_all(&mut vars_by_symbol, def.pattern_vars.clone().into_iter());
-                }
-            }
-            InvalidCycle(_, _) => panic!("TODO handle invalid cycles"),
-        }
-    }
 
     declarations_by_id.insert(home, module.declarations);
 
     let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
     let env = solve::Env {
-        vars_by_symbol,
+        vars_by_symbol: SendMap::default(),
         aliases: module.aliases,
     };
 
@@ -949,8 +920,10 @@ fn solve_module(
     unused_imports
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_parse_and_constrain(
     header: ModuleHeader,
+    mode: builtins::Mode,
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: &SubsByModule,
@@ -1007,13 +980,21 @@ fn spawn_parse_and_constrain(
     // Now that we have waiting_for_solve populated, continue parsing,
     // canonicalizing, and constraining the module.
     spawn_blocking(move || {
-        parse_and_constrain(header, module_ids, dep_idents, exposed_symbols, msg_tx);
+        parse_and_constrain(
+            header,
+            mode,
+            module_ids,
+            dep_idents,
+            exposed_symbols,
+            msg_tx,
+        );
     });
 }
 
 /// Parse the module, canonicalize it, and generate constraints for it.
 fn parse_and_constrain(
     header: ModuleHeader,
+    mode: builtins::Mode,
     module_ids: ModuleIds,
     dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,
@@ -1050,7 +1031,7 @@ fn parse_and_constrain(
             problems,
             ..
         }) => {
-            let constraint = constrain_module(module_id, &declarations, &aliases);
+            let constraint = constrain_module(module_id, mode, &declarations, &aliases);
             let module = Module {
                 module_id,
                 declarations,

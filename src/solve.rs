@@ -160,7 +160,7 @@ impl SolvedType {
     fn from_var(subs: &Subs, var: Variable) -> Self {
         use Content::*;
         match subs.get_without_compacting(var).content {
-            FlexVar(_opt_name) => SolvedType::Flex(VarId::from_var(var)),
+            FlexVar(_) => SolvedType::Flex(VarId::from_var(var)),
             RigidVar(name) => SolvedType::Rigid(name),
             Structure(flat_type) => Self::from_flat_type(subs, flat_type),
             Alias(symbol, args, actual_var) => {

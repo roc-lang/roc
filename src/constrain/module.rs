@@ -1,3 +1,4 @@
+use crate::builtins;
 use crate::can::def::Declaration;
 use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, MutMap, SendMap};
@@ -7,20 +8,27 @@ use crate::region::Located;
 use crate::solve::{BuiltinAlias, SolvedType};
 use crate::subs::{VarId, VarStore, Variable};
 use crate::types::{Alias, Constraint, LetConstraint, Type};
+use crate::uniqueness;
 
 #[inline(always)]
 pub fn constrain_module(
     home: ModuleId,
+    mode: builtins::Mode,
     decls: &[Declaration],
     aliases: &MutMap<Symbol, Alias>,
 ) -> Constraint {
+    use builtins::Mode::*;
+
     let mut send_aliases = SendMap::default();
 
     for (symbol, alias) in aliases {
         send_aliases.insert(*symbol, alias.clone());
     }
 
-    constrain_decls(home, decls, send_aliases)
+    match mode {
+        Standard => constrain_decls(home, decls, send_aliases),
+        Uniqueness => uniqueness::constrain_decls(home, decls, send_aliases),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -58,7 +66,13 @@ pub fn constrain_imported_values(
                     },
                 );
 
-                for (_, var) in free_vars.rigid_vars {
+                for (_, var) in free_vars.named_vars {
+                    rigid_vars.push(var);
+                }
+
+                // Variables can lose their name during type inference. But the unnamed
+                // variables are still part of a signature, and thus must be treated as rigids here!
+                for (_, var) in free_vars.unnamed_vars {
                     rigid_vars.push(var);
                 }
             }
@@ -66,12 +80,8 @@ pub fn constrain_imported_values(
     }
 
     Let(Box::new(LetConstraint {
-        // rigids from other modules should not be treated as rigid
-        // within this module; rather, they should be treated as flex
         rigid_vars,
         flex_vars: Vec::new(),
-        // Importing a value doesn't constrain this module at all.
-        // All it does is introduce variables and provide def_types for lookups
         def_types,
         def_aliases: SendMap::default(),
         defs_constraint: True,
@@ -99,7 +109,7 @@ pub fn load_builtin_aliases(
 
         for (loc_lowercase, index) in builtin_alias.vars.iter().zip(1..) {
             let var = free_vars
-                .flex_vars
+                .unnamed_vars
                 .get(&VarId::from_u32(index))
                 .expect("var_id was not instantiated (is it phantom?)");
 
@@ -119,12 +129,8 @@ pub fn load_builtin_aliases(
     }
 
     Let(Box::new(LetConstraint {
-        // rigids from other modules should not be treated as rigid
-        // within this module; rather, they should be treated as flex
         rigid_vars: Vec::new(),
         flex_vars: Vec::new(),
-        // Importing a value doesn't constrain this module at all.
-        // All it does is introduce variables and provide def_types for lookups
         def_types: SendMap::default(),
         def_aliases,
         defs_constraint: True,
@@ -134,8 +140,8 @@ pub fn load_builtin_aliases(
 
 #[derive(Debug, Clone, Default)]
 pub struct FreeVars {
-    pub rigid_vars: ImMap<Lowercase, Variable>,
-    pub flex_vars: ImMap<VarId, Variable>,
+    pub named_vars: ImMap<Lowercase, Variable>,
+    pub unnamed_vars: ImMap<VarId, Variable>,
 }
 
 pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
@@ -163,20 +169,20 @@ pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &V
             Type::Apply(*symbol, new_args)
         }
         Rigid(lowercase) => {
-            if let Some(var) = free_vars.rigid_vars.get(&lowercase) {
+            if let Some(var) = free_vars.named_vars.get(&lowercase) {
                 Type::Variable(*var)
             } else {
                 let var = var_store.fresh();
-                free_vars.rigid_vars.insert(lowercase.clone(), var);
+                free_vars.named_vars.insert(lowercase.clone(), var);
                 Type::Variable(var)
             }
         }
         Flex(var_id) => {
-            if let Some(var) = free_vars.flex_vars.get(&var_id) {
+            if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
                 Type::Variable(*var)
             } else {
                 let var = var_store.fresh();
-                free_vars.flex_vars.insert(*var_id, var);
+                free_vars.unnamed_vars.insert(*var_id, var);
 
                 Type::Variable(var)
             }
@@ -222,9 +228,9 @@ pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &V
             }
 
             let rec_var = free_vars
-                .flex_vars
+                .unnamed_vars
                 .get(rec_var_id)
-                .expect("rec var not in flex vars");
+                .expect("rec var not in unnamed vars");
 
             Type::RecursiveTagUnion(
                 *rec_var,
@@ -287,12 +293,8 @@ pub fn constrain_imported_aliases(
     }
 
     Let(Box::new(LetConstraint {
-        // rigids from other modules should not be treated as rigid
-        // within this module; rather, they should be treated as flex
         rigid_vars: Vec::new(),
         flex_vars: Vec::new(),
-        // Importing a value doesn't constrain this module at all.
-        // All it does is introduce variables and provide def_types for lookups
         def_types: SendMap::default(),
         def_aliases,
         defs_constraint: True,
