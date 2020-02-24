@@ -42,7 +42,7 @@ pub fn constrain_imported_values(
         let mut free_vars = FreeVars::default();
         let loc_symbol = import.loc_symbol;
 
-        // an imported symbol can be both an alias and a value
+        // an imported symbol can be either an alias or a value
         match import.solved_type {
             SolvedType::Alias(symbol, _, _) if symbol == &loc_symbol.value => {
                 // do nothing, in the future the alias definitions should not be in the list of imported values
