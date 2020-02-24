@@ -1,4 +1,5 @@
 use crate::builtins;
+use crate::builtins::StdLib;
 use crate::can::ident::TagName;
 use crate::collections::{default_hasher, MutMap};
 use crate::module::symbol::Symbol;
@@ -21,6 +22,16 @@ const UVAR1: VarId = VarId::from_u32(1001);
 const UVAR2: VarId = VarId::from_u32(1002);
 const UVAR3: VarId = VarId::from_u32(1003);
 const UVAR4: VarId = VarId::from_u32(1004);
+
+pub fn uniqueness_stdlib() -> StdLib {
+    use builtins::Mode;
+
+    StdLib {
+        mode: Mode::Uniqueness,
+        types: types(),
+        aliases: aliases(),
+    }
+}
 
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
     let mut aliases = builtins::aliases();
