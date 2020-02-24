@@ -19,6 +19,7 @@ mod test_infer_uniq {
     fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
         let (output, _problems, mut subs, variable, constraint, home, interns) = uniq_expr(src);
 
+        dbg!(&constraint);
         assert_correct_variable_usage(&constraint);
 
         for (name, var) in output.rigids {
@@ -1385,12 +1386,11 @@ mod test_infer_uniq {
     }
 
     #[test]
-    #[ignore]
     fn quicksort_swap() {
         infer_eq(
             indoc!(
                 r#"
-                    swap : Num.Num Int.Integer, Num.Num Int.Integer, List.List a -> List.List a
+                    swap : Int, Int, List a -> List a 
                     swap \i, j, list ->
                         when Pair (List.get i list) (List.get j list) is
                             Pair (Ok atI) (Ok atJ) ->
@@ -1408,7 +1408,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    #[ignore]
     fn quicksort() {
         infer_eq(
             indoc!(
@@ -1897,6 +1896,78 @@ mod test_infer_uniq {
                "#
             ),
             "Attr * (List (Attr * Int))",
+        );
+    }
+
+    #[test]
+    fn float_div_builtins() {
+        infer_eq(
+            indoc!(
+                r#"
+                Float.highest / Float.highest
+               "#
+            ),
+            "Attr * Float",
+        );
+    }
+
+    #[test]
+    fn float_div_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                3.0 / 4.0
+               "#
+            ),
+            "Attr * Float",
+        );
+    }
+
+    #[test]
+    fn float_div_literal_builtin() {
+        infer_eq(
+            indoc!(
+                r#"
+                3.0 / Float.highest
+               "#
+            ),
+            "Attr * Float",
+        );
+    }
+
+    #[test]
+    fn int_div_builtins() {
+        infer_eq(
+            indoc!(
+                r#"
+                Int.highest // Int.highest
+               "#
+            ),
+            "Attr * Int",
+        );
+    }
+
+    #[test]
+    fn int_div_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                3 // 4
+               "#
+            ),
+            "Attr * Int",
+        );
+    }
+
+    #[test]
+    fn int_div_literal_builtin() {
+        infer_eq(
+            indoc!(
+                r#"
+                3 // Int.highest
+               "#
+            ),
+            "Attr * Int",
         );
     }
 }

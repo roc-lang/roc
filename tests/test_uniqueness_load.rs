@@ -182,7 +182,6 @@ mod test_uniqueness_load {
         });
     }
 
-    /*
     #[test]
     fn import_alias() {
         test_async(async {
@@ -193,7 +192,7 @@ mod test_uniqueness_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "unit" => "Dep1.Unit",
+                    "unit" => "Attr * Dep1.Unit",
                 },
             );
         });
@@ -209,14 +208,14 @@ mod test_uniqueness_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "floatTest" => "Float",
-                    "divisionFn" => "Float, Float -> Float",
-                    "divisionTest" => "Float",
-                    "intTest" => "Int",
-                    "x" => "Float",
-                    "constantInt" => "Int",
-                    "divDep1ByDep2" => "Float",
-                    "fromDep2" => "Float",
+                    "floatTest" => "Attr Shared Float",
+                    "divisionFn" => "Attr Shared (Attr * Float, Attr * Float -> Attr * Float)",
+                    "divisionTest" => "Attr * Float",
+                    "intTest" => "Attr * Int",
+                    "x" => "Attr * Float",
+                    "constantInt" => "Attr * Int",
+                    "divDep1ByDep2" => "Attr * Float",
+                    "fromDep2" => "Attr * Float",
                 },
             );
         });
@@ -249,8 +248,8 @@ mod test_uniqueness_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "intVal" => "Str",
-                    "identity" => "a -> a",
+                    "intVal" => "Attr * Str",
+                    "identity" => "Attr * (a -> a)",
                 },
             );
         });
@@ -266,16 +265,16 @@ mod test_uniqueness_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "blah2" => "Float",
-                    "blah3" => "Str",
-                    "str" => "Str",
-                    "alwaysThree" => "* -> Str",
-                    "identity" => "a -> a",
-                    "z" => "Dep1.Unit",
-                    "w" => "Dep1.Identity {}",
-                    "succeed" => "a -> Dep1.Identity a",
-                    "yay" => "Res.Res {} err",
-                    "withDefault" => "Res.Res a *, a -> a",
+                    "blah2" => "Attr * Float",
+                    "blah3" => "Attr * Str",
+                    "str" => "Attr * Str",
+                    "alwaysThree" => "Attr * (* -> Attr * Str)",
+                    "identity" => "Attr * (a -> a)",
+                    "z" => "Attr * Dep1.Unit",
+                    "w" => "Attr * (Dep1.Identity (Attr * {}))",
+                    "succeed" => "Attr * (Attr b a -> Attr * (Dep1.Identity (Attr b a)))",
+                    "yay" => "Attr * (Res.Res (Attr * {}) (Attr * err))",
+                    "withDefault" => "Attr * (Attr * (Res.Res (Attr a b) (Attr * *)), Attr a b -> Attr a b)",
                 },
             );
         });
@@ -290,12 +289,11 @@ mod test_uniqueness_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "str" => "Str",
+                    "str" => "Attr * Str",
                 },
             );
         });
     }
-    */
 
     // #[test]
     // fn load_records() {

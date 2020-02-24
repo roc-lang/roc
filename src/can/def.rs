@@ -1407,7 +1407,11 @@ fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var
                     }
 
                     if let Some(alias) = aliases.get_mut(rec) {
-                        alias.typ.instantiate_aliases(&to_instantiate, var_store);
+                        alias.typ.instantiate_aliases(
+                            &to_instantiate,
+                            var_store,
+                            &mut ImSet::default(),
+                        );
                         make_tag_union_recursive(*rec, &mut alias.typ, var_store);
                     }
                 }
