@@ -401,12 +401,11 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
     builder.build_alloca(basic_type, name)
 }
 
-pub fn build_proc<'a, 'ctx, 'env>(
+pub fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     symbol: Symbol,
-    proc: Proc<'a>,
-    procs: &Procs<'a>,
-) -> FunctionValue<'ctx> {
+    proc: &Proc<'a>,
+) -> (FunctionValue<'ctx>, Vec<'a, BasicTypeEnum<'ctx>>) {
     let args = proc.args;
     let arena = env.arena;
     let subs = &env.subs;
@@ -434,6 +433,19 @@ pub fn build_proc<'a, 'ctx, 'env>(
         Some(Linkage::Private),
     );
 
+    (fn_val, arg_basic_types)
+}
+
+pub fn build_proc<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    proc: Proc<'a>,
+    procs: &Procs<'a>,
+    fn_val: FunctionValue<'ctx>,
+    arg_basic_types: Vec<'a, BasicTypeEnum<'ctx>>,
+) {
+    let args = proc.args;
+    let context = &env.context;
+
     // Add a basic block for the entry point
     let entry = context.append_basic_block(fn_val, "entry");
     let builder = env.builder;
@@ -459,8 +471,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let body = build_expr(env, &scope, fn_val, &proc.body, procs);
 
     builder.build_return(Some(&body));
-
-    fn_val
 }
 
 pub fn verify_fn(fn_val: FunctionValue<'_>) {

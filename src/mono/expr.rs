@@ -189,12 +189,12 @@ fn from_can<'a>(
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
 
-        Closure(_, _symbol, _, loc_args, boxed_body) => {
+        Closure(_, _, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
-            let name =
+            let symbol =
                 name.unwrap_or_else(|| gen_closure_name(procs, &mut env.ident_ids, env.home));
 
-            add_closure(env, name, loc_body.value, ret_var, &loc_args, procs)
+            add_closure(env, symbol, loc_body.value, ret_var, &loc_args, procs)
         }
 
         Call(boxed, loc_args, _) => {
@@ -293,7 +293,7 @@ fn from_can<'a>(
 
 fn add_closure<'a>(
     env: &mut Env<'a, '_>,
-    name: Symbol,
+    symbol: Symbol,
     can_body: can::expr::Expr,
     ret_var: Variable,
     loc_args: &[(Variable, Located<Pattern>)],
@@ -310,9 +310,9 @@ fn add_closure<'a>(
             Ok(layout) => layout,
             Err(()) => {
                 // Invalid closure!
-                procs.insert(name.clone(), None);
+                procs.insert(symbol, None);
 
-                return Expr::FunctionPointer(name);
+                return Expr::FunctionPointer(symbol);
             }
         };
 
@@ -333,9 +333,9 @@ fn add_closure<'a>(
         ret_var,
     };
 
-    procs.insert(name.clone(), Some(proc));
+    procs.insert(symbol, Some(proc));
 
-    Expr::FunctionPointer(name)
+    Expr::FunctionPointer(symbol)
 }
 
 fn store_pattern<'a>(
