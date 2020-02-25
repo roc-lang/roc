@@ -1389,7 +1389,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                    swap : Int, Int, List p -> List p
+                    swap : Int, Int, List a -> List a
                     swap = \i, j, list ->
                         when Pair (List.get list i) (List.get list j) is
                             Pair (Ok atI) (Ok atJ) ->
@@ -1403,7 +1403,7 @@ mod test_infer_uniq {
                 "#
             ),
             // TODO have sharing analysis count List.get and List.set differently
-            "Attr * (Attr Shared Int, Attr Shared Int, Attr Shared (List (Attr a p)) -> Attr * (List (Attr a p)))"
+            "Attr * (Attr Shared Int, Attr Shared Int, Attr Shared (List (Attr b a)) -> Attr * (List (Attr b a)))"
         );
     }
 
@@ -1461,7 +1461,7 @@ mod test_infer_uniq {
                 quicksort
                    "#
             ),
-            "Attr Shared (Attr Shared (List (Attr a (Num (Attr b a)))), Attr Shared Int, Attr Shared Int -> Attr Shared (List (Attr a (Num (Attr b a)))))"
+            "Attr Shared (Attr Shared (List (Attr b (Num (Attr c a)))), Attr Shared Int, Attr Shared Int -> Attr Shared (List (Attr b (Num (Attr c a)))))"
         );
     }
 

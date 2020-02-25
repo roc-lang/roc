@@ -120,8 +120,17 @@ fn find_names_needed(
                 }
             }
         }
-        FlexVar(Some(_)) => {
-            // This root already has a name. Nothing to do here!
+        FlexVar(Some(name)) => {
+            // This root already has a name. Nothing more to do here!
+
+            // User-defined names are already taken.
+            // We must not accidentally generate names that collide with them!
+            names_taken.insert(name);
+        }
+        RigidVar(name) => {
+            // User-defined names are already taken.
+            // We must not accidentally generate names that collide with them!
+            names_taken.insert(name);
         }
         Structure(Apply(_, args)) => {
             for var in args {
@@ -161,11 +170,6 @@ fn find_names_needed(
             for var in b.variables() {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
-        }
-        RigidVar(name) => {
-            // User-defined names are already taken.
-            // We must not accidentally generate names that collide with them!
-            names_taken.insert(name);
         }
         Alias(_, args, _actual) => {
             // TODO should we also look in the actual variable?
