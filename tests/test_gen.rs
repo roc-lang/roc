@@ -81,13 +81,9 @@ mod test_gen {
                 interns,
                 cfg,
             };
-            let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut ident_ids);
-
-            // Put this module's ident_ids back in the interns
-            env.interns.all_ident_ids.insert(home, ident_ids);
+            let mono_expr = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut env.interns);
 
             let mut scope = ImMap::default();
             let mut declared = Vec::with_capacity(procs.len());
@@ -222,13 +218,9 @@ mod test_gen {
                 module: arena.alloc(module),
             };
             let mut procs = MutMap::default();
-            let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut ident_ids);
-
-            // Put this module's ident_ids back in the interns, so we can use them in Env.
-            env.interns.all_ident_ids.insert(home, ident_ids);
+            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut env.interns);
 
             // Add all the Procs to the module
             for (name, opt_proc) in procs.clone() {

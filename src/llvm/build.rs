@@ -153,7 +153,12 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let ptr = env
                 .module
                 .get_function(symbol.ident_string(&env.interns))
-                .unwrap_or_else(|| panic!("Could not get pointer to unknown function {:?}", symbol))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Could not get pointer to unknown function {:?}",
+                        symbol.ident_string(&env.interns)
+                    )
+                })
                 .as_global_value()
                 .as_pointer_value();
 
