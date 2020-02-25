@@ -231,9 +231,9 @@ mod test_uniqueness_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "swap" => "Int, Int, List a -> List a",
-                    "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
-                    "quicksort" => "List (Num a), Int, Int -> List (Num a)",
+                    "swap" => "Attr * (Attr Shared Int, Attr Shared Int, Attr Shared (List (Attr a b)) -> Attr * (List (Attr a b)))",
+                    "partition" => "Attr * (Attr Shared Int, Attr Shared Int, Attr Shared (List (Attr b (Num (Attr c a)))) -> Attr * [ Pair (Attr * Int) (Attr Shared (List (Attr b (Num (Attr c a))))) ])",
+                    "quicksort" => "Attr Shared (Attr Shared (List (Attr a (Num (Attr b a)))), Attr Shared Int, Attr Shared Int -> Attr Shared (List (Attr a (Num (Attr b a)))))",
                 },
             );
         });
