@@ -60,10 +60,22 @@ pub fn fmt_expr<'a>(
 
             fmt_expr(buf, &loc_expr.value, indent, true, true);
 
-            for loc_arg in loc_args {
-                buf.push(' ');
+            let multiline_args = loc_args
+                .iter()
+                .any(|loc_arg| is_multiline_expr(&loc_arg.value));
 
-                fmt_expr(buf, &loc_arg.value, indent, true, true);
+            if multiline_args {
+                let arg_indent = indent + INDENT;
+
+                for loc_arg in loc_args {
+                    newline(buf, arg_indent);
+                    fmt_expr(buf, &loc_arg.value, arg_indent, true, false);
+                }
+            } else {
+                for loc_arg in loc_args {
+                    buf.push(' ');
+                    fmt_expr(buf, &loc_arg.value, indent, true, true);
+                }
             }
 
             if apply_needs_parens {
