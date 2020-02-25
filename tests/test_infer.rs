@@ -17,7 +17,13 @@ mod test_infer {
 
     // HELPERS
 
-    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+    fn infer_eq_help(
+        src: &str,
+    ) -> (
+        Vec<roc::types::Problem>,
+        Vec<roc::can::problem::Problem>,
+        String,
+    ) {
         let CanExprOut {
             output,
             var_store,
@@ -25,6 +31,7 @@ mod test_infer {
             constraint,
             home,
             interns,
+            problems: can_problems,
             ..
         } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
@@ -43,19 +50,19 @@ mod test_infer {
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
 
-        (unify_problems, actual_str)
+        (unify_problems, can_problems, actual_str)
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, actual) = infer_eq_help(src);
+        let (_, _can_problems, actual) = infer_eq_help(src);
 
         assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq_without_problem(src: &str, expected: &str) {
-        let (problems, actual) = infer_eq_help(src);
+        let (type_problems, _, actual) = infer_eq_help(src);
 
-        if !problems.is_empty() {
+        if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
@@ -78,8 +85,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                "type inference!"
-            "#
+                    "type inference!"
+                "#
             ),
             "Str",
         );
@@ -90,8 +97,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                ""
-            "#
+                    ""
+                "#
             ),
             "Str",
         );
@@ -117,8 +124,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                []
-            "#
+                    []
+                "#
             ),
             "List *",
         );
@@ -129,8 +136,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [[]]
-            "#
+                    [[]]
+                "#
             ),
             "List (List *)",
         );
@@ -141,8 +148,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [[[]]]
-            "#
+                    [[[]]]
+                "#
             ),
             "List (List (List *))",
         );
@@ -153,36 +160,36 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ [], [ [] ] ]
-            "#
+                    [ [], [ [] ] ]
+                "#
             ),
             "List (List (List *))",
         );
     }
 
-    // #[test]
-    // fn concat_different_types() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             empty = []
-    //             one = List.concat [ 1 ] empty
-    //             str = List.concat [ "blah" ] empty
+    #[test]
+    fn concat_different_types() {
+        infer_eq(
+            indoc!(
+                r#"
+                empty = []
+                one = List.concat [ 1 ] empty
+                str = List.concat [ "blah" ] empty
 
-    //             empty
-    //         "#
-    //         ),
-    //         "List *",
-    //     );
-    // }
+                empty
+            "#
+            ),
+            "List *",
+        );
+    }
 
     #[test]
     fn list_of_one_int() {
         infer_eq(
             indoc!(
                 r#"
-                [42]
-            "#
+                    [42]
+                "#
             ),
             "List Int",
         );
@@ -193,8 +200,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [[[ 5 ]]]
-            "#
+                    [[[ 5 ]]]
+                "#
             ),
             "List (List (List Int))",
         );
@@ -205,8 +212,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ 1, 2, 3 ]
-            "#
+                    [ 1, 2, 3 ]
+                "#
             ),
             "List Int",
         );
@@ -217,8 +224,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ [ 1 ], [ 2, 3 ] ]
-            "#
+                    [ [ 1 ], [ 2, 3 ] ]
+                "#
             ),
             "List (List Int)",
         );
@@ -229,8 +236,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ "cowabunga" ]
-            "#
+                    [ "cowabunga" ]
+                "#
             ),
             "List Str",
         );
@@ -241,8 +248,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [[[ "foo" ]]]
-            "#
+                    [[[ "foo" ]]]
+                "#
             ),
             "List (List (List Str))",
         );
@@ -253,8 +260,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ "foo", "bar" ]
-            "#
+                    [ "foo", "bar" ]
+                "#
             ),
             "List Str",
         );
@@ -283,8 +290,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ "foo", 5 ]
-            "#
+                    [ "foo", 5 ]
+                "#
             ),
             "List <type mismatch>",
         );
@@ -295,8 +302,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                [ [ "foo", 5 ] ]
-            "#
+                    [ [ "foo", 5 ] ]
+                "#
             ),
             "List (List <type mismatch>)",
         );
@@ -321,8 +328,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                \_ -> {}
-            "#
+                    \_ -> {}
+                "#
             ),
             "* -> {}",
         );
@@ -333,8 +340,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                \_, _ -> 42
-            "#
+                    \_, _ -> 42
+                "#
             ),
             "*, * -> Int",
         );
@@ -345,8 +352,8 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                \_, _, _ -> "test!"
-            "#
+                    \_, _, _ -> "test!"
+                "#
             ),
             "*, *, * -> Str",
         );
@@ -359,10 +366,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                foo = {}
+                    foo = {}
 
-                foo
-            "#
+                    foo
+                "#
             ),
             "{}",
         );
@@ -373,10 +380,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                str = "thing"
+                    str = "thing"
 
-                str
-            "#
+                    str
+                "#
             ),
             "Str",
         );
@@ -387,10 +394,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                fn = \_ -> {}
+                    fn = \_ -> {}
 
-                fn
-            "#
+                    fn
+                "#
             ),
             "* -> {}",
         );
@@ -401,10 +408,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                func = \_, _ -> 42
+                    func = \_, _ -> 42
 
-                func
-            "#
+                    func
+                "#
             ),
             "*, * -> Int",
         );
@@ -415,10 +422,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                f = \_, _, _ -> "test!"
+                    f = \_, _, _ -> "test!"
 
-                f
-            "#
+                    f
+                "#
             ),
             "*, *, * -> Str",
         );
@@ -429,12 +436,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                a = \_, _, _ -> "test!"
+                    a = \_, _, _ -> "test!"
 
-                b = a
+                    b = a
 
-                b
-            "#
+                    b
+                "#
             ),
             "*, *, * -> Str",
         );
@@ -445,12 +452,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                a = "test!"
+                    a = "test!"
 
-                b = a
+                    b = a
 
-                b
-            "#
+                    b
+                "#
             ),
             "Str",
         );
@@ -461,14 +468,14 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                c = b
+                    c = b
 
-                b = a
+                    b = a
 
-                a = 42
+                    a = 42
 
-                c
-            "#
+                    c
+                "#
             ),
             "Int",
         );
@@ -479,15 +486,15 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                f = \z -> z
-                g = \z -> z
+                    f = \z -> z
+                    g = \z -> z
 
-                (\x ->
-                    a = f x
-                    b = g x
-                    x
-                )
-            "#
+                    (\x ->
+                        a = f x
+                        b = g x
+                        x
+                    )
+                "#
             ),
             "a -> a",
         );
@@ -500,9 +507,9 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                alwaysFive = \_ -> 5
+                    alwaysFive = \_ -> 5
 
-                alwaysFive "stuff"
+                    alwaysFive "stuff"
                 "#
             ),
             "Int",
@@ -514,9 +521,9 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                identity = \a -> a
+                    identity = \a -> a
 
-                identity "hi"
+                    identity "hi"
                 "#
             ),
             "Str",
@@ -528,11 +535,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                identity = \x -> x
+                    identity = \x -> x
 
-                y = identity 5
+                    y = identity 5
 
-                identity
+                    identity
                 "#
             ),
             "a -> a",
@@ -544,12 +551,12 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                identity = \a -> a
+                    identity = \a -> a
 
-                x = identity 5
-                y = identity "hi"
+                    x = identity 5
+                    y = identity "hi"
 
-                x
+                    x
                 "#
             ),
             "Int",
@@ -561,9 +568,9 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                enlist = \val -> [ val ]
+                    enlist = \val -> [ val ]
 
-                enlist 5
+                    enlist 5
                 "#
             ),
             "List Int",
@@ -590,7 +597,7 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                1 |> (\a -> a)
+                    1 |> (\a -> a)
                 "#
             ),
             "Int",
@@ -845,11 +852,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                if True then
-                    42
-                else
-                    24
-            "#
+                    if True then
+                        42
+                    else
+                        24
+                "#
             ),
             "Int",
         );
@@ -860,10 +867,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                when 1 is
-                 1 -> 2
-                 3 -> 4
-            "#
+                    when 1 is
+                    1 -> 2
+                    3 -> 4
+                "#
             ),
             "Int",
         );
@@ -901,13 +908,13 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                fn = \rec ->
-                    x = rec.x
+                    fn = \rec ->
+                        x = rec.x
 
-                    rec
+                        rec
 
-                fn
-            "#
+                    fn
+                "#
             ),
             "{ x : a }b -> { x : a }b",
         );
@@ -918,11 +925,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            bar : custom -> custom
-            bar = \x -> x
+                    bar : custom -> custom
+                    bar = \x -> x
 
-            bar
-            "#
+                    bar
+                "#
             ),
             "custom -> custom",
         );
@@ -933,10 +940,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            foo: Str -> {}
+                    foo: Str -> {}
 
-            foo "hi"
-            "#
+                    foo "hi"
+                "#
             ),
             "{}",
         );
@@ -947,10 +954,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            foo : Int -> custom
+                    foo : Int -> custom
 
-            foo 2
-            "#
+                    foo 2
+                "#
             ),
             "custom",
         );
@@ -966,10 +973,10 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-            { x, y } : { x : ({} -> custom), y : {} }
+                    { x, y } : { x : ({} -> custom), y : {} }
 
-            x
-            "#
+                    x
+                "#
             ),
             "{} -> custom",
         );
@@ -980,13 +987,13 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                # technically, an empty record can be destructured
-                {} = {}
-                bar = \{} -> 42
+                    # technically, an empty record can be destructured
+                    {} = {}
+                    bar = \{} -> 42
 
-                when foo is
-                    { x: {} } -> x
-            "#
+                    when foo is
+                        { x: {} } -> x
+                "#
             ),
             "{}*",
         );
@@ -1096,11 +1103,11 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                f = \x ->
-                    when x is
-                        { a, b } -> a
+                    f = \x ->
+                        when x is
+                            { a, b: _ } -> a
 
-                f
+                    f
                 "#
             ),
             "{ a : a, b : * }* -> a",
@@ -1171,37 +1178,283 @@ mod test_infer {
     }
 
     #[test]
-    fn annotation_using_num() {
-        infer_eq_without_problem(
+    fn annotation_using_int() {
+        infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Int.Integer
+                   int : Int
 
                    int
-                   "#
+                "#
             ),
             "Int",
         );
     }
 
     #[test]
-    #[ignore] // TODO FIXME un-ignore this when Int is a builtin type alias
-    fn annotation_using_num_used() {
-        // There was a problem where `Int`, because it is only an annotation
-        // wasn't added to the vars_by_symbol.
-        infer_eq_without_problem(
+    fn annotation_using_num_integer() {
+        infer_eq(
             indoc!(
                 r#"
                    int : Num.Num Int.Integer
 
-                   p = (\x -> x) int
-
-                   p
-                   "#
+                   int
+                "#
             ),
             "Int",
         );
     }
+
+    #[test]
+    fn annotated_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Int
+                   int = 5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_int() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Int.Int
+                   int = 5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotated_num_integer() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Num Integer
+                   int = 5.5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_num_integer() {
+        infer_eq(
+            indoc!(
+                r#"
+                   int : Num.Num Int.Integer
+                   int = 5.5
+
+                   int
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn annotation_using_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotation_using_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num FloatingPoint
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float.Float
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotated_float() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Float
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn annotated_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num FloatingPoint
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    #[test]
+    fn fake_result_ok() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Res a e : [ Okay a, Error e ]
+
+                    ok : Res Int *
+                    ok = Okay 5
+
+                    ok
+                "#
+            ),
+            "Res Int *",
+        );
+    }
+
+    #[test]
+    fn fake_result_err() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Res a e : [ Okay a, Error e ]
+
+                    err : Res * Str
+                    err = Error "blah"
+
+                    err
+                "#
+            ),
+            "Res * Str",
+        );
+    }
+
+    #[test]
+    fn basic_result_ok() {
+        infer_eq(
+            indoc!(
+                r#"
+                    ok : Result Int *
+                    ok = Ok 5
+
+                    ok
+                "#
+            ),
+            "Result Int *",
+        );
+    }
+
+    #[test]
+    fn basic_result_err() {
+        infer_eq(
+            indoc!(
+                r#"
+                    err : Result * Str
+                    err = Err "blah"
+
+                    err
+                "#
+            ),
+            "Result * Str",
+        );
+    }
+
+    #[test]
+    fn basic_result_conditional() {
+        infer_eq(
+            indoc!(
+                r#"
+                    ok : Result Int *
+                    ok = Ok 5
+
+                    err : Result * Str
+                    err = Err "blah"
+
+                    if 1 > 0 then
+                        ok
+                    else
+                        err
+                "#
+            ),
+            "Result Int Str",
+        );
+    }
+
+    #[test]
+    fn qualified_annotated_num_floatingpoint() {
+        infer_eq(
+            indoc!(
+                r#"
+                   float : Num.Num Float.FloatingPoint
+                   float = 5.5
+
+                   float
+                "#
+            ),
+            "Float",
+        );
+    }
+
+    // #[test]
+    // fn annotation_using_num_used() {
+    //     // There was a problem where `Int`, because it is only an annotation
+    //     // wasn't added to the vars_by_symbol.
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                int : Int
+
+    //                p = (\x -> x) int
+
+    //                p
+    //                "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
 
     #[test]
     fn num_identity() {
@@ -1298,13 +1551,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo = \rec ->
+                    foo = \rec ->
                         when rec is
-                            { x } -> "1"
-                            { y } -> "2"
+                            { x: _ } -> "1"
+                            { y: _ } -> "2"
 
-                foo
-                      "#
+                    foo
+                "#
             ),
             "{ x : *, y : * }* -> Str",
         );
@@ -1350,9 +1603,9 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Result e a : [ Ok a, Err e ]
+                    Res e a : [ Ok a, Err e ]
 
-                    map : (a -> b), Result e a -> Result e b
+                    map : (a -> b), Res e a -> Res e b
                     map = \f, result ->
                         when result is
                             Ok v -> Ok (f v)
@@ -1361,7 +1614,7 @@ mod test_infer {
                     map
                        "#
             ),
-            "(a -> b), Result e a -> Result e b",
+            "(a -> b), Res e a -> Res e b",
         );
     }
 
@@ -1405,7 +1658,7 @@ mod test_infer {
             indoc!(
                 r#"
                     foo : Str.Str as Foo -> Foo
-                    foo = \x -> "foo"
+                    foo = \_ -> "foo"
 
                     foo
                 "#
@@ -1419,12 +1672,12 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Foo : Str.Str
+                    Foo : Str.Str
 
-                foo : Foo -> Foo
-                foo = \x -> "foo"
+                    foo : Foo -> Foo
+                    foo = \_ -> "foo"
 
-                foo
+                    foo
                 "#
             ),
             "Foo -> Foo",
@@ -1470,13 +1723,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    empty : [ Cons a (List a), Nil ] as List a
+                    empty : [ Cons a (ConsList a), Nil ] as ConsList a
                     empty = Nil
 
                     empty
                        "#
             ),
-            "List a",
+            "ConsList a",
         );
     }
 
@@ -1485,13 +1738,13 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    singleton : a -> [ Cons a (List a), Nil ] as List a
+                    singleton : a -> [ Cons a (ConsList a), Nil ] as ConsList a
                     singleton = \x -> Cons x Nil
 
                     singleton
                        "#
             ),
-            "a -> List a",
+            "a -> ConsList a",
         );
     }
 
@@ -1559,22 +1812,19 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                    map : (a -> b), List a -> List b
+                    map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
                         when list is
                             Nil -> Nil
                             Cons x xs ->
-                                a = f x
-                                b = map f xs
-
-                                Cons a b
+                                Cons (f x) (map f xs)
 
                     map
                        "#
             ),
-            "(a -> b), List a -> List b",
+            "(a -> b), ConsList a -> ConsList b",
         );
     }
 
@@ -1639,35 +1889,37 @@ mod test_infer {
             "<type mismatch>",
         );
     }
-    // doesn't currently print the error, but does report a problem
-    //    #[test]
-    //    fn nums() {
-    //        infer_eq_without_problem(
-    //            indoc!(
-    //                r#"
-    //                s : Num.Num a
-    //                s = 3.1
+
+    // TODO As intended, this fails, but it fails with the wrong error!
     //
-    //                s
-    //                "#
-    //            ),
-    //            "<type mismatch>",
-    //        );
-    //    }
-    //
+    // #[test]
+    // fn nums() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                 s : Num *
+    //                 s = 3.1
+
+    //                 s
+    //                 "#
+    //         ),
+    //         "<Type Mismatch: _____________>",
+    //     );
+    // }
+
     #[test]
     fn manual_attr() {
         infer_eq(
             indoc!(
                 r#"
-                r = Attr unknown "bar"
+                    r = Attr unknown "bar"
 
-                s = Attr unknown2 { left : Attr Shared "foo" }
+                    s = Attr unknown2 { left : Attr Shared "foo" }
 
-                when True is
-                    _ -> { x : ((\Attr _ val -> val) s).left, y : r }
-                    _ -> { x : ((\Attr _ val -> val) s).left, y : ((\Attr _ val -> val) s).left }
-                   "#
+                    when True is
+                        _ -> { x : ((\Attr _ val -> val) s).left, y : r }
+                        _ -> { x : ((\Attr _ val -> val) s).left, y : ((\Attr _ val -> val) s).left }
+                "#
             ),
             "{ x : [ Attr [ Shared ]* Str ]*, y : [ Attr [ Shared ]* Str ]* }",
         );
@@ -1678,20 +1930,37 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                Peano : [ S Peano, Z ]
+                    Peano : [ S Peano, Z ]
 
-                map : Peano -> Peano
-                map = \peano ->
-                        when peano is
-                            Z -> Z
-                            S rest ->
-                                map rest |> S
+                    map : Peano -> Peano
+                    map = \peano ->
+                            when peano is
+                                Z -> Z
+                                S rest ->
+                                    map rest |> S
 
 
-                map
-                       "#
+                    map
+                "#
             ),
             "Peano -> Peano",
+        );
+    }
+
+    #[test]
+    fn unit_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Unit : [ Unit ]
+
+                    unit : Unit
+                    unit = Unit
+
+                    unit
+                "#
+            ),
+            "Unit",
         );
     }
 
@@ -1700,19 +1969,19 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                toEmpty : List a -> List a
-                toEmpty = \_ ->
-                    result : List a
-                    result = Nil
+                    toEmpty : ConsList a -> ConsList a
+                    toEmpty = \_ ->
+                        result : ConsList a
+                        result = Nil
 
-                    result
+                        result
 
-                toEmpty
-                   "#
+                    toEmpty
+                "#
             ),
-            "List a -> List a",
+            "ConsList a -> ConsList a",
         );
     }
 
@@ -1721,19 +1990,19 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List a : [ Cons a (List a), Nil ]
+                    ConsList a : [ Cons a (ConsList a), Nil ]
 
-                toEmpty : List a -> List a
-                toEmpty = \_ ->
-                    result : List a
-                    result = Nil
+                    toEmpty : ConsList a -> ConsList a
+                    toEmpty = \_ ->
+                        result : ConsList a
+                        result = Nil
 
-                    toEmpty result
+                        toEmpty result
 
-                toEmpty
-                   "#
+                    toEmpty
+                "#
             ),
-            "List a -> List a",
+            "ConsList a -> ConsList a",
         );
     }
 
@@ -1742,11 +2011,11 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-               { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
-               { x, y } = { x : "foo", y : 3.14 }
+                    { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    { x, y } = { x : "foo", y : 3.14 }
 
-               x
-               "#
+                    x
+                "#
             ),
             "Str",
         );
@@ -1757,13 +2026,13 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
 
-               { x, y } : Foo
-               { x, y } = { x : "foo", y : 3.14 }
+                    { x, y } : Foo
+                    { x, y } = { x : "foo", y : 3.14 }
 
-               x
-               "#
+                    x
+                "#
             ),
             "Str",
         );
@@ -1774,15 +2043,15 @@ mod test_infer {
         infer_eq(
             indoc!(
                 r#"
-                map = \peano ->
-                        when peano is
-                            Z -> Z
-                            S rest ->
-                                map rest |> S
+                    map = \peano ->
+                            when peano is
+                                Z -> Z
+                                S rest ->
+                                    map rest |> S
 
 
-                map
-                       "#
+                    map
+                "#
             ),
             "[ S a, Z ]* as a -> [ S b, Z ]* as b",
         );
@@ -1793,41 +2062,41 @@ mod test_infer {
         infer_eq_without_problem(
             indoc!(
                 r#"
-               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
 
-               { x, y } : Foo
-               { x, y } = { x : "foo", y : 3.14 }
+                    { x, y } : Foo
+                    { x, y } = { x : "foo", y : 3.14 }
 
-               x
+                    x
                "#
             ),
             "Str",
         );
     }
 
-    //    #[test]
-    //    fn let_tag_pattern_with_annotation() {
-    //        infer_eq_without_problem(
-    //            indoc!(
-    //                r#"
-    //                UserId x : [ UserId Int ]
-    //                UserId x = UserId 42
-    //
-    //                x
-    //               "#
-    //            ),
-    //            "Int",
-    //        );
-    //    }
+    // #[test]
+    // fn let_tag_pattern_with_annotation() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                 UserId x : [ UserId Int ]
+    //                 UserId x = UserId 42
+
+    //                 x
+    //             "#
+    //         ),
+    //         "Int",
+    //     );
+    // }
 
     #[test]
     fn typecheck_record_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List q : [ Cons { x: q, xs: List q }, Nil ]
+                    ConsList q : [ Cons { x: q, xs: ConsList q }, Nil ]
 
-                    map : (a -> b), List a -> List b
+                    map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
                         when list is
                             Nil -> Nil
@@ -1835,9 +2104,9 @@ mod test_infer {
                                 Cons { x: f x, xs : map f xs }
 
                     map
-                       "#
+                "#
             ),
-            "(a -> b), List a -> List b",
+            "(a -> b), ConsList a -> ConsList b",
         );
     }
 
@@ -1853,39 +2122,57 @@ mod test_infer {
                                 Cons { x: f x, xs : map f xs }
 
                     map
-                       "#
+                "#
             ),
             "(a -> b), [ Cons { x : a, xs : c }*, Nil ]* as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
         );
     }
 
-    // infinite loop in type_to_var
-    //    #[test]
-    //    fn typecheck_mutually_recursive_tag_union() {
-    //        infer_eq_without_problem(
-    //            indoc!(
-    //                r#"
-    //                   ListA a b : [ Cons a (ListB b a), Nil ]
-    //                   ListB a b : [ Cons a (ListA b a), Nil ]
-    //
-    //                   List q : [ Cons q (List q), Nil ]
-    //
-    //                   toAs : (b -> a), ListA a b -> List a
-    //                   toAs = \f, lista ->
-    //                        when lista is
-    //                            Nil -> Nil
-    //                            Cons a listb ->
-    //                                when listb is
-    //                                    Nil -> Nil
-    //                                    Cons b newLista ->
-    //                                        Cons a (Cons (f b) (toAs f newLista))
-    //
-    //                   toAs
-    //                  "#
-    //            ),
-    //            "(b -> a), ListA a b -> List a",
-    //        );
-    //    }
+    #[test]
+    fn typecheck_mutually_recursive_tag_union() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    ListA a b : [ Cons a (ListB b a), Nil ]
+                    ListB a b : [ Cons a (ListA b a), Nil ]
+
+                    ConsList q : [ Cons q (ConsList q), Nil ]
+
+                    toAs : (b -> a), ListA a b -> ConsList a
+                    toAs = \f, lista ->
+                        when lista is
+                            Nil -> Nil
+                            Cons a listb ->
+                                when listb is
+                                    Nil -> Nil
+                                    Cons b newLista ->
+                                        Cons a (Cons (f b) (toAs f newLista))
+
+                    toAs
+                "#
+            ),
+            "(b -> a), ListA a b -> ConsList a",
+        );
+    }
+
+    #[test]
+    fn typecheck_mutually_recursive_tag_union_listabc() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    ListA a : [ Cons a (ListB a) ]
+                    ListB a : [ Cons a (ListC a) ]
+                    ListC a : [ Cons a (ListA a), Nil ]
+
+                    val : ListC Int.Int
+                    val = Cons 1 (Cons 2 (Cons 3 Nil))
+
+                    val
+                "#
+            ),
+            "ListC Int",
+        );
+    }
 
     #[test]
     fn infer_mutually_recursive_tag_union() {
@@ -1902,9 +2189,97 @@ mod test_infer {
                                         Cons a (Cons (f b) (toAs f newLista))
 
                    toAs
-                  "#
+                "#
             ),
             "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+        );
+    }
+
+    #[test]
+    fn type_more_general_than_signature() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+                partition = \low, high, initialList ->
+                    when List.get initialList high is
+                        Ok _ ->
+                            Pair 0 []
+
+                        Err _ ->
+                            Pair (low - 1) initialList
+
+                partition
+                            "#
+            ),
+            "Int, Int, List Int -> [ Pair Int (List Int) ]",
+        );
+    }
+
+    #[test]
+    fn quicksort_partition() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                swap : Int, Int, List a -> List a
+                swap = \i, j, list ->
+                    when Pair (List.get list i) (List.get list j) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+    
+                        _ ->
+                            list
+    
+                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+                partition = \low, high, initialList ->
+                    when List.get initialList high is
+                        Ok pivot ->
+                            go = \i, j, list ->
+                                if j < high then
+                                    when List.get list j is
+                                        Ok value ->
+                                            if value <= pivot then
+                                                go (i + 1) (j + 1) (swap (i + 1) j list)
+                                            else
+                                                go i (j + 1) list
+    
+                                        Err _ ->
+                                            Pair i list
+                                else
+                                    Pair i list
+    
+                            when go (low - 1) low initialList is
+                                Pair newI newList ->
+                                    Pair (newI + 1) (swap (newI + 1) high newList)
+    
+                        Err _ ->
+                            Pair (low - 1) initialList
+    
+                partition
+            "#
+            ),
+            "Int, Int, List Int -> [ Pair Int (List Int) ]",
+        );
+    }
+
+    #[test]
+    fn identity_list() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                idList : List a -> List a
+                idList = \list -> list
+
+                foo : List Int -> List Int
+                foo = \initialList -> idList initialList
+
+
+                foo
+            "#
+            ),
+            "List Int -> List Int",
         );
     }
 }

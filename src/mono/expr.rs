@@ -1,10 +1,9 @@
 use crate::can::pattern::Pattern;
 use crate::can::{self, ident::Lowercase};
 use crate::collections::MutMap;
-use crate::module::symbol::Symbol;
 use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
-use crate::subs::{Content, FlatType, Subs, Variable};
+use crate::subs::{Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inlinable_string::InlinableString;
@@ -454,23 +453,18 @@ fn from_can_when<'a>(
             let cond = from_can(env, loc_cond.value, procs, None);
             let subs = &env.subs;
             let content = subs.get_without_compacting(cond_var).content;
+            let layout = Layout::from_content(arena, content, subs)
+                .unwrap_or_else(|_| panic!("TODO generate a runtime error in from_can_when here!"));
 
             // We can Switch on integers and tags, because they both have
             // representations that work as integer values.
             //
             // TODO we can also Switch on record fields if we're pattern matching
             // on a record field that's also Switchable.
-            let is_switchable = match &content {
-                Content::Structure(FlatType::Apply(Symbol::NUM_NUM, args)) => {
-                    debug_assert!(args.len() == 1);
-
-                    let arg = args.iter().next().unwrap();
-
-                    match subs.get_without_compacting(*arg).content {
-                        Content::Structure(FlatType::Apply(Symbol::INT_INTEGER, _)) => true,
-                        _ => false,
-                    }
-                }
+            //
+            // TODO we can also convert floats to integer representations.
+            let is_switchable = match layout {
+                Layout::Builtin(Builtin::Int64) => true,
                 _ => false,
             };
 

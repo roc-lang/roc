@@ -10,10 +10,9 @@ use inkwell::{FloatPredicate, IntPredicate};
 use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
-use crate::llvm::convert::{
-    content_to_basic_type, get_fn_type, layout_to_basic_type, type_from_var,
-};
+use crate::llvm::convert::{basic_type_from_layout, get_fn_type};
 use crate::mono::expr::{Expr, Proc, Procs};
+use crate::mono::layout::Layout;
 use crate::subs::{Subs, Variable};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -74,7 +73,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
             ret_var,
             cond_var,
         } => {
-            let ret_type = type_from_var(*ret_var, &env.subs, env.context);
+            let subs = &env.subs;
+            let ret_content = subs.get_without_compacting(*ret_var).content;
+            let ret_layout = Layout::from_content(env.arena, ret_content, subs)
+                .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_expr here!"));
+            let ret_type = basic_type_from_layout(env.context, &ret_layout);
             let switch_args = SwitchArgs {
                 cond_var: *cond_var,
                 cond_expr: cond,
@@ -92,14 +95,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             for (name, var, expr) in stores.iter() {
                 let content = subs.get_without_compacting(*var).content;
+                let layout = Layout::from_content(env.arena, content, &subs).unwrap_or_else(|_| {
+                    panic!("TODO generate a runtime error in build_branch2 here!")
+                });
                 let val = build_expr(env, &scope, parent, &expr, procs);
-                let expr_bt =
-                    content_to_basic_type(&content, subs, context).unwrap_or_else(|err| {
-                        panic!(
-                            "Error converting symbol {:?} to basic type: {:?} - scope was: {:?}",
-                            name, err, scope
-                        )
-                    });
+                let expr_bt = basic_type_from_layout(context, &layout);
                 let alloca = create_entry_block_alloca(env, parent, expr_bt, &name);
 
                 env.builder.build_store(alloca, val);
@@ -208,16 +208,12 @@ fn build_branch2<'a, 'ctx, 'env>(
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let context = env.context;
     let subs = &env.subs;
 
-    let content = subs.get_without_compacting(cond.ret_var).content;
-    let ret_type = content_to_basic_type(&content, subs, context).unwrap_or_else(|err| {
-        panic!(
-            "Error converting cond branch ret_type content {:?} to basic type: {:?}",
-            cond.pass, err
-        )
-    });
+    let ret_content = subs.get_without_compacting(cond.ret_var).content;
+    let ret_layout = Layout::from_content(env.arena, ret_content, &subs)
+        .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_branch2 here!"));
+    let ret_type = basic_type_from_layout(env.context, &ret_layout);
 
     let lhs = build_expr(env, scope, parent, cond.cond_lhs, procs);
     let rhs = build_expr(env, scope, parent, cond.cond_rhs, procs);
@@ -413,18 +409,15 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let subs = &env.subs;
     let context = &env.context;
     let ret_content = subs.get_without_compacting(proc.ret_var).content;
-    // TODO this content_to_basic_type is duplicated when building this Proc
-    let ret_type = content_to_basic_type(&ret_content, subs, context).unwrap_or_else(|err| {
-        panic!(
-            "Error converting function return value content to basic type: {:?}",
-            err
-        )
-    });
+    // TODO this Layout::from_content is duplicated when building this Proc
+    let ret_layout = Layout::from_content(env.arena, ret_content, &subs)
+        .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_proc here!"));
+    let ret_type = basic_type_from_layout(context, &ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
     let mut arg_names = Vec::new_in(arena);
 
     for (layout, name, _var) in args.iter() {
-        let arg_type = layout_to_basic_type(&layout, subs, env.context);
+        let arg_type = basic_type_from_layout(env.context, &layout);
 
         arg_basic_types.push(arg_type);
         arg_names.push(name);

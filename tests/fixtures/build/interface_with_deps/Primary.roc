@@ -1,8 +1,9 @@
 interface Primary
-    exposes [ blah, str ]
-    imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Result ]
+    exposes [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay ]
+    imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Res ]
 
-blah = {}
+blah2 = Dep2.two
+blah3 = bar # TODO FIXME does work as Dep3.Blah.bar, some scoping issue
 
 str = Dep1.str
 
@@ -23,12 +24,12 @@ w = Identity {}
 succeed : a -> Dep1.Identity a
 succeed = \x -> Identity x
 
-map = Result.withDefault
+withDefault = Res.withDefault
 
-yay : Result.Result e {}
+yay : Res.Res {} err
 yay =
-    v = Ok "foo"
+    ok = Ok "foo"
 
     f = \_ -> {}
 
-    Result.map v f
+    Res.map ok f

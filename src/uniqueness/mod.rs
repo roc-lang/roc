@@ -1,10 +1,9 @@
-use crate::can::def::Def;
+use crate::can::def::{Declaration, Def};
 use crate::can::expr::Expr;
 use crate::can::expr::Field;
 use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::collections::{ImMap, ImSet, SendMap};
-use crate::constrain::builtins;
 use crate::constrain::expr::{exists, exists_with_aliases, Info};
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::{Located, Region};
@@ -19,11 +18,13 @@ use crate::types::PReason::{self};
 use crate::types::Reason;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::{Atom, Bool};
+use crate::uniqueness::builtins::{attr_type, list_type, str_type};
 use crate::uniqueness::sharing::{FieldAccess, ReferenceCount, VarUsage};
 
 pub use crate::can::expr::Expr::*;
 
 pub mod boolean_algebra;
+pub mod builtins;
 pub mod sharing;
 
 pub struct Env {
@@ -32,10 +33,6 @@ pub struct Env {
     /// map so that expressions within that annotation can share these vars.
     pub rigids: ImMap<Lowercase, (Variable, Variable)>,
     pub home: ModuleId,
-}
-
-pub fn attr_type(uniq: Bool, typ: Type) -> Type {
-    crate::constrain::builtins::builtin_type(Symbol::ATTR_ATTR, vec![Type::Boolean(uniq), typ])
 }
 
 pub fn constrain_declaration(
@@ -65,6 +62,62 @@ pub fn constrain_declaration(
         &loc_expr.value,
         expected,
     )
+}
+
+/// Constrain top-level module declarations
+#[inline(always)]
+pub fn constrain_decls(
+    home: ModuleId,
+    decls: &[Declaration],
+    aliases: SendMap<Symbol, Alias>,
+) -> Constraint {
+    let mut constraint = Constraint::SaveTheEnvironment;
+
+    let var_store = VarStore::default();
+    let var_usage = VarUsage::default();
+
+    for decl in decls.iter().rev() {
+        // NOTE: rigids are empty because they are not shared between top-level definitions
+        match decl {
+            Declaration::Declare(def) => {
+                constraint = exists_with_aliases(
+                    aliases.clone(),
+                    Vec::new(),
+                    constrain_def(
+                        &Env {
+                            home,
+                            rigids: ImMap::default(),
+                        },
+                        &var_store,
+                        &var_usage,
+                        &mut ImSet::default(),
+                        def,
+                        constraint,
+                    ),
+                );
+            }
+            Declaration::DeclareRec(defs) => {
+                constraint = exists_with_aliases(
+                    aliases.clone(),
+                    Vec::new(),
+                    constrain_recursive_defs(
+                        &Env {
+                            home,
+                            rigids: ImMap::default(),
+                        },
+                        &var_store,
+                        &var_usage,
+                        &mut ImSet::default(),
+                        defs,
+                        constraint,
+                    ),
+                );
+            }
+            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+        }
+    }
+
+    constraint
 }
 
 pub struct PatternState {
@@ -115,7 +168,7 @@ fn constrain_pattern(
                 Constraint::Pattern(
                     pattern.region,
                     PatternCategory::Str,
-                    attr_type(Bool::variable(uniq_var), Type::string()),
+                    str_type(Bool::variable(uniq_var)),
                     expected,
                 ),
             ));
@@ -309,7 +362,7 @@ pub fn constrain_expr(
         }
         BlockStr(_) | Str(_) => {
             let uniq_type = var_store.fresh();
-            let inferred = attr_type(Bool::variable(uniq_type), Type::string());
+            let inferred = str_type(Bool::variable(uniq_type));
 
             exists(vec![uniq_type], Eq(inferred, expected, region))
         }
@@ -429,10 +482,7 @@ pub fn constrain_expr(
         } => {
             let uniq_var = var_store.fresh();
             if loc_elems.is_empty() {
-                let inferred = attr_type(
-                    Bool::variable(uniq_var),
-                    builtins::empty_list_type(*entry_var),
-                );
+                let inferred = builtins::empty_list_type(Bool::variable(uniq_var), *entry_var);
                 exists(vec![*entry_var, uniq_var], Eq(inferred, expected, region))
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
@@ -455,7 +505,7 @@ pub fn constrain_expr(
                     constraints.push(constraint);
                 }
 
-                let inferred = attr_type(Bool::variable(uniq_var), builtins::list_type(entry_type));
+                let inferred = list_type(Bool::variable(uniq_var), entry_type);
                 constraints.push(Eq(inferred, expected, region));
 
                 exists(vec![*entry_var, uniq_var], And(constraints))

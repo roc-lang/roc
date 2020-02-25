@@ -1,4 +1,6 @@
-use crate::collections::{default_hasher, MutMap};
+use crate::can::ident::Ident;
+use crate::collections::{default_hasher, ImMap, MutMap};
+use crate::region::Region;
 use inlinable_string::InlinableString;
 use std::collections::HashMap;
 use std::{fmt, u32};
@@ -44,8 +46,9 @@ impl Symbol {
             .get_name(self.module_id())
             .unwrap_or_else(|| {
                 panic!(
-                    "module_string could not find IdentIds for {:?}",
-                    self.module_id()
+                    "module_string could not find IdentIds for {:?} in interns {:?}",
+                    self.module_id(),
+                    interns
                 )
             })
     }
@@ -56,8 +59,9 @@ impl Symbol {
             .get(&self.module_id())
             .unwrap_or_else(|| {
                 panic!(
-                    "ident_string could not find IdentIds for {:?}",
-                    self.module_id()
+                    "ident_string could not find IdentIds for {:?} in interns {:?}",
+                    self.module_id(),
+                    interns
                 )
             });
 
@@ -417,15 +421,15 @@ macro_rules! define_builtins {
         $(
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
-                    $ident_id:literal $ident_const:ident: $ident_name:literal
+                    $ident_id:literal $ident_const:ident: $ident_name:literal $($imported:ident)?
                 )+
             }
         )+
         num_modules: $total:literal
     } => {
         impl IdentIds {
-            pub fn exposed_builtins() -> MutMap<ModuleId, IdentIds> {
-                let mut exposed_idents_by_module = MutMap::default();
+            pub fn exposed_builtins(extra_capacity: usize) -> MutMap<ModuleId, IdentIds> {
+                let mut exposed_idents_by_module = HashMap::with_capacity_and_hasher(extra_capacity + $total, default_hasher());
 
                 $(
                     debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
@@ -472,6 +476,13 @@ macro_rules! define_builtins {
         }
 
         impl ModuleId {
+            pub fn is_builtin(&self) -> bool {
+                // This is a builtin ModuleId iff it's below the
+                // total number of builtin modules, since they
+                // take up the first $total ModuleId numbers.
+                self.0 < $total
+            }
+
             $(
                 pub const $module_const: ModuleId = ModuleId($module_id);
             )+
@@ -511,6 +522,31 @@ macro_rules! define_builtins {
                 )+
             )+
 
+            /// The default idents that should be in scope,
+            /// and what symbols they should resolve to.
+            ///
+            /// This is for type aliases like `Int` and `Str` and such.
+            pub fn default_in_scope() -> ImMap<Ident, (Symbol, Region)> {
+                let mut scope = ImMap::default();
+
+                $(
+                    $(
+                        $(
+                            // TODO is there a cleaner way to do this?
+                            // The goal is to make sure that we only
+                            // actually import things into scope if
+                            // they are tagged as "imported" in define_builtins!
+                            let $imported = true;
+
+                            if $imported {
+                                scope.insert($ident_name.into(), (Symbol::new(ModuleId($module_id), IdentId($ident_id)), Region::zero()));
+                            }
+                        )?
+                    )+
+                )+
+
+                scope
+            }
         }
     };
 }
@@ -518,37 +554,66 @@ macro_rules! define_builtins {
 define_builtins! {
     0 ATTR: "Attr" => {
         0 ATTR_ATTR: "Attr" // the Attr.Attr type alias, used in uniqueness types
+        1 ATTR_AT_ATTR: "@Attr" // the Attr.@Attr private tag
     }
     1 NUM: "Num" => {
-        0 NUM_NUM: "Num" // the Num.Num type alias
-        1 NUM_ABS: "abs"
-        2 NUM_ADD: "add"
-        3 NUM_SUB: "sub"
-        4 NUM_MUL: "mul"
+        0 NUM_NUM: "Num" imported // the Num.Num type alias
+        1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
+        2 NUM_ABS: "abs"
+        3 NUM_NEG: "neg"
+        4 NUM_ADD: "add"
+        5 NUM_SUB: "sub"
+        6 NUM_MUL: "mul"
+        7 NUM_LT: "isLt"
+        8 NUM_LE: "isLte"
+        9 NUM_GT: "isGt"
+        10 NUM_GE: "isGte"
     }
     2 INT: "Int" => {
-        0 INT_INT: "Int" // the Int.Int type alias
-        1 INT_INTEGER: "Integer" // Int : Num Integer
-        2 INT_DIV: "div"
+        0 INT_INT: "Int" imported // the Int.Int type alias
+        1 INT_INTEGER: "Integer" imported // Int : Num Integer
+        2 INT_AT_INTEGER: "@Integer" // the Int.@Integer private tag
+        3 INT_DIV: "div"
+        4 INT_MOD: "mod"
+        5 INT_HIGHEST: "highest"
+        6 INT_LOWEST: "lowest"
     }
     3 FLOAT: "Float" => {
-        0 FLOAT_FLOAT: "Float" // the Float.Float type alias
-        1 FLOAT_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
-        2 FLOAT_DIV: "div"
+        0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
+        1 FLOAT_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
+        2 FLOAT_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
+        3 FLOAT_DIV: "div"
+        4 FLOAT_MOD: "mod"
+        5 FLOAT_SQRT: "sqrt"
+        6 FLOAT_HIGHEST: "highest"
+        7 FLOAT_LOWEST: "lowest"
     }
     4 BOOL: "Bool" => {
-        0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
+        0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
         1 BOOL_AND: "and"
         2 BOOL_OR: "or"
+        3 BOOL_NOT: "not"
+        4 BOOL_XOR: "xor"
+        5 BOOL_EQ: "isEq"
+        6 BOOL_NEQ: "isNotEq"
     }
     5 STR: "Str" => {
-        0 STR_STR: "Str" // the Str.Str type alias
-        1 STR_ISEMPTY: "isEmpty"
+        0 STR_STR: "Str" imported // the Str.Str type alias
+        1 STR_AT_STR: "@Str" // the Str.@Str private tag
+        2 STR_ISEMPTY: "isEmpty"
     }
     6 LIST: "List" => {
-        0 LIST_LIST: "List" // the List.List type alias
-        1 LIST_ISEMPTY: "isEmpty"
+        0 LIST_LIST: "List" imported // the List.List type alias
+        1 LIST_AT_LIST: "@List" // the List.@List private tag
+        2 LIST_ISEMPTY: "isEmpty"
+        3 LIST_GET: "get"
+        4 LIST_SET: "set"
+        5 LIST_MAP: "map"
+    }
+    7 RESULT: "Result" => {
+        0 RESULT_RESULT: "Result" imported // the Result.Result type alias
+        1 RESULT_MAP: "map"
     }
 
-    num_modules: 7 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
+    num_modules: 8 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
 }

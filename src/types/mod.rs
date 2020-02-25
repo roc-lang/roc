@@ -1,5 +1,3 @@
-pub mod builtins;
-
 use crate::can::ident::{Ident, Lowercase, TagName};
 use crate::can::pattern::Pattern;
 use crate::collections::{ImMap, ImSet, MutSet, SendMap};
@@ -7,7 +5,7 @@ use crate::module::symbol::Symbol;
 use crate::operator::{ArgSide, BinOp};
 use crate::region::Located;
 use crate::region::Region;
-use crate::subs::Variable;
+use crate::subs::{VarStore, Variable};
 use crate::uniqueness::boolean_algebra;
 use inlinable_string::InlinableString;
 use std::fmt;
@@ -75,14 +73,15 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(symbol, args, actual) => {
+            Type::Alias(symbol, args, _actual) => {
                 write!(f, "Alias {:?}", symbol)?;
 
                 for (_, arg) in args {
                     write!(f, " {:?}", arg)?;
                 }
 
-                write!(f, "but really {:?}", actual)?;
+                // Sometimes it's useful to see the expansion of the alias
+                // write!(f, "[ but actually {:?} ]", _actual)?;
 
                 Ok(())
             }
@@ -221,31 +220,6 @@ impl fmt::Debug for Type {
 }
 
 impl Type {
-    pub fn num(args: Vec<Type>) -> Self {
-        Type::Apply(Symbol::NUM_NUM, args)
-    }
-
-    pub fn float() -> Self {
-        let floating_point = Type::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new());
-
-        Type::num(vec![floating_point])
-    }
-
-    pub fn int() -> Self {
-        let integer = Type::Apply(Symbol::INT_INTEGER, Vec::new());
-
-        Type::num(vec![integer])
-    }
-
-    pub fn string() -> Self {
-        Type::Apply(Symbol::STR_STR, Vec::new())
-    }
-
-    /// This is needed to constrain `if` conditionals
-    pub fn bool() -> Self {
-        Type::Apply(Symbol::BOOL_BOOL, Vec::new())
-    }
-
     pub fn arity(&self) -> usize {
         if let Type::Function(args, _) = self {
             args.len()
@@ -389,12 +363,131 @@ impl Type {
         }
     }
 
+    pub fn symbols(&self) -> ImSet<Symbol> {
+        let mut found_symbols = ImSet::default();
+        symbols_help(self, &mut found_symbols);
+
+        found_symbols
+    }
+
     /// a shallow dealias, continue until the first constructor is not an alias.
     pub fn shallow_dealias(&self) -> &Self {
         match self {
             Type::Alias(_, _, actual) => actual.shallow_dealias(),
             _ => self,
         }
+    }
+
+    pub fn instantiate_aliases(&mut self, aliases: &ImMap<Symbol, Alias>, var_store: &VarStore) {
+        use Type::*;
+
+        match self {
+            Function(args, ret) => {
+                for arg in args {
+                    arg.instantiate_aliases(aliases, var_store);
+                }
+                ret.instantiate_aliases(aliases, var_store);
+            }
+            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+                for (_, args) in tags {
+                    for x in args {
+                        x.instantiate_aliases(aliases, var_store);
+                    }
+                }
+                ext.instantiate_aliases(aliases, var_store);
+            }
+            Record(fields, ext) => {
+                for x in fields.iter_mut() {
+                    x.instantiate_aliases(aliases, var_store);
+                }
+                ext.instantiate_aliases(aliases, var_store);
+            }
+            Alias(_, _, actual_type) => {
+                actual_type.instantiate_aliases(aliases, var_store);
+            }
+            Apply(symbol, args) => {
+                if let Some(alias) = aliases.get(symbol) {
+                    debug_assert!(args.len() == alias.vars.len());
+                    let mut actual = alias.typ.clone();
+
+                    let mut named_args = Vec::with_capacity(args.len());
+                    let mut substitution = ImMap::default();
+
+                    // TODO substitute further in args
+                    for (
+                        Located {
+                            value: (lowercase, placeholder),
+                            ..
+                        },
+                        filler,
+                    ) in alias.vars.iter().zip(args.iter())
+                    {
+                        let mut filler = filler.clone();
+                        filler.instantiate_aliases(aliases, var_store);
+                        named_args.push((lowercase.clone(), filler.clone()));
+                        substitution.insert(*placeholder, filler);
+                    }
+
+                    actual.substitute(&substitution);
+                    actual.instantiate_aliases(aliases, var_store);
+
+                    // instantiate recursion variable!
+                    if let Type::RecursiveTagUnion(rec_var, mut tags, mut ext) = actual {
+                        let new_rec_var = var_store.fresh();
+                        substitution.clear();
+                        substitution.insert(rec_var, Type::Variable(new_rec_var));
+
+                        for typ in tags.iter_mut().map(|v| v.1.iter_mut()).flatten() {
+                            typ.substitute(&substitution);
+                        }
+                        ext.substitute(&substitution);
+
+                        *self = Type::Alias(
+                            *symbol,
+                            named_args,
+                            Box::new(Type::RecursiveTagUnion(new_rec_var, tags, ext)),
+                        );
+                    } else {
+                        *self = Type::Alias(*symbol, named_args, Box::new(actual));
+                    }
+                } else {
+                    // do nothing, maybe this alias gets instantiated later?
+                }
+            }
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
+        }
+    }
+}
+
+fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
+    use Type::*;
+
+    match tipe {
+        Function(args, ret) => {
+            symbols_help(&ret, accum);
+            args.iter().for_each(|arg| symbols_help(arg, accum));
+        }
+        RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+            symbols_help(&ext, accum);
+            tags.iter()
+                .map(|v| v.1.iter())
+                .flatten()
+                .for_each(|arg| symbols_help(arg, accum));
+        }
+
+        Record(fields, ext) => {
+            symbols_help(&ext, accum);
+            fields.values().for_each(|arg| symbols_help(arg, accum));
+        }
+        Alias(alias_symbol, _, actual_type) => {
+            accum.insert(*alias_symbol);
+            symbols_help(&actual_type, accum);
+        }
+        Apply(symbol, args) => {
+            accum.insert(*symbol);
+            args.iter().for_each(|arg| symbols_help(arg, accum));
+        }
+        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
     }
 }
 
@@ -487,6 +580,13 @@ impl<T> PExpected<T> {
             PExpected::ForReason(_, val, _) => val,
         }
     }
+
+    pub fn get_type_mut_ref(&mut self) -> &mut T {
+        match self {
+            PExpected::NoExpectation(val) => val,
+            PExpected::ForReason(_, val, _) => val,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,6 +608,14 @@ impl<T> Expected<T> {
     }
 
     pub fn get_type_ref(&self) -> &T {
+        match self {
+            Expected::NoExpectation(val) => val,
+            Expected::ForReason(_, val, _) => val,
+            Expected::FromAnnotation(_, _, _, val) => val,
+        }
+    }
+
+    pub fn get_type_mut_ref(&mut self) -> &mut T {
         match self {
             Expected::NoExpectation(val) => val,
             Expected::ForReason(_, val, _) => val,
@@ -551,6 +659,64 @@ pub enum Constraint {
     SaveTheEnvironment,
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
+}
+
+impl Constraint {
+    pub fn instantiate_aliases(&mut self, var_store: &VarStore) {
+        Self::instantiate_aliases_help(self, &ImMap::default(), var_store);
+    }
+
+    fn instantiate_aliases_help(&mut self, aliases: &ImMap<Symbol, Alias>, var_store: &VarStore) {
+        use Constraint::*;
+
+        match self {
+            True | SaveTheEnvironment => {}
+
+            Eq(typ, expected, _) => {
+                expected
+                    .get_type_mut_ref()
+                    .instantiate_aliases(aliases, var_store);
+                typ.instantiate_aliases(aliases, var_store);
+            }
+
+            Lookup(_, expected, _) => {
+                expected
+                    .get_type_mut_ref()
+                    .instantiate_aliases(aliases, var_store);
+            }
+
+            Pattern(_, _, typ, pexpected) => {
+                pexpected
+                    .get_type_mut_ref()
+                    .instantiate_aliases(aliases, var_store);
+                typ.instantiate_aliases(aliases, var_store);
+            }
+
+            And(nested) => {
+                for c in nested.iter_mut() {
+                    c.instantiate_aliases_help(aliases, var_store);
+                }
+            }
+
+            Let(letcon) => {
+                let mut new_aliases = aliases.clone();
+                for (k, v) in letcon.def_aliases.iter() {
+                    new_aliases.insert(*k, v.clone());
+                }
+
+                for Located { value: typ, .. } in letcon.def_types.iter_mut() {
+                    typ.instantiate_aliases(&new_aliases, var_store);
+                }
+
+                letcon
+                    .defs_constraint
+                    .instantiate_aliases_help(&new_aliases, var_store);
+                letcon
+                    .ret_constraint
+                    .instantiate_aliases_help(&new_aliases, var_store);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

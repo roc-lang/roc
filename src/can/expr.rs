@@ -676,8 +676,13 @@ fn canonicalize_when_branch<'a>(
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
     for (symbol, region) in scope.symbols() {
-        if !output.references.has_lookup(*symbol) && !original_scope.contains_symbol(*symbol) {
-            env.problem(Problem::UnusedDef(*symbol, *region));
+        let symbol = *symbol;
+
+        if !output.references.has_lookup(symbol)
+            && !branch_output.references.has_lookup(symbol)
+            && !original_scope.contains_symbol(symbol)
+        {
+            env.problem(Problem::UnusedDef(symbol, *region));
         }
     }
 
@@ -897,7 +902,11 @@ fn canonicalize_lookup(
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
         match env.qualified_lookup(module_name, ident, region) {
-            Ok(symbol) => Var(symbol),
+            Ok(symbol) => {
+                output.references.lookups.insert(symbol);
+
+                Var(symbol)
+            }
             Err(problem) => {
                 // Either the module wasn't imported, or
                 // it was imported but it doesn't expose this ident.

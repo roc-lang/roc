@@ -5,7 +5,7 @@ use crate::can::ident::Ident;
 use crate::can::ident::Lowercase;
 use crate::can::operator::desugar_def;
 use crate::can::pattern::PatternType;
-use crate::can::problem::RuntimeError;
+use crate::can::problem::{Problem, RuntimeError};
 use crate::can::scope::Scope;
 use crate::collections::{MutMap, MutSet};
 use crate::module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -22,6 +22,7 @@ pub struct ModuleOutput {
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
+    pub problems: Vec<Problem>,
     pub ident_ids: IdentIds,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
@@ -83,7 +84,7 @@ pub fn canonicalize_module_defs<'a>(
             let expr_var = var_store.fresh();
 
             match scope.import(ident, symbol, region) {
-                Ok(symbol) => {
+                Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
                     // exposes [ Bar.{ baz } ] then insert Foo.baz as the key, so when
@@ -103,7 +104,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, scope, output) = canonicalize_defs(
+    let (defs, _scope, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -111,6 +112,14 @@ pub fn canonicalize_module_defs<'a>(
         &desugared,
         PatternType::TopLevelDef,
     );
+
+    // See if any of the new idents we defined went unused.
+    // If any were unused and also not exposed, report it.
+    for (symbol, region) in symbols_introduced {
+        if !output.references.has_lookup(symbol) && !exposed_symbols.contains(&symbol) {
+            env.problem(Problem::UnusedDef(symbol, region));
+        }
+    }
 
     for (var, lowercase) in output.rigids.clone() {
         rigid_variables.insert(var, lowercase);
@@ -137,7 +146,6 @@ pub fn canonicalize_module_defs<'a>(
             for decl in declarations.iter() {
                 match decl {
                     Declare(def) => {
-                        // TODO if this doesn't work, try def.expr_var
                         for (symbol, variable) in def.pattern_vars.iter() {
                             if exposed_symbols.contains(symbol) {
                                 // This is one of our exposed symbols;
@@ -180,7 +188,7 @@ pub fn canonicalize_module_defs<'a>(
 
             let mut aliases = MutMap::default();
 
-            for (symbol, alias) in scope.into_aliases() {
+            for (symbol, alias) in output.aliases {
                 // Remove this from exposed_symbols,
                 // so that at the end of the process,
                 // we can see if there were any
@@ -188,10 +196,6 @@ pub fn canonicalize_module_defs<'a>(
                 // corresponding defs.
                 exposed_symbols.remove(&symbol);
 
-                // TODO store aliases as a MutMap inside Scope
-                // (and manually remove them when exiting a scope)
-                // and we can use it directly instead of rebuilding it
-                // piece by piece like this.
                 aliases.insert(symbol, alias);
             }
 
@@ -202,9 +206,6 @@ pub fn canonicalize_module_defs<'a>(
             if !exposed_symbols.is_empty() {
                 panic!("TODO gracefully handle invalid `exposes` entry (or entries) which had no corresponding definition: {:?}", exposed_symbols);
             }
-
-            // TODO incorporate rigids into here (possibly by making this be a Let instead
-            // of an And)
 
             // Incorporate any remaining output.lookups entries into references.
             for symbol in output.references.lookups {
@@ -217,6 +218,7 @@ pub fn canonicalize_module_defs<'a>(
                 declarations,
                 references,
                 exposed_imports: can_exposed_imports,
+                problems: env.problems,
                 lookups,
                 exposed_vars_by_symbol,
                 ident_ids: env.ident_ids,

@@ -1,4 +1,5 @@
-use crate::can::ident::Lowercase;
+use crate::can::ident::{Lowercase, TagName};
+use crate::collections::MutMap;
 use crate::module::symbol::Symbol;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use bumpalo::collections::Vec;
@@ -41,8 +42,17 @@ impl<'a> Layout<'a> {
                 panic!("Layout::from_content encountered an unresolved {:?}", var);
             }
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs),
-            Alias(_, _, _) => {
-                panic!("TODO recursively resolve type aliases in Layout::from_content");
+
+            Alias(Symbol::INT_INT, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Int64))
+            }
+            Alias(Symbol::FLOAT_FLOAT, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Layout::Builtin(Builtin::Float64))
+            }
+            Alias(_, _, var) => {
+                Self::from_content(arena, subs.get_without_compacting(var).content, subs)
             }
             Error => Err(()),
         }
@@ -102,16 +112,27 @@ fn layout_from_flat_type<'a>(
 
     match flat_type {
         Apply(symbol, args) => {
-            if symbol == Symbol::NUM_NUM {
-                // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
-                debug_assert!(args.len() == 1);
+            match symbol {
+                Symbol::INT_INT => {
+                    debug_assert!(args.is_empty());
+                    Ok(Layout::Builtin(Builtin::Int64))
+                }
+                Symbol::FLOAT_FLOAT => {
+                    debug_assert!(args.is_empty());
+                    Ok(Layout::Builtin(Builtin::Float64))
+                }
+                Symbol::NUM_NUM => {
+                    // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
+                    debug_assert!(args.len() == 1);
 
-                let var = args.iter().next().unwrap();
-                let content = subs.get_without_compacting(*var).content;
+                    let var = args.iter().next().unwrap();
+                    let content = subs.get_without_compacting(*var).content;
 
-                layout_from_num_content(content)
-            } else {
-                panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
+                    layout_from_num_content(content)
+                }
+                _ => {
+                    panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
+                }
             }
         }
         Func(args, ret_var) => {
@@ -131,7 +152,8 @@ fn layout_from_flat_type<'a>(
                 arena.alloc(ret),
             ))
         }
-        Record(fields, ext_var) => {
+        Record(mut fields, ext_var) => {
+            flatten_record(&mut fields, ext_var, subs);
             let ext_content = subs.get_without_compacting(ext_var).content;
             let ext_layout = match Layout::from_content(arena, ext_content, subs) {
                 Ok(layout) => layout,
@@ -174,8 +196,64 @@ fn layout_from_flat_type<'a>(
 
             Ok(Layout::Struct(field_layouts.into_bump_slice()))
         }
-        TagUnion(_, _) => {
-            panic!("TODO make Layout for non-empty Tag Union");
+        TagUnion(mut tags, ext_var) => {
+            // Recursively inject the contents of ext_var into tags
+            // until we have all the tags in one map.
+            flatten_union(&mut tags, ext_var, subs);
+
+            match tags.len() {
+                0 => {
+                    panic!("TODO gracefully handle trying to instantiate Never");
+                }
+                1 => {
+                    // This is a wrapper. Unwrap it!
+                    let (tag, args) = tags.into_iter().next().unwrap();
+
+                    match tag {
+                        TagName::Private(Symbol::NUM_AT_NUM) if args.len() == 1 => {
+                            let var = args.into_iter().next().unwrap();
+
+                            match subs.get_without_compacting(var).content {
+                                Content::Structure(flat_type) => match flat_type {
+                                    _ => {
+                                        panic!("TODO handle Num.@Num flat_type {:?}", flat_type);
+                                    }
+                                },
+                                Content::Alias(Symbol::INT_INTEGER, args, _) => {
+                                    debug_assert!(args.is_empty());
+                                    Ok(Layout::Builtin(Builtin::Int64))
+                                }
+                                Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+                                    debug_assert!(args.is_empty());
+                                    Ok(Layout::Builtin(Builtin::Float64))
+                                }
+                                other => {
+                                    panic!("TODO non structure Num.@Num flat_type {:?}", other);
+                                } // Symbol::INT_INT => {
+                                  //     debug_assert!(args.is_empty());
+                                  //     types::I64
+                                  // }
+                                  // Symbol::FLOAT_FLOAT => {
+                                  //     debug_assert!(args.is_empty());
+                                  //     types::F64
+                                  // }
+                                  // tag => {
+                                  //     panic!("TODO gracefully handle unrecognized Num.Num variant {:?} {:?}", tag, args);
+                                  // }
+                            }
+                        }
+                        TagName::Private(symbol) => {
+                            panic!("TODO emit wrapped private tag for {:?} {:?}", symbol, args);
+                        }
+                        TagName::Global(ident) => {
+                            panic!("TODO emit wrapped global tag for {:?} {:?}", ident, args);
+                        }
+                    }
+                }
+                _ => {
+                    panic!("TODO handle a tag union with mutliple tags.");
+                }
+            }
         }
         RecursiveTagUnion(_, _, _) => {
             panic!("TODO make Layout for non-empty Tag Union");
@@ -217,4 +295,50 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
         }
         Error => Err(()),
     }
+}
+
+/// Recursively inline the contents ext_var into this union until we have
+/// a flat union containing all the tags.
+fn flatten_union(
+    tags: &mut MutMap<TagName, std::vec::Vec<Variable>>,
+    ext_var: Variable,
+    subs: &Subs,
+) {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match subs.get_without_compacting(ext_var).content {
+        Structure(EmptyTagUnion) => (),
+        Structure(TagUnion(new_tags, new_ext_var)) => {
+            for (tag_name, vars) in new_tags {
+                tags.insert(tag_name, vars);
+            }
+
+            flatten_union(tags, new_ext_var, subs)
+        }
+        invalid => {
+            panic!("Compiler error: flatten_union got an ext_var in a tag union that wasn't itself a tag union; instead, it was: {:?}", invalid);
+        }
+    };
+}
+
+/// Recursively inline the contents ext_var into this record until we have
+/// a flat record containing all the fields.
+fn flatten_record(fields: &mut MutMap<Lowercase, Variable>, ext_var: Variable, subs: &Subs) {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match subs.get_without_compacting(ext_var).content {
+        Structure(EmptyRecord) => (),
+        Structure(Record(new_tags, new_ext_var)) => {
+            for (label, var) in new_tags {
+                fields.insert(label, var);
+            }
+
+            flatten_record(fields, new_ext_var, subs)
+        }
+        invalid => {
+            panic!("Compiler error: flatten_record encountered an ext_var in a record that wasn't itself a record; instead, it was: {:?}", invalid);
+        }
+    };
 }

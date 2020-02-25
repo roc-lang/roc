@@ -1,7 +1,7 @@
 use crate::can::ident::{Lowercase, TagName};
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::module::symbol::{ModuleId, Symbol};
-use crate::region::Located;
+use crate::region::{Located, Region};
 use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, VarId, Variable};
 use crate::types::Alias;
 use crate::types::Constraint::{self, *};
@@ -32,6 +32,7 @@ pub enum SolvedType {
     /// A bound type variable, e.g. `a` in `(a -> a)`
     Rigid(Lowercase),
     Flex(VarId),
+    Wildcard,
     /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
     Record {
         fields: Vec<(Lowercase, SolvedType)>,
@@ -144,10 +145,9 @@ impl SolvedType {
             Alias(symbol, args, box_type) => {
                 let solved_type = Self::from_type(solved_subs, *box_type);
                 let mut solved_args = Vec::with_capacity(args.len());
-                for (name, typ) in args {
-                    let solved_type = Self::from_type(solved_subs, typ);
 
-                    solved_args.push((name.clone(), solved_type));
+                for (name, var) in args {
+                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
                 }
 
                 SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
@@ -260,10 +260,17 @@ impl SolvedType {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuiltinAlias {
+    pub region: Region,
+    pub vars: Vec<Located<Lowercase>>,
+    pub typ: SolvedType,
+}
+
 #[derive(Clone, Debug)]
 pub struct Env {
     pub vars_by_symbol: SendMap<Symbol, Variable>,
-    pub aliases: SendMap<Symbol, Alias>,
+    pub aliases: MutMap<Symbol, Alias>,
 }
 
 const DEFAULT_POOLS: usize = 8;
@@ -374,14 +381,8 @@ fn solve(
             copy
         }
         Eq(typ, expected_type, _region) => {
-            let actual = type_to_var(subs, rank, pools, &env.aliases, typ);
-            let expected = type_to_var(
-                subs,
-                rank,
-                pools,
-                &env.aliases,
-                expected_type.get_type_ref(),
-            );
+            let actual = type_to_var(subs, rank, pools, typ);
+            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -423,13 +424,7 @@ fn solve(
             // is being looked up in this module, then we use our Subs as both
             // the source and destination.
             let actual = deep_copy_var(subs, rank, pools, var);
-            let expected = type_to_var(
-                subs,
-                rank,
-                pools,
-                &env.aliases,
-                expected_type.get_type_ref(),
-            );
+            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -449,8 +444,8 @@ fn solve(
             state
         }
         Pattern(_region, _category, typ, expected) => {
-            let actual = type_to_var(subs, rank, pools, &env.aliases, typ);
-            let expected = type_to_var(subs, rank, pools, &env.aliases, expected.get_type_ref());
+            let actual = type_to_var(subs, rank, pools, typ);
+            let expected = type_to_var(subs, rank, pools, expected.get_type_ref());
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -465,16 +460,10 @@ fn solve(
                 True if let_con.rigid_vars.is_empty() => {
                     introduce(subs, rank, pools, &let_con.flex_vars);
 
-                    let mut new_env = env.clone();
-
-                    for (symbol, alias) in let_con.def_aliases.iter() {
-                        new_env.aliases.insert(*symbol, alias.clone());
-                    }
-
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(
-                        &new_env,
+                        &env,
                         state,
                         rank,
                         pools,
@@ -494,17 +483,11 @@ fn solve(
                         &let_con.defs_constraint,
                     );
 
-                    let mut new_env = env.clone();
-
-                    for (symbol, alias) in let_con.def_aliases.iter() {
-                        new_env.aliases.insert(*symbol, alias.clone());
-                    }
-
                     // Add a variable for each def to new_vars_by_env.
                     let mut local_def_vars = ImMap::default();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(subs, rank, pools, &new_env.aliases, &loc_type.value);
+                        let var = type_to_var(subs, rank, pools, &loc_type.value);
 
                         local_def_vars.insert(
                             symbol.clone(),
@@ -515,6 +498,7 @@ fn solve(
                         );
                     }
 
+                    let mut new_env = env.clone();
                     for (symbol, loc_var) in local_def_vars.iter() {
                         if !new_env.vars_by_symbol.contains_key(&symbol) {
                             new_env.vars_by_symbol.insert(symbol.clone(), loc_var.value);
@@ -552,24 +536,13 @@ fn solve(
 
                         let mut new_env = env.clone();
 
-                        for (symbol, alias) in let_con.def_aliases.iter() {
-                            new_env.aliases.insert(*symbol, alias.clone());
-                        }
-
                         // Add a variable for each def to local_def_vars.
                         let mut local_def_vars = ImMap::default();
 
                         for (symbol, loc_type) in let_con.def_types.iter() {
                             let def_type = loc_type.value.clone();
 
-                            // TODO should this use new aliases?
-                            let var = type_to_var(
-                                subs,
-                                next_rank,
-                                next_pools,
-                                &new_env.aliases,
-                                &def_type,
-                            );
+                            let var = type_to_var(subs, next_rank, next_pools, &def_type);
 
                             local_def_vars.insert(
                                 symbol.clone(),
@@ -676,83 +649,24 @@ fn solve(
     }
 }
 
-fn type_to_var(
-    subs: &mut Subs,
-    rank: Rank,
-    pools: &mut Pools,
-    aliases: &SendMap<Symbol, Alias>,
-    typ: &Type,
-) -> Variable {
-    type_to_variable(subs, rank, pools, aliases, typ)
+fn type_to_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) -> Variable {
+    type_to_variable(subs, rank, pools, typ)
 }
 
-fn type_to_variable(
-    subs: &mut Subs,
-    rank: Rank,
-    pools: &mut Pools,
-    aliases: &SendMap<Symbol, Alias>,
-    typ: &Type,
-) -> Variable {
+fn type_to_variable(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) -> Variable {
     match typ {
         Variable(var) => *var,
         Apply(symbol, args) => {
-            if let Some(alias) = aliases.get(symbol) {
-                if args.len() != alias.vars.len() {
-                    panic!(
-                        "Alias {:?} applied to incorrect number of arguments",
-                        symbol
-                    );
-                }
+            let mut arg_vars = Vec::with_capacity(args.len());
 
-                let mut actual = alias.typ.clone();
-                let mut substitution = ImMap::default();
-                let mut arg_vars = Vec::with_capacity(args.len());
-
-                for (
-                    tipe,
-                    Located {
-                        value: (lowercase, var),
-                        ..
-                    },
-                ) in args.iter().zip(alias.vars.iter())
-                {
-                    let new_var = type_to_variable(subs, rank, pools, aliases, tipe);
-                    substitution.insert(*var, Type::Variable(new_var));
-                    arg_vars.push((lowercase.clone(), new_var));
-                }
-
-                actual.substitute(&substitution);
-
-                // We must instantiate the recursion variable, otherwise all e.g. lists will be
-                // unified, List Int ~ List Float
-                if let Type::RecursiveTagUnion(rec_var, _, _) = actual {
-                    let new_rec_var = subs.fresh_unnamed_flex_var();
-                    substitution.clear();
-                    substitution.insert(rec_var, Type::Variable(new_rec_var));
-
-                    actual.substitute(&substitution);
-
-                    if let Type::RecursiveTagUnion(_, tags, ext_var) = actual {
-                        actual = Type::RecursiveTagUnion(new_rec_var, tags, ext_var);
-                    }
-                }
-
-                let alias_var = type_to_variable(subs, rank, pools, aliases, &actual);
-                let content = Content::Alias(*symbol, arg_vars, alias_var);
-
-                register(subs, rank, pools, content)
-            } else {
-                let mut arg_vars = Vec::with_capacity(args.len());
-
-                for arg in args {
-                    arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
-                }
-
-                let flat_type = FlatType::Apply(*symbol, arg_vars);
-                let content = Content::Structure(flat_type);
-
-                register(subs, rank, pools, content)
+            for arg in args {
+                arg_vars.push(type_to_variable(subs, rank, pools, arg))
             }
+
+            let flat_type = FlatType::Apply(*symbol, arg_vars);
+            let content = Content::Structure(flat_type);
+
+            register(subs, rank, pools, content)
         }
         EmptyRec => {
             let content = Content::Structure(FlatType::EmptyRecord);
@@ -776,10 +690,10 @@ fn type_to_variable(
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, aliases, arg))
+                arg_vars.push(type_to_variable(subs, rank, pools, arg))
             }
 
-            let ret_var = type_to_variable(subs, rank, pools, aliases, ret_type);
+            let ret_var = type_to_variable(subs, rank, pools, ret_type);
             let content = Content::Structure(FlatType::Func(arg_vars, ret_var));
 
             register(subs, rank, pools, content)
@@ -790,11 +704,11 @@ fn type_to_variable(
             for (field, field_type) in fields {
                 field_vars.insert(
                     field.clone(),
-                    type_to_variable(subs, rank, pools, aliases, field_type),
+                    type_to_variable(subs, rank, pools, field_type),
                 );
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
+            let ext_var = type_to_variable(subs, rank, pools, ext);
             let content = Content::Structure(FlatType::Record(field_vars, ext_var));
 
             register(subs, rank, pools, content)
@@ -806,13 +720,13 @@ fn type_to_variable(
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
 
                 for arg_type in tag_argument_types {
-                    tag_argument_vars.push(type_to_variable(subs, rank, pools, aliases, arg_type));
+                    tag_argument_vars.push(type_to_variable(subs, rank, pools, arg_type));
                 }
 
                 tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
+            let ext_var = type_to_variable(subs, rank, pools, ext);
             let content = Content::Structure(FlatType::TagUnion(tag_vars, ext_var));
 
             register(subs, rank, pools, content)
@@ -824,13 +738,13 @@ fn type_to_variable(
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
 
                 for arg_type in tag_argument_types {
-                    tag_argument_vars.push(type_to_variable(subs, rank, pools, aliases, arg_type));
+                    tag_argument_vars.push(type_to_variable(subs, rank, pools, arg_type));
                 }
 
                 tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, aliases, ext);
+            let ext_var = type_to_variable(subs, rank, pools, ext);
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, ext_var));
 
@@ -841,13 +755,13 @@ fn type_to_variable(
             let mut new_aliases = ImMap::default();
 
             for (arg, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, aliases, arg_type);
+                let arg_var = type_to_variable(subs, rank, pools, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
                 new_aliases.insert(arg.clone(), arg_var);
             }
 
-            let alias_var = type_to_variable(subs, rank, pools, aliases, alias_type);
+            let alias_var = type_to_variable(subs, rank, pools, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
             register(subs, rank, pools, content)
@@ -869,7 +783,7 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     let is_uniqueness_infer = match subs.get(var).content {
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, _)) => true,
+        Content::Alias(Symbol::ATTR_ATTR, _, _) => true,
         _ => false,
     };
 
@@ -906,17 +820,17 @@ fn check_for_infinite_type(
                     // forward in the recursion and find the `Attr` there.
                     let index = 0;
                     match subs.get(chain[index]).content {
-                        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+                        Content::Alias(Symbol::ATTR_ATTR, args, _actual) => {
                             debug_assert!(args.len() == 2);
                             debug_assert!(
                                 subs.get_root_key_without_compacting(recursive)
-                                    == subs.get_root_key_without_compacting(args[1])
+                                    == subs.get_root_key_without_compacting(args[1].1)
                             );
 
                             // NOTE this ensures we use the same uniqueness var for the whole spine
                             // that might add too much uniqueness restriction.
                             // using `subs.fresh_unnamed_flex_var()` loosens it.
-                            let uniq_var = args[0];
+                            let uniq_var = args[0].1;
                             let tag_union_var = recursive;
                             let recursive = chain[index];
 
@@ -933,10 +847,10 @@ fn check_for_infinite_type(
                     }
                 }
             }
-            Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            Content::Alias(Symbol::ATTR_ATTR, args, _actual) => {
                 debug_assert!(args.len() == 2);
-                let uniq_var = args[0];
-                let tag_union_var = args[1];
+                let uniq_var = args[0].1;
+                let tag_union_var = args[1].1;
                 let nested_description = subs.get(tag_union_var);
                 match nested_description.content {
                     Content::Structure(FlatType::TagUnion(tags, ext_var)) => {

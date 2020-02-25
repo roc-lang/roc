@@ -28,7 +28,7 @@ impl Scope {
     pub fn new(home: ModuleId) -> Scope {
         Scope {
             home,
-            idents: ImMap::default(),
+            idents: Symbol::default_in_scope(),
             symbols: ImMap::default(),
             aliases: ImMap::default(),
         }
@@ -40,10 +40,6 @@ impl Scope {
 
     pub fn symbols(&self) -> impl Iterator<Item = &(Symbol, Region)> {
         self.symbols.iter()
-    }
-
-    pub fn into_aliases(self) -> ImMap<Symbol, Alias> {
-        self.aliases
     }
 
     pub fn contains_ident(&self, ident: &Ident) -> bool {
@@ -120,14 +116,14 @@ impl Scope {
         ident: Ident,
         symbol: Symbol,
         region: Region,
-    ) -> Result<Symbol, (Symbol, Region)> {
+    ) -> Result<(), (Symbol, Region)> {
         match self.idents.get(&ident) {
             Some(shadowed) => Err(*shadowed),
             None => {
                 self.symbols.insert(symbol, region);
                 self.idents.insert(ident, (symbol, region));
 
-                Ok(symbol)
+                Ok(())
             }
         }
     }

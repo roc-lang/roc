@@ -197,6 +197,10 @@ impl VarId {
 
         VarId(n)
     }
+
+    pub const fn from_u32(n: u32) -> Self {
+        VarId(n)
+    }
 }
 
 impl fmt::Debug for VarId {

@@ -51,7 +51,7 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
 
 #[inline(always)]
 pub fn exists_with_aliases(
-    aliases: SendMap<Symbol, Alias>,
+    def_aliases: SendMap<Symbol, Alias>,
     flex_vars: Vec<Variable>,
     constraint: Constraint,
 ) -> Constraint {
@@ -59,7 +59,7 @@ pub fn exists_with_aliases(
         rigid_vars: Vec::new(),
         flex_vars,
         def_types: SendMap::default(),
-        def_aliases: aliases,
+        def_aliases,
         defs_constraint: constraint,
         ret_constraint: Constraint::True,
     }))
@@ -678,30 +678,44 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
     Eq(EmptyRec, expected, region)
 }
 
+/// Constrain top-level module declarations
 #[inline(always)]
-pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
+pub fn constrain_decls(
+    home: ModuleId,
+    decls: &[Declaration],
+    aliases: SendMap<Symbol, Alias>,
+) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
+
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
         match decl {
             Declaration::Declare(def) => {
-                constraint = constrain_def(
-                    &Env {
-                        home,
-                        rigids: ImMap::default(),
-                    },
-                    def,
-                    constraint,
+                constraint = exists_with_aliases(
+                    aliases.clone(),
+                    Vec::new(),
+                    constrain_def(
+                        &Env {
+                            home,
+                            rigids: ImMap::default(),
+                        },
+                        def,
+                        constraint,
+                    ),
                 );
             }
             Declaration::DeclareRec(defs) => {
-                constraint = constrain_recursive_defs(
-                    &Env {
-                        home,
-                        rigids: ImMap::default(),
-                    },
-                    defs,
-                    constraint,
+                constraint = exists_with_aliases(
+                    aliases.clone(),
+                    Vec::new(),
+                    constrain_recursive_defs(
+                        &Env {
+                            home,
+                            rigids: ImMap::default(),
+                        },
+                        defs,
+                        constraint,
+                    ),
                 );
             }
             Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
@@ -744,12 +758,13 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_con = match &def.annotation {
         Some((annotation, free_vars, ann_def_aliases)) => {
             def_aliases = ann_def_aliases.clone();
+
             let arity = annotation.arity();
             let rigids = &env.rigids;
             let mut ftv = rigids.clone();
 
             let annotation = instantiate_rigids(
-                &annotation,
+                annotation,
                 &free_vars,
                 &mut new_rigids,
                 &mut ftv,
@@ -823,8 +838,6 @@ fn instantiate_rigids(
         } else {
             // It's possible to use this rigid in nested defs
             ftv.insert(name.clone(), *var);
-
-            new_rigids.push(*var);
         }
     }
 
@@ -837,8 +850,9 @@ fn instantiate_rigids(
         &loc_pattern.value,
         &Located::at(loc_pattern.region, annotation.clone()),
     ) {
-        for (k, v) in new_headers {
-            headers.insert(k, v);
+        for (symbol, loc_type) in new_headers {
+            new_rigids.extend(loc_type.value.variables());
+            headers.insert(symbol, loc_type);
         }
     }
 
@@ -863,6 +877,7 @@ pub fn rec_defs_help(
     mut flex_info: Info,
 ) -> Constraint {
     let mut def_aliases = SendMap::default();
+
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -913,6 +928,7 @@ pub fn rec_defs_help(
                 for (symbol, alias) in ann_def_aliases.clone() {
                     def_aliases.insert(symbol, alias);
                 }
+
                 let arity = annotation.arity();
                 let mut ftv = env.rigids.clone();
 

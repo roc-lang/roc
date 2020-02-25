@@ -1,21 +1,34 @@
+use crate::builtins;
 use crate::can::def::Declaration;
 use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, MutMap, SendMap};
 use crate::constrain::expr::constrain_decls;
 use crate::module::symbol::{ModuleId, Symbol};
-use crate::region::{Located, Region};
-use crate::solve::SolvedType;
+use crate::region::Located;
+use crate::solve::{BuiltinAlias, SolvedType};
 use crate::subs::{VarId, VarStore, Variable};
 use crate::types::{Alias, Constraint, LetConstraint, Type};
+use crate::uniqueness;
 
 #[inline(always)]
 pub fn constrain_module(
     home: ModuleId,
+    mode: builtins::Mode,
     decls: &[Declaration],
-    _lookups: Vec<(Symbol, Variable, Region)>,
+    aliases: &MutMap<Symbol, Alias>,
 ) -> Constraint {
-    // NOTE lookups are now not included!
-    constrain_decls(home, &decls)
+    use builtins::Mode::*;
+
+    let mut send_aliases = SendMap::default();
+
+    for (symbol, alias) in aliases {
+        send_aliases.insert(*symbol, alias.clone());
+    }
+
+    match mode {
+        Standard => constrain_decls(home, decls, send_aliases),
+        Uniqueness => uniqueness::constrain_decls(home, decls, send_aliases),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -26,33 +39,112 @@ pub struct Import<'a> {
 
 pub fn constrain_imported_values(
     imports: Vec<Import<'_>>,
-    aliases: MutMap<Symbol, Alias>,
-    mut body_con: Constraint,
+    body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
-    // TODO try out combining all the def_types and free_vars, so that we
-    // don't need to make this big linked list of nested constraints.
-    // Theoretically that should be equivalent to doing it this way!
+    use Constraint::*;
+    let mut def_types = SendMap::default();
+    let mut rigid_vars = Vec::new();
+
     for import in imports {
-        body_con = constrain_imported_value(
-            import.loc_symbol,
-            import.solved_type,
-            body_con,
-            &aliases,
-            var_store,
-        );
+        let mut free_vars = FreeVars::default();
+        let loc_symbol = import.loc_symbol;
+
+        // an imported symbol can be either an alias or a value
+        match import.solved_type {
+            SolvedType::Alias(symbol, _, _) if symbol == &loc_symbol.value => {
+                // do nothing, in the future the alias definitions should not be in the list of imported values
+            }
+            _ => {
+                let typ = to_type(&import.solved_type, &mut free_vars, var_store);
+
+                def_types.insert(
+                    loc_symbol.value,
+                    Located {
+                        region: loc_symbol.region,
+                        value: typ,
+                    },
+                );
+
+                for (_, var) in free_vars.named_vars {
+                    rigid_vars.push(var);
+                }
+
+                // Variables can lose their name during type inference. But the unnamed
+                // variables are still part of a signature, and thus must be treated as rigids here!
+                for (_, var) in free_vars.unnamed_vars {
+                    rigid_vars.push(var);
+                }
+            }
+        }
     }
 
-    body_con
+    Let(Box::new(LetConstraint {
+        rigid_vars,
+        flex_vars: Vec::new(),
+        def_types,
+        def_aliases: SendMap::default(),
+        defs_constraint: True,
+        ret_constraint: body_con,
+    }))
+}
+
+pub fn load_builtin_aliases(
+    aliases: &MutMap<Symbol, BuiltinAlias>,
+    body_con: Constraint,
+    var_store: &VarStore,
+) -> Constraint {
+    use Constraint::*;
+
+    // Load all builtin aliases.
+    // TODO load only the ones actually used in this module
+    let mut def_aliases = SendMap::default();
+
+    for (symbol, builtin_alias) in aliases {
+        let mut free_vars = FreeVars::default();
+
+        let actual = to_type(&builtin_alias.typ, &mut free_vars, var_store);
+
+        let mut vars = Vec::with_capacity(builtin_alias.vars.len());
+
+        for (loc_lowercase, index) in builtin_alias.vars.iter().zip(1..) {
+            let var = free_vars
+                .unnamed_vars
+                .get(&VarId::from_u32(index))
+                .expect("var_id was not instantiated (is it phantom?)");
+
+            vars.push(Located::at(
+                loc_lowercase.region,
+                (loc_lowercase.value.clone(), *var),
+            ));
+        }
+
+        let alias = Alias {
+            vars,
+            region: builtin_alias.region,
+            typ: actual,
+        };
+
+        def_aliases.insert(*symbol, alias);
+    }
+
+    Let(Box::new(LetConstraint {
+        rigid_vars: Vec::new(),
+        flex_vars: Vec::new(),
+        def_types: SendMap::default(),
+        def_aliases,
+        defs_constraint: True,
+        ret_constraint: body_con,
+    }))
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct FreeVars {
-    rigid_vars: ImMap<Lowercase, Variable>,
-    flex_vars: ImMap<VarId, Variable>,
+    pub named_vars: ImMap<Lowercase, Variable>,
+    pub unnamed_vars: ImMap<VarId, Variable>,
 }
 
-fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
+pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
     use crate::solve::SolvedType::*;
 
     match solved_type {
@@ -77,23 +169,25 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
             Type::Apply(*symbol, new_args)
         }
         Rigid(lowercase) => {
-            if let Some(var) = free_vars.rigid_vars.get(&lowercase) {
+            if let Some(var) = free_vars.named_vars.get(&lowercase) {
                 Type::Variable(*var)
             } else {
                 let var = var_store.fresh();
-                free_vars.rigid_vars.insert(lowercase.clone(), var);
+                free_vars.named_vars.insert(lowercase.clone(), var);
                 Type::Variable(var)
             }
         }
         Flex(var_id) => {
-            if let Some(var) = free_vars.flex_vars.get(&var_id) {
+            if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
                 Type::Variable(*var)
             } else {
                 let var = var_store.fresh();
-                free_vars.flex_vars.insert(*var_id, var);
+                free_vars.unnamed_vars.insert(*var_id, var);
+
                 Type::Variable(var)
             }
         }
+        Wildcard => Type::Variable(var_store.fresh()),
         Record { fields, ext } => {
             let mut new_fields = SendMap::default();
 
@@ -134,9 +228,9 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
             }
 
             let rec_var = free_vars
-                .flex_vars
+                .unnamed_vars
                 .get(rec_var_id)
-                .expect("rec var not in flex vars");
+                .expect("rec var not in unnamed vars");
 
             Type::RecursiveTagUnion(
                 *rec_var,
@@ -148,11 +242,8 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
         Alias(symbol, solved_type_variables, solved_actual) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
-            for (lowercase, solved_type) in solved_type_variables {
-                type_variables.push((
-                    lowercase.clone(),
-                    to_type(solved_type, free_vars, var_store),
-                ));
+            for (lowercase, solved_arg) in solved_type_variables {
+                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
             }
 
             let actual = to_type(solved_actual, free_vars, var_store);
@@ -166,98 +257,44 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
     }
 }
 
-fn constrain_imported_value(
-    loc_symbol: Located<Symbol>,
-    solved_type: &SolvedType,
-    body_con: Constraint,
-    aliases: &MutMap<Symbol, Alias>,
-    var_store: &VarStore,
-) -> Constraint {
-    use Constraint::*;
-    let mut free_vars = FreeVars::default();
-
-    // an imported symbol can be both an alias and a value
-    match solved_type {
-        SolvedType::Alias(symbol, _, _) if symbol == &loc_symbol.value => {
-            if let Some(alias) = aliases.get(symbol) {
-                constrain_imported_alias(loc_symbol, alias, body_con, var_store)
-            } else {
-                panic!("Alias {:?} is not available", symbol)
-            }
-        }
-        _ => {
-            let mut def_types = SendMap::default();
-            let typ = to_type(solved_type, &mut free_vars, var_store);
-
-            def_types.insert(
-                loc_symbol.value,
-                Located {
-                    region: loc_symbol.region,
-                    value: typ,
-                },
-            );
-
-            let mut rigid_vars = Vec::new();
-
-            for (_, var) in free_vars.rigid_vars {
-                rigid_vars.push(var);
-            }
-
-            Let(Box::new(LetConstraint {
-                // rigids from other modules should not be treated as rigid
-                // within this module; rather, they should be treated as flex
-                rigid_vars,
-                flex_vars: Vec::new(),
-                // Importing a value doesn't constrain this module at all.
-                // All it does is introduce variables and provide def_types for lookups
-                def_types,
-                def_aliases: SendMap::default(),
-                defs_constraint: True,
-                ret_constraint: body_con,
-            }))
-        }
-    }
-}
-
-fn constrain_imported_alias(
-    loc_symbol: Located<Symbol>,
-    imported_alias: &Alias,
+pub fn constrain_imported_aliases(
+    aliases: MutMap<Symbol, Alias>,
     body_con: Constraint,
     var_store: &VarStore,
 ) -> Constraint {
     use Constraint::*;
     let mut def_aliases = SendMap::default();
 
-    let mut vars = Vec::with_capacity(imported_alias.vars.len());
-    let mut substitution = ImMap::default();
-    for Located {
-        region,
-        value: (lowercase, old_var),
-    } in &imported_alias.vars
-    {
-        let new_var = var_store.fresh();
-        vars.push(Located::at(*region, (lowercase.clone(), new_var)));
-        substitution.insert(*old_var, Type::Variable(new_var));
+    for (symbol, imported_alias) in aliases {
+        let mut vars = Vec::with_capacity(imported_alias.vars.len());
+        let mut substitution = ImMap::default();
+
+        for Located {
+            region,
+            value: (lowercase, old_var),
+        } in &imported_alias.vars
+        {
+            let new_var = var_store.fresh();
+            vars.push(Located::at(*region, (lowercase.clone(), new_var)));
+            substitution.insert(*old_var, Type::Variable(new_var));
+        }
+
+        let mut actual = imported_alias.typ.clone();
+
+        actual.substitute(&substitution);
+
+        let alias = Alias {
+            vars,
+            region: imported_alias.region,
+            typ: actual,
+        };
+
+        def_aliases.insert(symbol, alias);
     }
 
-    let mut actual = imported_alias.typ.clone();
-    actual.substitute(&substitution);
-
-    let alias = Alias {
-        vars,
-        region: loc_symbol.region,
-        typ: actual,
-    };
-
-    def_aliases.insert(loc_symbol.value, alias);
-
     Let(Box::new(LetConstraint {
-        // rigids from other modules should not be treated as rigid
-        // within this module; rather, they should be treated as flex
         rigid_vars: Vec::new(),
         flex_vars: Vec::new(),
-        // Importing a value doesn't constrain this module at all.
-        // All it does is introduce variables and provide def_types for lookups
         def_types: SendMap::default(),
         def_aliases,
         defs_constraint: True,

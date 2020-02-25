@@ -1,5 +1,5 @@
 interface Dep3.Blah
-    exposes [ foo, bar ]
+    exposes [ one, two, foo, bar ]
     imports []
 
 one = 1

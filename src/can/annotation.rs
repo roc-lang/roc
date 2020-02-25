@@ -3,14 +3,13 @@ use crate::can::env::Env;
 use crate::can::ident::Ident;
 use crate::can::ident::{Lowercase, TagName};
 use crate::can::scope::Scope;
-use crate::collections::{default_hasher, ImMap, MutMap, MutSet, SendMap};
+use crate::collections::{ImMap, MutMap, MutSet, SendMap};
 use crate::module::symbol::Symbol;
 use crate::parse::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::region::Located;
 use crate::region::Region;
 use crate::subs::{VarStore, Variable};
 use crate::types::{Alias, Problem, Type};
-use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -40,7 +39,8 @@ pub fn canonicalize_annotation(
     // `ftv : SendMap<Variable, Lowercase>`.
     let mut rigids = ImMap::default();
     let mut aliases = SendMap::default();
-    let (typ, references) = can_annotation_help(
+    let mut references = MutSet::default();
+    let typ = can_annotation_help(
         env,
         annotation,
         region,
@@ -48,6 +48,7 @@ pub fn canonicalize_annotation(
         var_store,
         &mut rigids,
         &mut aliases,
+        &mut references,
     );
 
     let mut ftv = MutMap::default();
@@ -65,6 +66,7 @@ pub fn canonicalize_annotation(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn can_annotation_help(
     env: &mut Env,
     annotation: &crate::parse::ast::TypeAnnotation,
@@ -73,16 +75,16 @@ fn can_annotation_help(
     var_store: &VarStore,
     rigids: &mut ImMap<Lowercase, Variable>,
     local_aliases: &mut SendMap<Symbol, Alias>,
-) -> (Type, MutSet<Symbol>) {
+    references: &mut MutSet<Symbol>,
+) -> Type {
     use crate::parse::ast::TypeAnnotation::*;
 
     match annotation {
         Function(argument_types, return_type) => {
             let mut args = Vec::new();
-            let mut references = MutSet::default();
 
             for arg in *argument_types {
-                let (arg_ann, arg_refs) = can_annotation_help(
+                let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
                     region,
@@ -90,14 +92,13 @@ fn can_annotation_help(
                     var_store,
                     rigids,
                     local_aliases,
+                    references,
                 );
-
-                references.extend(arg_refs);
 
                 args.push(arg_ann);
             }
 
-            let (ret, ret_refs) = can_annotation_help(
+            let ret = can_annotation_help(
                 env,
                 &return_type.value,
                 region,
@@ -105,11 +106,10 @@ fn can_annotation_help(
                 var_store,
                 rigids,
                 local_aliases,
+                references,
             );
 
-            references.extend(ret_refs);
-
-            (Type::Function(args, Box::new(ret)), references)
+            Type::Function(args, Box::new(ret))
         }
         Apply(module_name, ident, type_arguments) => {
             let symbol = if module_name.is_empty() {
@@ -122,10 +122,7 @@ fn can_annotation_help(
                     Err(problem) => {
                         env.problem(crate::can::problem::Problem::RuntimeError(problem));
 
-                        return (
-                            Type::Erroneous(Problem::UnrecognizedIdent(ident.into())),
-                            MutSet::default(),
-                        );
+                        return Type::Erroneous(Problem::UnrecognizedIdent(ident.into()));
                     }
                 }
             } else {
@@ -136,21 +133,17 @@ fn can_annotation_help(
                         // it was imported but it doesn't expose this ident.
                         env.problem(crate::can::problem::Problem::RuntimeError(problem));
 
-                        return (
-                            Type::Erroneous(Problem::UnrecognizedIdent((*ident).into())),
-                            MutSet::default(),
-                        );
+                        return Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
                     }
                 }
             };
 
             let mut args = Vec::new();
-            let mut references = HashSet::with_capacity_and_hasher(1, default_hasher());
 
             references.insert(symbol);
 
             for arg in *type_arguments {
-                let (arg_ann, arg_refs) = can_annotation_help(
+                let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
                     region,
@@ -158,18 +151,18 @@ fn can_annotation_help(
                     var_store,
                     rigids,
                     local_aliases,
+                    references,
                 );
-
-                references.extend(arg_refs);
 
                 args.push(arg_ann);
             }
 
-            (Type::Apply(symbol, args), references)
+            Type::Apply(symbol, args)
         }
         BoundVariable(v) => {
             let name = Lowercase::from(*v);
-            let typ = match rigids.get(&name) {
+
+            match rigids.get(&name) {
                 Some(var) => Type::Variable(*var),
                 None => {
                     let var = var_store.fresh();
@@ -178,9 +171,7 @@ fn can_annotation_help(
 
                     Type::Variable(var)
                 }
-            };
-
-            (typ, MutSet::default())
+            }
         }
         As(loc_inner, _spaces, loc_as) => match loc_as.value {
             TypeAnnotation::Apply(module_name, ident, loc_vars) if module_name.is_empty() => {
@@ -196,11 +187,11 @@ fn can_annotation_help(
                         let problem = Problem::Shadowed(original_region, shadow);
                         env.problem(can::problem::Problem::ErroneousAnnotation(problem.clone()));
 
-                        return (Type::Erroneous(problem), MutSet::default());
+                        return Type::Erroneous(problem);
                     }
                 };
 
-                let (inner_type, mut references) = can_annotation_help(
+                let inner_type = can_annotation_help(
                     env,
                     &loc_inner.value,
                     region,
@@ -208,6 +199,7 @@ fn can_annotation_help(
                     var_store,
                     rigids,
                     local_aliases,
+                    references,
                 );
                 let mut vars = Vec::with_capacity(loc_vars.len());
                 let mut lowercase_vars = Vec::with_capacity(loc_vars.len());
@@ -233,10 +225,7 @@ fn can_annotation_help(
                         _ => {
                             // If anything other than a lowercase identifier
                             // appears here, the whole annotation is invalid.
-                            return (
-                                Type::Erroneous(Problem::CanonicalizationProblem),
-                                references,
-                            );
+                            return Type::Erroneous(Problem::CanonicalizationProblem);
                         }
                     }
                 }
@@ -266,24 +255,19 @@ fn can_annotation_help(
                 };
                 local_aliases.insert(symbol, alias);
 
-                let type_alias = Type::Alias(symbol, vars, Box::new(alias_actual));
-                (type_alias, references)
+                Type::Alias(symbol, vars, Box::new(alias_actual))
             }
             _ => {
                 // This is a syntactically invalid type alias.
-                (
-                    Type::Erroneous(Problem::CanonicalizationProblem),
-                    MutSet::default(),
-                )
+                Type::Erroneous(Problem::CanonicalizationProblem)
             }
         },
 
         Record { fields, ext } => {
             let mut field_types = SendMap::default();
-            let mut references = MutSet::default();
 
             for field in fields.iter() {
-                let field_refs = can_assigned_field(
+                can_assigned_field(
                     env,
                     &field.value,
                     region,
@@ -292,12 +276,11 @@ fn can_annotation_help(
                     rigids,
                     local_aliases,
                     &mut field_types,
+                    references,
                 );
-
-                references.extend(field_refs);
             }
 
-            let (ext_type, ext_refs) = match ext {
+            let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
                     env,
                     &loc_ann.value,
@@ -306,20 +289,18 @@ fn can_annotation_help(
                     var_store,
                     rigids,
                     local_aliases,
+                    references,
                 ),
-                None => (Type::EmptyRec, MutSet::default()),
+                None => Type::EmptyRec,
             };
 
-            references.extend(ext_refs);
-
-            (Type::Record(field_types, Box::new(ext_type)), references)
+            Type::Record(field_types, Box::new(ext_type))
         }
         TagUnion { tags, ext } => {
             let mut tag_types = Vec::with_capacity(tags.len());
-            let mut references = MutSet::default();
 
             for tag in tags.iter() {
-                let tag_refs = can_tag(
+                can_tag(
                     env,
                     &tag.value,
                     region,
@@ -328,12 +309,11 @@ fn can_annotation_help(
                     rigids,
                     local_aliases,
                     &mut tag_types,
+                    references,
                 );
-
-                references.extend(tag_refs);
             }
 
-            let (ext_type, ext_refs) = match ext {
+            let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
                     env,
                     &loc_ann.value,
@@ -342,21 +322,27 @@ fn can_annotation_help(
                     var_store,
                     rigids,
                     local_aliases,
+                    references,
                 ),
-                None => (Type::EmptyTagUnion, MutSet::default()),
+                None => Type::EmptyTagUnion,
             };
 
-            references.extend(ext_refs);
-
-            (Type::TagUnion(tag_types, Box::new(ext_type)), references)
+            Type::TagUnion(tag_types, Box::new(ext_type))
         }
-        SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
-            can_annotation_help(env, nested, region, scope, var_store, rigids, local_aliases)
-        }
+        SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
+            env,
+            nested,
+            region,
+            scope,
+            var_store,
+            rigids,
+            local_aliases,
+            references,
+        ),
         Wildcard | Malformed(_) => {
             let var = var_store.fresh();
 
-            (Type::Variable(var), MutSet::default())
+            Type::Variable(var)
         }
     }
 }
@@ -372,12 +358,13 @@ fn can_assigned_field<'a>(
     rigids: &mut ImMap<Lowercase, Variable>,
     local_aliases: &mut SendMap<Symbol, Alias>,
     field_types: &mut SendMap<Lowercase, Type>,
-) -> MutSet<Symbol> {
+    references: &mut MutSet<Symbol>,
+) {
     use crate::parse::ast::AssignedField::*;
 
     match field {
         LabeledValue(field_name, _, annotation) => {
-            let (field_type, refs) = can_annotation_help(
+            let field_type = can_annotation_help(
                 env,
                 &annotation.value,
                 region,
@@ -385,12 +372,11 @@ fn can_assigned_field<'a>(
                 var_store,
                 rigids,
                 local_aliases,
+                references,
             );
             let label = Lowercase::from(field_name.value);
 
             field_types.insert(label, field_type);
-
-            refs
         }
         LabelOnly(loc_field_name) => {
             // Interpret { a, b } as { a : a, b : b }
@@ -406,8 +392,6 @@ fn can_assigned_field<'a>(
             };
 
             field_types.insert(field_name, field_type);
-
-            MutSet::default()
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_assigned_field(
             env,
@@ -418,8 +402,9 @@ fn can_assigned_field<'a>(
             rigids,
             local_aliases,
             field_types,
+            references,
         ),
-        Malformed(_) => MutSet::default(),
+        Malformed(_) => (),
     }
 }
 
@@ -434,15 +419,15 @@ fn can_tag<'a>(
     rigids: &mut ImMap<Lowercase, Variable>,
     local_aliases: &mut SendMap<Symbol, Alias>,
     tag_types: &mut Vec<(TagName, Vec<Type>)>,
-) -> MutSet<Symbol> {
+    references: &mut MutSet<Symbol>,
+) {
     match tag {
         Tag::Global { name, args } => {
             let name = name.value.into();
-            let mut references = MutSet::default();
             let mut arg_types = Vec::with_capacity(args.len());
 
             for arg in args.iter() {
-                let (ann, refs) = can_annotation_help(
+                let ann = can_annotation_help(
                     env,
                     &arg.value,
                     region,
@@ -450,24 +435,21 @@ fn can_tag<'a>(
                     var_store,
                     rigids,
                     local_aliases,
+                    references,
                 );
 
                 arg_types.push(ann);
-                references.extend(refs);
             }
 
             tag_types.push((TagName::Global(name), arg_types));
-
-            references
         }
         Tag::Private { name, args } => {
             let ident_id = env.ident_ids.get_or_insert(&name.value.into());
             let symbol = Symbol::new(env.home, ident_id);
-            let mut references = MutSet::default();
             let mut arg_types = Vec::with_capacity(args.len());
 
             for arg in args.iter() {
-                let (ann, refs) = can_annotation_help(
+                let ann = can_annotation_help(
                     env,
                     &arg.value,
                     region,
@@ -475,15 +457,13 @@ fn can_tag<'a>(
                     var_store,
                     rigids,
                     local_aliases,
+                    references,
                 );
 
                 arg_types.push(ann);
-                references.extend(refs);
             }
 
             tag_types.push((TagName::Private(symbol), arg_types));
-
-            references
         }
         Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => can_tag(
             env,
@@ -494,7 +474,8 @@ fn can_tag<'a>(
             rigids,
             local_aliases,
             tag_types,
+            references,
         ),
-        Tag::Malformed(_) => MutSet::default(),
+        Tag::Malformed(_) => (),
     }
 }
