@@ -4,7 +4,7 @@ use crate::can::{
     ident::{Lowercase, TagName},
 };
 use crate::collections::MutMap;
-use crate::module::symbol::Symbol;
+use crate::module::symbol::{IdentIds, ModuleId, Symbol};
 use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
 use crate::subs::{Subs, Variable};
@@ -24,6 +24,8 @@ pub struct Proc<'a> {
 struct Env<'a> {
     pub arena: &'a Bump,
     pub subs: &'a Subs,
+    pub home: ModuleId,
+    pub ident_ids: IdentIds,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,15 +114,22 @@ impl<'a> Expr<'a> {
         subs: &'a Subs,
         can_expr: can::expr::Expr,
         procs: &mut Procs<'a>,
+        home: ModuleId,
+        ident_ids: IdentIds,
     ) -> Self {
-        let env = Env { arena, subs };
+        let mut env = Env {
+            arena,
+            subs,
+            home,
+            ident_ids,
+        };
 
-        from_can(&env, can_expr, procs, None)
+        from_can(&mut env, can_expr, procs, None)
     }
 }
 
 fn from_can<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     can_expr: can::expr::Expr,
     procs: &mut Procs<'a>,
     name: Option<Symbol>,
@@ -182,7 +191,8 @@ fn from_can<'a>(
 
         Closure(_, _symbol, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
-            let name = name.unwrap_or_else(|| gen_closure_name(procs));
+            let name =
+                name.unwrap_or_else(|| gen_closure_name(procs, &mut env.ident_ids, env.home));
 
             add_closure(env, name, loc_body.value, ret_var, &loc_args, procs)
         }
@@ -282,7 +292,7 @@ fn from_can<'a>(
 }
 
 fn add_closure<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     name: Symbol,
     can_body: can::expr::Expr,
     ret_var: Variable,
@@ -329,7 +339,7 @@ fn add_closure<'a>(
 }
 
 fn store_pattern<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     can_pat: Pattern,
     can_expr: can::expr::Expr,
     var: Variable,
@@ -367,16 +377,14 @@ fn store_pattern<'a>(
     }
 }
 
-fn gen_closure_name(procs: &Procs<'_>) -> Symbol {
-    // Give the closure a name like "_0" or "_1".
-    // We know procs.len() will be unique!
-    panic!(
-        "TODO generate a unique closure symbol, presumably by keeping the current module and generating a new unique IdentId for it. Previously was: format!(\"_{}\", procs.len()).into();"
-    );
+fn gen_closure_name(procs: &Procs<'_>, ident_ids: &mut IdentIds, home: ModuleId) -> Symbol {
+    let ident_id = ident_ids.add(format!("_{}", procs.len()).into());
+
+    Symbol::new(home, ident_id)
 }
 
 fn from_can_when<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<can::expr::Expr>,

@@ -45,7 +45,7 @@ mod test_gen {
             let mut ctx = module.make_context();
             let mut func_ctx = FunctionBuilderContext::new();
 
-            let CanExprOut { loc_expr, var_store, var, constraint, .. } = can_expr($src);
+            let CanExprOut { loc_expr, var_store, var, constraint, home, mut interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
             let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
@@ -81,8 +81,10 @@ mod test_gen {
                 cfg,
             };
 
+            let ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs);
+            let mono_expr = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, ident_ids);
             let mut scope = ImMap::default();
             let mut declared = Vec::with_capacity(procs.len());
 
@@ -172,7 +174,7 @@ mod test_gen {
     macro_rules! assert_llvm_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
             let arena = Bump::new();
-            let CanExprOut { loc_expr, var_store, var, constraint, .. } = can_expr($src);
+            let CanExprOut { loc_expr, var_store, var, constraint, home, mut interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
             let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
@@ -216,8 +218,10 @@ mod test_gen {
                 module: arena.alloc(module),
             };
 
+            let ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs);
+            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, ident_ids);
 
             // Add all the Procs to the module
             for (name, opt_proc) in procs.clone() {
