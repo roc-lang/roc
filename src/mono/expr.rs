@@ -1,26 +1,31 @@
 use crate::can::pattern::Pattern;
-use crate::can::{self, ident::Lowercase};
+use crate::can::{
+    self,
+    ident::{Lowercase, TagName},
+};
 use crate::collections::MutMap;
+use crate::module::symbol::{IdentIds, ModuleId, Symbol};
 use crate::mono::layout::{Builtin, Layout};
 use crate::region::Located;
 use crate::subs::{Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use inlinable_string::InlinableString;
 
-pub type Procs<'a> = MutMap<InlinableString, Option<Proc<'a>>>;
+pub type Procs<'a> = MutMap<Symbol, Option<Proc<'a>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
-    pub args: &'a [(Layout<'a>, InlinableString, Variable)],
+    pub args: &'a [(Layout<'a>, Symbol, Variable)],
     pub body: Expr<'a>,
     pub closes_over: Layout<'a>,
     pub ret_var: Variable,
 }
 
-struct Env<'a> {
+struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'a Subs,
+    pub home: ModuleId,
+    pub ident_ids: &'i mut IdentIds,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,12 +45,12 @@ pub enum Expr<'a> {
     Byte(u8),
 
     // Load/Store
-    Load(InlinableString),
-    Store(&'a [(InlinableString, Variable, Expr<'a>)], &'a Expr<'a>),
+    Load(Symbol),
+    Store(&'a [(Symbol, Variable, Expr<'a>)], &'a Expr<'a>),
 
     // Functions
-    FunctionPointer(InlinableString),
-    CallByName(InlinableString, &'a [Expr<'a>]),
+    FunctionPointer(Symbol),
+    CallByName(Symbol, &'a [Expr<'a>]),
     CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Variable),
 
     // Exactly two conditional branches, e.g. if/else
@@ -87,7 +92,7 @@ pub enum Expr<'a> {
     Tag {
         variant_var: Variable,
         ext_var: Variable,
-        name: InlinableString,
+        name: TagName,
         arguments: &'a [Expr<'a>],
     },
     Struct {
@@ -109,18 +114,25 @@ impl<'a> Expr<'a> {
         subs: &'a Subs,
         can_expr: can::expr::Expr,
         procs: &mut Procs<'a>,
+        home: ModuleId,
+        ident_ids: &mut IdentIds,
     ) -> Self {
-        let env = Env { arena, subs };
+        let mut env = Env {
+            arena,
+            subs,
+            home,
+            ident_ids,
+        };
 
-        from_can(&env, can_expr, procs, None)
+        from_can(&mut env, can_expr, procs, None)
     }
 }
 
 fn from_can<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a, '_>,
     can_expr: can::expr::Expr,
     procs: &mut Procs<'a>,
-    name: Option<InlinableString>,
+    name: Option<Symbol>,
 ) -> Expr<'a> {
     use crate::can::expr::Expr::*;
     use crate::can::pattern::Pattern::*;
@@ -129,7 +141,7 @@ fn from_can<'a>(
         Int(_, val) => Expr::Int(val),
         Float(_, val) => Expr::Float(val),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
-        Var(symbol) => Expr::Load(symbol.emit()),
+        Var(symbol) => Expr::Load(symbol),
         LetNonRec(def, ret_expr, _, _) => {
             let arena = env.arena;
             let loc_pattern = def.loc_pattern;
@@ -153,7 +165,7 @@ fn from_can<'a>(
                 if let Closure(_, _, _, _, _) = &loc_expr.value {
                     // Extract Procs, but discard the resulting Expr::Load.
                     // That Load looks up the pointer, which we won't use here!
-                    from_can(env, loc_expr.value, procs, Some(symbol.emit()));
+                    from_can(env, loc_expr.value, procs, Some(*symbol));
 
                     // Discard this LetNonRec by replacing it with its ret_expr.
                     return from_can(env, ret_expr.value, procs, None);
@@ -177,11 +189,12 @@ fn from_can<'a>(
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
 
-        Closure(_, _symbol, _, loc_args, boxed_body) => {
+        Closure(_, _, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
-            let name = name.unwrap_or_else(|| gen_closure_name(procs));
+            let symbol =
+                name.unwrap_or_else(|| gen_closure_name(procs, &mut env.ident_ids, env.home));
 
-            add_closure(env, name, loc_body.value, ret_var, &loc_args, procs)
+            add_closure(env, symbol, loc_body.value, ret_var, &loc_args, procs)
         }
 
         Call(boxed, loc_args, _) => {
@@ -279,8 +292,8 @@ fn from_can<'a>(
 }
 
 fn add_closure<'a>(
-    env: &Env<'a>,
-    name: InlinableString,
+    env: &mut Env<'a, '_>,
+    symbol: Symbol,
     can_body: can::expr::Expr,
     ret_var: Variable,
     loc_args: &[(Variable, Located<Pattern>)],
@@ -297,14 +310,14 @@ fn add_closure<'a>(
             Ok(layout) => layout,
             Err(()) => {
                 // Invalid closure!
-                procs.insert(name.clone(), None);
+                procs.insert(symbol, None);
 
-                return Expr::FunctionPointer(name);
+                return Expr::FunctionPointer(symbol);
             }
         };
 
-        let arg_name: InlinableString = match &loc_arg.value {
-            Pattern::Identifier(symbol) => symbol.emit(),
+        let arg_name: Symbol = match &loc_arg.value {
+            Pattern::Identifier(symbol) => *symbol,
             _ => {
                 panic!("TODO determine arg_name for pattern {:?}", loc_arg.value);
             }
@@ -320,18 +333,18 @@ fn add_closure<'a>(
         ret_var,
     };
 
-    procs.insert(name.clone(), Some(proc));
+    procs.insert(symbol, Some(proc));
 
-    Expr::FunctionPointer(name)
+    Expr::FunctionPointer(symbol)
 }
 
 fn store_pattern<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a, '_>,
     can_pat: Pattern,
     can_expr: can::expr::Expr,
     var: Variable,
     procs: &mut Procs<'a>,
-    stored: &mut Vec<'a, (InlinableString, Variable, Expr<'a>)>,
+    stored: &mut Vec<'a, (Symbol, Variable, Expr<'a>)>,
 ) {
     use crate::can::pattern::Pattern::*;
 
@@ -349,12 +362,14 @@ fn store_pattern<'a>(
     //     identity 5
     //
     match can_pat {
-        Identifier(symbol) => {
-            stored.push((symbol.emit(), var, from_can(env, can_expr, procs, None)))
-        }
+        Identifier(symbol) => stored.push((symbol, var, from_can(env, can_expr, procs, None))),
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
-            stored.push(("_".into(), var, from_can(env, can_expr, procs, None)))
+            stored.push((
+                Symbol::UNDERSCORE,
+                var,
+                from_can(env, can_expr, procs, None),
+            ))
         }
         _ => {
             panic!("TODO store_pattern for {:?}", can_pat);
@@ -362,14 +377,14 @@ fn store_pattern<'a>(
     }
 }
 
-fn gen_closure_name(procs: &Procs<'_>) -> InlinableString {
-    // Give the closure a name like "_0" or "_1".
-    // We know procs.len() will be unique!
-    format!("_{}", procs.len()).into()
+fn gen_closure_name(procs: &Procs<'_>, ident_ids: &mut IdentIds, home: ModuleId) -> Symbol {
+    let ident_id = ident_ids.add(format!("_{}", procs.len()).into());
+
+    Symbol::new(home, ident_id)
 }
 
 fn from_can_when<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a, '_>,
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<can::expr::Expr>,

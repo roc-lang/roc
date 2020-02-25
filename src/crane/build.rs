@@ -12,15 +12,15 @@ use cranelift_codegen::ir::{immediates::Offset32, types, InstBuilder, Signature,
 use cranelift_codegen::isa::TargetFrontendConfig;
 use cranelift_codegen::Context;
 use cranelift_module::{Backend, FuncId, Linkage, Module};
-use inlinable_string::InlinableString;
 
 use crate::collections::ImMap;
 use crate::crane::convert::{sig_from_layout, type_from_layout};
+use crate::module::symbol::{Interns, Symbol};
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::{Builtin, Layout};
 use crate::subs::{Subs, Variable};
 
-type Scope = ImMap<InlinableString, ScopeEntry>;
+type Scope = ImMap<Symbol, ScopeEntry>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ScopeEntry {
@@ -34,6 +34,7 @@ pub struct Env<'a> {
     pub arena: &'a Bump,
     pub cfg: TargetFrontendConfig,
     pub subs: Subs,
+    pub interns: Interns,
 }
 
 pub fn build_expr<'a, B: Backend>(
@@ -119,43 +120,32 @@ pub fn build_expr<'a, B: Backend>(
                 // access itself!
                 scope = im_rc::HashMap::clone(&scope);
 
-                scope.insert(name.clone(), ScopeEntry::Stack { expr_type, slot });
+                scope.insert(*name, ScopeEntry::Stack { expr_type, slot });
             }
 
             build_expr(env, &scope, module, builder, ret, procs)
         }
-        CallByName(ref name, ref args) => {
-            // TODO try one of these alternative strategies (preferably the latter):
-            //
-            // 1. use SIMD string comparison to compare these strings faster
-            // 2. pre-register Bool.or using module.add_function, and see if LLVM inlines it
-            // 3. intern all these strings
-            if name == "Bool.or" {
-                panic!("TODO create a branch for ||");
-            } else if name == "Bool.and" {
-                panic!("TODO create a branch for &&");
-            } else {
-                let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
+        CallByName(ref symbol, ref args) => {
+            let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
 
-                for arg in args.iter() {
-                    arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
-                }
+            for arg in args.iter() {
+                arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
+            }
 
-                let fn_id = match scope.get(name) {
+            let fn_id = match scope.get(symbol) {
                     Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
                     other => panic!(
                         "CallByName could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
-                        name, other, scope
+                        symbol, other, scope
                     ),
                 };
-                let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
-                let call = builder.ins().call(local_func, &arg_vals);
-                let results = builder.inst_results(call);
+            let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
+            let call = builder.ins().call(local_func, &arg_vals);
+            let results = builder.inst_results(call);
 
-                debug_assert!(results.len() == 1);
+            debug_assert!(results.len() == 1);
 
-                results[0]
-            }
+            results[0]
         }
         FunctionPointer(ref name) => {
             let fn_id = match scope.get(name) {
@@ -432,7 +422,7 @@ fn build_switch<'a, B: Backend>(
 pub fn declare_proc<'a, B: Backend>(
     env: &Env<'a>,
     module: &mut Module<B>,
-    name: InlinableString,
+    symbol: Symbol,
     proc: &Proc<'a>,
 ) -> (FuncId, Signature) {
     let args = proc.args;
@@ -459,8 +449,8 @@ pub fn declare_proc<'a, B: Backend>(
 
     // Declare the function in the module
     let fn_id = module
-        .declare_function(&name, Linkage::Local, &sig)
-        .unwrap_or_else(|err| panic!("Error when building function {:?} - {:?}", name, err));
+        .declare_function(symbol.ident_string(&env.interns), Linkage::Local, &sig)
+        .unwrap_or_else(|err| panic!("Error when building function {:?} - {:?}", symbol, err));
 
     (fn_id, sig)
 }
@@ -498,7 +488,7 @@ pub fn define_proc_body<'a, B: Backend>(
         builder.append_ebb_params_for_function_params(block);
 
         // Add args to scope
-        for (&param, (_, arg_name, var)) in builder.ebb_params(block).iter().zip(args) {
+        for (&param, (_, arg_symbol, var)) in builder.ebb_params(block).iter().zip(args) {
             let content = subs.get_without_compacting(*var).content;
             // TODO this Layout::from_content is duplicated when building this Proc
             //
@@ -507,7 +497,7 @@ pub fn define_proc_body<'a, B: Backend>(
             });
             let expr_type = type_from_layout(cfg, &layout);
 
-            scope.insert(arg_name.clone(), ScopeEntry::Arg { expr_type, param });
+            scope.insert(*arg_symbol, ScopeEntry::Arg { expr_type, param });
         }
 
         let body = build_expr(env, &scope, module, &mut builder, &proc.body, procs);

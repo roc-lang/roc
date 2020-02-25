@@ -29,7 +29,7 @@ mod test_gen {
     use roc::crane::build::{declare_proc, define_proc_body, ScopeEntry};
     use roc::crane::convert::type_from_layout;
     use roc::infer::infer_expr;
-    use roc::llvm::build::build_proc;
+    use roc::llvm::build::{build_proc, build_proc_header};
     use roc::llvm::convert::basic_type_from_layout;
     use roc::mono::expr::Expr;
     use roc::mono::layout::Layout;
@@ -45,7 +45,7 @@ mod test_gen {
             let mut ctx = module.make_context();
             let mut func_ctx = FunctionBuilderContext::new();
 
-            let CanExprOut { loc_expr, var_store, var, constraint, .. } = can_expr($src);
+            let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
             let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
@@ -75,14 +75,20 @@ mod test_gen {
 
             // Compile and add all the Procs before adding main
             let mut procs = MutMap::default();
-            let env = roc::crane::build::Env {
+            let mut env = roc::crane::build::Env {
                 arena: &arena,
                 subs,
+                interns,
                 cfg,
             };
+            let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs);
+            let mono_expr = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut ident_ids);
+
+            // Put this module's ident_ids back in the interns
+            env.interns.all_ident_ids.insert(home, ident_ids);
+
             let mut scope = ImMap::default();
             let mut declared = Vec::with_capacity(procs.len());
 
@@ -172,7 +178,7 @@ mod test_gen {
     macro_rules! assert_llvm_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
             let arena = Bump::new();
-            let CanExprOut { loc_expr, var_store, var, constraint, .. } = can_expr($src);
+            let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
             let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
@@ -207,33 +213,49 @@ mod test_gen {
             let main_fn_name = "$Test.main";
 
             // Compile and add all the Procs before adding main
-            let mut procs = MutMap::default();
-            let env = roc::llvm::build::Env {
+            let mut env = roc::llvm::build::Env {
                 arena: &arena,
                 subs,
                 builder: &builder,
                 context: &context,
+                interns,
                 module: arena.alloc(module),
             };
+            let mut procs = MutMap::default();
+            let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs);
+            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut ident_ids);
 
-            // Add all the Procs to the module
-            for (name, opt_proc) in procs.clone() {
+            // Put this module's ident_ids back in the interns, so we can use them in Env.
+            env.interns.all_ident_ids.insert(home, ident_ids);
+
+            let mut headers = Vec::with_capacity(procs.len());
+
+            // Add all the Proc headers to the module.
+            // We have to do this in a separate pass first,
+            // because their bodies may reference each other.
+            for (symbol, opt_proc) in procs.clone().into_iter() {
                 if let Some(proc) = opt_proc {
-                    // NOTE: This is here to be uncommented in case verification fails.
-                    // (This approach means we don't have to defensively clone name here.)
-                    //
-                    // println!("\n\nBuilding and then verifying function {}\n\n", name);
-                    let fn_val = build_proc(&env, name, proc, &procs);
+                    let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
 
-                    if fn_val.verify(true) {
-                        fpm.run_on(&fn_val);
-                    } else {
-                        // NOTE: If this fails, uncomment the above println to debug.
-                        panic!("Non-main function failed LLVM verification. Uncomment the above println to debug!");
-                    }
+                    headers.push((proc, fn_val, arg_basic_types));
+                }
+            }
+
+            // Build each proc using its header info.
+            for (proc, fn_val, arg_basic_types) in headers {
+                // NOTE: This is here to be uncommented in case verification fails.
+                // (This approach means we don't have to defensively clone name here.)
+                //
+                // println!("\n\nBuilding and then verifying function {}\n\n", name);
+                build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+
+                if fn_val.verify(true) {
+                    fpm.run_on(&fn_val);
+                } else {
+                    // NOTE: If this fails, uncomment the above println to debug.
+                    panic!("Non-main function failed LLVM verification. Uncomment the above println to debug!");
                 }
             }
 

@@ -89,10 +89,6 @@ impl Symbol {
             .into()
         }
     }
-
-    pub fn emit(self) -> InlinableString {
-        format!("${}", self.0).into()
-    }
 }
 
 /// Rather than displaying as this:
@@ -553,8 +549,9 @@ macro_rules! define_builtins {
 
 define_builtins! {
     0 ATTR: "Attr" => {
-        0 ATTR_ATTR: "Attr" // the Attr.Attr type alias, used in uniqueness types
-        1 ATTR_AT_ATTR: "@Attr" // the Attr.@Attr private tag
+        0 UNDERSCORE: "_" // the _ used in pattern matches. This is Symbol 0.
+        1 ATTR_ATTR: "Attr" // the Attr.Attr type alias, used in uniqueness types
+        2 ATTR_AT_ATTR: "@Attr" // the Attr.@Attr private tag
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
