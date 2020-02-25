@@ -519,7 +519,6 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
 fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     use Type::*;
 
-    let var175 = unsafe { crate::subs::Variable::unsafe_test_debug_variable(175) };
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
         Boolean(b) => {
@@ -566,6 +565,9 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             accum.remove(rec);
         }
         Alias(_, args, actual) => {
+            for (_, arg) in args {
+                variables_help(arg, accum);
+            }
             variables_help(actual, accum);
         }
         Apply(_, args) => {
