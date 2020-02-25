@@ -89,13 +89,6 @@ impl Symbol {
             .into()
         }
     }
-
-    /// TODO This function should be deleted, and replaced by using intern table
-    /// lookups instead. (Everywhere this function is used, an &str is expected anyway,
-    /// so using this leads to a ton of unnecessary allocations.)
-    pub fn emit(self) -> String {
-        format!("${}", self.0)
-    }
 }
 
 /// Rather than displaying as this:

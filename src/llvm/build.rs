@@ -10,7 +10,7 @@ use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::collections::ImMap;
 use crate::llvm::convert::{basic_type_from_layout, get_fn_type};
-use crate::module::symbol::Symbol;
+use crate::module::symbol::{Interns, Symbol};
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::Layout;
 use crate::subs::{Subs, Variable};
@@ -30,6 +30,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
     pub module: &'ctx Module<'ctx>,
+    pub interns: Interns,
     pub subs: Subs,
 }
 
@@ -100,7 +101,12 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 });
                 let val = build_expr(env, &scope, parent, &expr, procs);
                 let expr_bt = basic_type_from_layout(context, &layout);
-                let alloca = create_entry_block_alloca(env, parent, expr_bt, &symbol.emit());
+                let alloca = create_entry_block_alloca(
+                    env,
+                    parent,
+                    expr_bt,
+                    symbol.ident_string(&env.interns),
+                );
 
                 env.builder.build_store(alloca, val);
 
@@ -133,7 +139,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 let fn_val = env
                     .module
-                    .get_function(&symbol.emit())
+                    .get_function(symbol.ident_string(&env.interns))
                     .unwrap_or_else(|| panic!("Unrecognized function: {:?}", symbol));
 
                 let call = env.builder.build_call(fn_val, arg_vals.as_slice(), "tmp");
@@ -146,7 +152,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
         FunctionPointer(ref symbol) => {
             let ptr = env
                 .module
-                .get_function(&symbol.emit())
+                .get_function(symbol.ident_string(&env.interns))
                 .unwrap_or_else(|| panic!("Could not get pointer to unknown function {:?}", symbol))
                 .as_global_value()
                 .as_pointer_value();
@@ -177,9 +183,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
 
-        Load(name) => match scope.get(name) {
-            Some((_, ptr)) => env.builder.build_load(*ptr, &name.emit()),
-            None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
+        Load(symbol) => match scope.get(symbol) {
+            Some((_, ptr)) => env
+                .builder
+                .build_load(*ptr, symbol.ident_string(&env.interns)),
+            None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
         },
         _ => {
             panic!("I don't yet know how to LLVM build {:?}", expr);
@@ -395,7 +403,7 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
 
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    name: Symbol,
+    symbol: Symbol,
     proc: Proc<'a>,
     procs: &Procs<'a>,
 ) -> FunctionValue<'ctx> {
@@ -409,20 +417,22 @@ pub fn build_proc<'a, 'ctx, 'env>(
         .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_proc here!"));
     let ret_type = basic_type_from_layout(context, &ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
-    let mut arg_names = Vec::new_in(arena);
+    let mut arg_symbols = Vec::new_in(arena);
 
-    for (layout, name, _var) in args.iter() {
+    for (layout, arg_symbol, _var) in args.iter() {
         let arg_type = basic_type_from_layout(env.context, &layout);
 
         arg_basic_types.push(arg_type);
-        arg_names.push(name);
+        arg_symbols.push(arg_symbol);
     }
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
 
-    let fn_val = env
-        .module
-        .add_function(&name.emit(), fn_type, Some(Linkage::Private));
+    let fn_val = env.module.add_function(
+        symbol.ident_string(&env.interns),
+        fn_type,
+        Some(Linkage::Private),
+    );
 
     // Add a basic block for the entry point
     let entry = context.append_basic_block(fn_val, "entry");
@@ -433,16 +443,17 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let mut scope = ImMap::default();
 
     // Add args to scope
-    for ((arg_val, arg_type), (_, arg_name, var)) in
+    for ((arg_val, arg_type), (_, arg_symbol, var)) in
         fn_val.get_param_iter().zip(arg_basic_types).zip(args)
     {
-        set_name(arg_val, &arg_name.emit());
+        set_name(arg_val, arg_symbol.ident_string(&env.interns));
 
-        let alloca = create_entry_block_alloca(env, fn_val, arg_type, &arg_name.emit());
+        let alloca =
+            create_entry_block_alloca(env, fn_val, arg_type, arg_symbol.ident_string(&env.interns));
 
         builder.build_store(alloca, arg_val);
 
-        scope.insert(arg_name.clone(), (*var, alloca));
+        scope.insert(*arg_symbol, (*var, alloca));
     }
 
     let body = build_expr(env, &scope, fn_val, &proc.body, procs);

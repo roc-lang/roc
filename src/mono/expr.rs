@@ -21,11 +21,11 @@ pub struct Proc<'a> {
     pub ret_var: Variable,
 }
 
-struct Env<'a> {
+struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'a Subs,
     pub home: ModuleId,
-    pub ident_ids: IdentIds,
+    pub ident_ids: &'i mut IdentIds,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -115,7 +115,7 @@ impl<'a> Expr<'a> {
         can_expr: can::expr::Expr,
         procs: &mut Procs<'a>,
         home: ModuleId,
-        ident_ids: IdentIds,
+        ident_ids: &mut IdentIds,
     ) -> Self {
         let mut env = Env {
             arena,
@@ -129,7 +129,7 @@ impl<'a> Expr<'a> {
 }
 
 fn from_can<'a>(
-    env: &mut Env<'a>,
+    env: &mut Env<'a, '_>,
     can_expr: can::expr::Expr,
     procs: &mut Procs<'a>,
     name: Option<Symbol>,
@@ -292,7 +292,7 @@ fn from_can<'a>(
 }
 
 fn add_closure<'a>(
-    env: &mut Env<'a>,
+    env: &mut Env<'a, '_>,
     name: Symbol,
     can_body: can::expr::Expr,
     ret_var: Variable,
@@ -339,7 +339,7 @@ fn add_closure<'a>(
 }
 
 fn store_pattern<'a>(
-    env: &mut Env<'a>,
+    env: &mut Env<'a, '_>,
     can_pat: Pattern,
     can_expr: can::expr::Expr,
     var: Variable,
@@ -384,7 +384,7 @@ fn gen_closure_name(procs: &Procs<'_>, ident_ids: &mut IdentIds, home: ModuleId)
 }
 
 fn from_can_when<'a>(
-    env: &mut Env<'a>,
+    env: &mut Env<'a, '_>,
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<can::expr::Expr>,

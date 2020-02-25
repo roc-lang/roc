@@ -15,7 +15,7 @@ use cranelift_module::{Backend, FuncId, Linkage, Module};
 
 use crate::collections::ImMap;
 use crate::crane::convert::{sig_from_layout, type_from_layout};
-use crate::module::symbol::Symbol;
+use crate::module::symbol::{Interns, Symbol};
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::{Builtin, Layout};
 use crate::subs::{Subs, Variable};
@@ -34,6 +34,7 @@ pub struct Env<'a> {
     pub arena: &'a Bump,
     pub cfg: TargetFrontendConfig,
     pub subs: Subs,
+    pub interns: Interns,
 }
 
 pub fn build_expr<'a, B: Backend>(
@@ -421,7 +422,7 @@ fn build_switch<'a, B: Backend>(
 pub fn declare_proc<'a, B: Backend>(
     env: &Env<'a>,
     module: &mut Module<B>,
-    name: Symbol,
+    symbol: Symbol,
     proc: &Proc<'a>,
 ) -> (FuncId, Signature) {
     let args = proc.args;
@@ -448,8 +449,8 @@ pub fn declare_proc<'a, B: Backend>(
 
     // Declare the function in the module
     let fn_id = module
-        .declare_function(&name.emit(), Linkage::Local, &sig)
-        .unwrap_or_else(|err| panic!("Error when building function {:?} - {:?}", name, err));
+        .declare_function(symbol.ident_string(&env.interns), Linkage::Local, &sig)
+        .unwrap_or_else(|err| panic!("Error when building function {:?} - {:?}", symbol, err));
 
     (fn_id, sig)
 }
