@@ -19,7 +19,7 @@ use crate::types::Reason;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use crate::uniqueness::builtins::{attr_type, list_type, str_type};
-use crate::uniqueness::sharing::{FieldAccess, ReferenceCount, VarUsage};
+use crate::uniqueness::sharing::{FieldAccess, Mark, Usage, VarUsage};
 
 pub use crate::can::expr::Expr::*;
 
@@ -1144,13 +1144,16 @@ fn constrain_var(
     var_store: &VarStore,
     applied_usage_constraint: &mut ImSet<Symbol>,
     symbol_for_lookup: Symbol,
-    usage: Option<&ReferenceCount>,
+    usage: Option<&Usage>,
     region: Region,
     expected: Expected<Type>,
 ) -> Constraint {
-    use sharing::ReferenceCount::*;
+    use sharing::Container;
+    use sharing::Mark::*;
+    use sharing::Usage::*;
+
     match usage {
-        None | Some(Shared) => {
+        None | Some(Simple(Shared)) => {
             // the variable is used/consumed more than once, so it must be Shared
             let val_var = var_store.fresh();
             let uniq_var = var_store.fresh();
@@ -1173,12 +1176,12 @@ fn constrain_var(
                 ]),
             )
         }
-        Some(Unique) => {
+        Some(Simple(Unique)) => {
             // no additional constraints, keep uniqueness unbound
             Lookup(symbol_for_lookup, expected, region)
         }
-        Some(ReferenceCount::Access(field_access))
-        | Some(ReferenceCount::Update(_, field_access)) => {
+        Some(Usage::Access(Container::Record, _, field_access))
+        | Some(Usage::Update(Container::Record, _, field_access)) => {
             applied_usage_constraint.insert(symbol_for_lookup.clone());
 
             let mut variables = Vec::new();
@@ -1207,12 +1210,14 @@ fn constrain_field_access(
     field_access: &FieldAccess,
     field_vars: &mut Vec<Variable>,
 ) -> (Variable, Vec<Atom>, Type) {
+    panic!();
+    /*
     use sharing::ReferenceCount::Shared;
 
     let mut field_types = SendMap::default();
     let mut uniq_vars = Vec::new();
 
-    for (field, (rc, nested)) in field_access.fields.clone() {
+    for (field, nested) in field_access.fields.clone() {
         // handle nested fields
         let field_type = if nested.is_empty() {
             // generate constraint for this field
@@ -1259,6 +1264,7 @@ fn constrain_field_access(
             Box::new(Variable(record_ext_var)),
         ),
     )
+    */
 }
 
 // TODO trim down these arguments
