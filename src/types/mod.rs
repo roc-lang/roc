@@ -283,7 +283,17 @@ impl Type {
                     arg.substitute(substitutions);
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => {}
+            Boolean(b) => {
+                let mut mapper = |var| match substitutions.get(&var) {
+                    Some(Type::Variable(new_var)) => *new_var,
+                    Some(_) => panic!("cannot substitute boolean var for Type"),
+                    None => var,
+                };
+
+                *b = b.map_variables(&mut mapper)
+            }
+
+            EmptyRec | EmptyTagUnion | Erroneous(_) => {}
         }
     }
 
@@ -463,9 +473,6 @@ impl Type {
                             Box::new(Type::RecursiveTagUnion(new_rec_var, tags, ext)),
                         );
                     } else {
-                        if *symbol == Symbol::INT_INT {
-                            dbg!(&named_args, &actual);
-                        }
                         *self = Type::Alias(*symbol, named_args, Box::new(actual));
                     }
                 } else {
@@ -540,10 +547,6 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             for (_, args) in tags {
                 for x in args {
                     variables_help(x, accum);
-                    if (accum.contains(&var175)) {
-                        dbg!(&tags);
-                        // panic!();
-                    }
                 }
             }
             variables_help(ext, accum);
@@ -745,7 +748,6 @@ impl Constraint {
                     var_store,
                     &mut introduced,
                 );
-                dbg!(&introduced);
 
                 letcon.flex_vars.extend(introduced);
             }

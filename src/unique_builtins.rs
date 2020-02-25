@@ -80,6 +80,26 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Integer : [ @Integer ]
+    add_alias(
+        Symbol::INT_INTEGER,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: single_private_tag(Symbol::INT_AT_INTEGER, Vec::new()),
+        },
+    );
+
+    // FloatingPoint : [ @FloatingPoint ]
+    add_alias(
+        Symbol::FLOAT_FLOATINGPOINT,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: single_private_tag(Symbol::FLOAT_AT_FLOATINGPOINT, Vec::new()),
+        },
+    );
+
     // Int : Num Integer
     add_alias(
         Symbol::INT_INT,
@@ -119,6 +139,25 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: vec![Located::at(Region::zero(), "elem".into())],
             typ: single_private_tag(Symbol::LIST_AT_LIST, vec![flex(TVAR1)]),
+        },
+    );
+
+    // Result a e : [ Ok a, Err e ]
+    add_alias(
+        Symbol::RESULT_RESULT,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![
+                Located::at(Region::zero(), "a".into()),
+                Located::at(Region::zero(), "e".into()),
+            ],
+            typ: SolvedType::TagUnion(
+                vec![
+                    (TagName::Global("Ok".into()), vec![flex(TVAR1)]),
+                    (TagName::Global("Err".into()), vec![flex(TVAR2)]),
+                ],
+                Box::new(SolvedType::EmptyTagUnion),
+            ),
         },
     );
 
