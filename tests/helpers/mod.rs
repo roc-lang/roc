@@ -366,7 +366,6 @@ pub fn variable_usage(con: &Constraint) -> (SeenVariables, Vec<Variable>) {
 
 fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mut ImSet<Variable>) {
     use Constraint::*;
-    let var175 = unsafe { Variable::unsafe_test_debug_variable(175) };
 
     match con {
         True | SaveTheEnvironment => (),
@@ -378,18 +377,10 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
             for v in expectation.get_type_ref().variables() {
                 used.insert(v);
             }
-            if (used.contains(&var175)) {
-                dbg!(&expectation);
-                panic!();
-            }
         }
         Lookup(_, expectation, _) => {
             for v in expectation.get_type_ref().variables() {
                 used.insert(v);
-            }
-            if (used.contains(&var175)) {
-                dbg!(&expectation);
-                panic!();
             }
         }
         Pattern(_, _, tipe, pexpectation) => {

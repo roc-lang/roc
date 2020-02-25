@@ -287,6 +287,7 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
                                 write_content(env, content, subs, buf, parens);
                             }),
                         },
+
                         _ => write_parens!(write_parens, buf, {
                             buf.push_str("Num ");
                             write_content(env, content, subs, buf, parens);
