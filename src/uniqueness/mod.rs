@@ -70,11 +70,26 @@ pub fn constrain_decls(
     home: ModuleId,
     decls: &[Declaration],
     aliases: SendMap<Symbol, Alias>,
+    var_store: &VarStore,
 ) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
 
-    let var_store = VarStore::default();
-    let var_usage = VarUsage::default();
+    // perform usage analysis on the whole file
+    let mut var_usage = VarUsage::default();
+    for decl in decls.iter().rev() {
+        // NOTE: rigids are empty because they are not shared between top-level definitions
+        match decl {
+            Declaration::Declare(def) => {
+                sharing::annotate_usage(&def.loc_expr.value, &mut var_usage);
+            }
+            Declaration::DeclareRec(defs) => {
+                for def in defs {
+                    sharing::annotate_usage(&def.loc_expr.value, &mut var_usage);
+                }
+            }
+            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+        }
+    }
 
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
@@ -348,6 +363,7 @@ pub fn constrain_expr(
         }
         Float(var, _) => {
             let (num_uvar, float_uvar, num_type) = unique_float(var_store);
+
             exists(
                 vec![*var, num_uvar, float_uvar],
                 And(vec![
@@ -1134,7 +1150,7 @@ fn constrain_var(
 ) -> Constraint {
     use sharing::ReferenceCount::*;
     match usage {
-        Some(Shared) => {
+        None | Some(Shared) => {
             // the variable is used/consumed more than once, so it must be Shared
             let val_var = var_store.fresh();
             let uniq_var = var_store.fresh();
@@ -1183,7 +1199,6 @@ fn constrain_var(
         }
 
         Some(other) => panic!("some other rc value: {:?}", other),
-        None => panic!("symbol not analyzed"),
     }
 }
 

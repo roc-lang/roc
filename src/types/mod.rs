@@ -283,7 +283,17 @@ impl Type {
                     arg.substitute(substitutions);
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => {}
+            Boolean(b) => {
+                let mut mapper = |var| match substitutions.get(&var) {
+                    Some(Type::Variable(new_var)) => *new_var,
+                    Some(_) => panic!("cannot substitute boolean var for Type"),
+                    None => var,
+                };
+
+                *b = b.map_variables(&mut mapper)
+            }
+
+            EmptyRec | EmptyTagUnion | Erroneous(_) => {}
         }
     }
 
@@ -378,32 +388,37 @@ impl Type {
         }
     }
 
-    pub fn instantiate_aliases(&mut self, aliases: &ImMap<Symbol, Alias>, var_store: &VarStore) {
+    pub fn instantiate_aliases(
+        &mut self,
+        aliases: &ImMap<Symbol, Alias>,
+        var_store: &VarStore,
+        introduced: &mut ImSet<Variable>,
+    ) {
         use Type::*;
 
         match self {
             Function(args, ret) => {
                 for arg in args {
-                    arg.instantiate_aliases(aliases, var_store);
+                    arg.instantiate_aliases(aliases, var_store, introduced);
                 }
-                ret.instantiate_aliases(aliases, var_store);
+                ret.instantiate_aliases(aliases, var_store, introduced);
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
-                        x.instantiate_aliases(aliases, var_store);
+                        x.instantiate_aliases(aliases, var_store, introduced);
                     }
                 }
-                ext.instantiate_aliases(aliases, var_store);
+                ext.instantiate_aliases(aliases, var_store, introduced);
             }
             Record(fields, ext) => {
                 for x in fields.iter_mut() {
-                    x.instantiate_aliases(aliases, var_store);
+                    x.instantiate_aliases(aliases, var_store, introduced);
                 }
-                ext.instantiate_aliases(aliases, var_store);
+                ext.instantiate_aliases(aliases, var_store, introduced);
             }
             Alias(_, _, actual_type) => {
-                actual_type.instantiate_aliases(aliases, var_store);
+                actual_type.instantiate_aliases(aliases, var_store, introduced);
             }
             Apply(symbol, args) => {
                 if let Some(alias) = aliases.get(symbol) {
@@ -423,13 +438,23 @@ impl Type {
                     ) in alias.vars.iter().zip(args.iter())
                     {
                         let mut filler = filler.clone();
-                        filler.instantiate_aliases(aliases, var_store);
+                        filler.instantiate_aliases(aliases, var_store, introduced);
                         named_args.push((lowercase.clone(), filler.clone()));
                         substitution.insert(*placeholder, filler);
                     }
 
+                    // instantiate "hidden" uniqueness variables
+                    for variable in actual.variables() {
+                        if !substitution.contains_key(&variable) {
+                            let var = var_store.fresh();
+                            substitution.insert(variable, Type::Variable(var));
+
+                            introduced.insert(var);
+                        }
+                    }
+
                     actual.substitute(&substitution);
-                    actual.instantiate_aliases(aliases, var_store);
+                    actual.instantiate_aliases(aliases, var_store, introduced);
 
                     // instantiate recursion variable!
                     if let Type::RecursiveTagUnion(rec_var, mut tags, mut ext) = actual {
@@ -493,6 +518,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
 
 fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     use Type::*;
+
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
         Boolean(b) => {
@@ -539,8 +565,8 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             accum.remove(rec);
         }
         Alias(_, args, actual) => {
-            for (_, x) in args {
-                variables_help(x, accum);
+            for (_, arg) in args {
+                variables_help(arg, accum);
             }
             variables_help(actual, accum);
         }
@@ -663,10 +689,15 @@ pub enum Constraint {
 
 impl Constraint {
     pub fn instantiate_aliases(&mut self, var_store: &VarStore) {
-        Self::instantiate_aliases_help(self, &ImMap::default(), var_store);
+        Self::instantiate_aliases_help(self, &ImMap::default(), var_store, &mut ImSet::default())
     }
 
-    fn instantiate_aliases_help(&mut self, aliases: &ImMap<Symbol, Alias>, var_store: &VarStore) {
+    fn instantiate_aliases_help(
+        &mut self,
+        aliases: &ImMap<Symbol, Alias>,
+        var_store: &VarStore,
+        introduced: &mut ImSet<Variable>,
+    ) {
         use Constraint::*;
 
         match self {
@@ -675,26 +706,26 @@ impl Constraint {
             Eq(typ, expected, _) => {
                 expected
                     .get_type_mut_ref()
-                    .instantiate_aliases(aliases, var_store);
-                typ.instantiate_aliases(aliases, var_store);
+                    .instantiate_aliases(aliases, var_store, introduced);
+                typ.instantiate_aliases(aliases, var_store, introduced);
             }
 
             Lookup(_, expected, _) => {
                 expected
                     .get_type_mut_ref()
-                    .instantiate_aliases(aliases, var_store);
+                    .instantiate_aliases(aliases, var_store, introduced);
             }
 
             Pattern(_, _, typ, pexpected) => {
                 pexpected
                     .get_type_mut_ref()
-                    .instantiate_aliases(aliases, var_store);
-                typ.instantiate_aliases(aliases, var_store);
+                    .instantiate_aliases(aliases, var_store, introduced);
+                typ.instantiate_aliases(aliases, var_store, introduced);
             }
 
             And(nested) => {
                 for c in nested.iter_mut() {
-                    c.instantiate_aliases_help(aliases, var_store);
+                    c.instantiate_aliases_help(aliases, var_store, introduced);
                 }
             }
 
@@ -704,16 +735,23 @@ impl Constraint {
                     new_aliases.insert(*k, v.clone());
                 }
 
+                let mut introduced = ImSet::default();
                 for Located { value: typ, .. } in letcon.def_types.iter_mut() {
-                    typ.instantiate_aliases(&new_aliases, var_store);
+                    typ.instantiate_aliases(&new_aliases, var_store, &mut introduced);
                 }
 
-                letcon
-                    .defs_constraint
-                    .instantiate_aliases_help(&new_aliases, var_store);
-                letcon
-                    .ret_constraint
-                    .instantiate_aliases_help(&new_aliases, var_store);
+                letcon.defs_constraint.instantiate_aliases_help(
+                    &new_aliases,
+                    var_store,
+                    &mut introduced,
+                );
+                letcon.ret_constraint.instantiate_aliases_help(
+                    &new_aliases,
+                    var_store,
+                    &mut introduced,
+                );
+
+                letcon.flex_vars.extend(introduced);
             }
         }
     }

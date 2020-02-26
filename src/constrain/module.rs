@@ -16,6 +16,7 @@ pub fn constrain_module(
     mode: builtins::Mode,
     decls: &[Declaration],
     aliases: &MutMap<Symbol, Alias>,
+    var_store: &VarStore,
 ) -> Constraint {
     use builtins::Mode::*;
 
@@ -27,7 +28,7 @@ pub fn constrain_module(
 
     match mode {
         Standard => constrain_decls(home, decls, send_aliases),
-        Uniqueness => uniqueness::constrain_decls(home, decls, send_aliases),
+        Uniqueness => uniqueness::constrain_decls(home, decls, send_aliases, var_store),
     }
 }
 

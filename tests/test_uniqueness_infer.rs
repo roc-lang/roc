@@ -1385,82 +1385,83 @@ mod test_infer_uniq {
     }
 
     #[test]
-    #[ignore]
     fn quicksort_swap() {
         infer_eq(
             indoc!(
                 r#"
-                    swap : Num.Num Int.Integer, Num.Num Int.Integer, List.List a -> List.List a
-                    swap \i, j, list ->
-                        when Pair (List.get i list) (List.get j list) is
+                    swap : Int, Int, List p -> List p
+                    swap = \i, j, list ->
+                        when Pair (List.get list i) (List.get list j) is
                             Pair (Ok atI) (Ok atJ) ->
                                 list
                                     |> List.set i atJ
                                     |> List.set j atI
                             _ ->
-                                list
+                                []
 
                     swap
                 "#
             ),
-            "Attr * (Attr Shared Int, Attr Shared Int, Attr a (List b) -> Attr a (List b))",
+            // TODO have sharing analysis count List.get and List.set differently
+            "Attr * (Attr Shared Int, Attr Shared Int, Attr Shared (List (Attr a p)) -> Attr * (List (Attr a p)))"
         );
     }
 
     #[test]
-    #[ignore]
     fn quicksort() {
         infer_eq(
             indoc!(
                 r#"
+                quicksort : List (Num a), Int, Int -> List (Num a)
+                quicksort = \list, low, high ->
+                    when partition low high list is
+                        Pair partitionIndex partitioned ->
+                            partitioned
+                                |> quicksort low (partitionIndex - 1)
+                                |> quicksort (partitionIndex + 1) high
+
+
                 swap : Int, Int, List a -> List a
-                swap \i, j, list ->
-                    when Pair (List.get i list) (List.get j list) is
+                swap = \i, j, list ->
+                    when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
                             list
                                 |> List.set i atJ
                                 |> List.set j atI
+
                         _ ->
-                            list
+                            []
 
-                partition : Int, Int, List Int -> [ Pair Int (List Int) ]
+
+                partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
                 partition = \low, high, initialList ->
-                    when List.get high initialList is
+                    when List.get initialList high is
                         Ok pivot ->
-
-                            go \i, j, list =
+                            go = \i, j, list ->
                                 if j < high then
-                                    when List.get j list is
+                                    when List.get list j is
                                         Ok value ->
                                             if value <= pivot then
                                                 go (i + 1) (j + 1) (swap (i + 1) j list)
                                             else
                                                 go i (j + 1) list
 
-                                        _ ->
+                                        Err _ ->
                                             Pair i list
                                 else
                                     Pair i list
 
-                            Pair newI newList = go (low - 1) low initialList
-
-                            Pair (newI + 1) (swap (newI + 1) high newList)
+                            when go (low - 1) low initialList is
+                                Pair newI newList ->
+                                    Pair (newI + 1) (swap (newI + 1) high newList)
 
                         Err _ ->
                             Pair (low - 1) initialList
 
-                quicksort : List Int, Int, Int -> List Int
-                quicksort = \list, low, high ->
-                    Pair partitionIndex partitioned = partition low high list
-
-                    arr
-                        |> quicksort low (partitionIndex - 1)
-                        |> quicksort (partitionIndex + 1) high
-
                 quicksort
                    "#
             ),
-            "Attr * (Attr Shared Int, Attr Shared Int, Attr a (List b) -> Attr a (List b))",
+            "Attr Shared (Attr Shared (List (Attr a (Num (Attr b a)))), Attr Shared Int, Attr Shared Int -> Attr Shared (List (Attr a (Num (Attr b a)))))"
         );
     }
 
@@ -1795,51 +1796,50 @@ mod test_infer_uniq {
         );
     }
 
-    // boolean variables introduced by the alias are not bound (by the alias) and thus not instantiated
-    //    #[test]
-    //    fn let_record_pattern_with_annotation_alias() {
-    //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //               Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
-    //
-    //               { x, y } : Foo
-    //               { x, y } = { x : "foo", y : 3.14 }
-    //
-    //               x
-    //               "#
-    //            ),
-    //            "Attr * Str",
-    //        );
-    //    }
+    #[test]
+    fn let_record_pattern_with_annotation_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+               Foo : { x : Str, y : Float }
 
-    // boolean variables introduced by the alias are not bound (by the alias) and thus not instantiated
-    //    #[test]
-    //    fn typecheck_mutually_recursive_tag_union() {
-    //        infer_eq(
-    //                indoc!(
-    //                    r#"
-    //                          ListA a b : [ Cons a (ListB b a), Nil ]
-    //                          ListB a b : [ Cons a (ListA b a), Nil ]
-    //
-    //                          ConsList q : [ Cons q (ConsList q), Nil ]
-    //
-    //                          toAs : (q -> p), ListA p q -> ConsList p
-    //                          toAs = \f, lista ->
-    //                               when lista is
-    //                                   Nil -> Nil
-    //                                   Cons a listb ->
-    //                                       when listb is
-    //                                           Nil -> Nil
-    //                                           Cons b newLista ->
-    //                                               Cons a (Cons (f b) (toAs f newLista))
-    //
-    //                          toAs
-    //                         "#
-    //                ),
-    //                "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr * (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
-    //            );
-    //    }
+               { x, y } : Foo
+               { x, y } = { x : "foo", y : 3.14 }
+
+               x
+               "#
+            ),
+            "Attr * Str",
+        );
+    }
+
+    #[test]
+    fn typecheck_mutually_recursive_tag_union() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                            ListA a b : [ Cons a (ListB b a), Nil ]
+                            ListB a b : [ Cons a (ListA b a), Nil ]
+
+                            ConsList q : [ Cons q (ConsList q), Nil ]
+
+                            toAs : (q -> p), ListA p q -> ConsList p
+                            toAs =
+                                \f, lista ->
+                                    when lista is
+                                       Nil -> Nil
+                                       Cons a listb ->
+                                           when listb is
+                                               Nil -> Nil
+                                               Cons b newLista ->
+                                                   Cons a (Cons (f b) (toAs f newLista))
+
+                            toAs
+                             "#
+                    ),
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr * (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                );
+    }
 
     #[test]
     fn infer_mutually_recursive_tag_union() {
@@ -1897,6 +1897,78 @@ mod test_infer_uniq {
                "#
             ),
             "Attr * (List (Attr * Int))",
+        );
+    }
+
+    #[test]
+    fn float_div_builtins() {
+        infer_eq(
+            indoc!(
+                r#"
+                Float.highest / Float.highest
+               "#
+            ),
+            "Attr * Float",
+        );
+    }
+
+    #[test]
+    fn float_div_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                3.0 / 4.0
+               "#
+            ),
+            "Attr * Float",
+        );
+    }
+
+    #[test]
+    fn float_div_literal_builtin() {
+        infer_eq(
+            indoc!(
+                r#"
+                3.0 / Float.highest
+               "#
+            ),
+            "Attr * Float",
+        );
+    }
+
+    #[test]
+    fn int_div_builtins() {
+        infer_eq(
+            indoc!(
+                r#"
+                Int.highest // Int.highest
+               "#
+            ),
+            "Attr * Int",
+        );
+    }
+
+    #[test]
+    fn int_div_literals() {
+        infer_eq(
+            indoc!(
+                r#"
+                3 // 4
+               "#
+            ),
+            "Attr * Int",
+        );
+    }
+
+    #[test]
+    fn int_div_literal_builtin() {
+        infer_eq(
+            indoc!(
+                r#"
+                3 // Int.highest
+               "#
+            ),
+            "Attr * Int",
         );
     }
 }

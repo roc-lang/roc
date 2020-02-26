@@ -366,6 +366,7 @@ pub fn variable_usage(con: &Constraint) -> (SeenVariables, Vec<Variable>) {
 
 fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mut ImSet<Variable>) {
     use Constraint::*;
+
     match con {
         True | SaveTheEnvironment => (),
         Eq(tipe, expectation, _) => {
