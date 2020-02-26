@@ -132,20 +132,7 @@ pub fn build_expr<'a, B: Backend>(
                 arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
             }
 
-            let fn_id = match scope.get(symbol) {
-                    Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
-                    other => panic!(
-                        "CallByName could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
-                        symbol, other, scope
-                    ),
-                };
-            let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
-            let call = builder.ins().call(local_func, &arg_vals);
-            let results = builder.inst_results(call);
-
-            debug_assert!(results.len() == 1);
-
-            results[0]
+            call_with_args(*symbol, arg_vals.into_bump_slice(), scope, module, builder)
         }
         FunctionPointer(ref name) => {
             let fn_id = match scope.get(name) {
@@ -516,4 +503,36 @@ pub fn define_proc_body<'a, B: Backend>(
         .expect("Defining Cranelift function failed");
 
     module.clear_context(ctx);
+}
+
+#[inline(always)]
+fn call_with_args<'a, B: Backend>(
+    symbol: Symbol,
+    args: &'a [Value],
+    scope: &Scope,
+    module: &mut Module<B>,
+    builder: &mut FunctionBuilder,
+) -> Value {
+    match symbol {
+        Symbol::NUM_ADD => {
+            debug_assert!(args.len() == 2);
+            builder.ins().iadd(args[0], args[1])
+        }
+        _ => {
+            let fn_id = match scope.get(&symbol) {
+                    Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
+                    other => panic!(
+                        "CallByName could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
+                        symbol, other, scope
+                    ),
+                };
+            let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
+            let call = builder.ins().call(local_func, args);
+            let results = builder.inst_results(call);
+
+            debug_assert!(results.len() == 1);
+
+            results[0]
+        }
+    }
 }

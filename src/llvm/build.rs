@@ -137,16 +137,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     arg_vals.push(build_expr(env, scope, parent, arg, procs));
                 }
 
-                let fn_val = env
-                    .module
-                    .get_function(symbol.ident_string(&env.interns))
-                    .unwrap_or_else(|| panic!("Unrecognized function: {:?}", symbol));
-
-                let call = env.builder.build_call(fn_val, arg_vals.as_slice(), "tmp");
-
-                call.try_as_basic_value().left().unwrap_or_else(|| {
-                    panic!("LLVM error: Invalid call by name for name {:?}", symbol)
-                })
+                call_with_args(*symbol, arg_vals.into_bump_slice(), env)
             }
         },
         FunctionPointer(ref symbol) => {
@@ -480,5 +471,38 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
         }
 
         panic!("Invalid generated fn_val.")
+    }
+}
+
+#[inline(always)]
+fn call_with_args<'a, 'ctx, 'env>(
+    symbol: Symbol,
+    args: &[BasicValueEnum<'ctx>],
+    env: &Env<'a, 'ctx, 'env>,
+) -> BasicValueEnum<'ctx> {
+    match symbol {
+        Symbol::NUM_ADD => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_add(
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "IADD",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        _ => {
+            let fn_val = env
+                .module
+                .get_function(symbol.ident_string(&env.interns))
+                .unwrap_or_else(|| panic!("Unrecognized function: {:?}", symbol));
+
+            let call = env.builder.build_call(fn_val, args, "tmp");
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
+        }
     }
 }
