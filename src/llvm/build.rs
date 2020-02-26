@@ -503,6 +503,17 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
+        Symbol::NUM_MUL => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_mul(
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "MUL_I64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
         _ => {
             let fn_val = env
                 .module

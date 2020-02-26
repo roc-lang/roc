@@ -639,6 +639,19 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_mul_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    2 * 4 * 6
+                "#
+            ),
+            48,
+            i64
+        );
+    }
+
+    #[test]
     fn return_unnamed_fn() {
         assert_evals_to!(
             indoc!(

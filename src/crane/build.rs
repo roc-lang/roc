@@ -522,6 +522,10 @@ fn call_with_args<'a, B: Backend>(
             debug_assert!(args.len() == 2);
             builder.ins().isub(args[0], args[1])
         }
+        Symbol::NUM_MUL => {
+            debug_assert!(args.len() == 2);
+            builder.ins().imul(args[0], args[1])
+        }
         _ => {
             let fn_id = match scope.get(&symbol) {
                     Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
