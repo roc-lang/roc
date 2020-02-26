@@ -487,7 +487,18 @@ fn call_with_args<'a, 'ctx, 'env>(
             let int_val = env.builder.build_int_add(
                 args[0].into_int_value(),
                 args[1].into_int_value(),
-                "IADD",
+                "ADD_I64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::NUM_SUB => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_sub(
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "SUB_I64",
             );
 
             BasicValueEnum::IntValue(int_val)

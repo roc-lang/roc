@@ -617,10 +617,23 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-                    1 + 2
+                    1 + 2 + 3
                 "#
             ),
-            3,
+            6,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_sub_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 - 2 - 3
+                "#
+            ),
+            -4,
             i64
         );
     }
