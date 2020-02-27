@@ -44,7 +44,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
     use crate::mono::expr::Expr::*;
 
     match expr {
-        Int(num) => env.context.i64_type().const_int(*num as u64, false).into(),
+        Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
         Float(num) => env.context.f64_type().const_float(*num).into(),
         Cond {
             cond_lhs,
