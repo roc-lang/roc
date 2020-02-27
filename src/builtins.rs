@@ -208,6 +208,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // mul or (*) : Num a, Num a -> Num a
+    add_type(
+        Symbol::NUM_MUL,
+        SolvedType::Func(
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(num_type(flex(TVAR1))),
+        ),
+    );
+
     // abs : Num a -> Num a
     add_type(
         Symbol::NUM_ABS,
