@@ -242,6 +242,7 @@ fn layout_from_flat_type<'a>(
                                   // }
                             }
                         }
+                        TagName::Private(Symbol::STR_AT_STR) => Ok(Layout::Builtin(Builtin::Str)),
                         TagName::Private(symbol) => {
                             panic!("TODO emit wrapped private tag for {:?} {:?}", symbol, args);
                         }

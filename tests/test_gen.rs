@@ -279,13 +279,16 @@ mod test_gen {
 
             builder.build_return(Some(&ret));
 
+            // Uncomment this to see the module's un-optimized LLVM instruction output:
+            // env.module.print_to_stderr();
+
             if main_fn.verify(true) {
                 fpm.run_on(&main_fn);
             } else {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
-            // Uncomment this to see the module's LLVM instruction output:
+            // Uncomment this to see the module's optimized LLVM instruction output:
             // env.module.print_to_stderr();
 
             let execution_engine = env
