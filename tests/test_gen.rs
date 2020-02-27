@@ -34,7 +34,9 @@ mod test_gen {
     use roc::mono::expr::Expr;
     use roc::mono::layout::Layout;
     use roc::subs::Subs;
+    use std::ffi::{CStr, CString};
     use std::mem;
+    use std::os::raw::c_char;
     use target_lexicon::HOST;
 
     macro_rules! assert_crane_evals_to {
@@ -325,6 +327,16 @@ mod test_gen {
                 assert_llvm_evals_to!($src, $expected, $ty, $transform);
             }
         };
+    }
+
+    #[test]
+    fn basic_str() {
+        assert_llvm_evals_to!(
+            "\"shirt and hat\"",
+            CString::new("shirt and hat").unwrap().as_c_str(),
+            *const c_char,
+            CStr::from_ptr
+        );
     }
 
     #[test]
