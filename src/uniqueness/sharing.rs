@@ -16,6 +16,15 @@ pub struct FieldAccess {
     fields: ImMap<Lowercase, Usage>,
 }
 
+impl IntoIterator for FieldAccess {
+    type Item = (Lowercase, Usage);
+    type IntoIter = im_rc::hashmap::ConsumingIter<(Lowercase, Usage)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fields.into_iter()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Usage {
     Simple(Mark),
@@ -29,7 +38,7 @@ pub enum Container {
     List,
 }
 
-trait Composable {
+pub trait Composable {
     fn sequential(&mut self, other: &Self);
     fn parallel(&mut self, other: &Self);
 }
@@ -59,6 +68,7 @@ impl Composable for FieldAccess {
     }
 
     fn parallel(&mut self, other: &Self) {
+        dbg!(&self, &other);
         for (field_name, other_usage) in other.fields.clone() {
             if self.fields.contains_key(&field_name) {
                 if let Some(self_usage) = self.fields.get_mut(&field_name) {
@@ -76,6 +86,7 @@ impl Composable for Usage {
         use Mark::*;
         use Usage::*;
 
+        println!("{:?} ~ {:?}", &self, &other);
         match (&self, other) {
             // Shared always wins
             (Simple(Shared), _) | (_, Simple(Shared)) => {
@@ -109,7 +120,7 @@ impl Composable for Usage {
                 let mut fa = fa1.clone();
                 fa.sequential(fa2);
 
-                let mut m = m1.clone();
+                let mut m = *m1;
                 m.sequential(m2);
 
                 *self = Access(*c1, m, fa);
@@ -117,10 +128,30 @@ impl Composable for Usage {
             (Access(c1, m, fa1), Simple(Unique)) => {
                 let mut copy = Access(*c1, *m, fa1.clone());
                 make_subtree_shared(&mut copy);
-                *self = copy;
+
+                // correct the mark of the top-level access
+                *self = if let Access(c, _, fa) = copy {
+                    let mut m = *m;
+                    m.sequential(&Unique);
+
+                    Access(c, m, fa)
+                } else {
+                    unreachable!()
+                };
             }
-            (Simple(Unique), Access(_, _, _)) => {
-                *self = Simple(Shared);
+            (Simple(Unique), Access(c, m, fa)) => {
+                let mut copy = Access(*c, *m, fa.clone());
+                make_subtree_shared(&mut copy);
+
+                // correct the mark of the top-level access
+                *self = if let Access(c, _, fa) = copy {
+                    let mut m = *m;
+                    m.sequential(&Unique);
+
+                    Access(c, m, fa)
+                } else {
+                    unreachable!()
+                };
             }
 
             (Simple(m1 @ Seen), Access(c1, m2, fa)) => {
@@ -150,7 +181,7 @@ impl Composable for Usage {
         match (&self, other) {
             (Simple(s1), Simple(s2)) => {
                 let mut s = s1.clone();
-                s.sequential(s2);
+                s.parallel(s2);
                 *self = Simple(s);
             }
 
@@ -190,15 +221,22 @@ impl Composable for Usage {
             }
 
             (Access(c1, m1, fa1), Access(c2, m2, fa2)) => {
+                println!("Access - Access");
                 debug_assert_eq!(c1, c2);
                 let mut m = m1.clone();
                 m.parallel(m2);
 
                 let mut fa = fa1.clone();
                 fa.parallel(fa2);
+                println!("Done");
                 *self = Access(*c1, m, fa)
             }
-            (Access(_, _, _), Simple(Unique)) | (Access(_, _, _), Simple(Seen)) => {
+            (Access(c, m, fa), Simple(Unique)) => {
+                let mut m = *m;
+                m.parallel(&Unique);
+                *self = Access(*c, m, fa.clone());
+            }
+            (Access(_, _, _), Simple(Seen)) => {
                 // *self = Access(*c1, *m, fa.clone());
             }
             (Simple(m1 @ Unique), Access(c1, m2, fa)) | (Simple(m1 @ Seen), Access(c1, m2, fa)) => {
@@ -291,7 +329,10 @@ fn make_subtree_shared(usage: &mut Usage) {
             for nested in fa.fields.iter_mut() {
                 make_subtree_shared(nested);
             }
-            *m = Shared;
+            *m = match &m {
+                Seen => Seen,
+                _ => Shared,
+            };
         }
     }
 }
@@ -327,7 +368,9 @@ impl VarUsage {
             }
         };
 
-        self.usage.insert(symbol.clone(), value);
+        println!("REGISTER {:?} {:?}", symbol, &value);
+
+        self.usage.insert(symbol, value);
     }
 
     pub fn register_shared(&mut self, symbol: Symbol) {
@@ -411,6 +454,17 @@ impl Usage {
 
         accum
     }
+
+    pub fn parallel_chain(&mut self, access_chain: Vec<Lowercase>) {
+        let other = Self::from_chain(access_chain);
+        self.parallel(&other);
+    }
+
+    pub fn sequential_chain(&mut self, access_chain: Vec<Lowercase>) {
+        let other = Self::from_chain(access_chain);
+        dbg!(&other);
+        self.sequential(&other);
+    }
 }
 
 impl FieldAccess {
@@ -419,22 +473,24 @@ impl FieldAccess {
             field_usage.parallel(constraint);
         }
     }
-}
 
-//     pub fn parallel(&mut self, access_chain: Vec<Lowercase>) {
-//         let other = Self::from_chain(access_chain);
-//         self.parallel_merge(&other);
-//     }
-//
-//     pub fn sequential(&mut self, access_chain: Vec<Lowercase>) {
-//         let other = Self::from_chain(access_chain);
-//         self.sequential_merge(&other);
-//     }
+    pub fn new(fields: ImMap<Lowercase, Usage>) -> Self {
+        FieldAccess { fields }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.fields.len()
+    }
+}
 
 pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
     use Expr::*;
 
-    match expr {
+    match dbg!(expr) {
         RuntimeError(_)
         | Int(_, _)
         | Float(_, _)

@@ -47,6 +47,11 @@ impl Bool {
         Bool(Variable(variable), atom_set)
     }
 
+    pub fn from_parts(free: Atom, rest: Vec<Atom>) -> Self {
+        let atom_set: SendSet<Atom> = rest.into_iter().collect();
+        Bool(free, atom_set)
+    }
+
     pub fn variables(&self) -> SendSet<Variable> {
         let mut result = SendSet::default();
 

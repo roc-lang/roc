@@ -19,7 +19,7 @@ use crate::types::Reason;
 use crate::types::Type::{self, *};
 use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use crate::uniqueness::builtins::{attr_type, list_type, str_type};
-use crate::uniqueness::sharing::{FieldAccess, Mark, Usage, VarUsage};
+use crate::uniqueness::sharing::{Container, FieldAccess, Mark, Usage, VarUsage};
 
 pub use crate::can::expr::Expr::*;
 
@@ -1186,9 +1186,11 @@ fn constrain_var(
 
             let mut variables = Vec::new();
             let (free, rest, inner_type) =
-                constrain_field_access(var_store, &field_access, &mut variables);
+                constrain_by_usage(&usage.expect("wut"), var_store, &mut variables);
 
-            let record_type = attr_type(Bool::with_free(free, rest), inner_type);
+            dbg!(&free, &rest, &inner_type);
+
+            let record_type = attr_type(Bool::from_parts(free, rest), inner_type);
 
             // NOTE breaking the expectation up like this REALLY matters!
             let new_expected = Expected::NoExpectation(record_type.clone());
@@ -1202,6 +1204,80 @@ fn constrain_var(
         }
 
         Some(other) => panic!("some other rc value: {:?}", other),
+    }
+}
+
+fn constrain_by_usage(
+    usage: &Usage,
+    var_store: &VarStore,
+    introduced: &mut Vec<Variable>,
+) -> (Atom, Vec<Atom>, Type) {
+    use Container::*;
+    use Mark::*;
+    use Usage::*;
+
+    match usage {
+        Simple(Shared) => {
+            let var = var_store.fresh();
+
+            introduced.push(var);
+
+            (Atom::Zero, vec![], Type::Variable(var))
+        }
+        Simple(Seen) | Simple(Unique) => {
+            let var = var_store.fresh();
+            let uvar = var_store.fresh();
+
+            introduced.push(var);
+            introduced.push(uvar);
+
+            (Atom::Variable(uvar), vec![], Type::Variable(var))
+        }
+        Usage::Update(Container::Record, _, fields) => todo!(),
+        Usage::Access(Container::Record, mark, fields) => {
+            let (record_uniq_var, atoms, ext_type) =
+                constrain_by_usage(&Simple(*mark), var_store, introduced);
+            debug_assert!(atoms.is_empty());
+
+            let mut field_types = SendMap::default();
+
+            if fields.is_empty() {
+                (
+                    record_uniq_var,
+                    vec![],
+                    Type::Record(field_types, Box::new(ext_type)),
+                )
+            } else {
+                let mut uniq_vars = Vec::with_capacity(fields.len());
+
+                for (lowercase, nested_usage) in fields.clone().into_iter() {
+                    let (uvar, atoms, nested_type) =
+                        constrain_by_usage(&nested_usage, var_store, introduced);
+
+                    for atom in &atoms {
+                        uniq_vars.push(*atom);
+                    }
+                    uniq_vars.push(uvar);
+
+                    let field_type = attr_type(Bool::from_parts(uvar, atoms), nested_type);
+
+                    field_types.insert(lowercase.clone(), field_type);
+                }
+                (
+                    record_uniq_var,
+                    uniq_vars,
+                    Type::Record(
+                        field_types,
+                        // TODO can we avoid doing Box::new on every single one of these?
+                        // For example, could we have a single lazy_static global Box they
+                        // could all share?
+                        Box::new(ext_type),
+                    ),
+                )
+            }
+        }
+        Usage::Update(Container::List, _, fields) => todo!(),
+        Usage::Access(Container::List, mark, fields) => todo!(),
     }
 }
 

@@ -1239,12 +1239,13 @@ mod test_infer_uniq {
                         v = r.x
                         w = r.y
 
-                        p = r
+                        # force alias after access (nested let-block)
+                        (p = r
 
-                        p
+                        p)
                 "#
             ),
-        "Attr * (Attr Shared { x : (Attr Shared a), y : (Attr Shared b) }c -> Attr Shared { x : (Attr Shared a), y : (Attr Shared b) }c)"
+        "Attr * (Attr a { x : (Attr Shared b), y : (Attr Shared c) }d -> Attr a { x : (Attr Shared b), y : (Attr Shared c) }d)"
         );
     }
 
@@ -1306,7 +1307,7 @@ mod test_infer_uniq {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e)"
+            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e)"
         );
     }
 
@@ -1341,7 +1342,8 @@ mod test_infer_uniq {
                             r.tic.tac.toe
                 "#
             ),
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | e) { bar : (Attr (b | e) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | d) { tac : (Attr (b | d) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | d | e) { bar : (Attr (b | d) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (b | c) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | e) { bar : (Attr (b | e) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | d) { tac : (Attr (b | d) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
             // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (b | c | e) { tac : (Attr (c | e) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
             // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (b | d | e) { tac : (Attr (b | d) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
         );
