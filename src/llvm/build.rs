@@ -180,6 +180,41 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .build_load(*ptr, symbol.ident_string(&env.interns)),
             None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
         },
+        Str(str_literal) => {
+            if str_literal.is_empty() {
+                panic!("TODO build an empty string in LLVM");
+            } else {
+                let ctx = env.context;
+                let builder = env.builder;
+                let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+
+                let byte_type = ctx.i8_type();
+                let nul_terminator = byte_type.const_zero();
+                let len = ctx.i32_type().const_int(bytes_len as u64, false);
+                let ptr = env
+                    .builder
+                    .build_array_malloc(ctx.i8_type(), len, "str_ptr")
+                    .unwrap();
+
+                // Copy the bytes from the string literal into the array
+                for (index, byte) in str_literal.bytes().enumerate() {
+                    let index = ctx.i32_type().const_int(index as u64, false).into();
+                    let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "byte") };
+
+                    builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
+                }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false).into();
+                let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
+
+                builder.build_store(elem_ptr, nul_terminator);
+
+                BasicValueEnum::PointerValue(ptr)
+            }
+        }
         _ => {
             panic!("I don't yet know how to LLVM build {:?}", expr);
         }
