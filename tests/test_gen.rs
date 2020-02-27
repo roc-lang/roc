@@ -613,6 +613,58 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_add_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 + 2 + 3
+                "#
+            ),
+            6,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_sub_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 - 2 - 3
+                "#
+            ),
+            -4,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_mul_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    2 * 4 * 6
+                "#
+            ),
+            48,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_order_of_arithmetic_ops() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 + 3 * 7 - 2
+                "#
+            ),
+            20,
+            i64
+        );
+    }
+
+    #[test]
     fn return_unnamed_fn() {
         assert_evals_to!(
             indoc!(
