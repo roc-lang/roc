@@ -3,6 +3,11 @@ use crate::can::ident::Lowercase;
 use crate::collections::{ImMap, ImSet};
 use crate::module::symbol::Symbol;
 use crate::region::Located;
+use crate::subs::Variable;
+
+// fake field names for container elements
+// e.g. for lists, internally it's a record with a `list_elem` field
+pub const LIST_ELEM: &str = "@list_elem";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
@@ -56,9 +61,16 @@ impl Composable for FieldAccess {
                         // (`foo.bar` itself and `.bar rec.foo`)
                         // Therefore fields of the subtrees must be shared!
 
-                        // TODO make this work!!
+                        // TODO make this work? Seems to function well without it
                         // self_nested.or_subtree(&Usage::Shared);
                         // other_nested.or_subtree(&Usage::Shared);
+                        //
+                        // member function on FieldAccess
+                        //    fn or_subtree(&mut self, constraint: &Usage) {
+                        //        for field_usage in self.fields.iter_mut() {
+                        //            field_usage.parallel(constraint);
+                        //        }
+                        //    }
                     }
                 }
             } else {
@@ -68,7 +80,6 @@ impl Composable for FieldAccess {
     }
 
     fn parallel(&mut self, other: &Self) {
-        dbg!(&self, &other);
         for (field_name, other_usage) in other.fields.clone() {
             if self.fields.contains_key(&field_name) {
                 if let Some(self_usage) = self.fields.get_mut(&field_name) {
@@ -86,7 +97,6 @@ impl Composable for Usage {
         use Mark::*;
         use Usage::*;
 
-        println!("{:?} ~ {:?}", &self, &other);
         match (&self, other) {
             // Shared always wins
             (Simple(Shared), _) | (_, Simple(Shared)) => {
@@ -155,19 +165,19 @@ impl Composable for Usage {
             }
 
             (Simple(m1 @ Seen), Access(c1, m2, fa)) => {
-                let mut m = m1.clone();
+                let mut m = *m1;
                 m.sequential(m2);
                 *self = Access(*c1, m, fa.clone())
             }
 
             (Access(c1, m1, fa), Simple(m2 @ Seen)) => {
-                let mut m = m1.clone();
+                let mut m = *m1;
                 m.sequential(m2);
                 *self = Access(*c1, m, fa.clone());
             }
 
             (Simple(s1), Simple(s2)) => {
-                let mut s = s1.clone();
+                let mut s = *s1;
                 s.sequential(s2);
                 *self = Simple(s);
             }
@@ -180,7 +190,7 @@ impl Composable for Usage {
 
         match (&self, other) {
             (Simple(s1), Simple(s2)) => {
-                let mut s = s1.clone();
+                let mut s = *s1;
                 s.parallel(s2);
                 *self = Simple(s);
             }
@@ -221,14 +231,12 @@ impl Composable for Usage {
             }
 
             (Access(c1, m1, fa1), Access(c2, m2, fa2)) => {
-                println!("Access - Access");
                 debug_assert_eq!(c1, c2);
-                let mut m = m1.clone();
+                let mut m = *m1;
                 m.parallel(m2);
 
                 let mut fa = fa1.clone();
                 fa.parallel(fa2);
-                println!("Done");
                 *self = Access(*c1, m, fa)
             }
             (Access(c, m, fa), Simple(Unique)) => {
@@ -240,7 +248,7 @@ impl Composable for Usage {
                 // *self = Access(*c1, *m, fa.clone());
             }
             (Simple(m1 @ Unique), Access(c1, m2, fa)) | (Simple(m1 @ Seen), Access(c1, m2, fa)) => {
-                let mut m = m1.clone();
+                let mut m = *m1;
                 m.sequential(m2);
                 *self = Access(*c1, m, fa.clone());
             }
@@ -301,12 +309,12 @@ fn correct_overwritten(
 
     // fields that are accessed, but not overwritten in the update, must be shared!
     for (label, usage) in fa1.fields.clone().keys().zip(fa1.fields.iter_mut()) {
-        if !overwritten.contains(&label.clone().into()) {
+        if !overwritten.contains(&label.clone()) {
             make_subtree_shared(usage);
         }
     }
 
-    Update(c, overwritten.clone(), fa1.clone())
+    Update(c, overwritten.clone(), fa1)
 }
 
 fn make_subtree_shared(usage: &mut Usage) {
@@ -367,8 +375,6 @@ impl VarUsage {
                 current
             }
         };
-
-        println!("REGISTER {:?} {:?}", symbol, &value);
 
         self.usage.insert(symbol, value);
     }
@@ -462,18 +468,11 @@ impl Usage {
 
     pub fn sequential_chain(&mut self, access_chain: Vec<Lowercase>) {
         let other = Self::from_chain(access_chain);
-        dbg!(&other);
         self.sequential(&other);
     }
 }
 
 impl FieldAccess {
-    fn or_subtree(&mut self, constraint: &Usage) {
-        for field_usage in self.fields.iter_mut() {
-            field_usage.parallel(constraint);
-        }
-    }
-
     pub fn new(fields: ImMap<Lowercase, Usage>) -> Self {
         FieldAccess { fields }
     }
@@ -485,12 +484,41 @@ impl FieldAccess {
     pub fn len(&self) -> usize {
         self.fields.len()
     }
+
+    pub fn get(&self, key: &Lowercase) -> Option<&Usage> {
+        self.fields.get(key)
+    }
+
+    pub fn list_access() -> Self {
+        use Mark::*;
+        use Usage::*;
+
+        let mut result = Self::default();
+        result.fields.insert(LIST_ELEM.into(), Simple(Unique));
+
+        result
+    }
+
+    pub fn list_seen() -> Self {
+        Self::default()
+    }
+
+    pub fn list_update() -> Self {
+        use Mark::*;
+        use Usage::*;
+
+        // TODO maybe this should be a different key so accessed items are never in overwritten and kept unique
+        let mut result = Self::default();
+        result.fields.insert(LIST_ELEM.into(), Simple(Seen));
+
+        result
+    }
 }
 
 pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
     use Expr::*;
 
-    match dbg!(expr) {
+    match expr {
         RuntimeError(_)
         | Int(_, _)
         | Float(_, _)
@@ -587,10 +615,16 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
             annotate_usage(&loc_expr.value, usage);
         }
         Call(fun, loc_args, _) => {
-            annotate_usage(&fun.1.value, usage);
+            if let Var(symbol) = fun.1.value {
+                // call by name
+                special_case_builtins(usage, symbol, loc_args);
+            } else {
+                // unknown call
+                annotate_usage(&fun.1.value, usage);
 
-            for (_, arg) in loc_args {
-                annotate_usage(&arg.value, usage);
+                for (_, arg) in loc_args {
+                    annotate_usage(&arg.value, usage);
+                }
             }
         }
         Closure(_, _, _, _, body) => {
@@ -656,10 +690,76 @@ fn get_access_chain<'a>(expr: &'a Expr, chain: &mut Vec<Lowercase>) -> Option<&'
     }
 }
 
-#[allow(dead_code)]
-fn special_case_builtins(usage: &mut VarUsage, symbol: Symbol, loc_args: Vec<Located<Expr>>) {
+fn special_case_builtins(
+    usage: &mut VarUsage,
+    symbol: Symbol,
+    loc_args: &[(Variable, Located<Expr>)],
+) {
+    use Expr::Var;
+    use Mark::*;
     use Usage::*;
     match symbol {
-        _ => {}
+        Symbol::LIST_GET => {
+            debug_assert!(loc_args.len() == 2);
+
+            let loc_list = &loc_args[0].1;
+            let loc_index = &loc_args[1].1;
+
+            if let Var(list_var) = loc_list.value {
+                usage.register_with(
+                    list_var,
+                    &Access(Container::List, Seen, FieldAccess::list_access()),
+                );
+            } else {
+                annotate_usage(&loc_list.value, usage);
+            }
+            annotate_usage(&loc_index.value, usage);
+        }
+
+        Symbol::LIST_SET => {
+            debug_assert!(loc_args.len() == 3);
+
+            let loc_list = &loc_args[0].1;
+            let loc_index = &loc_args[1].1;
+            let loc_value = &loc_args[2].1;
+
+            if let Var(list_var) = loc_list.value {
+                usage.register_with(
+                    list_var,
+                    &Update(
+                        Container::List,
+                        ImSet::default(),
+                        FieldAccess::list_update(),
+                    ),
+                );
+            } else {
+                annotate_usage(&loc_list.value, usage);
+            }
+            annotate_usage(&loc_index.value, usage);
+            annotate_usage(&loc_value.value, usage);
+        }
+
+        Symbol::LIST_ISEMPTY => {
+            debug_assert!(loc_args.len() == 1);
+
+            let loc_list = &loc_args[0].1;
+
+            if let Var(list_var) = loc_list.value {
+                usage.register_with(
+                    list_var,
+                    &Access(Container::List, Seen, FieldAccess::list_seen()),
+                );
+            } else {
+                annotate_usage(&loc_list.value, usage);
+            }
+        }
+
+        _ => {
+            usage.register_unique(symbol);
+
+            for (_, arg) in loc_args {
+                annotate_usage(&arg.value, usage);
+            }
+        }
     }
 }

@@ -15,8 +15,8 @@ mod test_usage_analysis {
     use crate::helpers::{can_expr, test_home, CanExprOut};
     use roc::can::ident::Lowercase;
     use roc::collections::{ImMap, ImSet};
-    use roc::module::symbol::Interns;
-    use roc::uniqueness::sharing::Composable;
+    use roc::module::symbol::{Interns, Symbol};
+    use roc::uniqueness::sharing;
     use roc::uniqueness::sharing::FieldAccess;
     use roc::uniqueness::sharing::VarUsage;
     use roc::uniqueness::sharing::{Container, Mark, Usage};
@@ -36,10 +36,8 @@ mod test_usage_analysis {
 
         for access in accesses {
             let temp: Vec<Lowercase> = access.into_iter().map(|v| v.into()).collect();
-            dbg!(&usage);
             usage.sequential_chain(temp);
         }
-        dbg!(&usage);
 
         match usage {
             Usage::Access(_, _, fields) => {
@@ -711,6 +709,112 @@ mod test_usage_analysis {
 
                 usage.register_with(r, &access_r);
                 usage.register_with(s, &access_s);
+
+                usage
+            },
+        );
+    }
+    #[test]
+    fn list_repeated_get() {
+        usage_eq(
+            indoc!(
+                r#"
+                    \r ->
+                        p = List.get r 0
+                        q = List.get r 0 
+
+                        r
+                "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let access = Access(
+                    List,
+                    Unique,
+                    field_access(hashmap![
+                        sharing::LIST_ELEM => Simple(Shared),
+                    ]),
+                );
+
+                let r = interns.symbol(home, "r".into());
+
+                usage.register_with(r, &access);
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn list_get_then_set() {
+        usage_eq(
+            indoc!(
+                r#"
+                list = [1,2,3]
+
+                when List.get list 0 is
+                    Ok v -> 
+                        List.set list 0 (v + 1)
+
+                    Err _ -> 
+                        list
+               "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let access = Update(
+                    List,
+                    ImSet::default(),
+                    field_access(hashmap![
+                        sharing::LIST_ELEM => Simple(Shared),
+                    ]),
+                );
+
+                let r = interns.symbol(home, "list".into());
+                let v = interns.symbol(home, "v".into());
+
+                usage.register_with(r, &access);
+
+                usage.register_unique(v);
+                usage.register_unique(Symbol::NUM_ADD);
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn list_is_empty_then_set() {
+        usage_eq(
+            indoc!(
+                r#"
+                list = [1,2,3]
+
+                if List.isEmpty list then
+                    list
+                else
+                    List.set list 0 42
+               "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let access = Update(
+                    List,
+                    ImSet::default(),
+                    field_access(hashmap![
+                        sharing::LIST_ELEM => Simple(Seen),
+                    ]),
+                );
+
+                let r = interns.symbol(home, "list".into());
+
+                usage.register_with(r, &access);
 
                 usage
             },

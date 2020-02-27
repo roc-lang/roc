@@ -1404,8 +1404,7 @@ mod test_infer_uniq {
                     swap
                 "#
             ),
-            // TODO have sharing analysis count List.get and List.set differently
-            "Attr * (Attr Shared Int, Attr Shared Int, Attr Shared (List (Attr b a)) -> Attr * (List (Attr b a)))"
+            "Attr * (Attr Shared Int, Attr Shared Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))"
         );
     }
 
@@ -1463,7 +1462,7 @@ mod test_infer_uniq {
                 quicksort
                    "#
             ),
-            "Attr Shared (Attr Shared (List (Attr b (Num (Attr c a)))), Attr Shared Int, Attr Shared Int -> Attr Shared (List (Attr b (Num (Attr c a)))))"
+            "Attr Shared (Attr b (List (Attr Shared (Num (Attr c a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr c a)))))"
         );
     }
 
@@ -1971,6 +1970,56 @@ mod test_infer_uniq {
                "#
             ),
             "Attr * Int",
+        );
+    }
+
+    #[test]
+    fn list_repeated_get() {
+        infer_eq(
+            indoc!(
+                r#"
+                \list -> 
+                    p = List.get list 1
+                    q = List.get list 1
+
+                    { p, q }
+               "#
+            ),
+            "Attr * (Attr * (List (Attr Shared a)) -> Attr * { p : (Attr * (Result (Attr Shared a) (Attr * [ IndexOutOfBounds ]*))), q : (Attr * (Result (Attr Shared a) (Attr * [ IndexOutOfBounds ]*))) })"
+        );
+    }
+
+    #[test]
+    fn list_get_then_set() {
+        infer_eq(
+            indoc!(
+                r#"
+                \list -> 
+                    when List.get list 0 is
+                        Ok v -> 
+                            List.set list 0 (v + 1)
+
+                        Err _ -> 
+                            list
+               "#
+            ),
+            "Attr * (Attr a (List (Attr Shared Int)) -> Attr a (List (Attr Shared Int)))",
+        );
+    }
+
+    #[test]
+    fn list_is_empty_then_set() {
+        infer_eq(
+            indoc!(
+                r#"
+                \list -> 
+                    if List.isEmpty list then
+                        list
+                    else
+                        List.set list 0 42
+               "#
+            ),
+            "Attr * (Attr (a | b) (List (Attr a Int)) -> Attr (a | b) (List (Attr a Int)))",
         );
     }
 }
