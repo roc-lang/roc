@@ -1239,12 +1239,13 @@ mod test_infer_uniq {
                         v = r.x
                         w = r.y
 
-                        p = r
+                        # force alias after access (nested let-block)
+                        (p = r
 
-                        p
+                        p)
                 "#
             ),
-        "Attr * (Attr Shared { x : (Attr Shared a), y : (Attr Shared b) }c -> Attr Shared { x : (Attr Shared a), y : (Attr Shared b) }c)"
+        "Attr * (Attr a { x : (Attr Shared b), y : (Attr Shared c) }d -> Attr a { x : (Attr Shared b), y : (Attr Shared c) }d)"
         );
     }
 
@@ -1288,7 +1289,7 @@ mod test_infer_uniq {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
+            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
         );
     }
 
@@ -1341,7 +1342,10 @@ mod test_infer_uniq {
                             r.tic.tac.toe
                 "#
             ),
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (c | d | e) { bar : (Attr (c | d) { baz : (Attr c f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (a | c) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (a | d | e) { tac : (Attr (d | e) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
+            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (c | d | e) { bar : (Attr (c | d) { baz : (Attr c f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (a | c) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
+            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | d | e) { bar : (Attr (b | d) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (b | c) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | e) { bar : (Attr (b | e) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | d) { tac : (Attr (b | d) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
             // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (b | c | e) { tac : (Attr (c | e) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
             // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (b | d | e) { tac : (Attr (b | d) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
         );
@@ -1389,7 +1393,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                    swap : Int, Int, List p -> List p
+                    swap : Int, Int, List a -> List a
                     swap = \i, j, list ->
                         when Pair (List.get list i) (List.get list j) is
                             Pair (Ok atI) (Ok atJ) ->
@@ -1402,8 +1406,7 @@ mod test_infer_uniq {
                     swap
                 "#
             ),
-            // TODO have sharing analysis count List.get and List.set differently
-            "Attr * (Attr Shared Int, Attr Shared Int, Attr Shared (List (Attr a p)) -> Attr * (List (Attr a p)))"
+            "Attr * (Attr Shared Int, Attr Shared Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))"
         );
     }
 
@@ -1461,7 +1464,7 @@ mod test_infer_uniq {
                 quicksort
                    "#
             ),
-            "Attr Shared (Attr Shared (List (Attr a (Num (Attr b a)))), Attr Shared Int, Attr Shared Int -> Attr Shared (List (Attr a (Num (Attr b a)))))"
+            "Attr Shared (Attr b (List (Attr Shared (Num (Attr c a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr c a)))))"
         );
     }
 
@@ -1969,6 +1972,56 @@ mod test_infer_uniq {
                "#
             ),
             "Attr * Int",
+        );
+    }
+
+    #[test]
+    fn list_repeated_get() {
+        infer_eq(
+            indoc!(
+                r#"
+                \list -> 
+                    p = List.get list 1
+                    q = List.get list 1
+
+                    { p, q }
+               "#
+            ),
+            "Attr * (Attr * (List (Attr Shared a)) -> Attr * { p : (Attr * (Result (Attr Shared a) (Attr * [ IndexOutOfBounds ]*))), q : (Attr * (Result (Attr Shared a) (Attr * [ IndexOutOfBounds ]*))) })"
+        );
+    }
+
+    #[test]
+    fn list_get_then_set() {
+        infer_eq(
+            indoc!(
+                r#"
+                \list -> 
+                    when List.get list 0 is
+                        Ok v -> 
+                            List.set list 0 (v + 1)
+
+                        Err _ -> 
+                            list
+               "#
+            ),
+            "Attr * (Attr a (List (Attr Shared Int)) -> Attr a (List (Attr Shared Int)))",
+        );
+    }
+
+    #[test]
+    fn list_is_empty_then_set() {
+        infer_eq(
+            indoc!(
+                r#"
+                \list -> 
+                    if List.isEmpty list then
+                        list
+                    else
+                        List.set list 0 42
+               "#
+            ),
+            "Attr * (Attr (a | b) (List (Attr a Int)) -> Attr (a | b) (List (Attr a Int)))",
         );
     }
 }

@@ -15,55 +15,90 @@ mod test_usage_analysis {
     use crate::helpers::{can_expr, test_home, CanExprOut};
     use roc::can::ident::Lowercase;
     use roc::collections::{ImMap, ImSet};
-    use roc::module::symbol::Interns;
+    use roc::module::symbol::{Interns, Symbol};
+    use roc::uniqueness::sharing;
     use roc::uniqueness::sharing::FieldAccess;
-    use roc::uniqueness::sharing::ReferenceCount::{self, *};
     use roc::uniqueness::sharing::VarUsage;
+    use roc::uniqueness::sharing::{Container, Mark, Usage};
+
+    use Container::*;
+    use Mark::*;
+    use Usage::*;
 
     fn field_access_seq(
         accesses: Vec<Vec<&str>>,
-        expected: std::collections::HashMap<&str, ReferenceCount>,
+        expected_ref: std::collections::HashMap<&str, Usage>,
     ) {
-        let mut state = FieldAccess::default();
+        use Mark::*;
+        use Usage::*;
+
+        let mut usage = Simple(Seen);
 
         for access in accesses {
             let temp: Vec<Lowercase> = access.into_iter().map(|v| v.into()).collect();
-            state.sequential(temp);
+            usage.sequential_chain(temp);
         }
 
-        let mut im_expected: std::collections::HashMap<String, ReferenceCount> =
-            std::collections::HashMap::default();
+        match usage {
+            Usage::Access(_, _, fields) => {
+                let mut actual: std::collections::HashMap<Lowercase, Usage> =
+                    std::collections::HashMap::default();
+                for (k, v) in fields.into_iter() {
+                    actual.insert(k, v);
+                }
 
-        for (k, v) in expected {
-            im_expected.insert(k.into(), v);
+                let mut expected = std::collections::HashMap::default();
+                for (k, v) in expected_ref {
+                    expected.insert(k.into(), v);
+                }
+
+                assert_eq!(actual, expected);
+            }
+            _ => panic!("Not an access, but {:?}", usage),
         }
-
-        let actual: std::collections::HashMap<String, ReferenceCount> = state.into();
-
-        assert_eq!(actual, im_expected);
     }
 
     fn field_access_par(
         accesses: Vec<Vec<&str>>,
-        expected: std::collections::HashMap<&str, ReferenceCount>,
+        expected_ref: std::collections::HashMap<&str, Usage>,
     ) {
-        let mut state = FieldAccess::default();
+        use Mark::*;
+        use Usage::*;
+
+        let mut usage = Simple(Seen);
 
         for access in accesses {
             let temp: Vec<Lowercase> = access.into_iter().map(|v| v.into()).collect();
-            state.parallel(temp);
+            usage.parallel_chain(temp);
         }
 
-        let mut im_expected: std::collections::HashMap<String, ReferenceCount> =
-            std::collections::HashMap::default();
+        match usage {
+            Usage::Access(_, _, fields) => {
+                let mut actual: std::collections::HashMap<Lowercase, Usage> =
+                    std::collections::HashMap::default();
+                for (k, v) in fields.into_iter() {
+                    actual.insert(k, v);
+                }
 
-        for (k, v) in expected {
-            im_expected.insert(k.into(), v);
+                let mut expected = std::collections::HashMap::default();
+                for (k, v) in expected_ref {
+                    expected.insert(k.into(), v);
+                }
+
+                assert_eq!(actual, expected);
+            }
+            _ => panic!("Not an access, but {:?}", usage),
+        }
+    }
+
+    fn field_access(fields: std::collections::HashMap<&str, Usage>) -> FieldAccess {
+        let mut new_fields = ImMap::default();
+
+        for (k, v) in fields {
+            new_fields.insert(k.into(), v);
         }
 
-        let actual: std::collections::HashMap<String, ReferenceCount> = state.into();
-
-        assert_eq!(actual, im_expected);
+        FieldAccess::new(new_fields)
     }
 
     #[test]
@@ -71,16 +106,16 @@ mod test_usage_analysis {
         field_access_seq(
             vec![vec!["foo"], vec!["bar"]],
             hashmap![
-                "foo" => Unique,
-                "bar" => Unique,
+                "foo" => Simple(Unique),
+                "bar" => Simple(Unique),
             ],
         );
 
         field_access_par(
             vec![vec!["foo"], vec!["bar"]],
             hashmap![
-                "foo" => Unique,
-                "bar" => Unique,
+                "foo" => Simple(Unique),
+                "bar" => Simple(Unique),
             ],
         );
     }
@@ -89,9 +124,7 @@ mod test_usage_analysis {
     fn usage_access_repeated_field_seq() {
         field_access_seq(
             vec![vec!["foo"], vec!["foo"]],
-            hashmap![
-                "foo" => Shared,
-            ],
+            hashmap![ "foo" => Simple(Shared) ],
         );
     }
 
@@ -100,7 +133,7 @@ mod test_usage_analysis {
         field_access_par(
             vec![vec!["foo"], vec!["foo"]],
             hashmap![
-                "foo" => Unique,
+                "foo" => Simple(Unique),
             ],
         );
     }
@@ -110,15 +143,14 @@ mod test_usage_analysis {
         field_access_seq(
             vec![vec!["foo", "bar"], vec!["foo"]],
             hashmap![
-                "foo" => Unique,
-                "foo.bar" => Shared,
+                "foo" => Access(Record, Unique, field_access(hashmap![ "bar" => Simple(Shared) ]))
             ],
         );
+
         field_access_seq(
             vec![vec!["foo"], vec!["foo", "bar"]],
             hashmap![
-                "foo" => Unique,
-                "foo.bar" => Shared,
+                "foo" => Access(Record, Unique, field_access(hashmap![ "bar" => Simple(Shared) ]))
             ],
         );
     }
@@ -127,15 +159,13 @@ mod test_usage_analysis {
         field_access_par(
             vec![vec!["foo", "bar"], vec!["foo"]],
             hashmap![
-                "foo" => Unique,
-                "foo.bar" => Unique,
+                "foo" => Access(Record, Unique, field_access(hashmap![ "bar" => Simple(Unique) ]))
             ],
         );
         field_access_par(
             vec![vec!["foo"], vec!["foo", "bar"]],
             hashmap![
-                "foo" => Unique,
-                "foo.bar" => Unique,
+                "foo" => Access(Record, Unique, field_access(hashmap![ "bar" => Simple(Unique) ]))
             ],
         );
     }
@@ -145,20 +175,17 @@ mod test_usage_analysis {
         field_access_seq(
             vec![vec!["foo", "bar", "baz"], vec!["foo", "bar"]],
             hashmap![
-                "foo" => Seen,
-                "foo.bar" => Unique,
-                "foo.bar.baz" => Shared,
+                "foo" => Access(Record, Seen, field_access(hashmap![ "bar" => Access(Record, Unique, field_access(hashmap![ "baz" => Simple(Shared) ]))]))
             ],
         );
         field_access_seq(
             vec![vec!["foo", "bar"], vec!["foo", "bar", "baz"]],
             hashmap![
-                "foo" => Seen,
-                "foo.bar" => Unique,
-                "foo.bar.baz" => Shared,
+                "foo" => Access(Record, Seen, field_access(hashmap![ "bar" => Access(Record, Unique, field_access(hashmap![ "baz" => Simple(Shared) ]))]))
             ],
         );
     }
+
     fn usage_eq<F>(src: &str, get_expected: F)
     where
         F: FnOnce(Interns) -> VarUsage,
@@ -192,9 +219,9 @@ mod test_usage_analysis {
                 let home = test_home();
                 let mut usage = VarUsage::default();
 
-                usage.register_with(interns.symbol(home, "m".into()), &Unique);
-                usage.register_with(interns.symbol(home, "n".into()), &Unique);
-                usage.register_with(interns.symbol(home, "factorial".into()), &Shared);
+                usage.register_unique(interns.symbol(home, "m".into()));
+                usage.register_unique(interns.symbol(home, "n".into()));
+                usage.register_shared(interns.symbol(home, "factorial".into()));
 
                 usage
             },
@@ -213,11 +240,14 @@ mod test_usage_analysis {
             |interns| {
                 let home = test_home();
                 let mut usage = VarUsage::default();
-                let fa = FieldAccess::from_chain(vec!["foo".into()]);
 
                 usage.register_with(
                     interns.symbol(home, "rec".into()),
-                    &ReferenceCount::Access(fa),
+                    &Access(
+                        Record,
+                        Seen,
+                        field_access(hashmap![ "foo" => Simple(Unique) ]),
+                    ),
                 );
 
                 usage
@@ -237,12 +267,15 @@ mod test_usage_analysis {
             |interns| {
                 let home = test_home();
                 let mut usage = VarUsage::default();
-                let fa = FieldAccess::from_chain(vec!["foo".into()]);
 
                 let overwritten = hashset!["foo".into()].into();
                 usage.register_with(
                     interns.symbol(home, "rec".into()),
-                    &ReferenceCount::Update(overwritten, fa),
+                    &Update(
+                        Record,
+                        overwritten,
+                        field_access(hashmap![ "foo" => Simple(Unique) ]),
+                    ),
                 );
 
                 usage
@@ -264,7 +297,7 @@ mod test_usage_analysis {
             |interns| {
                 let home = test_home();
                 let mut usage = VarUsage::default();
-                usage.register_with(interns.symbol(home, "rec".into()), &ReferenceCount::Shared);
+                usage.register_with(interns.symbol(home, "rec".into()), &Simple(Shared));
 
                 usage
             },
@@ -285,15 +318,14 @@ mod test_usage_analysis {
             |interns| {
                 let home = test_home();
                 let mut usage = VarUsage::default();
-                let mut fields = ImMap::default();
-                fields.insert(
-                    "foo".into(),
-                    (ReferenceCount::Shared, FieldAccess::default()),
-                );
-                let fa = FieldAccess { fields: fields };
+
                 usage.register_with(
                     interns.symbol(home, "rec".into()),
-                    &ReferenceCount::Update(ImSet::default(), fa),
+                    &Access(
+                        Record,
+                        Unique,
+                        field_access(hashmap![ "foo" => Simple(Shared) ]),
+                    ),
                 );
 
                 usage
@@ -310,17 +342,27 @@ mod test_usage_analysis {
                         v = r.x
                         w = r.y
 
-                        p = r
+                        # nested let-block. Force the assignement after the access
+                        (p = r
 
-                        p
+                        p)
                 "#
             ),
             |interns| {
                 let home = test_home();
+                println!("---- test -----");
                 let mut usage = VarUsage::default();
 
-                usage.register_with(interns.symbol(home, "p".into()), &ReferenceCount::Unique);
-                usage.register_with(interns.symbol(home, "r".into()), &ReferenceCount::Shared);
+                let fa = field_access(hashmap![
+                    "x" => Simple(Shared),
+                    "y" => Simple(Shared),
+                ]);
+
+                usage.register_unique(interns.symbol(home, "p".into()));
+                usage.register_with(
+                    interns.symbol(home, "r".into()),
+                    &Access(Record, Unique, fa),
+                );
 
                 usage
             },
@@ -343,26 +385,17 @@ mod test_usage_analysis {
                 let home = test_home();
                 let mut usage = VarUsage::default();
 
-                let mut nested_fields = ImMap::default();
-                nested_fields.insert(
-                    "bar".into(),
-                    (ReferenceCount::Shared, FieldAccess::default()),
-                );
-                nested_fields.insert(
-                    "baz".into(),
-                    (ReferenceCount::Shared, FieldAccess::default()),
-                );
-                let nested_fa = FieldAccess {
-                    fields: nested_fields,
-                };
+                let fa = field_access(hashmap![
+                    "foo" =>
+                        Access(Record, Seen, field_access(hashmap![
+                            "bar" => Simple(Shared),
+                            "baz" => Simple(Shared),
+                        ]))
+                ]);
 
-                let mut fields = ImMap::default();
-                fields.insert("foo".into(), (ReferenceCount::Seen, nested_fa));
-
-                let fa = FieldAccess { fields: fields };
                 usage.register_with(
                     interns.symbol(home, "r".into()),
-                    &ReferenceCount::Update(ImSet::default(), fa),
+                    &Access(Record, Unique, fa),
                 );
 
                 usage
@@ -388,24 +421,22 @@ mod test_usage_analysis {
                 let home = test_home();
                 let mut usage = VarUsage::default();
 
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
-                let fa = FieldAccess { fields: fields };
+                let r = interns.symbol(home, "r".into());
+                let s = interns.symbol(home, "s".into());
+
                 let overwritten = hashset!["y".into()].into();
-                usage.register_with(
-                    interns.symbol(home, "r".into()),
-                    &ReferenceCount::Update(overwritten, fa),
-                );
+                let fa = field_access(hashmap![
+                    "x" => Simple(Shared),
+                ]);
 
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                let fa = FieldAccess { fields: fields };
-                usage.register_with(
-                    interns.symbol(home, "s".into()),
-                    &ReferenceCount::Access(fa),
-                );
+                usage.register_with(r, &Update(Record, overwritten, fa));
 
+                let fa = field_access(hashmap![
+                    "x" => Simple(Unique),
+                    "y" => Simple(Unique),
+                ]);
+
+                usage.register_with(s, &Access(Record, Seen, fa));
                 usage
             },
         );
@@ -427,24 +458,24 @@ mod test_usage_analysis {
             ),
             |interns| {
                 let home = test_home();
-                // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
                 let mut usage = VarUsage::default();
 
-                let fa = FieldAccess::from_chain(vec!["x".into()]);
-                let overwritten = hashset!["x".into(), "y".into()].into();
-                usage.register_with(
-                    interns.symbol(home, "r".into()),
-                    &ReferenceCount::Update(overwritten, fa),
-                );
+                let r = interns.symbol(home, "r".into());
+                let s = interns.symbol(home, "s".into());
 
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                let fa = FieldAccess { fields: fields };
-                usage.register_with(
-                    interns.symbol(home, "s".into()),
-                    &ReferenceCount::Access(fa),
-                );
+                let overwritten = hashset!["x".into(), "y".into()].into();
+                let fa = field_access(hashmap![
+                    "x" => Simple(Unique),
+                ]);
+
+                usage.register_with(r, &Update(Record, overwritten, fa));
+
+                let fa = field_access(hashmap![
+                    "x" => Simple(Unique),
+                    "y" => Simple(Unique),
+                ]);
+
+                usage.register_with(s, &Access(Record, Seen, fa));
 
                 usage
             },
@@ -466,14 +497,14 @@ mod test_usage_analysis {
                 // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
                 let mut usage = VarUsage::default();
 
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                let fa = FieldAccess { fields: fields };
-                usage.register_with(
-                    interns.symbol(home, "r".into()),
-                    &ReferenceCount::Access(fa),
-                );
+                let r = interns.symbol(home, "r".into());
+
+                let fa = field_access(hashmap![
+                    "x" => Simple(Unique),
+                    "y" => Simple(Unique),
+                ]);
+
+                usage.register_with(r, &Access(Record, Seen, fa));
 
                 usage
             },
@@ -492,16 +523,17 @@ mod test_usage_analysis {
             ),
             |interns| {
                 let home = test_home();
-                // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
                 let mut usage = VarUsage::default();
 
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
-                let fa = FieldAccess { fields: fields };
-                usage.register_with(
-                    interns.symbol(home, "r".into()),
-                    &ReferenceCount::Update(hashset!["y".into()].into(), fa),
-                );
+                let r = interns.symbol(home, "r".into());
+
+                let fa = field_access(hashmap![
+                    "x" => Simple(Shared),
+                ]);
+
+                let overwritten = hashset!["y".into()].into();
+
+                usage.register_with(r, &Update(Record, overwritten, fa));
 
                 usage
             },
@@ -520,18 +552,18 @@ mod test_usage_analysis {
             ),
             |interns| {
                 let home = test_home();
-                // pub fields: ImMap<String, (ReferenceCount, FieldAccess)>,
                 let mut usage = VarUsage::default();
 
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                let fa = FieldAccess { fields: fields };
-                usage.register_with(
-                    interns.symbol(home, "r".into()),
-                    &ReferenceCount::Access(fa),
+                let access = Access(
+                    Record,
+                    Seen,
+                    field_access(hashmap![
+                        "x" => Simple(Unique),
+                        "y" => Simple(Unique)
+                    ]),
                 );
 
+                usage.register_with(interns.symbol(home, "r".into()), &access);
                 usage
             },
         );
@@ -549,8 +581,8 @@ mod test_usage_analysis {
                 let home = test_home();
                 let mut usage = VarUsage::default();
 
-                usage.register_with(Interns::from_index(home, 1), &ReferenceCount::Unique);
-                usage.register_with(Interns::from_index(home, 3), &ReferenceCount::Unique);
+                usage.register_unique(Interns::from_index(home, 1));
+                usage.register_unique(Interns::from_index(home, 3));
 
                 usage
             },
@@ -575,19 +607,22 @@ mod test_usage_analysis {
                 let mut usage = VarUsage::default();
                 let home = test_home();
 
-                let mut fields = ImMap::default();
-                fields.insert("y".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                let fa_r = FieldAccess { fields: fields };
-
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
-                let fa_s = FieldAccess { fields: fields };
+                let access_r = Access(
+                    Record,
+                    Seen,
+                    field_access(hashmap![ "y" => Simple(Unique) ]),
+                );
+                let access_s = Access(
+                    Record,
+                    Seen,
+                    field_access(hashmap![ "x" => Simple(Shared) ]),
+                );
 
                 let r = interns.symbol(home, "r".into());
                 let s = interns.symbol(home, "s".into());
 
-                usage.register_with(r, &ReferenceCount::Access(fa_r));
-                usage.register_with(s, &ReferenceCount::Access(fa_s));
+                usage.register_with(r, &access_r);
+                usage.register_with(s, &access_s);
 
                 usage
             },
@@ -613,19 +648,173 @@ mod test_usage_analysis {
                 let mut usage = VarUsage::default();
                 let home = test_home();
 
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Unique, FieldAccess::default()));
-                let fa_r = FieldAccess { fields: fields };
-
-                let mut fields = ImMap::default();
-                fields.insert("x".into(), (ReferenceCount::Shared, FieldAccess::default()));
-                let fa_s = FieldAccess { fields: fields };
+                let access_r = Access(
+                    Record,
+                    Seen,
+                    field_access(hashmap![ "x" => Simple(Unique) ]),
+                );
+                let access_s = Access(
+                    Record,
+                    Seen,
+                    field_access(hashmap![ "x" => Simple(Shared) ]),
+                );
 
                 let r = interns.symbol(home, "r".into());
                 let s = interns.symbol(home, "s".into());
 
-                usage.register_with(r, &ReferenceCount::Access(fa_r));
-                usage.register_with(s, &ReferenceCount::Access(fa_s));
+                usage.register_with(r, &access_r);
+                usage.register_with(s, &access_s);
+
+                usage
+            },
+        );
+    }
+    #[test]
+    fn record_update_is_safe() {
+        usage_eq(
+            indoc!(
+                r#"
+                    \r ->
+
+                        s = { r & y: r.x }
+
+                        p = s.x
+                        q = s.y
+
+                        s
+                "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let overwritten = hashset!["y".into()].into();
+                let access_r = Update(
+                    Record,
+                    overwritten,
+                    field_access(hashmap![ "x" => Simple(Shared) ]),
+                );
+
+                let access_s = Access(
+                    Record,
+                    Unique,
+                    field_access(hashmap![
+                        "x" => Simple(Shared),
+                        "y" => Simple(Shared)
+                    ]),
+                );
+
+                let r = interns.symbol(home, "r".into());
+                let s = interns.symbol(home, "s".into());
+
+                usage.register_with(r, &access_r);
+                usage.register_with(s, &access_s);
+
+                usage
+            },
+        );
+    }
+    #[test]
+    fn list_repeated_get() {
+        usage_eq(
+            indoc!(
+                r#"
+                    \r ->
+                        p = List.get r 0
+                        q = List.get r 0 
+
+                        r
+                "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let access = Access(
+                    List,
+                    Unique,
+                    field_access(hashmap![
+                        sharing::LIST_ELEM => Simple(Shared),
+                    ]),
+                );
+
+                let r = interns.symbol(home, "r".into());
+
+                usage.register_with(r, &access);
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn list_get_then_set() {
+        usage_eq(
+            indoc!(
+                r#"
+                list = [1,2,3]
+
+                when List.get list 0 is
+                    Ok v -> 
+                        List.set list 0 (v + 1)
+
+                    Err _ -> 
+                        list
+               "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let access = Update(
+                    List,
+                    ImSet::default(),
+                    field_access(hashmap![
+                        sharing::LIST_ELEM => Simple(Shared),
+                    ]),
+                );
+
+                let r = interns.symbol(home, "list".into());
+                let v = interns.symbol(home, "v".into());
+
+                usage.register_with(r, &access);
+
+                usage.register_unique(v);
+                usage.register_unique(Symbol::NUM_ADD);
+
+                usage
+            },
+        );
+    }
+
+    #[test]
+    fn list_is_empty_then_set() {
+        usage_eq(
+            indoc!(
+                r#"
+                list = [1,2,3]
+
+                if List.isEmpty list then
+                    list
+                else
+                    List.set list 0 42
+               "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                let access = Update(
+                    List,
+                    ImSet::default(),
+                    field_access(hashmap![
+                        sharing::LIST_ELEM => Simple(Seen),
+                    ]),
+                );
+
+                let r = interns.symbol(home, "list".into());
+
+                usage.register_with(r, &access);
 
                 usage
             },
