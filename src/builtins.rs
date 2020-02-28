@@ -336,6 +336,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![bool_type(), bool_type()], Box::new(bool_type())),
     );
 
+    // xor : Bool, Bool -> Bool
+    add_type(
+        Symbol::BOOL_XOR,
+        SolvedType::Func(vec![bool_type(), bool_type()], Box::new(bool_type())),
+    );
+
+    // not : Bool -> Bool
+    add_type(
+        Symbol::BOOL_NOT,
+        SolvedType::Func(vec![bool_type()], Box::new(bool_type())),
+    );
+
     // Str module
 
     // isEmpty : Str -> Bool
