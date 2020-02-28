@@ -5,10 +5,11 @@ use crate::collections::{ImMap, MutMap, SendMap};
 use crate::constrain::expr::constrain_decls;
 use crate::module::symbol::{ModuleId, Symbol};
 use crate::region::Located;
-use crate::solve::{BuiltinAlias, SolvedType};
+use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
 use crate::subs::{VarId, VarStore, Variable};
 use crate::types::{Alias, Constraint, LetConstraint, Type};
 use crate::uniqueness;
+use crate::uniqueness::boolean_algebra::{Atom, Bool};
 
 #[inline(always)]
 pub fn constrain_module(
@@ -239,7 +240,16 @@ pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &V
                 Box::new(to_type(ext, free_vars, var_store)),
             )
         }
-        Boolean(val) => Type::Boolean(val.clone()),
+        Boolean(solved_free, solved_rest) => {
+            let free = to_atom(solved_free, free_vars, var_store);
+            let mut rest = Vec::with_capacity(solved_rest.len());
+
+            for solved_atom in solved_rest {
+                rest.push(to_atom(solved_atom, free_vars, var_store));
+            }
+
+            Type::Boolean(Bool::from_parts(free, rest))
+        }
         Alias(symbol, solved_type_variables, solved_actual) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
@@ -255,6 +265,23 @@ pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &V
             panic!("TODO convert from SolvedType::Error to Type somehow");
         }
         Erroneous(problem) => Type::Erroneous(problem.clone()),
+    }
+}
+
+pub fn to_atom(solved_atom: &SolvedAtom, free_vars: &mut FreeVars, var_store: &VarStore) -> Atom {
+    match solved_atom {
+        SolvedAtom::Zero => Atom::Zero,
+        SolvedAtom::One => Atom::One,
+        SolvedAtom::Variable(var_id) => {
+            if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
+                Atom::Variable(*var)
+            } else {
+                let var = var_store.fresh();
+                free_vars.unnamed_vars.insert(*var_id, var);
+
+                Atom::Variable(var)
+            }
+        }
     }
 }
 

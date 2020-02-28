@@ -51,10 +51,30 @@ pub enum SolvedType {
     Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
 
     /// a boolean algebra Bool
-    Boolean(boolean_algebra::Bool),
+    Boolean(SolvedAtom, Vec<SolvedAtom>),
 
     /// A type error
     Error,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SolvedAtom {
+    Zero,
+    One,
+    Variable(VarId),
+}
+
+impl SolvedAtom {
+    pub fn from_atom(atom: boolean_algebra::Atom) -> Self {
+        use boolean_algebra::Atom::*;
+
+        // NOTE we blindly trust that `var` is a root and has a FlexVar as content
+        match atom {
+            Zero => SolvedAtom::Zero,
+            One => SolvedAtom::One,
+            Variable(var) => SolvedAtom::Variable(VarId::from_var(var)),
+        }
+    }
 }
 
 impl SolvedType {
@@ -152,7 +172,15 @@ impl SolvedType {
 
                 SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
             }
-            Boolean(val) => SolvedType::Boolean(val),
+            Boolean(val) => {
+                let free = SolvedAtom::from_atom(val.0);
+
+                let mut rest = Vec::with_capacity(val.1.len());
+                for atom in val.1 {
+                    rest.push(SolvedAtom::from_atom(atom));
+                }
+                SolvedType::Boolean(free, rest)
+            }
             Variable(var) => Self::from_var(solved_subs.inner(), var),
         }
     }
@@ -254,7 +282,15 @@ impl SolvedType {
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Boolean(val) => SolvedType::Boolean(val),
+            Boolean(val) => {
+                let free = SolvedAtom::from_atom(val.0);
+
+                let mut rest = Vec::with_capacity(val.1.len());
+                for atom in val.1 {
+                    rest.push(SolvedAtom::from_atom(atom));
+                }
+                SolvedType::Boolean(free, rest)
+            }
             Erroneous(problem) => SolvedType::Erroneous(problem),
         }
     }
