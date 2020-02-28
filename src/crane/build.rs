@@ -259,14 +259,14 @@ fn build_branch2<'a, B: Backend>(
     let ret = cranelift::frontend::Variable::with_u32(0);
 
     // The block we'll jump to once the switch has completed.
-    let ret_block = builder.create_ebb();
+    let ret_block = builder.create_block();
 
     builder.declare_var(ret, ret_type);
 
     let lhs = build_expr(env, scope, module, builder, branch.cond_lhs, procs);
     let rhs = build_expr(env, scope, module, builder, branch.cond_rhs, procs);
-    let pass_block = builder.create_ebb();
-    let fail_block = builder.create_ebb();
+    let pass_block = builder.create_block();
+    let fail_block = builder.create_block();
 
     match branch.cond_layout {
         Layout::Builtin(Builtin::Float64) => {
@@ -291,8 +291,8 @@ fn build_branch2<'a, B: Backend>(
     let mut build_branch = |expr, block| {
         builder.switch_to_block(block);
 
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
 
         // Mutate the ret variable to be the outcome of this branch.
@@ -310,8 +310,8 @@ fn build_branch2<'a, B: Backend>(
     // Finally, build ret_block - which contains our terminator instruction.
     {
         builder.switch_to_block(ret_block);
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
 
         // Now that ret has been mutated by the switch statement, evaluate to it.
@@ -351,30 +351,30 @@ fn build_switch<'a, B: Backend>(
     builder.declare_var(ret, ret_type);
 
     // The block for the conditional's default branch.
-    let default_block = builder.create_ebb();
+    let default_block = builder.create_block();
 
     // The block we'll jump to once the switch has completed.
-    let ret_block = builder.create_ebb();
+    let ret_block = builder.create_block();
 
     // Build the blocks for each branch, and register them in the switch.
     // Do this before emitting the switch, because it needs to be emitted at the front.
     for (int, _) in branches {
-        let block = builder.create_ebb();
+        let block = builder.create_block();
 
         blocks.push(block);
 
         switch.set_entry(*int, block);
     }
 
-    // Run the switch. Each branch will mutate ret and then jump to ret_ebb.
+    // Run the switch. Each branch will mutate ret and then jump to ret_block.
     let cond = build_expr(env, scope, module, builder, cond_expr, procs);
 
     switch.emit(builder, cond, default_block);
 
     let mut build_branch = |block, expr| {
         builder.switch_to_block(block);
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
 
         // Mutate the ret variable to be the outcome of this branch.
@@ -397,8 +397,8 @@ fn build_switch<'a, B: Backend>(
     // Finally, build ret_block - which contains our terminator instruction.
     {
         builder.switch_to_block(ret_block);
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
 
         // Now that ret has been mutated by the switch statement, evaluate to it.
@@ -469,13 +469,13 @@ pub fn define_proc_body<'a, B: Backend>(
         let mut func_ctx = FunctionBuilderContext::new();
         let mut builder: FunctionBuilder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
 
-        let block = builder.create_ebb();
+        let block = builder.create_block();
 
         builder.switch_to_block(block);
-        builder.append_ebb_params_for_function_params(block);
+        builder.append_block_params_for_function_params(block);
 
         // Add args to scope
-        for (&param, (_, arg_symbol, var)) in builder.ebb_params(block).iter().zip(args) {
+        for (&param, (_, arg_symbol, var)) in builder.block_params(block).iter().zip(args) {
             let content = subs.get_without_compacting(*var).content;
             // TODO this Layout::from_content is duplicated when building this Proc
             //
@@ -490,8 +490,8 @@ pub fn define_proc_body<'a, B: Backend>(
         let body = build_expr(env, &scope, module, &mut builder, &proc.body, procs);
 
         builder.ins().return_(&[body]);
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
         builder.seal_all_blocks();
 

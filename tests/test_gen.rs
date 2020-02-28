@@ -142,18 +142,18 @@ mod test_gen {
             {
                 let mut builder: FunctionBuilder =
                     FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
-                let block = builder.create_ebb();
+                let block = builder.create_block();
 
                 builder.switch_to_block(block);
                 // TODO try deleting this line and seeing if everything still works.
-                builder.append_ebb_params_for_function_params(block);
+                builder.append_block_params_for_function_params(block);
 
                 let main_body =
                     roc::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
                 builder.ins().return_(&[main_body]);
-                // TODO re-enable this once Switch stops making unsealed
-                // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+                // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+                // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
                 // builder.seal_block(block);
                 builder.seal_all_blocks();
                 builder.finalize();
