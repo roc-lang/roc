@@ -198,7 +198,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 // Copy the bytes from the string literal into the array
                 for (index, byte) in str_literal.bytes().enumerate() {
-                    let index = ctx.i32_type().const_int(index as u64, false).into();
+                    let index = ctx.i32_type().const_int(index as u64, false);
                     let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "byte") };
 
                     builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
@@ -207,7 +207,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // Add a NUL terminator at the end.
                 // TODO: Instead of NUL-terminating, return a struct
                 // with the pointer and also the length and capacity.
-                let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false).into();
+                let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false);
                 let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
 
                 builder.build_store(elem_ptr, nul_terminator);
