@@ -171,9 +171,12 @@ mod test_gen {
             }
 
             let main_ptr = module.get_finalized_function(main_fn);
-            let run_main = unsafe { mem::transmute::<_, fn() -> $ty>(main_ptr) };
 
-            assert_eq!($transform(run_main()), $expected);
+            unsafe {
+                let run_main =  mem::transmute::<_, fn() -> $ty>(main_ptr) ;
+
+                assert_eq!($transform(run_main()), $expected);
+            }
         };
     }
 
@@ -334,7 +337,7 @@ mod test_gen {
 
     #[test]
     fn basic_str() {
-        assert_llvm_evals_to!(
+        assert_evals_to!(
             "\"shirt and hat\"",
             CString::new("shirt and hat").unwrap().as_c_str(),
             *const c_char,
