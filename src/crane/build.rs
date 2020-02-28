@@ -6,7 +6,7 @@ use cranelift::frontend::Switch;
 use cranelift::prelude::{
     AbiParam, ExternalName, FloatCC, FunctionBuilder, FunctionBuilderContext, IntCC, MemFlags,
 };
-use cranelift_codegen::ir::entities::{StackSlot, Value};
+use cranelift_codegen::ir::entities::{FuncRef, StackSlot, Value};
 use cranelift_codegen::ir::stackslot::{StackSlotData, StackSlotKind};
 use cranelift_codegen::ir::{immediates::Offset32, types, InstBuilder, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
@@ -35,6 +35,7 @@ pub struct Env<'a> {
     pub cfg: TargetFrontendConfig,
     pub subs: Subs,
     pub interns: Interns,
+    pub malloc: FuncRef,
 }
 
 pub fn build_expr<'a, B: Backend>(

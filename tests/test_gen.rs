@@ -28,6 +28,7 @@ mod test_gen {
     use roc::collections::{ImMap, MutMap};
     use roc::crane::build::{declare_proc, define_proc_body, ScopeEntry};
     use roc::crane::convert::type_from_layout;
+    use roc::crane::imports::declare_malloc;
     use roc::infer::infer_expr;
     use roc::llvm::build::{build_proc, build_proc_header};
     use roc::llvm::convert::basic_type_from_layout;
@@ -46,7 +47,6 @@ mod test_gen {
                 Module::new(SimpleJITBuilder::new(default_libcall_names()));
             let mut ctx = module.make_context();
             let mut func_ctx = FunctionBuilderContext::new();
-
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
@@ -77,11 +77,13 @@ mod test_gen {
 
             // Compile and add all the Procs before adding main
             let mut procs = MutMap::default();
+            let malloc = declare_malloc(&mut module, &mut ctx);
             let mut env = roc::crane::build::Env {
                 arena: &arena,
                 subs,
                 interns,
                 cfg,
+                malloc
             };
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
