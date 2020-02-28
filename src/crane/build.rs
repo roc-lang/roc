@@ -227,6 +227,36 @@ pub fn build_expr<'a, B: Backend>(
         // } => {
         //     panic!("I don't yet know how to crane build {:?}", expr);
         // }
+        Str(str_literal) => {
+            if str_literal.is_empty() {
+                panic!("TODO build an empty string in Crane");
+            } else {
+                let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+                let ptr_type = module.target_config().pointer_type();
+                let size = builder.ins().iconst(ptr_type, bytes_len as i64);
+                let argument_exprs = vec![size];
+                let call = builder.ins().call(env.malloc, &argument_exprs);
+                let ptr = builder.inst_results(call)[0];
+
+                // Copy the bytes from the string literal into the array
+                // for (index, byte) in str_literal.bytes().enumerate() {
+                //     let index = ctx.i32_type().const_int(index as u64, false);
+                //     let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "byte") };
+
+                //     builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
+                // }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                // let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false);
+                // let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
+
+                // builder.build_store(elem_ptr, nul_terminator);
+
+                ptr
+            }
+        }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
         }
