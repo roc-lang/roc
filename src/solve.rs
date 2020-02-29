@@ -907,6 +907,23 @@ fn check_for_infinite_type(
     }
 }
 
+fn content_attr_alias(subs: &mut Subs, u: Variable, a: Variable) -> Content {
+    let actual = subs.fresh_unnamed_flex_var();
+    let ext_var = subs.fresh_unnamed_flex_var();
+
+    let mut attr_at_attr = MutMap::default();
+    attr_at_attr.insert(TagName::Private(Symbol::ATTR_AT_ATTR), vec![u, a]);
+    let attr_tag = FlatType::TagUnion(attr_at_attr, ext_var);
+
+    subs.set_content(actual, Content::Structure(attr_tag));
+
+    Content::Alias(
+        Symbol::ATTR_ATTR,
+        vec![("u".into(), u), ("a".into(), a)],
+        actual,
+    )
+}
+
 fn correct_recursive_attr(
     subs: &mut Subs,
     recursive: Variable,
@@ -918,10 +935,8 @@ fn correct_recursive_attr(
     let rec_var = subs.fresh_unnamed_flex_var();
     let attr_var = subs.fresh_unnamed_flex_var();
 
-    subs.set_content(
-        attr_var,
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, rec_var])),
-    );
+    let content = content_attr_alias(subs, uniq_var, rec_var);
+    subs.set_content(attr_var, content);
 
     let mut new_tags = MutMap::default();
 
@@ -938,9 +953,9 @@ fn correct_recursive_attr(
     let new_tag_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
     subs.set_content(tag_union_var, Content::Structure(new_tag_type));
 
-    let new_recursive = FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, tag_union_var]);
+    let new_recursive = content_attr_alias(subs, uniq_var, tag_union_var);
 
-    subs.set_content(recursive, Content::Structure(new_recursive));
+    subs.set_content(recursive, new_recursive);
 }
 
 fn circular_error(
