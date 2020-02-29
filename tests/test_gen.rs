@@ -77,7 +77,6 @@ mod test_gen {
 
             // Compile and add all the Procs before adding main
             let mut procs = MutMap::default();
-            let malloc = declare_malloc(&mut module, &mut ctx);
             let mut env = roc::crane::build::Env {
                 arena: &arena,
                 subs,
