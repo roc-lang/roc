@@ -12,8 +12,15 @@ pub struct Report {
 }
 
 impl Report {
-    pub fn problem(filename: PathBuf, problem: Problem) -> Self {
-        let text = ReportText::Plain("TODO convert Problem to ReportText".into());
+    pub fn can_problem(filename: PathBuf, problem: Problem) -> Self {
+        let text = match problem {
+            Problem::UnusedDef(symbol, region) => {
+                panic!("TODO implelment me!");
+            }
+            _ => {
+                panic!("TODO implement others");
+            }
+        };
 
         Report { filename, text }
     }
@@ -39,6 +46,9 @@ pub enum ReportText {
 
     /// A URL, which should be rendered as a hyperlink.
     Url(Box<str>),
+
+    /// The documentation for this symbol.
+    Docs(Symbol),
 }
 
 impl ReportText {
@@ -82,6 +92,9 @@ impl ReportText {
                     "TODO convert these source lines and this region into a String: {:?}, {:?}",
                     src_lines, region
                 );
+            }
+            Docs(_) => {
+                panic!("TODO implment docs");
             }
         }
     }
