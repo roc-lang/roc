@@ -35,6 +35,7 @@ pub struct Env<'a> {
     pub cfg: TargetFrontendConfig,
     pub subs: Subs,
     pub interns: Interns,
+    pub malloc: FuncId,
 }
 
 pub fn build_expr<'a, B: Backend>(
@@ -226,6 +227,34 @@ pub fn build_expr<'a, B: Backend>(
         // } => {
         //     panic!("I don't yet know how to crane build {:?}", expr);
         // }
+        Str(str_literal) => {
+            if str_literal.is_empty() {
+                panic!("TODO build an empty string in Crane");
+            } else {
+                let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+                let ptr = call_malloc(env, module, builder, bytes_len);
+                let mem_flags = MemFlags::new();
+
+                // Copy the bytes from the string literal into the array
+                for (index, byte) in str_literal.bytes().enumerate() {
+                    let val = builder.ins().iconst(types::I8, byte as i64);
+                    let offset = Offset32::new(index as i32);
+
+                    builder.ins().store(mem_flags, val, ptr, offset);
+                }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                let nul_terminator = builder.ins().iconst(types::I8, 0);
+                let index = bytes_len as u64 - 1;
+                let offset = Offset32::new(index as i32);
+
+                builder.ins().store(mem_flags, nul_terminator, ptr, offset);
+
+                ptr
+            }
+        }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
         }
@@ -259,14 +288,14 @@ fn build_branch2<'a, B: Backend>(
     let ret = cranelift::frontend::Variable::with_u32(0);
 
     // The block we'll jump to once the switch has completed.
-    let ret_block = builder.create_ebb();
+    let ret_block = builder.create_block();
 
     builder.declare_var(ret, ret_type);
 
     let lhs = build_expr(env, scope, module, builder, branch.cond_lhs, procs);
     let rhs = build_expr(env, scope, module, builder, branch.cond_rhs, procs);
-    let pass_block = builder.create_ebb();
-    let fail_block = builder.create_ebb();
+    let pass_block = builder.create_block();
+    let fail_block = builder.create_block();
 
     match branch.cond_layout {
         Layout::Builtin(Builtin::Float64) => {
@@ -291,8 +320,8 @@ fn build_branch2<'a, B: Backend>(
     let mut build_branch = |expr, block| {
         builder.switch_to_block(block);
 
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
 
         // Mutate the ret variable to be the outcome of this branch.
@@ -310,8 +339,8 @@ fn build_branch2<'a, B: Backend>(
     // Finally, build ret_block - which contains our terminator instruction.
     {
         builder.switch_to_block(ret_block);
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
 
         // Now that ret has been mutated by the switch statement, evaluate to it.
@@ -351,30 +380,30 @@ fn build_switch<'a, B: Backend>(
     builder.declare_var(ret, ret_type);
 
     // The block for the conditional's default branch.
-    let default_block = builder.create_ebb();
+    let default_block = builder.create_block();
 
     // The block we'll jump to once the switch has completed.
-    let ret_block = builder.create_ebb();
+    let ret_block = builder.create_block();
 
     // Build the blocks for each branch, and register them in the switch.
     // Do this before emitting the switch, because it needs to be emitted at the front.
     for (int, _) in branches {
-        let block = builder.create_ebb();
+        let block = builder.create_block();
 
         blocks.push(block);
 
         switch.set_entry(*int, block);
     }
 
-    // Run the switch. Each branch will mutate ret and then jump to ret_ebb.
+    // Run the switch. Each branch will mutate ret and then jump to ret_block.
     let cond = build_expr(env, scope, module, builder, cond_expr, procs);
 
     switch.emit(builder, cond, default_block);
 
     let mut build_branch = |block, expr| {
         builder.switch_to_block(block);
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
 
         // Mutate the ret variable to be the outcome of this branch.
@@ -397,8 +426,8 @@ fn build_switch<'a, B: Backend>(
     // Finally, build ret_block - which contains our terminator instruction.
     {
         builder.switch_to_block(ret_block);
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
 
         // Now that ret has been mutated by the switch statement, evaluate to it.
@@ -469,13 +498,13 @@ pub fn define_proc_body<'a, B: Backend>(
         let mut func_ctx = FunctionBuilderContext::new();
         let mut builder: FunctionBuilder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
 
-        let block = builder.create_ebb();
+        let block = builder.create_block();
 
         builder.switch_to_block(block);
-        builder.append_ebb_params_for_function_params(block);
+        builder.append_block_params_for_function_params(block);
 
         // Add args to scope
-        for (&param, (_, arg_symbol, var)) in builder.ebb_params(block).iter().zip(args) {
+        for (&param, (_, arg_symbol, var)) in builder.block_params(block).iter().zip(args) {
             let content = subs.get_without_compacting(*var).content;
             // TODO this Layout::from_content is duplicated when building this Proc
             //
@@ -490,8 +519,8 @@ pub fn define_proc_body<'a, B: Backend>(
         let body = build_expr(env, &scope, module, &mut builder, &proc.body, procs);
 
         builder.ins().return_(&[body]);
-        // TODO re-enable this once Switch stops making unsealed
-        // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);
         builder.seal_all_blocks();
 
@@ -543,4 +572,26 @@ fn call_with_args<'a, B: Backend>(
             results[0]
         }
     }
+}
+
+fn call_malloc<B: Backend>(
+    env: &Env<'_>,
+    module: &mut Module<B>,
+    builder: &mut FunctionBuilder,
+    size: usize,
+) -> Value {
+    // Declare malloc inside this function
+    let local_func = module.declare_func_in_func(env.malloc, &mut builder.func);
+
+    // Convert the size argument to a Value
+    let ptr_size_type = module.target_config().pointer_type();
+    let size_arg = builder.ins().iconst(ptr_size_type, size as i64);
+
+    // Call malloc and return the resulting pointer
+    let call = builder.ins().call(local_func, &[size_arg]);
+    let results = builder.inst_results(call);
+
+    debug_assert!(results.len() == 1);
+
+    results[0]
 }

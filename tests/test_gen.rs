@@ -15,7 +15,6 @@ mod test_gen {
     use bumpalo::Bump;
     use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
     use cranelift_codegen::ir::InstBuilder;
-    use cranelift_codegen::isa;
     use cranelift_codegen::settings;
     use cranelift_codegen::verifier::verify_function;
     use cranelift_module::{default_libcall_names, Linkage, Module};
@@ -28,6 +27,7 @@ mod test_gen {
     use roc::collections::{ImMap, MutMap};
     use roc::crane::build::{declare_proc, define_proc_body, ScopeEntry};
     use roc::crane::convert::type_from_layout;
+    use roc::crane::imports::define_malloc;
     use roc::infer::infer_expr;
     use roc::llvm::build::{build_proc, build_proc_header};
     use roc::llvm::convert::basic_type_from_layout;
@@ -37,35 +37,23 @@ mod test_gen {
     use std::ffi::{CStr, CString};
     use std::mem;
     use std::os::raw::c_char;
-    use target_lexicon::HOST;
 
     macro_rules! assert_crane_evals_to {
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             let arena = Bump::new();
-            let mut module: Module<SimpleJITBackend> =
-                Module::new(SimpleJITBuilder::new(default_libcall_names()));
-            let mut ctx = module.make_context();
-            let mut func_ctx = FunctionBuilderContext::new();
-
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
             let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
-            let cfg = match isa::lookup(HOST) {
-                Err(err) => {
-                    panic!(
-                        "Unsupported target ISA for test runner {:?} - error: {:?}",
-                        HOST, err
-                    );
-                }
-                Ok(isa_builder) => {
-                    let isa = isa_builder.finish(shared_flags.clone());
+            let mut module: Module<SimpleJITBackend> =
+                Module::new(SimpleJITBuilder::new(default_libcall_names()));
 
-                    isa.frontend_config()
-                }
-            };
+            let cfg = module.target_config();
+            let mut ctx = module.make_context();
+            let malloc = define_malloc(&mut module, &mut ctx);
+            let mut func_ctx = FunctionBuilderContext::new();
 
             let main_fn_name = "$Test.main";
 
@@ -82,6 +70,7 @@ mod test_gen {
                 subs,
                 interns,
                 cfg,
+                malloc
             };
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
@@ -106,7 +95,6 @@ mod test_gen {
                 }
             }
 
-            // Now that scope includes all the Procs, we can build their bodies.
             for (proc, sig, fn_id) in declared {
                 define_proc_body(
                     &env,
@@ -142,24 +130,24 @@ mod test_gen {
             {
                 let mut builder: FunctionBuilder =
                     FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
-                let block = builder.create_ebb();
+                let block = builder.create_block();
 
                 builder.switch_to_block(block);
                 // TODO try deleting this line and seeing if everything still works.
-                builder.append_ebb_params_for_function_params(block);
+                builder.append_block_params_for_function_params(block);
 
                 let main_body =
                     roc::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
                 builder.ins().return_(&[main_body]);
-                // TODO re-enable this once Switch stops making unsealed
-                // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+                // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+                // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
                 // builder.seal_block(block);
                 builder.seal_all_blocks();
                 builder.finalize();
             }
 
-            module.define_function(main_fn, &mut ctx).unwrap();
+            module.define_function(main_fn, &mut ctx).expect("declare main");
             module.clear_context(&mut ctx);
 
             // Perform linking
@@ -171,9 +159,12 @@ mod test_gen {
             }
 
             let main_ptr = module.get_finalized_function(main_fn);
-            let run_main = unsafe { mem::transmute::<_, fn() -> $ty>(main_ptr) };
 
-            assert_eq!($transform(run_main()), $expected);
+            unsafe {
+                let run_main =  mem::transmute::<_, fn() -> $ty>(main_ptr) ;
+
+                assert_eq!($transform(run_main()), $expected);
+            }
         };
     }
 
@@ -267,7 +258,7 @@ mod test_gen {
             // Add main's body
             let basic_block = context.append_basic_block(main_fn, "entry");
 
-            builder.position_at_end(&basic_block);
+            builder.position_at_end(basic_block);
 
             let ret = roc::llvm::build::build_expr(
                 &env,
@@ -334,7 +325,7 @@ mod test_gen {
 
     #[test]
     fn basic_str() {
-        assert_llvm_evals_to!(
+        assert_evals_to!(
             "\"shirt and hat\"",
             CString::new("shirt and hat").unwrap().as_c_str(),
             *const c_char,
