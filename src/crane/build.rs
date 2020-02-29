@@ -6,7 +6,7 @@ use cranelift::frontend::Switch;
 use cranelift::prelude::{
     AbiParam, ExternalName, FloatCC, FunctionBuilder, FunctionBuilderContext, IntCC, MemFlags,
 };
-use cranelift_codegen::ir::entities::{FuncRef, StackSlot, Value};
+use cranelift_codegen::ir::entities::{StackSlot, Value};
 use cranelift_codegen::ir::stackslot::{StackSlotData, StackSlotKind};
 use cranelift_codegen::ir::{immediates::Offset32, types, InstBuilder, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
@@ -35,7 +35,7 @@ pub struct Env<'a> {
     pub cfg: TargetFrontendConfig,
     pub subs: Subs,
     pub interns: Interns,
-    pub malloc: FuncRef,
+    pub malloc: FuncId,
 }
 
 pub fn build_expr<'a, B: Backend>(
@@ -232,11 +232,7 @@ pub fn build_expr<'a, B: Backend>(
                 panic!("TODO build an empty string in Crane");
             } else {
                 let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
-                let ptr_type = module.target_config().pointer_type();
-                let size = builder.ins().iconst(ptr_type, bytes_len as i64);
-                let argument_exprs = vec![size];
-                let call = builder.ins().call(env.malloc, &argument_exprs);
-                let ptr = builder.inst_results(call)[0];
+                let ptr = call_malloc(env, module, builder, bytes_len);
 
                 // Copy the bytes from the string literal into the array
                 // for (index, byte) in str_literal.bytes().enumerate() {
@@ -574,4 +570,26 @@ fn call_with_args<'a, B: Backend>(
             results[0]
         }
     }
+}
+
+fn call_malloc<B: Backend>(
+    env: &Env<'_>,
+    module: &mut Module<B>,
+    builder: &mut FunctionBuilder,
+    size: usize,
+) -> Value {
+    // Declare malloc inside this function
+    let local_func = module.declare_func_in_func(env.malloc, &mut builder.func);
+
+    // Convert the size argument to a Value
+    let ptr_size_type = module.target_config().pointer_type();
+    let size_arg = builder.ins().iconst(ptr_size_type, size as i64);
+
+    // Call malloc and return the resulting pointer
+    let call = builder.ins().call(local_func, &[size_arg]);
+    let results = builder.inst_results(call);
+
+    debug_assert!(results.len() == 1);
+
+    results[0]
 }

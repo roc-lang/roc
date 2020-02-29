@@ -15,7 +15,6 @@ mod test_gen {
     use bumpalo::Bump;
     use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
     use cranelift_codegen::ir::InstBuilder;
-    use cranelift_codegen::isa;
     use cranelift_codegen::settings;
     use cranelift_codegen::verifier::verify_function;
     use cranelift_module::{default_libcall_names, Linkage, Module};
@@ -28,7 +27,7 @@ mod test_gen {
     use roc::collections::{ImMap, MutMap};
     use roc::crane::build::{declare_proc, define_proc_body, ScopeEntry};
     use roc::crane::convert::type_from_layout;
-    use roc::crane::imports::declare_malloc;
+    use roc::crane::imports::define_malloc;
     use roc::infer::infer_expr;
     use roc::llvm::build::{build_proc, build_proc_header};
     use roc::llvm::convert::basic_type_from_layout;
@@ -38,34 +37,23 @@ mod test_gen {
     use std::ffi::{CStr, CString};
     use std::mem;
     use std::os::raw::c_char;
-    use target_lexicon::HOST;
 
     macro_rules! assert_crane_evals_to {
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             let arena = Bump::new();
-            let mut module: Module<SimpleJITBackend> =
-                Module::new(SimpleJITBuilder::new(default_libcall_names()));
-            let mut ctx = module.make_context();
-            let mut func_ctx = FunctionBuilderContext::new();
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
             let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
-            let cfg = match isa::lookup(HOST) {
-                Err(err) => {
-                    panic!(
-                        "Unsupported target ISA for test runner {:?} - error: {:?}",
-                        HOST, err
-                    );
-                }
-                Ok(isa_builder) => {
-                    let isa = isa_builder.finish(shared_flags.clone());
+            let mut module: Module<SimpleJITBackend> =
+                Module::new(SimpleJITBuilder::new(default_libcall_names()));
 
-                    isa.frontend_config()
-                }
-            };
+            let cfg = module.target_config();
+            let mut ctx = module.make_context();
+            let malloc = define_malloc(&mut module, &mut ctx);
+            let mut func_ctx = FunctionBuilderContext::new();
 
             let main_fn_name = "$Test.main";
 
@@ -107,7 +95,6 @@ mod test_gen {
                 }
             }
 
-            // Now that scope includes all the Procs, we can build their bodies.
             for (proc, sig, fn_id) in declared {
                 define_proc_body(
                     &env,
@@ -160,7 +147,7 @@ mod test_gen {
                 builder.finalize();
             }
 
-            module.define_function(main_fn, &mut ctx).unwrap();
+            module.define_function(main_fn, &mut ctx).expect("declare main");
             module.clear_context(&mut ctx);
 
             // Perform linking
