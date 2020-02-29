@@ -233,22 +233,24 @@ pub fn build_expr<'a, B: Backend>(
             } else {
                 let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
                 let ptr = call_malloc(env, module, builder, bytes_len);
+                let mem_flags = MemFlags::new();
 
                 // Copy the bytes from the string literal into the array
-                // for (index, byte) in str_literal.bytes().enumerate() {
-                //     let index = ctx.i32_type().const_int(index as u64, false);
-                //     let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "byte") };
+                for (index, byte) in str_literal.bytes().enumerate() {
+                    let val = builder.ins().iconst(types::I8, byte as i64);
+                    let offset = Offset32::new(index as i32);
 
-                //     builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
-                // }
+                    builder.ins().store(mem_flags, val, ptr, offset);
+                }
 
                 // Add a NUL terminator at the end.
                 // TODO: Instead of NUL-terminating, return a struct
                 // with the pointer and also the length and capacity.
-                // let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false);
-                // let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
+                let nul_terminator = builder.ins().iconst(types::I8, 0);
+                let index = bytes_len as u64 - 1;
+                let offset = Offset32::new(index as i32);
 
-                // builder.build_store(elem_ptr, nul_terminator);
+                builder.ins().store(mem_flags, nul_terminator, ptr, offset);
 
                 ptr
             }
