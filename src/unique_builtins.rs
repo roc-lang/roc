@@ -1,7 +1,7 @@
 use crate::builtins;
 use crate::builtins::StdLib;
 use crate::can::ident::TagName;
-use crate::collections::{default_hasher, MutMap};
+use crate::collections::{default_hasher, MutMap, MutSet};
 use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
 use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
@@ -41,10 +41,49 @@ fn disjunction(free: VarId, rest: Vec<VarId>) -> SolvedType {
 pub fn uniqueness_stdlib() -> StdLib {
     use builtins::Mode;
 
+    let types = types();
+    let aliases = aliases();
+
+    debug_assert!({
+        let normal_types: MutSet<Symbol> = builtins::types().keys().copied().collect();
+        let normal_aliases: MutSet<Symbol> = builtins::aliases().keys().copied().collect();
+
+        let unique_types = types.keys().copied().collect();
+        let unique_aliases = aliases.keys().copied().collect();
+
+        let missing_unique_types: MutSet<Symbol> =
+            normal_types.difference(&unique_types).copied().collect();
+        let missing_normal_types: MutSet<Symbol> =
+            unique_types.difference(&normal_types).copied().collect();
+
+        let missing_unique_aliases: MutSet<Symbol> = normal_aliases
+            .difference(&unique_aliases)
+            .copied()
+            .collect();
+        let missing_normal_aliases: MutSet<Symbol> = unique_aliases
+            .difference(&normal_aliases)
+            .copied()
+            .collect();
+
+        let cond = missing_normal_types.is_empty()
+            && missing_unique_types.is_empty()
+            && missing_normal_aliases.is_empty()
+            && missing_unique_aliases.is_empty();
+
+        dbg!(
+            missing_normal_types,
+            missing_unique_types,
+            missing_normal_aliases,
+            missing_unique_aliases
+        );
+
+        cond
+    });
+
     StdLib {
         mode: Mode::Uniqueness,
-        types: types(),
-        aliases: aliases(),
+        types,
+        aliases,
     }
 }
 
