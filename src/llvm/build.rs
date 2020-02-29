@@ -310,34 +310,34 @@ fn build_switch<'a, 'ctx, 'env>(
         let int_val = context.i64_type().const_int(*int as u64, false);
         let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
 
-        cases.push((int_val, &*arena.alloc(block)));
+        cases.push((int_val, block));
     }
 
     let default_block = context.append_basic_block(parent, "default");
 
-    builder.build_switch(cond, &default_block, &cases);
+    builder.build_switch(cond, default_block, &cases);
 
     for ((_, branch_expr), (_, block)) in branches.iter().zip(cases) {
-        builder.position_at_end(&block);
+        builder.position_at_end(block);
 
         let branch_val = build_expr(env, scope, parent, branch_expr, procs);
 
-        builder.build_unconditional_branch(&cont_block);
+        builder.build_unconditional_branch(cont_block);
 
         incoming.push((branch_val, block));
     }
 
     // The block for the conditional's default branch.
-    builder.position_at_end(&default_block);
+    builder.position_at_end(default_block);
 
     let default_val = build_expr(env, scope, parent, default_branch, procs);
 
-    builder.build_unconditional_branch(&cont_block);
+    builder.build_unconditional_branch(cont_block);
 
-    incoming.push((default_val, &default_block));
+    incoming.push((default_val, default_block));
 
     // emit merge block
-    builder.position_at_end(&cont_block);
+    builder.position_at_end(cont_block);
 
     let phi = builder.build_phi(ret_type, "branch");
 
@@ -368,30 +368,30 @@ fn build_phi2<'a, 'ctx, 'env>(
     let else_block = context.append_basic_block(parent, "else");
     let cont_block = context.append_basic_block(parent, "branchcont");
 
-    builder.build_conditional_branch(comparison, &then_block, &else_block);
+    builder.build_conditional_branch(comparison, then_block, else_block);
 
     // build then block
-    builder.position_at_end(&then_block);
+    builder.position_at_end(then_block);
     let then_val = build_expr(env, scope, parent, pass, procs);
-    builder.build_unconditional_branch(&cont_block);
+    builder.build_unconditional_branch(cont_block);
 
     let then_block = builder.get_insert_block().unwrap();
 
     // build else block
-    builder.position_at_end(&else_block);
+    builder.position_at_end(else_block);
     let else_val = build_expr(env, scope, parent, fail, procs);
-    builder.build_unconditional_branch(&cont_block);
+    builder.build_unconditional_branch(cont_block);
 
     let else_block = builder.get_insert_block().unwrap();
 
     // emit merge block
-    builder.position_at_end(&cont_block);
+    builder.position_at_end(cont_block);
 
     let phi = builder.build_phi(ret_type, "branch");
 
     phi.add_incoming(&[
-        (&Into::<BasicValueEnum>::into(then_val), &then_block),
-        (&Into::<BasicValueEnum>::into(else_val), &else_block),
+        (&Into::<BasicValueEnum>::into(then_val), then_block),
+        (&Into::<BasicValueEnum>::into(else_val), else_block),
     ]);
 
     phi.as_basic_value()
@@ -421,7 +421,7 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
 
     match entry.get_first_instruction() {
         Some(first_instr) => builder.position_before(&first_instr),
-        None => builder.position_at_end(&entry),
+        None => builder.position_at_end(entry),
     }
 
     builder.build_alloca(basic_type, name)
@@ -476,7 +476,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let entry = context.append_basic_block(fn_val, "entry");
     let builder = env.builder;
 
-    builder.position_at_end(&entry);
+    builder.position_at_end(entry);
 
     let mut scope = ImMap::default();
 

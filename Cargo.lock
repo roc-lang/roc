@@ -434,7 +434,7 @@ dependencies = [
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/TheDan64/inkwell?branch=llvm8-0#ac045c544f64b2d12ed7c3c7c429a4e7f02a5d5b"
+source = "git+https://github.com/TheDan64/inkwell?branch=llvm8-0#c9055142661c48c3f064bb02eff413cc05907e88"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.1.0"
-source = "git+https://github.com/TheDan64/inkwell?branch=llvm8-0#ac045c544f64b2d12ed7c3c7c429a4e7f02a5d5b"
+source = "git+https://github.com/TheDan64/inkwell?branch=llvm8-0#c9055142661c48c3f064bb02eff413cc05907e88"
 dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
@@ -994,9 +994,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "0.2.12"
+version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b34bee1facdc352fba10c9c58b654e6ecb6a2250167772bf86071f7c5f2f5061"
+checksum = "0fa5e81d6bc4e67fe889d5783bd2a128ab2e0cfa487e0be16b6a8d177b101616"
 dependencies = [
  "bytes",
  "fnv",

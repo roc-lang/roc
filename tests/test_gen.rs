@@ -258,7 +258,7 @@ mod test_gen {
             // Add main's body
             let basic_block = context.append_basic_block(main_fn, "entry");
 
-            builder.position_at_end(&basic_block);
+            builder.position_at_end(basic_block);
 
             let ret = roc::llvm::build::build_expr(
                 &env,
