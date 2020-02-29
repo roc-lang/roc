@@ -34,11 +34,13 @@ mod test_gen {
     use roc::mono::expr::Expr;
     use roc::mono::layout::Layout;
     use roc::subs::Subs;
+    use std::ffi::{CStr, CString};
     use std::mem;
+    use std::os::raw::c_char;
     use target_lexicon::HOST;
 
     macro_rules! assert_crane_evals_to {
-        ($src:expr, $expected:expr, $ty:ty) => {
+        ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             let arena = Bump::new();
             let mut module: Module<SimpleJITBackend> =
                 Module::new(SimpleJITBuilder::new(default_libcall_names()));
@@ -171,12 +173,12 @@ mod test_gen {
             let main_ptr = module.get_finalized_function(main_fn);
             let run_main = unsafe { mem::transmute::<_, fn() -> $ty>(main_ptr) };
 
-            assert_eq!(run_main(), $expected);
+            assert_eq!($transform(run_main()), $expected);
         };
     }
 
     macro_rules! assert_llvm_evals_to {
-        ($src:expr, $expected:expr, $ty:ty) => {
+        ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             let arena = Bump::new();
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
@@ -208,7 +210,7 @@ mod test_gen {
             let subs = solved.into_inner();
             let layout = Layout::from_content(&arena, content, &subs)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_fn_type = basic_type_from_layout( &context, &layout)
+            let main_fn_type = basic_type_from_layout(&context, &layout)
                 .fn_type(&[], false);
             let main_fn_name = "$Test.main";
 
@@ -277,13 +279,16 @@ mod test_gen {
 
             builder.build_return(Some(&ret));
 
+            // Uncomment this to see the module's un-optimized LLVM instruction output:
+            // env.module.print_to_stderr();
+
             if main_fn.verify(true) {
                 fpm.run_on(&main_fn);
             } else {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
-            // Uncomment this to see the module's LLVM instruction output:
+            // Uncomment this to see the module's optimized LLVM instruction output:
             // env.module.print_to_stderr();
 
             let execution_engine = env
@@ -298,7 +303,7 @@ mod test_gen {
                     .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
                     .expect("errored");
 
-                assert_eq!(main.call(), $expected);
+                assert_eq!($transform(main.call()), $expected);
             }
         };
     }
@@ -310,12 +315,31 @@ mod test_gen {
             // parsing the source, so that there's no chance their passing
             // or failing depends on leftover state from the previous one.
             {
-                assert_crane_evals_to!($src, $expected, $ty);
+                assert_crane_evals_to!($src, $expected, $ty, (|val| val));
             }
             {
-                assert_llvm_evals_to!($src, $expected, $ty);
+                assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
             }
         };
+        ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+            // Same as above, except with an additional transformation argument.
+            {
+                assert_crane_evals_to!($src, $expected, $ty, $transform);
+            }
+            {
+                assert_llvm_evals_to!($src, $expected, $ty, $transform);
+            }
+        };
+    }
+
+    #[test]
+    fn basic_str() {
+        assert_llvm_evals_to!(
+            "\"shirt and hat\"",
+            CString::new("shirt and hat").unwrap().as_c_str(),
+            *const c_char,
+            CStr::from_ptr
+        );
     }
 
     #[test]

@@ -50,7 +50,10 @@ pub fn basic_type_from_layout<'ctx>(
         Builtin(builtin) => match builtin {
             Int64 => context.i64_type().as_basic_type_enum(),
             Float64 => context.f64_type().as_basic_type_enum(),
-            Str => panic!("TODO layout_to_basic_type for Builtin::Str"),
+            Str => context
+                .i8_type()
+                .ptr_type(AddressSpace::Generic)
+                .as_basic_type_enum(),
             Map(_, _) => panic!("TODO layout_to_basic_type for Builtin::Map"),
             Set(_) => panic!("TODO layout_to_basic_type for Builtin::Set"),
         },
