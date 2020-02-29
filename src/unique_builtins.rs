@@ -4,7 +4,7 @@ use crate::can::ident::TagName;
 use crate::collections::{default_hasher, MutMap};
 use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
-use crate::solve::{BuiltinAlias, SolvedType};
+use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
 use crate::subs::VarId;
 use std::collections::HashMap;
 
@@ -22,6 +22,21 @@ const UVAR1: VarId = VarId::from_u32(1001);
 const UVAR2: VarId = VarId::from_u32(1002);
 const UVAR3: VarId = VarId::from_u32(1003);
 const UVAR4: VarId = VarId::from_u32(1004);
+const UVAR5: VarId = VarId::from_u32(1005);
+
+fn shared() -> SolvedType {
+    SolvedType::Boolean(SolvedAtom::Zero, vec![])
+}
+
+fn boolean(b: VarId) -> SolvedType {
+    SolvedType::Boolean(SolvedAtom::Variable(b), vec![])
+}
+
+fn disjunction(free: VarId, rest: Vec<VarId>) -> SolvedType {
+    let solved_rest = rest.into_iter().map(SolvedAtom::Variable).collect();
+
+    SolvedType::Boolean(SolvedAtom::Variable(free), solved_rest)
+}
 
 pub fn uniqueness_stdlib() -> StdLib {
     use builtins::Mode;
@@ -161,6 +176,16 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Str : [ @Str ]
+    add_alias(
+        Symbol::STR_STR,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: single_private_tag(Symbol::STR_AT_STR, Vec::new()),
+        },
+    );
+
     aliases
 }
 
@@ -258,6 +283,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![list_type(UVAR1, TVAR1)], bool_type(UVAR2)),
     );
 
+    // length : List a -> Int
+    add_type(
+        Symbol::LIST_LENGTH,
+        unique_function(vec![list_type(UVAR1, TVAR1)], int_type(UVAR2)),
+    );
+
     // get : List a, Int -> Result a [ IndexOutOfBounds ]*
     let index_out_of_bounds = SolvedType::TagUnion(
         vec![(TagName::Global("IndexOutOfBounds".into()), vec![])],
@@ -272,12 +303,107 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // set : List a, Int, a -> List a
-    add_type(
-        Symbol::LIST_SET,
+    // set : Attr (w | u | v) (List (Attr u a))
+    //     , Attr * Int
+    //     , Attr (u | v) a
+    //    -> List a
+    add_type(Symbol::LIST_SET, {
+        let u = UVAR1;
+        let v = UVAR2;
+        let w = UVAR3;
+        let star1 = UVAR4;
+        let star2 = UVAR5;
+
+        let a = TVAR1;
+
         unique_function(
-            vec![list_type(UVAR1, TVAR1), int_type(UVAR2), flex(TVAR1)],
-            list_type(UVAR3, TVAR1),
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(w, vec![u, v]),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    ],
+                ),
+                int_type(star1),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![disjunction(u, vec![v]), flex(a)]),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star2),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                ],
+            ),
+        )
+    });
+
+    // push : Attr (w | u | v) (List (Attr u a))
+    //      , Attr (u | v) a
+    //     -> Attr * (List (Attr u a))
+    add_type(Symbol::LIST_PUSH, {
+        let u = UVAR1;
+        let v = UVAR2;
+        let w = UVAR3;
+        let star = UVAR4;
+
+        let a = TVAR1;
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(w, vec![u, v]),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    ],
+                ),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![disjunction(u, vec![v]), flex(a)]),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                ],
+            ),
+        )
+    });
+
+    // map : List a, (a -> b) -> List b
+    add_type(
+        Symbol::LIST_MAP,
+        unique_function(
+            vec![
+                list_type(UVAR1, TVAR1),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        shared(),
+                        SolvedType::Func(vec![flex(TVAR1)], Box::new(flex(TVAR2))),
+                    ],
+                ),
+            ],
+            list_type(UVAR2, TVAR2),
+        ),
+    );
+
+    // foldr : List a, (a -> b -> b), b -> b
+    add_type(
+        Symbol::LIST_FOLDR,
+        unique_function(
+            vec![
+                list_type(UVAR1, TVAR1),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        shared(),
+                        SolvedType::Func(vec![flex(TVAR1), flex(TVAR2)], Box::new(flex(TVAR2))),
+                    ],
+                ),
+                flex(TVAR2),
+            ],
+            flex(TVAR2),
         ),
     );
 

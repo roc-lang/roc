@@ -605,7 +605,11 @@ define_builtins! {
         2 LIST_ISEMPTY: "isEmpty"
         3 LIST_GET: "get"
         4 LIST_SET: "set"
-        5 LIST_MAP: "map"
+        5 LIST_PUSH: "push"
+        6 LIST_MAP: "map"
+        7 LIST_LENGTH: "length"
+        8 LIST_FOLDL: "foldl"
+        9 LIST_FOLDR: "foldr"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

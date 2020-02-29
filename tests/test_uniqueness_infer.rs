@@ -1891,19 +1891,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn list_set() {
-        infer_eq(
-            indoc!(
-                r#"
-                    [1, 2 ]
-                        |> List.set 1 42
-               "#
-            ),
-            "Attr * (List (Attr * Int))",
-        );
-    }
-
-    #[test]
     fn float_div_builtins() {
         infer_eq(
             indoc!(
@@ -2022,6 +2009,85 @@ mod test_infer_uniq {
                "#
             ),
             "Attr * (Attr (a | b) (List (Attr a Int)) -> Attr (a | b) (List (Attr a Int)))",
+        );
+    }
+
+    #[test]
+    fn list_set() {
+        infer_eq(indoc!(r#"List.set"#), "Attr * (Attr (* | a | b) (List (Attr b c)), Attr * Int, Attr (a | b) c -> Attr * (List (Attr b c)))");
+    }
+
+    #[test]
+    fn list_map() {
+        infer_eq(
+            indoc!(r#"List.map"#),
+            "Attr * (Attr * (List a), Attr Shared (a -> b) -> Attr * (List b))",
+        );
+    }
+
+    #[test]
+    fn list_map_identity() {
+        infer_eq(
+            indoc!(r#"\list -> List.map list (\x -> x)"#),
+            "Attr * (Attr * (List a) -> Attr * (List a))",
+        );
+    }
+
+    #[test]
+    fn list_foldr() {
+        infer_eq(
+            indoc!(r#"List.foldr"#),
+            "Attr * (Attr * (List a), Attr Shared (a, b -> b), b -> b)",
+        );
+    }
+
+    #[test]
+    fn list_foldr_sum() {
+        infer_eq(
+            indoc!(
+                r#"
+            sum = \list -> List.foldr list Num.add 0
+
+            sum
+            "#
+            ),
+            "Attr * (Attr * (List (Attr * Int)) -> Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn list_push() {
+        infer_eq(
+            indoc!(r#"List.push"#),
+            "Attr * (Attr (* | a | b) (List (Attr b c)), Attr (a | b) c -> Attr * (List (Attr b c)))"
+        );
+    }
+
+    #[test]
+    fn list_push_singleton() {
+        infer_eq(
+            indoc!(
+                r#"
+                singleton = \x -> List.push [] x
+
+                singleton
+                "#
+            ),
+            "Attr * (Attr (* | a) b -> Attr * (List (Attr a b)))",
+        );
+    }
+
+    #[test]
+    fn list_foldr_reverse() {
+        infer_eq(
+            indoc!(
+                r#"
+            reverse = \list -> List.foldr list (\e, l -> List.push l e) []
+
+            reverse
+            "#
+            ),
+            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
         );
     }
 }
