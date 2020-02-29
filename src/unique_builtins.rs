@@ -15,6 +15,8 @@ const NUM_BUILTIN_IMPORTS: usize = 7;
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const TVAR1: VarId = VarId::from_u32(1);
 const TVAR2: VarId = VarId::from_u32(2);
+const TVAR3: VarId = VarId::from_u32(3);
+const TVAR4: VarId = VarId::from_u32(4);
 
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const FUVAR: VarId = VarId::from_u32(1000);
@@ -23,6 +25,7 @@ const UVAR2: VarId = VarId::from_u32(1002);
 const UVAR3: VarId = VarId::from_u32(1003);
 const UVAR4: VarId = VarId::from_u32(1004);
 const UVAR5: VarId = VarId::from_u32(1005);
+const UVAR6: VarId = VarId::from_u32(1006);
 
 fn shared() -> SolvedType {
     SolvedType::Boolean(SolvedAtom::Zero, vec![])
@@ -60,10 +63,11 @@ pub fn uniqueness_stdlib() -> StdLib {
             .difference(&unique_aliases)
             .copied()
             .collect();
-        let missing_normal_aliases: MutSet<Symbol> = unique_aliases
+        let mut missing_normal_aliases: MutSet<Symbol> = unique_aliases
             .difference(&normal_aliases)
             .copied()
             .collect();
+        missing_normal_aliases.remove(&Symbol::ATTR_ATTR);
 
         let cond = missing_normal_types.is_empty()
             && missing_unique_types.is_empty()
@@ -182,6 +186,22 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                     UVAR1,
                     SolvedType::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new()),
                 )],
+            ),
+        },
+    );
+
+    // Bool : [ True, False ]
+    add_alias(
+        Symbol::BOOL_BOOL,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: SolvedType::TagUnion(
+                vec![
+                    (TagName::Global("True".into()), Vec::new()),
+                    (TagName::Global("False".into()), Vec::new()),
+                ],
+                Box::new(SolvedType::EmptyTagUnion),
             ),
         },
     );
@@ -313,6 +333,30 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(Symbol::FLOAT_LOWEST, float_type(UVAR1));
 
     // Bool module
+
+    // and or (&&) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    add_type(
+        Symbol::BOOL_AND,
+        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+    );
+
+    // or or (||)  : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    add_type(
+        Symbol::BOOL_OR,
+        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+    );
+
+    // xor : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    add_type(
+        Symbol::BOOL_XOR,
+        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+    );
+
+    // not : Attr u1 Bool -> Attr u2 Bool
+    add_type(
+        Symbol::BOOL_NOT,
+        unique_function(vec![bool_type(UVAR1)], bool_type(UVAR2)),
+    );
 
     // List module
 
@@ -446,6 +490,52 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // Str module
+
+    // isEmpty : Attr u Str -> Attr v Bool
+    add_type(Symbol::STR_ISEMPTY, {
+        unique_function(vec![str_type(UVAR1)], bool_type(UVAR2))
+    });
+
+    // Result module
+
+    // map : Attr (* | u | v) (Result (Attr u a) e), Attr * (Attr u a -> b) -> Attr * (Result b e)
+    add_type(Symbol::RESULT_MAP, {
+        let u = UVAR1;
+        let star1 = UVAR4;
+        let star2 = UVAR5;
+        let star3 = UVAR6;
+
+        let a = TVAR1;
+        let b = TVAR2;
+        let e = TVAR3;
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star1, vec![u]),
+                        SolvedType::Apply(Symbol::RESULT_RESULT, vec![attr_type(u, a), flex(e)]),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        flex(star2),
+                        SolvedType::Func(vec![attr_type(u, a)], Box::new(flex(b))),
+                    ],
+                ),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::RESULT_RESULT, vec![flex(b), flex(e)]),
+                ],
+            ),
+        )
+    });
+
     types
 }
 
@@ -497,10 +587,12 @@ fn bool_type(u: VarId) -> SolvedType {
     )
 }
 
-#[allow(dead_code)]
 #[inline(always)]
-fn str_type() -> SolvedType {
-    SolvedType::Apply(Symbol::STR_STR, Vec::new())
+fn str_type(u: VarId) -> SolvedType {
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![flex(u), SolvedType::Apply(Symbol::STR_STR, Vec::new())],
+    )
 }
 
 #[inline(always)]

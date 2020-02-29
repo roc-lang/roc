@@ -405,6 +405,34 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // foldr : List a, (a -> b -> b), b -> b
+    add_type(
+        Symbol::LIST_FOLDR,
+        SolvedType::Func(
+            vec![
+                list_type(flex(TVAR1)),
+                SolvedType::Func(vec![flex(TVAR1), flex(TVAR2)], Box::new(flex(TVAR2))),
+                flex(TVAR2),
+            ],
+            Box::new(flex(TVAR2)),
+        ),
+    );
+
+    // push : List a -> a -> List a
+    add_type(
+        Symbol::LIST_PUSH,
+        SolvedType::Func(
+            vec![list_type(flex(TVAR1))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
+    // length : List a -> Int
+    add_type(
+        Symbol::LIST_LENGTH,
+        SolvedType::Func(vec![list_type(flex(TVAR1))], Box::new(int_type())),
+    );
+
     // Result module
 
     // map : Result a err, (a -> b) -> Result b err
