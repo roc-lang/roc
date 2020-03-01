@@ -166,9 +166,20 @@ fn find_names_needed(
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
             find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
         }
-        Structure(Boolean(b)) => {
-            for var in b.variables() {
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+        Structure(Boolean(b)) =>
+        // NOTE it's important that we traverse the variables in the same order as they are
+        // below in write_boolean, hence the call to `simplify`.
+        {
+            match b.simplify(subs) {
+                Err(Atom::Variable(var)) => {
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
+                Err(_) => {}
+                Ok(variables) => {
+                    for var in variables {
+                        find_names_needed(var, subs, roots, root_appearances, names_taken);
+                    }
+                }
             }
         }
         Alias(_, args, _actual) => {

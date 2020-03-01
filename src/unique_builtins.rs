@@ -16,7 +16,6 @@ const NUM_BUILTIN_IMPORTS: usize = 7;
 const TVAR1: VarId = VarId::from_u32(1);
 const TVAR2: VarId = VarId::from_u32(2);
 const TVAR3: VarId = VarId::from_u32(3);
-const TVAR4: VarId = VarId::from_u32(4);
 
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const FUVAR: VarId = VarId::from_u32(1000);
@@ -63,23 +62,24 @@ pub fn uniqueness_stdlib() -> StdLib {
             .difference(&unique_aliases)
             .copied()
             .collect();
-        let mut missing_normal_aliases: MutSet<Symbol> = unique_aliases
+        let missing_normal_aliases: MutSet<Symbol> = unique_aliases
             .difference(&normal_aliases)
             .copied()
+            .filter(|v| *v != Symbol::ATTR_ATTR)
             .collect();
-        missing_normal_aliases.remove(&Symbol::ATTR_ATTR);
 
         let cond = missing_normal_types.is_empty()
             && missing_unique_types.is_empty()
             && missing_normal_aliases.is_empty()
             && missing_unique_aliases.is_empty();
 
-        dbg!(
-            missing_normal_types,
-            missing_unique_types,
-            missing_normal_aliases,
-            missing_unique_aliases
-        );
+        if !cond {
+            println!("Missing hardcoded types for:");
+            println!("normal types: {:?}", missing_normal_types);
+            println!("unique types: {:?}", missing_unique_types);
+            println!("normal aliases: {:?}", missing_normal_aliases);
+            println!("unique aliases: {:?}", missing_unique_aliases);
+        }
 
         cond
     });
@@ -284,6 +284,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // mul or (*) : Num a, Num a -> Num a
+    add_type(
+        Symbol::NUM_MUL,
+        unique_function(
+            vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
+            num_type(UVAR3, TVAR1),
+        ),
+    );
+
+    // abs : Num a -> Num a
+    add_type(
+        Symbol::NUM_ABS,
+        unique_function(vec![num_type(UVAR1, TVAR1)], num_type(UVAR2, TVAR1)),
+    );
+
+    // neg : Num a -> Num a
+    add_type(
+        Symbol::NUM_NEG,
+        unique_function(vec![num_type(UVAR1, TVAR1)], num_type(UVAR2, TVAR1)),
+    );
+
     // isLt or (<) : Num a, Num a -> Bool
     add_type(
         Symbol::NUM_LT,
@@ -302,6 +323,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // isGt or (>) : Num a, Num a -> Bool
+    add_type(
+        Symbol::NUM_GT,
+        unique_function(
+            vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
+            bool_type(UVAR3),
+        ),
+    );
+
+    // isGte or (>=) : Num a, Num a -> Bool
+    add_type(
+        Symbol::NUM_GE,
+        unique_function(
+            vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
+            bool_type(UVAR3),
+        ),
+    );
+
     // Int module
 
     // highest : Int
@@ -310,8 +349,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // lowest : Int
     add_type(Symbol::INT_LOWEST, int_type(UVAR1));
 
+    // div or (//) : Int, Int -> Int
     add_type(
         Symbol::INT_DIV,
+        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
+    );
+
+    // mod : Int, Int -> Int
+    add_type(
+        Symbol::INT_MOD,
         unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
     );
 
@@ -324,6 +370,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             vec![float_type(UVAR1), float_type(UVAR2)],
             float_type(UVAR3),
         ),
+    );
+
+    // mod : Float, Float -> Float
+    add_type(
+        Symbol::FLOAT_MOD,
+        unique_function(
+            vec![float_type(UVAR1), float_type(UVAR2)],
+            float_type(UVAR3),
+        ),
+    );
+
+    // sqrt : Float -> Float
+    add_type(
+        Symbol::FLOAT_SQRT,
+        unique_function(vec![float_type(UVAR1)], float_type(UVAR2)),
     );
 
     // highest : Float

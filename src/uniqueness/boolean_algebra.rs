@@ -1,5 +1,5 @@
 use self::Atom::*;
-use crate::collections::{ImSet, SendSet};
+use crate::collections::SendSet;
 use crate::subs::{Content, FlatType, Subs, Variable};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -76,13 +76,13 @@ impl Bool {
         }
     }
 
-    pub fn simplify(&self, subs: &mut Subs) -> Result<ImSet<Variable>, Atom> {
+    pub fn simplify(&self, subs: &mut Subs) -> Result<Vec<Variable>, Atom> {
         match self.0 {
             Atom::Zero => Err(Atom::Zero),
             Atom::One => Err(Atom::One),
             Atom::Variable(var) => {
-                let mut result = ImSet::default();
-                result.insert(var);
+                let mut result = Vec::new();
+                result.push(var);
 
                 for atom in &self.1 {
                     match atom {
@@ -93,7 +93,7 @@ impl Bool {
                                 match nested.simplify(subs) {
                                     Ok(variables) => {
                                         for var in variables {
-                                            result.insert(var);
+                                            result.push(var);
                                         }
                                     }
                                     Err(Atom::Zero) => {}
@@ -102,7 +102,7 @@ impl Bool {
                                 }
                             }
                             _ => {
-                                result.insert(*v);
+                                result.push(*v);
                             }
                         },
                     }

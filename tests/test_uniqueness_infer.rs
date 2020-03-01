@@ -1024,7 +1024,7 @@ mod test_infer_uniq {
                     \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr * (Attr (* | a | b) { left : (Attr a c), right : (Attr b d) }* -> Attr * { left : (Attr a c), right : (Attr b d) })",
+            "Attr * (Attr (* | a | b) { left : (Attr b c), right : (Attr a d) }* -> Attr * { left : (Attr b c), right : (Attr a d) })"
         );
     }
 
@@ -1066,7 +1066,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr * (Attr (* | a | b) [ Foo (Attr b c) (Attr a *) ]* -> Attr * [ Foo (Attr b c) (Attr * Str) ]*)",
+            "Attr * (Attr (* | a | b) [ Foo (Attr a c) (Attr b *) ]* -> Attr * [ Foo (Attr a c) (Attr * Str) ]*)"
         );
     }
 
@@ -1342,12 +1342,8 @@ mod test_infer_uniq {
                             r.tic.tac.toe
                 "#
             ),
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (a | d | e) { tac : (Attr (d | e) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (c | d | e) { bar : (Attr (c | d) { baz : (Attr c f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (a | c) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | d | e) { bar : (Attr (b | d) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (b | c) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | e) { bar : (Attr (b | e) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | d) { tac : (Attr (b | d) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (b | c | e) { tac : (Attr (c | e) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (b | d | e) { tac : (Attr (b | d) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
+
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | c) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (c | d | e) { tac : (Attr (c | d) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
         );
     }
 
@@ -2008,7 +2004,7 @@ mod test_infer_uniq {
                         List.set list 0 42
                "#
             ),
-            "Attr * (Attr (a | b) (List (Attr a Int)) -> Attr (a | b) (List (Attr a Int)))",
+            "Attr * (Attr (a | b) (List (Attr b Int)) -> Attr (a | b) (List (Attr b Int)))",
         );
     }
 
