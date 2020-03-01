@@ -606,6 +606,7 @@ define_builtins! {
         3 LIST_GET: "get"
         4 LIST_SET: "set"
         5 LIST_MAP: "map"
+        6 LIST_GET_UNSAFE: "getUnsafe" // TODO remove once we can code gen Result
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
