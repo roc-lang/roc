@@ -1,7 +1,7 @@
 use crate::builtins;
 use crate::builtins::StdLib;
 use crate::can::ident::TagName;
-use crate::collections::{default_hasher, MutMap, MutSet};
+use crate::collections::{default_hasher, MutMap};
 use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
 use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
