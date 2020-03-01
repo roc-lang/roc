@@ -493,16 +493,16 @@ pub fn constrain_expr(
             exists(vars, And(arg_cons))
         }
         List {
-            entry_var,
+            elem_var,
             loc_elems,
         } => {
             let uniq_var = var_store.fresh();
             if loc_elems.is_empty() {
-                let inferred = builtins::empty_list_type(Bool::variable(uniq_var), *entry_var);
-                exists(vec![*entry_var, uniq_var], Eq(inferred, expected, region))
+                let inferred = builtins::empty_list_type(Bool::variable(uniq_var), *elem_var);
+                exists(vec![*elem_var, uniq_var], Eq(inferred, expected, region))
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
-                let entry_type = Type::Variable(*entry_var);
+                let entry_type = Type::Variable(*elem_var);
                 let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
                 for loc_elem in loc_elems.iter() {
@@ -524,7 +524,7 @@ pub fn constrain_expr(
                 let inferred = list_type(Bool::variable(uniq_var), entry_type);
                 constraints.push(Eq(inferred, expected, region));
 
-                exists(vec![*entry_var, uniq_var], And(constraints))
+                exists(vec![*elem_var, uniq_var], And(constraints))
             }
         }
         Var(symbol) => {
