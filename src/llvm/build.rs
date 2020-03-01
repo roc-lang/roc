@@ -32,6 +32,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub subs: Subs,
+    pub pointer_bytes: u32,
 }
 
 pub fn build_expr<'a, 'ctx, 'env>(
