@@ -256,7 +256,7 @@ fn layout_from_flat_type<'a>(
                     }
                 }
                 _ => {
-                    panic!("TODO handle a tag union with mutliple tags.");
+                    panic!("TODO handle a tag union with mutliple tags: {:?}", tags);
                 }
             }
         }
