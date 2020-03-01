@@ -32,6 +32,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub subs: Subs,
+    pub pointer_bytes: u32,
 }
 
 pub fn build_expr<'a, 'ctx, 'env>(
@@ -44,7 +45,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
     use crate::mono::expr::Expr::*;
 
     match expr {
-        Int(num) => env.context.i64_type().const_int(*num as u64, false).into(),
+        Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
         Float(num) => env.context.f64_type().const_float(*num).into(),
         Cond {
             cond_lhs,
@@ -180,6 +181,80 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .build_load(*ptr, symbol.ident_string(&env.interns)),
             None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
         },
+        Str(str_literal) => {
+            if str_literal.is_empty() {
+                panic!("TODO build an empty string in LLVM");
+            } else {
+                let ctx = env.context;
+                let builder = env.builder;
+                let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+
+                let byte_type = ctx.i8_type();
+                let nul_terminator = byte_type.const_zero();
+                let len = ctx.i32_type().const_int(bytes_len as u64, false);
+                let ptr = env
+                    .builder
+                    .build_array_malloc(ctx.i8_type(), len, "str_ptr")
+                    .unwrap();
+
+                // Copy the bytes from the string literal into the array
+                for (index, byte) in str_literal.bytes().enumerate() {
+                    let index = ctx.i32_type().const_int(index as u64, false);
+                    let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "byte") };
+
+                    builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
+                }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false);
+                let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
+
+                builder.build_store(elem_ptr, nul_terminator);
+
+                BasicValueEnum::PointerValue(ptr)
+            }
+        }
+        Array { elem_layout, elems } => {
+            if elems.is_empty() {
+                panic!("TODO build an empty string in LLVM");
+            } else {
+                let elem_bytes = elem_layout.stack_size(env.pointer_bytes) as u64;
+                let bytes_len = elem_bytes * (elems.len() + 1) as u64/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+
+                let ctx = env.context;
+                let builder = env.builder;
+
+                let elem_type = basic_type_from_layout(ctx, elem_layout);
+                let nul_terminator = elem_type.into_int_type().const_zero();
+                let len = ctx.i32_type().const_int(bytes_len, false);
+                let ptr = env
+                    .builder
+                    .build_array_malloc(elem_type, len, "str_ptr")
+                    .unwrap();
+
+                // Copy the bytes from the string literal into the array
+                for (index, elem) in elems.iter().enumerate() {
+                    let offset = ctx.i32_type().const_int(elem_bytes * index as u64, false);
+                    let elem_ptr = unsafe { builder.build_gep(ptr, &[offset], "elem") };
+
+                    let val = build_expr(env, &scope, parent, &elem, procs);
+
+                    builder.build_store(elem_ptr, val);
+                }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false);
+                let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
+
+                builder.build_store(elem_ptr, nul_terminator);
+
+                BasicValueEnum::PointerValue(ptr)
+            }
+        }
         _ => {
             panic!("I don't yet know how to LLVM build {:?}", expr);
         }
@@ -275,34 +350,34 @@ fn build_switch<'a, 'ctx, 'env>(
         let int_val = context.i64_type().const_int(*int as u64, false);
         let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
 
-        cases.push((int_val, &*arena.alloc(block)));
+        cases.push((int_val, block));
     }
 
     let default_block = context.append_basic_block(parent, "default");
 
-    builder.build_switch(cond, &default_block, &cases);
+    builder.build_switch(cond, default_block, &cases);
 
     for ((_, branch_expr), (_, block)) in branches.iter().zip(cases) {
-        builder.position_at_end(&block);
+        builder.position_at_end(block);
 
         let branch_val = build_expr(env, scope, parent, branch_expr, procs);
 
-        builder.build_unconditional_branch(&cont_block);
+        builder.build_unconditional_branch(cont_block);
 
         incoming.push((branch_val, block));
     }
 
     // The block for the conditional's default branch.
-    builder.position_at_end(&default_block);
+    builder.position_at_end(default_block);
 
     let default_val = build_expr(env, scope, parent, default_branch, procs);
 
-    builder.build_unconditional_branch(&cont_block);
+    builder.build_unconditional_branch(cont_block);
 
-    incoming.push((default_val, &default_block));
+    incoming.push((default_val, default_block));
 
     // emit merge block
-    builder.position_at_end(&cont_block);
+    builder.position_at_end(cont_block);
 
     let phi = builder.build_phi(ret_type, "branch");
 
@@ -333,30 +408,30 @@ fn build_phi2<'a, 'ctx, 'env>(
     let else_block = context.append_basic_block(parent, "else");
     let cont_block = context.append_basic_block(parent, "branchcont");
 
-    builder.build_conditional_branch(comparison, &then_block, &else_block);
+    builder.build_conditional_branch(comparison, then_block, else_block);
 
     // build then block
-    builder.position_at_end(&then_block);
+    builder.position_at_end(then_block);
     let then_val = build_expr(env, scope, parent, pass, procs);
-    builder.build_unconditional_branch(&cont_block);
+    builder.build_unconditional_branch(cont_block);
 
     let then_block = builder.get_insert_block().unwrap();
 
     // build else block
-    builder.position_at_end(&else_block);
+    builder.position_at_end(else_block);
     let else_val = build_expr(env, scope, parent, fail, procs);
-    builder.build_unconditional_branch(&cont_block);
+    builder.build_unconditional_branch(cont_block);
 
     let else_block = builder.get_insert_block().unwrap();
 
     // emit merge block
-    builder.position_at_end(&cont_block);
+    builder.position_at_end(cont_block);
 
     let phi = builder.build_phi(ret_type, "branch");
 
     phi.add_incoming(&[
-        (&Into::<BasicValueEnum>::into(then_val), &then_block),
-        (&Into::<BasicValueEnum>::into(else_val), &else_block),
+        (&Into::<BasicValueEnum>::into(then_val), then_block),
+        (&Into::<BasicValueEnum>::into(else_val), else_block),
     ]);
 
     phi.as_basic_value()
@@ -386,7 +461,7 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
 
     match entry.get_first_instruction() {
         Some(first_instr) => builder.position_before(&first_instr),
-        None => builder.position_at_end(&entry),
+        None => builder.position_at_end(entry),
     }
 
     builder.build_alloca(basic_type, name)
@@ -441,7 +516,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let entry = context.append_basic_block(fn_val, "entry");
     let builder = env.builder;
 
-    builder.position_at_end(&entry);
+    builder.position_at_end(entry);
 
     let mut scope = ImMap::default();
 
@@ -513,6 +588,21 @@ fn call_with_args<'a, 'ctx, 'env>(
             );
 
             BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::LIST_GET_UNSAFE => {
+            debug_assert!(args.len() == 2);
+
+            let list_ptr = args[0].into_pointer_value();
+            let elem_index = args[1].into_int_value();
+
+            let builder = env.builder;
+            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
+            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
+            let offset = builder.build_int_mul(elem_index, elem_size, "MUL_OFFSET");
+
+            let elem_ptr = unsafe { builder.build_gep(list_ptr, &[offset], "elem") };
+
+            builder.build_load(elem_ptr, "List.get")
         }
         _ => {
             let fn_val = env

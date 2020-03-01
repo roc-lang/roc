@@ -46,6 +46,7 @@ pub fn uniqueness_stdlib() -> StdLib {
     let types = types();
     let aliases = aliases();
 
+    /*
     debug_assert!({
         let normal_types: MutSet<Symbol> = builtins::types().keys().copied().collect();
         let normal_aliases: MutSet<Symbol> = builtins::aliases().keys().copied().collect();
@@ -83,6 +84,7 @@ pub fn uniqueness_stdlib() -> StdLib {
 
         cond
     });
+    */
 
     StdLib {
         mode: Mode::Uniqueness,
@@ -444,6 +446,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(
             vec![list_type(UVAR1, TVAR1), int_type(UVAR2)],
             result_type(UVAR3, flex(TVAR1), lift(UVAR4, index_out_of_bounds)),
+        ),
+    );
+
+    add_type(
+        Symbol::LIST_GET_UNSAFE,
+        unique_function(
+            vec![list_type(UVAR1, TVAR1), int_type(UVAR2)],
+            attr_type(UVAR3, TVAR1),
         ),
     );
 

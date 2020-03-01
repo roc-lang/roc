@@ -171,17 +171,17 @@ pub fn constrain_expr(
         }
         Str(_) | BlockStr(_) => Eq(str_type(), expected, region),
         List {
-            entry_var,
+            elem_var,
             loc_elems,
             ..
         } => {
             if loc_elems.is_empty() {
                 exists(
-                    vec![*entry_var],
-                    Eq(empty_list_type(*entry_var), expected, region),
+                    vec![*elem_var],
+                    Eq(empty_list_type(*elem_var), expected, region),
                 )
             } else {
-                let list_elem_type = Type::Variable(*entry_var);
+                let list_elem_type = Type::Variable(*elem_var);
                 let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
                 for loc_elem in loc_elems {
@@ -195,7 +195,7 @@ pub fn constrain_expr(
 
                 constraints.push(Eq(list_type(list_elem_type), expected, region));
 
-                exists(vec![*entry_var], And(constraints))
+                exists(vec![*elem_var], And(constraints))
             }
         }
         Call(boxed, loc_args, _application_style) => {

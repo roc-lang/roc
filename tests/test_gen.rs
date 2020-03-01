@@ -15,7 +15,6 @@ mod test_gen {
     use bumpalo::Bump;
     use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
     use cranelift_codegen::ir::InstBuilder;
-    use cranelift_codegen::isa;
     use cranelift_codegen::settings;
     use cranelift_codegen::verifier::verify_function;
     use cranelift_module::{default_libcall_names, Linkage, Module};
@@ -28,42 +27,33 @@ mod test_gen {
     use roc::collections::{ImMap, MutMap};
     use roc::crane::build::{declare_proc, define_proc_body, ScopeEntry};
     use roc::crane::convert::type_from_layout;
+    use roc::crane::imports::define_malloc;
     use roc::infer::infer_expr;
     use roc::llvm::build::{build_proc, build_proc_header};
     use roc::llvm::convert::basic_type_from_layout;
     use roc::mono::expr::Expr;
     use roc::mono::layout::Layout;
     use roc::subs::Subs;
+    use std::ffi::{CStr, CString};
     use std::mem;
-    use target_lexicon::HOST;
+    use std::os::raw::c_char;
 
     macro_rules! assert_crane_evals_to {
-        ($src:expr, $expected:expr, $ty:ty) => {
+        ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             let arena = Bump::new();
-            let mut module: Module<SimpleJITBackend> =
-                Module::new(SimpleJITBuilder::new(default_libcall_names()));
-            let mut ctx = module.make_context();
-            let mut func_ctx = FunctionBuilderContext::new();
-
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
             let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
-            let cfg = match isa::lookup(HOST) {
-                Err(err) => {
-                    panic!(
-                        "Unsupported target ISA for test runner {:?} - error: {:?}",
-                        HOST, err
-                    );
-                }
-                Ok(isa_builder) => {
-                    let isa = isa_builder.finish(shared_flags.clone());
+            let mut module: Module<SimpleJITBackend> =
+                Module::new(SimpleJITBuilder::new(default_libcall_names()));
 
-                    isa.frontend_config()
-                }
-            };
+            let cfg = module.target_config();
+            let mut ctx = module.make_context();
+            let malloc = define_malloc(&mut module, &mut ctx);
+            let mut func_ctx = FunctionBuilderContext::new();
 
             let main_fn_name = "$Test.main";
 
@@ -80,6 +70,7 @@ mod test_gen {
                 subs,
                 interns,
                 cfg,
+                malloc
             };
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
@@ -104,7 +95,6 @@ mod test_gen {
                 }
             }
 
-            // Now that scope includes all the Procs, we can build their bodies.
             for (proc, sig, fn_id) in declared {
                 define_proc_body(
                     &env,
@@ -140,24 +130,24 @@ mod test_gen {
             {
                 let mut builder: FunctionBuilder =
                     FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
-                let block = builder.create_ebb();
+                let block = builder.create_block();
 
                 builder.switch_to_block(block);
                 // TODO try deleting this line and seeing if everything still works.
-                builder.append_ebb_params_for_function_params(block);
+                builder.append_block_params_for_function_params(block);
 
                 let main_body =
                     roc::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
                 builder.ins().return_(&[main_body]);
-                // TODO re-enable this once Switch stops making unsealed
-                // EBBs, e.g. https://docs.rs/cranelift-frontend/0.52.0/src/cranelift_frontend/switch.rs.html#143
+                // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+                // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
                 // builder.seal_block(block);
                 builder.seal_all_blocks();
                 builder.finalize();
             }
 
-            module.define_function(main_fn, &mut ctx).unwrap();
+            module.define_function(main_fn, &mut ctx).expect("declare main");
             module.clear_context(&mut ctx);
 
             // Perform linking
@@ -169,14 +159,17 @@ mod test_gen {
             }
 
             let main_ptr = module.get_finalized_function(main_fn);
-            let run_main = unsafe { mem::transmute::<_, fn() -> $ty>(main_ptr) };
 
-            assert_eq!(run_main(), $expected);
+            unsafe {
+                let run_main =  mem::transmute::<_, fn() -> $ty>(main_ptr) ;
+
+                assert_eq!($transform(run_main()), $expected);
+            }
         };
     }
 
     macro_rules! assert_llvm_evals_to {
-        ($src:expr, $expected:expr, $ty:ty) => {
+        ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             let arena = Bump::new();
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
@@ -208,9 +201,16 @@ mod test_gen {
             let subs = solved.into_inner();
             let layout = Layout::from_content(&arena, content, &subs)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_fn_type = basic_type_from_layout( &context, &layout)
+            let main_fn_type = basic_type_from_layout(&context, &layout)
                 .fn_type(&[], false);
             let main_fn_name = "$Test.main";
+
+            let execution_engine =
+                module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .expect("Error creating JIT execution engine for test");
+
+            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
 
             // Compile and add all the Procs before adding main
             let mut env = roc::llvm::build::Env {
@@ -220,6 +220,7 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
+                pointer_bytes
             };
             let mut procs = MutMap::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -265,7 +266,7 @@ mod test_gen {
             // Add main's body
             let basic_block = context.append_basic_block(main_fn, "entry");
 
-            builder.position_at_end(&basic_block);
+            builder.position_at_end(basic_block);
 
             let ret = roc::llvm::build::build_expr(
                 &env,
@@ -277,19 +278,17 @@ mod test_gen {
 
             builder.build_return(Some(&ret));
 
+            // Uncomment this to see the module's un-optimized LLVM instruction output:
+            // env.module.print_to_stderr();
+
             if main_fn.verify(true) {
                 fpm.run_on(&main_fn);
             } else {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
-            // Uncomment this to see the module's LLVM instruction output:
+            // Uncomment this to see the module's optimized LLVM instruction output:
             // env.module.print_to_stderr();
-
-            let execution_engine = env
-                .module
-                .create_jit_execution_engine(OptimizationLevel::None)
-                .expect("Error creating JIT execution engine for test");
 
             unsafe {
                 let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
@@ -298,7 +297,7 @@ mod test_gen {
                     .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
                     .expect("errored");
 
-                assert_eq!(main.call(), $expected);
+                assert_eq!($transform(main.call()), $expected);
             }
         };
     }
@@ -310,12 +309,31 @@ mod test_gen {
             // parsing the source, so that there's no chance their passing
             // or failing depends on leftover state from the previous one.
             {
-                assert_crane_evals_to!($src, $expected, $ty);
+                assert_crane_evals_to!($src, $expected, $ty, (|val| val));
             }
             {
-                assert_llvm_evals_to!($src, $expected, $ty);
+                assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
             }
         };
+        ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+            // Same as above, except with an additional transformation argument.
+            {
+                assert_crane_evals_to!($src, $expected, $ty, $transform);
+            }
+            {
+                assert_llvm_evals_to!($src, $expected, $ty, $transform);
+            }
+        };
+    }
+
+    #[test]
+    fn basic_str() {
+        assert_evals_to!(
+            "\"shirt and hat\"",
+            CString::new("shirt and hat").unwrap().as_c_str(),
+            *const c_char,
+            CStr::from_ptr
+        );
     }
 
     #[test]
@@ -329,14 +347,19 @@ mod test_gen {
     }
 
     #[test]
+    fn get_int_list() {
+        assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64);
+    }
+
+    #[test]
     fn branch_first_float() {
         assert_evals_to!(
             indoc!(
                 r#"
-                        when 1.23 is
-                            1.23 -> 12
-                            _ -> 34
-                    "#
+                    when 1.23 is
+                        1.23 -> 12
+                        _ -> 34
+                "#
             ),
             12,
             i64

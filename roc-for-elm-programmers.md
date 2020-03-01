@@ -683,10 +683,13 @@ Like Elm, Roc has two numeric types: `Int` and `Float`. `Float` is the same as i
 Elm: it's a 64-bit floating point number. In Roc, `Int` is a 64-bit integer. Also
 unlike Elm, if you encounter an overflow with either of them, you get a runtime
 exception rather than wrapping overflow behavior (or a float becoming `Infinity` or `-Infinity`).
+You can opt into wrapping overflow instead with functions like `Int.wrapAdd`,
+or into a function that returns a `Result` that gives `Err` if it overflows, like `Int.tryAdd`.
 
-Roc does not let calculations result in `Infinity`, `-Infinity`, or `NaN`.
-Any operation which would result in one of these (such as `sqrt` or `/`) returns
-a `Result`.
+Roc does not let floating point calculations result in `Infinity`, `-Infinity`, or `NaN`.
+Any operation which would result in one of these (such as `sqrt` or `/`) will
+result in a runtime exception. Similarly to overflow, you can opt into handling these
+a different way, such as `Float.trySqrt` which returns a `Result`.
 
 Also like Elm, number literals with decimal points are `Float`. However, number
 literals *without* a decimal point are always `Int`. So `x / 2` will never

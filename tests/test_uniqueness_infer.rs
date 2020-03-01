@@ -1024,7 +1024,7 @@ mod test_infer_uniq {
                     \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr * (Attr (* | a | b) { left : (Attr b c), right : (Attr a d) }* -> Attr * { left : (Attr b c), right : (Attr a d) })"
+            "Attr * (Attr (* | a | b) { left : (Attr a c), right : (Attr b d) }* -> Attr * { left : (Attr a c), right : (Attr b d) })"
         );
     }
 
@@ -1289,7 +1289,7 @@ mod test_infer_uniq {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
+            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
         );
     }
 
@@ -1307,7 +1307,7 @@ mod test_infer_uniq {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e)"
+            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e)"
         );
     }
 
@@ -1342,8 +1342,8 @@ mod test_infer_uniq {
                             r.tic.tac.toe
                 "#
             ),
-
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | c) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (c | d | e) { tac : (Attr (c | d) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | e) { bar : (Attr (a | e) { baz : (Attr e f) }*) }*), tic : (Attr (c | d | e) { tac : (Attr (d | e) { toe : (Attr e f) }*) }*) }* -> Attr e f)"
+            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | c) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (c | d | e) { tac : (Attr (c | d) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
         );
     }
 
@@ -1963,7 +1963,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \list -> 
+                \list ->
                     p = List.get list 1
                     q = List.get list 1
 
@@ -1979,12 +1979,12 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \list -> 
+                \list ->
                     when List.get list 0 is
-                        Ok v -> 
+                        Ok v ->
                             List.set list 0 (v + 1)
 
-                        Err _ -> 
+                        Err _ ->
                             list
                "#
             ),
@@ -1997,7 +1997,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \list -> 
+                \list ->
                     if List.isEmpty list then
                         list
                     else
@@ -2010,7 +2010,7 @@ mod test_infer_uniq {
 
     #[test]
     fn list_set() {
-        infer_eq(indoc!(r#"List.set"#), "Attr * (Attr (* | a | b) (List (Attr b c)), Attr * Int, Attr (a | b) c -> Attr * (List (Attr b c)))");
+        infer_eq(indoc!(r#"List.set"#), "Attr * (Attr (* | a | b) (List (Attr a c)), Attr * Int, Attr (a | b) c -> Attr * (List (Attr a c)))");
     }
 
     #[test]
@@ -2055,7 +2055,7 @@ mod test_infer_uniq {
     fn list_push() {
         infer_eq(
             indoc!(r#"List.push"#),
-            "Attr * (Attr (* | a | b) (List (Attr b c)), Attr (a | b) c -> Attr * (List (Attr b c)))"
+            "Attr * (Attr (* | a | b) (List (Attr a c)), Attr (a | b) c -> Attr * (List (Attr a c)))"
         );
     }
 

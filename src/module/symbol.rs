@@ -610,6 +610,7 @@ define_builtins! {
         7 LIST_LENGTH: "length"
         8 LIST_FOLDL: "foldl"
         9 LIST_FOLDR: "foldr"
+        10 LIST_GET_UNSAFE: "getUnsafe" // TODO remove once we can code gen Result
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
