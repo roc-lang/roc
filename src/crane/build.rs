@@ -247,8 +247,37 @@ pub fn build_expr<'a, B: Backend>(
                 // TODO: Instead of NUL-terminating, return a struct
                 // with the pointer and also the length and capacity.
                 let nul_terminator = builder.ins().iconst(types::I8, 0);
-                let index = bytes_len as u64 - 1;
-                let offset = Offset32::new(index as i32);
+                let index = bytes_len as i32 - 1;
+                let offset = Offset32::new(index);
+
+                builder.ins().store(mem_flags, nul_terminator, ptr, offset);
+
+                ptr
+            }
+        }
+        Array { elem_layout, elems } => {
+            if elems.is_empty() {
+                panic!("TODO build an empty Array in Crane");
+            } else {
+                let elem_bytes = elem_layout.stack_size(env.cfg) as usize;
+                let bytes_len = (elem_bytes * elems.len()) + 1/* TODO drop the +1 when we have structs and this is no longer NUL-terminated. */;
+                let ptr = call_malloc(env, module, builder, bytes_len);
+                let mem_flags = MemFlags::new();
+
+                // Copy the elements from the literal into the array
+                for (index, elem) in elems.iter().enumerate() {
+                    let offset = Offset32::new(elem_bytes as i32 * index as i32);
+                    let val = build_expr(env, scope, module, builder, elem, procs);
+
+                    builder.ins().store(mem_flags, val, ptr, offset);
+                }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                let nul_terminator = builder.ins().iconst(types::I8, 0);
+                let index = bytes_len as i32 - 1;
+                let offset = Offset32::new(index);
 
                 builder.ins().store(mem_flags, nul_terminator, ptr, offset);
 

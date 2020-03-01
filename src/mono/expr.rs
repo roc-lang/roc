@@ -105,6 +105,11 @@ pub enum Expr<'a> {
         struct_layout: Layout<'a>,
     },
 
+    Array {
+        elem_layout: Layout<'a>,
+        elems: &'a [Expr<'a>],
+    },
+
     RuntimeError(&'a str),
 }
 
@@ -287,6 +292,31 @@ fn from_can<'a>(
             }
         }
 
+        List {
+            elem_var,
+            loc_elems,
+        } => {
+            let subs = env.subs;
+            let arena = env.arena;
+            let content = subs.get_without_compacting(elem_var).content;
+            let elem_layout = match Layout::from_content(arena, content, subs) {
+                Ok(layout) => layout,
+                Err(()) => {
+                    panic!("TODO gracefully handle List with invalid element layout");
+                }
+            };
+
+            let mut elems = Vec::with_capacity_in(loc_elems.len(), arena);
+
+            for loc_elem in loc_elems {
+                elems.push(from_can(env, loc_elem.value, procs, None));
+            }
+
+            Expr::Array {
+                elem_layout,
+                elems: elems.into_bump_slice(),
+            }
+        }
         other => panic!("TODO convert canonicalized {:?} to ll::Expr", other),
     }
 }
