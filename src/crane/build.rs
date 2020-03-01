@@ -109,7 +109,7 @@ pub fn build_expr<'a, B: Backend>(
 
                 let slot = builder.create_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
-                    layout.stack_size(cfg),
+                    layout.stack_size(cfg.pointer_bytes() as u32),
                 ));
 
                 builder.ins().stack_store(val, slot, Offset32::new(0));
@@ -199,7 +199,7 @@ pub fn build_expr<'a, B: Backend>(
             // Create a slot
             let slot = builder.create_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
-                layout.stack_size(cfg),
+                layout.stack_size(cfg.pointer_bytes() as u32),
             ));
 
             // Create instructions for storing each field's expression
@@ -259,7 +259,7 @@ pub fn build_expr<'a, B: Backend>(
             if elems.is_empty() {
                 panic!("TODO build an empty Array in Crane");
             } else {
-                let elem_bytes = elem_layout.stack_size(env.cfg) as usize;
+                let elem_bytes = elem_layout.stack_size(env.cfg.pointer_bytes() as u32) as usize;
                 let bytes_len = (elem_bytes * elems.len()) + 1/* TODO drop the +1 when we have structs and this is no longer NUL-terminated. */;
                 let ptr = call_malloc(env, module, builder, bytes_len);
                 let mem_flags = MemFlags::new();

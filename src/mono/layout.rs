@@ -4,7 +4,6 @@ use crate::module::symbol::Symbol;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use cranelift_codegen::isa::TargetFrontendConfig;
 
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,31 +57,23 @@ impl<'a> Layout<'a> {
         }
     }
 
-    /// TODO this will probably need to move to crane:: because
-    /// LLVM gets the answer using different APIs! Also, might be
-    /// nice to rename it to bytes_size, both to include the units
-    /// and also because this is the size on the stack *and* the heap!
-    pub fn stack_size(&self, cfg: TargetFrontendConfig) -> u32 {
+    pub fn stack_size(&self, pointer_size: u32) -> u32 {
         use Layout::*;
 
         match self {
-            Builtin(builtin) => builtin.stack_size(cfg),
+            Builtin(builtin) => builtin.stack_size(pointer_size),
             Struct(fields) => {
                 let mut sum = 0;
 
                 for (_, field_layout) in *fields {
-                    sum += field_layout.stack_size(cfg);
+                    sum += field_layout.stack_size(pointer_size);
                 }
 
                 sum
             }
-            Pointer(_) | FunctionPointer(_, _) => pointer_size(cfg),
+            Pointer(_) | FunctionPointer(_, _) => pointer_size,
         }
     }
-}
-
-fn pointer_size(cfg: TargetFrontendConfig) -> u32 {
-    cfg.pointer_bytes() as u32
 }
 
 impl<'a> Builtin<'a> {
@@ -94,15 +85,15 @@ impl<'a> Builtin<'a> {
     const MAP_WORDS: u32 = 6;
     const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
 
-    pub fn stack_size(&self, cfg: TargetFrontendConfig) -> u32 {
+    pub fn stack_size(&self, pointer_size: u32) -> u32 {
         use Builtin::*;
 
         match self {
             Int64 => Builtin::I64_SIZE,
             Float64 => Builtin::F64_SIZE,
-            Str => Builtin::STR_WORDS * pointer_size(cfg),
-            Map(_, _) => Builtin::MAP_WORDS * pointer_size(cfg),
-            Set(_) => Builtin::SET_WORDS * pointer_size(cfg),
+            Str => Builtin::STR_WORDS * pointer_size,
+            Map(_, _) => Builtin::MAP_WORDS * pointer_size,
+            Set(_) => Builtin::SET_WORDS * pointer_size,
         }
     }
 }
