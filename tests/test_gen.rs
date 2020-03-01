@@ -347,8 +347,8 @@ mod test_gen {
     }
 
     #[test]
-    fn basic_int_list() {
-        assert_crane_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64, |a| a);
+    fn get_int_list() {
+        assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64);
     }
 
     #[test]

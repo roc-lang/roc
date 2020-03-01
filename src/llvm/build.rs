@@ -216,6 +216,45 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::PointerValue(ptr)
             }
         }
+        Array { elem_layout, elems } => {
+            if elems.is_empty() {
+                panic!("TODO build an empty string in LLVM");
+            } else {
+                let elem_bytes = elem_layout.stack_size(env.pointer_bytes) as u64;
+                let bytes_len = elem_bytes * (elems.len() + 1) as u64/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+
+                let ctx = env.context;
+                let builder = env.builder;
+
+                let elem_type = basic_type_from_layout(ctx, elem_layout);
+                let nul_terminator = elem_type.into_int_type().const_zero();
+                let len = ctx.i32_type().const_int(bytes_len, false);
+                let ptr = env
+                    .builder
+                    .build_array_malloc(elem_type, len, "str_ptr")
+                    .unwrap();
+
+                // Copy the bytes from the string literal into the array
+                for (index, elem) in elems.iter().enumerate() {
+                    let offset = ctx.i32_type().const_int(elem_bytes * index as u64, false);
+                    let elem_ptr = unsafe { builder.build_gep(ptr, &[offset], "elem") };
+
+                    let val = build_expr(env, &scope, parent, &elem, procs);
+
+                    builder.build_store(elem_ptr, val);
+                }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false);
+                let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
+
+                builder.build_store(elem_ptr, nul_terminator);
+
+                BasicValueEnum::PointerValue(ptr)
+            }
+        }
         _ => {
             panic!("I don't yet know how to LLVM build {:?}", expr);
         }
@@ -549,6 +588,21 @@ fn call_with_args<'a, 'ctx, 'env>(
             );
 
             BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::LIST_GET_UNSAFE => {
+            debug_assert!(args.len() == 2);
+
+            let list_ptr = args[0].into_pointer_value();
+            let elem_index = args[1].into_int_value();
+
+            let builder = env.builder;
+            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
+            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
+            let offset = builder.build_int_mul(elem_index, elem_size, "MUL_OFFSET");
+
+            let elem_ptr = unsafe { builder.build_gep(list_ptr, &[offset], "elem") };
+
+            builder.build_load(elem_ptr, "List.get")
         }
         _ => {
             let fn_val = env
