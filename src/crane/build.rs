@@ -247,8 +247,37 @@ pub fn build_expr<'a, B: Backend>(
                 // TODO: Instead of NUL-terminating, return a struct
                 // with the pointer and also the length and capacity.
                 let nul_terminator = builder.ins().iconst(types::I8, 0);
-                let index = bytes_len as u64 - 1;
-                let offset = Offset32::new(index as i32);
+                let index = bytes_len as i32 - 1;
+                let offset = Offset32::new(index);
+
+                builder.ins().store(mem_flags, nul_terminator, ptr, offset);
+
+                ptr
+            }
+        }
+        Array { elem_layout, elems } => {
+            if elems.is_empty() {
+                panic!("TODO build an empty Array in Crane");
+            } else {
+                let elem_bytes = elem_layout.stack_size(env.cfg) as usize;
+                let bytes_len = (elem_bytes * elems.len()) + 1/* TODO drop the +1 when we have structs and this is no longer NUL-terminated. */;
+                let ptr = call_malloc(env, module, builder, bytes_len);
+                let mem_flags = MemFlags::new();
+
+                // Copy the elements from the literal into the array
+                for (index, elem) in elems.iter().enumerate() {
+                    let offset = Offset32::new(elem_bytes as i32 * index as i32);
+                    let val = build_expr(env, scope, module, builder, elem, procs);
+
+                    builder.ins().store(mem_flags, val, ptr, offset);
+                }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                let nul_terminator = builder.ins().iconst(types::I8, 0);
+                let index = bytes_len as i32 - 1;
+                let offset = Offset32::new(index);
 
                 builder.ins().store(mem_flags, nul_terminator, ptr, offset);
 
@@ -554,6 +583,26 @@ fn call_with_args<'a, B: Backend>(
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);
             builder.ins().imul(args[0], args[1])
+        }
+        Symbol::LIST_GET_UNSAFE => {
+            debug_assert!(args.len() == 2);
+
+            let list_ptr = args[0];
+            let elem_index = args[1];
+
+            let elem_type = Type::int(64).unwrap(); // TODO Look this up instead of hardcoding it!
+            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
+            let elem_size = builder.ins().iconst(types::I64, elem_bytes);
+
+            // Multiply the requested index by the size of each element.
+            let offset = builder.ins().imul(elem_index, elem_size);
+
+            builder.ins().load_complex(
+                elem_type,
+                MemFlags::new(),
+                &[list_ptr, offset],
+                Offset32::new(0),
+            )
         }
         _ => {
             let fn_id = match scope.get(&symbol) {

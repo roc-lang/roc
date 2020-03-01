@@ -344,14 +344,19 @@ mod test_gen {
     }
 
     #[test]
+    fn basic_int_list() {
+        assert_crane_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64, |a| a);
+    }
+
+    #[test]
     fn branch_first_float() {
         assert_evals_to!(
             indoc!(
                 r#"
-                        when 1.23 is
-                            1.23 -> 12
-                            _ -> 34
-                    "#
+                    when 1.23 is
+                        1.23 -> 12
+                        _ -> 34
+                "#
             ),
             12,
             i64

@@ -58,6 +58,10 @@ impl<'a> Layout<'a> {
         }
     }
 
+    /// TODO this will probably need to move to crane:: because
+    /// LLVM gets the answer using different APIs! Also, might be
+    /// nice to rename it to bytes_size, both to include the units
+    /// and also because this is the size on the stack *and* the heap!
     pub fn stack_size(&self, cfg: TargetFrontendConfig) -> u32 {
         use Layout::*;
 
@@ -252,7 +256,7 @@ fn layout_from_flat_type<'a>(
                     }
                 }
                 _ => {
-                    panic!("TODO handle a tag union with mutliple tags.");
+                    panic!("TODO handle a tag union with mutliple tags: {:?}", tags);
                 }
             }
         }
