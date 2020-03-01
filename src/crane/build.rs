@@ -584,6 +584,26 @@ fn call_with_args<'a, B: Backend>(
             debug_assert!(args.len() == 2);
             builder.ins().imul(args[0], args[1])
         }
+        Symbol::LIST_GET_UNSAFE => {
+            debug_assert!(args.len() == 2);
+
+            let list_ptr = args[0];
+            let elem_index = args[1];
+
+            let elem_type = Type::int(64).unwrap(); // TODO Look this up instead of hardcoding it!
+            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
+            let elem_size = builder.ins().iconst(types::I64, elem_bytes);
+
+            // Multiply the requested index by the size of each element.
+            let offset = builder.ins().imul(elem_index, elem_size);
+
+            builder.ins().load_complex(
+                elem_type,
+                MemFlags::new(),
+                &[list_ptr, offset],
+                Offset32::new(0),
+            )
+        }
         _ => {
             let fn_id = match scope.get(&symbol) {
                     Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
