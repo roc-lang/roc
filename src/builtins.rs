@@ -358,7 +358,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // get : List a, Int -> Result a [ IndexOutOfBounds ]*
+    // get : List elem, Int -> Result elem [ IndexOutOfBounds ]*
     let index_out_of_bounds = SolvedType::TagUnion(
         vec![(TagName::Global("IndexOutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -380,7 +380,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // set : List a, Int, a -> List a
+    // set : List elem, Int, elem -> List elem
     add_type(
         Symbol::LIST_SET,
         SolvedType::Func(
@@ -389,7 +389,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // map : List a, (a -> b) -> List b
+    // map : List before, (before -> after) -> List after
     add_type(
         Symbol::LIST_MAP,
         SolvedType::Func(
