@@ -38,7 +38,7 @@ mod test_infer {
 
         assert_correct_variable_usage(&constraint);
 
-        for (name, var) in output.rigids {
+        for (var, name) in output.ftv {
             subs.rigid_var(var, name);
         }
 
@@ -2292,6 +2292,24 @@ mod test_infer {
                 "#
             ),
             "Result Int [ IndexOutOfBounds ]*",
+        );
+    }
+
+    #[test]
+    fn use_rigid_twice() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                id1 : q -> q
+                id1 = \x -> x
+
+                id2 : q -> q
+                id2 = \x -> x
+
+                { id1, id2 }
+                "#
+            ),
+            "{ id1 : q -> q, id2 : q -> q }",
         );
     }
 }
