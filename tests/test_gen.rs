@@ -352,6 +352,11 @@ mod test_gen {
     }
 
     #[test]
+    fn set_int_list() {
+        assert_evals_to!("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", 42, i64);
+    }
+
+    #[test]
     fn branch_first_float() {
         assert_evals_to!(
             indoc!(
