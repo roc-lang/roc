@@ -392,18 +392,27 @@ pub fn run(
     };
     let rank = Rank::toplevel();
     let state = solve(
-        env, state, rank, &mut pools, problems, &mut subs, constraint,
+        env,
+        state,
+        rank,
+        &mut pools,
+        problems,
+        &mut MutMap::default(),
+        &mut subs,
+        constraint,
     );
 
     (Solved(subs), state.env)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn solve(
     env: &Env,
     state: State,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<Problem>,
+    cached_aliases: &mut MutMap<Symbol, Variable>,
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
@@ -417,8 +426,14 @@ fn solve(
             copy
         }
         Eq(typ, expected_type, _region) => {
-            let actual = type_to_var(subs, rank, pools, typ);
-            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                cached_aliases,
+                expected_type.get_type_ref(),
+            );
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -460,7 +475,13 @@ fn solve(
             // is being looked up in this module, then we use our Subs as both
             // the source and destination.
             let actual = deep_copy_var(subs, rank, pools, var);
-            let expected = type_to_var(subs, rank, pools, expected_type.get_type_ref());
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                cached_aliases,
+                expected_type.get_type_ref(),
+            );
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -474,14 +495,23 @@ fn solve(
             let mut state = state;
 
             for sub_constraint in sub_constraints.iter() {
-                state = solve(env, state, rank, pools, problems, subs, sub_constraint);
+                state = solve(
+                    env,
+                    state,
+                    rank,
+                    pools,
+                    problems,
+                    cached_aliases,
+                    subs,
+                    sub_constraint,
+                );
             }
 
             state
         }
         Pattern(_region, _category, typ, expected) => {
-            let actual = type_to_var(subs, rank, pools, typ);
-            let expected = type_to_var(subs, rank, pools, expected.get_type_ref());
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let expected = type_to_var(subs, rank, pools, cached_aliases, expected.get_type_ref());
             let Unified { vars, mismatches } = unify(subs, actual, expected);
 
             // TODO use region when reporting a problem
@@ -504,6 +534,7 @@ fn solve(
                         rank,
                         pools,
                         problems,
+                        cached_aliases,
                         subs,
                         &let_con.defs_constraint,
                     )
@@ -515,6 +546,7 @@ fn solve(
                         rank,
                         pools,
                         problems,
+                        cached_aliases,
                         subs,
                         &let_con.defs_constraint,
                     );
@@ -523,7 +555,7 @@ fn solve(
                     let mut local_def_vars = ImMap::default();
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(subs, rank, pools, &loc_type.value);
+                        let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
 
                         local_def_vars.insert(
                             symbol.clone(),
@@ -541,7 +573,16 @@ fn solve(
                         }
                     }
 
-                    let new_state = solve(&new_env, state, rank, pools, problems, subs, ret_con);
+                    let new_state = solve(
+                        &new_env,
+                        state,
+                        rank,
+                        pools,
+                        problems,
+                        cached_aliases,
+                        subs,
+                        ret_con,
+                    );
 
                     for (symbol, loc_var) in local_def_vars {
                         check_for_infinite_type(subs, problems, symbol, loc_var);
@@ -578,7 +619,8 @@ fn solve(
                         for (symbol, loc_type) in let_con.def_types.iter() {
                             let def_type = loc_type.value.clone();
 
-                            let var = type_to_var(subs, next_rank, next_pools, &def_type);
+                            let var =
+                                type_to_var(subs, next_rank, next_pools, cached_aliases, &def_type);
 
                             local_def_vars.insert(
                                 symbol.clone(),
@@ -598,6 +640,7 @@ fn solve(
                             next_rank,
                             next_pools,
                             problems,
+                            cached_aliases,
                             subs,
                             &let_con.defs_constraint,
                         );
@@ -663,7 +706,14 @@ fn solve(
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
                         let new_state = solve(
-                            &new_env, temp_state, rank, next_pools, problems, subs, &ret_con,
+                            &new_env,
+                            temp_state,
+                            rank,
+                            next_pools,
+                            problems,
+                            cached_aliases,
+                            subs,
+                            &ret_con,
                         );
 
                         for (symbol, loc_var) in local_def_vars {
@@ -685,18 +735,30 @@ fn solve(
     }
 }
 
-fn type_to_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) -> Variable {
-    type_to_variable(subs, rank, pools, typ)
+fn type_to_var(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    cached: &mut MutMap<Symbol, Variable>,
+    typ: &Type,
+) -> Variable {
+    type_to_variable(subs, rank, pools, cached, typ)
 }
 
-fn type_to_variable(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) -> Variable {
+fn type_to_variable(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    cached: &mut MutMap<Symbol, Variable>,
+    typ: &Type,
+) -> Variable {
     match typ {
         Variable(var) => *var,
         Apply(symbol, args) => {
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, arg))
+                arg_vars.push(type_to_variable(subs, rank, pools, cached, arg))
             }
 
             let flat_type = FlatType::Apply(*symbol, arg_vars);
@@ -726,10 +788,10 @@ fn type_to_variable(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) 
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, arg))
+                arg_vars.push(type_to_variable(subs, rank, pools, cached, arg))
             }
 
-            let ret_var = type_to_variable(subs, rank, pools, ret_type);
+            let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
             let content = Content::Structure(FlatType::Func(arg_vars, ret_var));
 
             register(subs, rank, pools, content)
@@ -740,11 +802,11 @@ fn type_to_variable(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) 
             for (field, field_type) in fields {
                 field_vars.insert(
                     field.clone(),
-                    type_to_variable(subs, rank, pools, field_type),
+                    type_to_variable(subs, rank, pools, cached, field_type),
                 );
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, ext);
+            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
             let content = Content::Structure(FlatType::Record(field_vars, ext_var));
 
             register(subs, rank, pools, content)
@@ -756,13 +818,13 @@ fn type_to_variable(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) 
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
 
                 for arg_type in tag_argument_types {
-                    tag_argument_vars.push(type_to_variable(subs, rank, pools, arg_type));
+                    tag_argument_vars.push(type_to_variable(subs, rank, pools, cached, arg_type));
                 }
 
                 tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, ext);
+            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
             let content = Content::Structure(FlatType::TagUnion(tag_vars, ext_var));
 
             register(subs, rank, pools, content)
@@ -774,33 +836,60 @@ fn type_to_variable(subs: &mut Subs, rank: Rank, pools: &mut Pools, typ: &Type) 
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
 
                 for arg_type in tag_argument_types {
-                    tag_argument_vars.push(type_to_variable(subs, rank, pools, arg_type));
+                    tag_argument_vars.push(type_to_variable(subs, rank, pools, cached, arg_type));
                 }
 
                 tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, ext);
+            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, ext_var));
 
             register(subs, rank, pools, content)
         }
         Alias(symbol, args, alias_type) => {
+            // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
+            // different variables (once for each occurence). The recursion restriction is required
+            // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
+            // attribute in the body, when
+            //
+            // Peano : [ S Peano, Z ]
+            //
+            // becomes
+            //
+            // Peano : [ S (Attr u Peano), Z ]
+            //
+            // This `u` variable can be different between lists, so giving just one variable to
+            // this type is incorrect.
+            let is_recursive = alias_type.is_recursive();
+            let no_args = args.is_empty();
+            if no_args && !is_recursive {
+                if let Some(var) = cached.get(symbol) {
+                    return *var;
+                }
+            }
+
             let mut arg_vars = Vec::with_capacity(args.len());
             let mut new_aliases = ImMap::default();
 
             for (arg, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, arg_type);
+                let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
                 new_aliases.insert(arg.clone(), arg_var);
             }
 
-            let alias_var = type_to_variable(subs, rank, pools, alias_type);
+            let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
-            register(subs, rank, pools, content)
+            let result = register(subs, rank, pools, content);
+
+            if no_args && !is_recursive {
+                cached.insert(*symbol, result);
+            }
+
+            result
         }
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem.clone()));
