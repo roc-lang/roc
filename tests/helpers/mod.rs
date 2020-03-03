@@ -114,7 +114,7 @@ pub fn uniq_expr_with(
         home,
         &var_store,
         Region::zero(),
-        loc_expr,
+        &loc_expr,
         declared_idents,
         expected2,
     );
