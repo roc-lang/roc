@@ -417,7 +417,11 @@ impl Type {
                 }
                 ext.instantiate_aliases(aliases, var_store, introduced);
             }
-            Alias(_, _, actual_type) => {
+            Alias(_, type_args, actual_type) => {
+                for arg in type_args {
+                    arg.1.instantiate_aliases(aliases, var_store, introduced);
+                }
+
                 actual_type.instantiate_aliases(aliases, var_store, introduced);
             }
             Apply(symbol, args) => {

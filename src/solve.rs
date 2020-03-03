@@ -51,10 +51,30 @@ pub enum SolvedType {
     Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
 
     /// a boolean algebra Bool
-    Boolean(boolean_algebra::Bool),
+    Boolean(SolvedAtom, Vec<SolvedAtom>),
 
     /// A type error
     Error,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SolvedAtom {
+    Zero,
+    One,
+    Variable(VarId),
+}
+
+impl SolvedAtom {
+    pub fn from_atom(atom: boolean_algebra::Atom) -> Self {
+        use boolean_algebra::Atom::*;
+
+        // NOTE we blindly trust that `var` is a root and has a FlexVar as content
+        match atom {
+            Zero => SolvedAtom::Zero,
+            One => SolvedAtom::One,
+            Variable(var) => SolvedAtom::Variable(VarId::from_var(var)),
+        }
+    }
 }
 
 impl SolvedType {
@@ -152,7 +172,15 @@ impl SolvedType {
 
                 SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
             }
-            Boolean(val) => SolvedType::Boolean(val),
+            Boolean(val) => {
+                let free = SolvedAtom::from_atom(val.0);
+
+                let mut rest = Vec::with_capacity(val.1.len());
+                for atom in val.1 {
+                    rest.push(SolvedAtom::from_atom(atom));
+                }
+                SolvedType::Boolean(free, rest)
+            }
             Variable(var) => Self::from_var(solved_subs.inner(), var),
         }
     }
@@ -254,7 +282,15 @@ impl SolvedType {
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Boolean(val) => SolvedType::Boolean(val),
+            Boolean(val) => {
+                let free = SolvedAtom::from_atom(val.0);
+
+                let mut rest = Vec::with_capacity(val.1.len());
+                for atom in val.1 {
+                    rest.push(SolvedAtom::from_atom(atom));
+                }
+                SolvedType::Boolean(free, rest)
+            }
             Erroneous(problem) => SolvedType::Erroneous(problem),
         }
     }
@@ -871,6 +907,23 @@ fn check_for_infinite_type(
     }
 }
 
+fn content_attr_alias(subs: &mut Subs, u: Variable, a: Variable) -> Content {
+    let actual = subs.fresh_unnamed_flex_var();
+    let ext_var = subs.fresh_unnamed_flex_var();
+
+    let mut attr_at_attr = MutMap::default();
+    attr_at_attr.insert(TagName::Private(Symbol::ATTR_AT_ATTR), vec![u, a]);
+    let attr_tag = FlatType::TagUnion(attr_at_attr, ext_var);
+
+    subs.set_content(actual, Content::Structure(attr_tag));
+
+    Content::Alias(
+        Symbol::ATTR_ATTR,
+        vec![("u".into(), u), ("a".into(), a)],
+        actual,
+    )
+}
+
 fn correct_recursive_attr(
     subs: &mut Subs,
     recursive: Variable,
@@ -882,10 +935,8 @@ fn correct_recursive_attr(
     let rec_var = subs.fresh_unnamed_flex_var();
     let attr_var = subs.fresh_unnamed_flex_var();
 
-    subs.set_content(
-        attr_var,
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, rec_var])),
-    );
+    let content = content_attr_alias(subs, uniq_var, rec_var);
+    subs.set_content(attr_var, content);
 
     let mut new_tags = MutMap::default();
 
@@ -902,9 +953,9 @@ fn correct_recursive_attr(
     let new_tag_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
     subs.set_content(tag_union_var, Content::Structure(new_tag_type));
 
-    let new_recursive = FlatType::Apply(Symbol::ATTR_ATTR, vec![uniq_var, tag_union_var]);
+    let new_recursive = content_attr_alias(subs, uniq_var, tag_union_var);
 
-    subs.set_content(recursive, Content::Structure(new_recursive));
+    subs.set_content(recursive, new_recursive);
 }
 
 fn circular_error(

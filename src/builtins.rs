@@ -336,6 +336,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![bool_type(), bool_type()], Box::new(bool_type())),
     );
 
+    // xor : Bool, Bool -> Bool
+    add_type(
+        Symbol::BOOL_XOR,
+        SolvedType::Func(vec![bool_type(), bool_type()], Box::new(bool_type())),
+    );
+
+    // not : Bool -> Bool
+    add_type(
+        Symbol::BOOL_NOT,
+        SolvedType::Func(vec![bool_type()], Box::new(bool_type())),
+    );
+
     // Str module
 
     // isEmpty : Str -> Bool
@@ -358,7 +370,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // get : List a, Int -> Result a [ IndexOutOfBounds ]*
+    // get : List elem, Int -> Result elem [ IndexOutOfBounds ]*
     let index_out_of_bounds = SolvedType::TagUnion(
         vec![(TagName::Global("IndexOutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -372,7 +384,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // set : List a, Int, a -> List a
+    add_type(
+        Symbol::LIST_GET_UNSAFE, // TODO remove this once we can code gen Result
+        SolvedType::Func(
+            vec![list_type(flex(TVAR1)), int_type()],
+            Box::new(flex(TVAR1)),
+        ),
+    );
+
+    // set : List elem, Int, elem -> List elem
     add_type(
         Symbol::LIST_SET,
         SolvedType::Func(
@@ -381,7 +401,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // map : List a, (a -> b) -> List b
+    // map : List before, (before -> after) -> List after
     add_type(
         Symbol::LIST_MAP,
         SolvedType::Func(
@@ -391,6 +411,34 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             ],
             Box::new(list_type(flex(TVAR2))),
         ),
+    );
+
+    // foldr : List a, (a -> b -> b), b -> b
+    add_type(
+        Symbol::LIST_FOLDR,
+        SolvedType::Func(
+            vec![
+                list_type(flex(TVAR1)),
+                SolvedType::Func(vec![flex(TVAR1), flex(TVAR2)], Box::new(flex(TVAR2))),
+                flex(TVAR2),
+            ],
+            Box::new(flex(TVAR2)),
+        ),
+    );
+
+    // push : List a -> a -> List a
+    add_type(
+        Symbol::LIST_PUSH,
+        SolvedType::Func(
+            vec![list_type(flex(TVAR1))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
+    // length : List a -> Int
+    add_type(
+        Symbol::LIST_LENGTH,
+        SolvedType::Func(vec![list_type(flex(TVAR1))], Box::new(int_type())),
     );
 
     // Result module

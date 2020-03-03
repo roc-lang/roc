@@ -4,7 +4,7 @@ use crate::can::ident::TagName;
 use crate::collections::{default_hasher, MutMap};
 use crate::module::symbol::Symbol;
 use crate::region::{Located, Region};
-use crate::solve::{BuiltinAlias, SolvedType};
+use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
 use crate::subs::VarId;
 use std::collections::HashMap;
 
@@ -15,6 +15,7 @@ const NUM_BUILTIN_IMPORTS: usize = 7;
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const TVAR1: VarId = VarId::from_u32(1);
 const TVAR2: VarId = VarId::from_u32(2);
+const TVAR3: VarId = VarId::from_u32(3);
 
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const FUVAR: VarId = VarId::from_u32(1000);
@@ -22,14 +23,73 @@ const UVAR1: VarId = VarId::from_u32(1001);
 const UVAR2: VarId = VarId::from_u32(1002);
 const UVAR3: VarId = VarId::from_u32(1003);
 const UVAR4: VarId = VarId::from_u32(1004);
+const UVAR5: VarId = VarId::from_u32(1005);
+const UVAR6: VarId = VarId::from_u32(1006);
+
+fn shared() -> SolvedType {
+    SolvedType::Boolean(SolvedAtom::Zero, vec![])
+}
+
+fn boolean(b: VarId) -> SolvedType {
+    SolvedType::Boolean(SolvedAtom::Variable(b), vec![])
+}
+
+fn disjunction(free: VarId, rest: Vec<VarId>) -> SolvedType {
+    let solved_rest = rest.into_iter().map(SolvedAtom::Variable).collect();
+
+    SolvedType::Boolean(SolvedAtom::Variable(free), solved_rest)
+}
 
 pub fn uniqueness_stdlib() -> StdLib {
     use builtins::Mode;
 
+    let types = types();
+    let aliases = aliases();
+
+    /*
+    debug_assert!({
+        let normal_types: MutSet<Symbol> = builtins::types().keys().copied().collect();
+        let normal_aliases: MutSet<Symbol> = builtins::aliases().keys().copied().collect();
+
+        let unique_types = types.keys().copied().collect();
+        let unique_aliases = aliases.keys().copied().collect();
+
+        let missing_unique_types: MutSet<Symbol> =
+            normal_types.difference(&unique_types).copied().collect();
+        let missing_normal_types: MutSet<Symbol> =
+            unique_types.difference(&normal_types).copied().collect();
+
+        let missing_unique_aliases: MutSet<Symbol> = normal_aliases
+            .difference(&unique_aliases)
+            .copied()
+            .collect();
+        let missing_normal_aliases: MutSet<Symbol> = unique_aliases
+            .difference(&normal_aliases)
+            .copied()
+            .filter(|v| *v != Symbol::ATTR_ATTR)
+            .collect();
+
+        let cond = missing_normal_types.is_empty()
+            && missing_unique_types.is_empty()
+            && missing_normal_aliases.is_empty()
+            && missing_unique_aliases.is_empty();
+
+        if !cond {
+            println!("Missing hardcoded types for:");
+            println!("normal types: {:?}", missing_normal_types);
+            println!("unique types: {:?}", missing_unique_types);
+            println!("normal aliases: {:?}", missing_normal_aliases);
+            println!("unique aliases: {:?}", missing_unique_aliases);
+        }
+
+        cond
+    });
+    */
+
     StdLib {
         mode: Mode::Uniqueness,
-        types: types(),
-        aliases: aliases(),
+        types,
+        aliases,
     }
 }
 
@@ -132,6 +192,22 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Bool : [ True, False ]
+    add_alias(
+        Symbol::BOOL_BOOL,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: SolvedType::TagUnion(
+                vec![
+                    (TagName::Global("True".into()), Vec::new()),
+                    (TagName::Global("False".into()), Vec::new()),
+                ],
+                Box::new(SolvedType::EmptyTagUnion),
+            ),
+        },
+    );
+
     // List a : [ @List a ]
     add_alias(
         Symbol::LIST_LIST,
@@ -158,6 +234,16 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 ],
                 Box::new(SolvedType::EmptyTagUnion),
             ),
+        },
+    );
+
+    // Str : [ @Str ]
+    add_alias(
+        Symbol::STR_STR,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: single_private_tag(Symbol::STR_AT_STR, Vec::new()),
         },
     );
 
@@ -200,6 +286,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // mul or (*) : Num a, Num a -> Num a
+    add_type(
+        Symbol::NUM_MUL,
+        unique_function(
+            vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
+            num_type(UVAR3, TVAR1),
+        ),
+    );
+
+    // abs : Num a -> Num a
+    add_type(
+        Symbol::NUM_ABS,
+        unique_function(vec![num_type(UVAR1, TVAR1)], num_type(UVAR2, TVAR1)),
+    );
+
+    // neg : Num a -> Num a
+    add_type(
+        Symbol::NUM_NEG,
+        unique_function(vec![num_type(UVAR1, TVAR1)], num_type(UVAR2, TVAR1)),
+    );
+
     // isLt or (<) : Num a, Num a -> Bool
     add_type(
         Symbol::NUM_LT,
@@ -218,6 +325,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // isGt or (>) : Num a, Num a -> Bool
+    add_type(
+        Symbol::NUM_GT,
+        unique_function(
+            vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
+            bool_type(UVAR3),
+        ),
+    );
+
+    // isGte or (>=) : Num a, Num a -> Bool
+    add_type(
+        Symbol::NUM_GE,
+        unique_function(
+            vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
+            bool_type(UVAR3),
+        ),
+    );
+
     // Int module
 
     // highest : Int
@@ -226,8 +351,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // lowest : Int
     add_type(Symbol::INT_LOWEST, int_type(UVAR1));
 
+    // div or (//) : Int, Int -> Int
     add_type(
         Symbol::INT_DIV,
+        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
+    );
+
+    // mod : Int, Int -> Int
+    add_type(
+        Symbol::INT_MOD,
         unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
     );
 
@@ -242,6 +374,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // mod : Float, Float -> Float
+    add_type(
+        Symbol::FLOAT_MOD,
+        unique_function(
+            vec![float_type(UVAR1), float_type(UVAR2)],
+            float_type(UVAR3),
+        ),
+    );
+
+    // sqrt : Float -> Float
+    add_type(
+        Symbol::FLOAT_SQRT,
+        unique_function(vec![float_type(UVAR1)], float_type(UVAR2)),
+    );
+
     // highest : Float
     add_type(Symbol::FLOAT_HIGHEST, float_type(UVAR1));
 
@@ -250,12 +397,42 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Bool module
 
+    // and or (&&) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    add_type(
+        Symbol::BOOL_AND,
+        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+    );
+
+    // or or (||)  : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    add_type(
+        Symbol::BOOL_OR,
+        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+    );
+
+    // xor : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    add_type(
+        Symbol::BOOL_XOR,
+        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+    );
+
+    // not : Attr u1 Bool -> Attr u2 Bool
+    add_type(
+        Symbol::BOOL_NOT,
+        unique_function(vec![bool_type(UVAR1)], bool_type(UVAR2)),
+    );
+
     // List module
 
     // isEmpty : Attr u (List *) -> Attr v Bool
     add_type(
         Symbol::LIST_ISEMPTY,
         unique_function(vec![list_type(UVAR1, TVAR1)], bool_type(UVAR2)),
+    );
+
+    // length : List a -> Int
+    add_type(
+        Symbol::LIST_LENGTH,
+        unique_function(vec![list_type(UVAR1, TVAR1)], int_type(UVAR2)),
     );
 
     // get : List a, Int -> Result a [ IndexOutOfBounds ]*
@@ -272,14 +449,163 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // set : List a, Int, a -> List a
     add_type(
-        Symbol::LIST_SET,
+        Symbol::LIST_GET_UNSAFE,
         unique_function(
-            vec![list_type(UVAR1, TVAR1), int_type(UVAR2), flex(TVAR1)],
-            list_type(UVAR3, TVAR1),
+            vec![list_type(UVAR1, TVAR1), int_type(UVAR2)],
+            attr_type(UVAR3, TVAR1),
         ),
     );
+
+    // set : Attr (w | u | v) (List (Attr u a))
+    //     , Attr * Int
+    //     , Attr (u | v) a
+    //    -> List a
+    add_type(Symbol::LIST_SET, {
+        let u = UVAR1;
+        let v = UVAR2;
+        let w = UVAR3;
+        let star1 = UVAR4;
+        let star2 = UVAR5;
+
+        let a = TVAR1;
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(w, vec![u, v]),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    ],
+                ),
+                int_type(star1),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![disjunction(u, vec![v]), flex(a)]),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star2),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                ],
+            ),
+        )
+    });
+
+    // push : Attr (w | u | v) (List (Attr u a))
+    //      , Attr (u | v) a
+    //     -> Attr * (List (Attr u a))
+    add_type(Symbol::LIST_PUSH, {
+        let u = UVAR1;
+        let v = UVAR2;
+        let w = UVAR3;
+        let star = UVAR4;
+
+        let a = TVAR1;
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(w, vec![u, v]),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    ],
+                ),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![disjunction(u, vec![v]), flex(a)]),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                ],
+            ),
+        )
+    });
+
+    // map : List a, (a -> b) -> List b
+    add_type(
+        Symbol::LIST_MAP,
+        unique_function(
+            vec![
+                list_type(UVAR1, TVAR1),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        shared(),
+                        SolvedType::Func(vec![flex(TVAR1)], Box::new(flex(TVAR2))),
+                    ],
+                ),
+            ],
+            list_type(UVAR2, TVAR2),
+        ),
+    );
+
+    // foldr : List a, (a -> b -> b), b -> b
+    add_type(
+        Symbol::LIST_FOLDR,
+        unique_function(
+            vec![
+                list_type(UVAR1, TVAR1),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        shared(),
+                        SolvedType::Func(vec![flex(TVAR1), flex(TVAR2)], Box::new(flex(TVAR2))),
+                    ],
+                ),
+                flex(TVAR2),
+            ],
+            flex(TVAR2),
+        ),
+    );
+
+    // Str module
+
+    // isEmpty : Attr u Str -> Attr v Bool
+    add_type(Symbol::STR_ISEMPTY, {
+        unique_function(vec![str_type(UVAR1)], bool_type(UVAR2))
+    });
+
+    // Result module
+
+    // map : Attr (* | u | v) (Result (Attr u a) e), Attr * (Attr u a -> b) -> Attr * (Result b e)
+    add_type(Symbol::RESULT_MAP, {
+        let u = UVAR1;
+        let star1 = UVAR4;
+        let star2 = UVAR5;
+        let star3 = UVAR6;
+
+        let a = TVAR1;
+        let b = TVAR2;
+        let e = TVAR3;
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star1, vec![u]),
+                        SolvedType::Apply(Symbol::RESULT_RESULT, vec![attr_type(u, a), flex(e)]),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        flex(star2),
+                        SolvedType::Func(vec![attr_type(u, a)], Box::new(flex(b))),
+                    ],
+                ),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::RESULT_RESULT, vec![flex(b), flex(e)]),
+                ],
+            ),
+        )
+    });
 
     types
 }
@@ -332,10 +658,12 @@ fn bool_type(u: VarId) -> SolvedType {
     )
 }
 
-#[allow(dead_code)]
 #[inline(always)]
-fn str_type() -> SolvedType {
-    SolvedType::Apply(Symbol::STR_STR, Vec::new())
+fn str_type(u: VarId) -> SolvedType {
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![flex(u), SolvedType::Apply(Symbol::STR_STR, Vec::new())],
+    )
 }
 
 #[inline(always)]

@@ -166,15 +166,32 @@ fn find_names_needed(
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
             find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
         }
-        Structure(Boolean(b)) => {
-            for var in b.variables() {
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+        Structure(Boolean(b)) =>
+        // NOTE it's important that we traverse the variables in the same order as they are
+        // below in write_boolean, hence the call to `simplify`.
+        {
+            match b.simplify(subs) {
+                Err(Atom::Variable(var)) => {
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
+                Err(_) => {}
+                Ok(mut variables) => {
+                    variables.sort();
+                    for var in variables {
+                        find_names_needed(var, subs, roots, root_appearances, names_taken);
+                    }
+                }
             }
         }
-        Alias(_, args, _actual) => {
-            // TODO should we also look in the actual variable?
-            for (_, var) in args {
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+        Alias(symbol, args, _actual) => {
+            if let Symbol::ATTR_ATTR = symbol {
+                find_names_needed(args[0].1, subs, roots, root_appearances, names_taken);
+                find_names_needed(args[1].1, subs, roots, root_appearances, names_taken);
+            } else {
+                // TODO should we also look in the actual variable?
+                for (_, var) in args {
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
             }
         }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
@@ -523,7 +540,8 @@ fn chase_ext_tag_union(
 fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
     match boolean.simplify(subs) {
         Err(atom) => write_boolean_atom(env, atom, subs, buf, parens),
-        Ok(variables) => {
+        Ok(mut variables) => {
+            variables.sort();
             let mut buffers_set = ImSet::default();
 
             for v in variables {

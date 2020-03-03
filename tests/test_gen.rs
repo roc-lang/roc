@@ -205,6 +205,13 @@ mod test_gen {
                 .fn_type(&[], false);
             let main_fn_name = "$Test.main";
 
+            let execution_engine =
+                module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .expect("Error creating JIT execution engine for test");
+
+            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+
             // Compile and add all the Procs before adding main
             let mut env = roc::llvm::build::Env {
                 arena: &arena,
@@ -213,6 +220,7 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
+                pointer_bytes
             };
             let mut procs = MutMap::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -282,11 +290,6 @@ mod test_gen {
             // Uncomment this to see the module's optimized LLVM instruction output:
             // env.module.print_to_stderr();
 
-            let execution_engine = env
-                .module
-                .create_jit_execution_engine(OptimizationLevel::None)
-                .expect("Error creating JIT execution engine for test");
-
             unsafe {
                 let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
                     .get_function(main_fn_name)
@@ -344,14 +347,24 @@ mod test_gen {
     }
 
     #[test]
+    fn get_int_list() {
+        assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64);
+    }
+
+    #[test]
+    fn set_int_list() {
+        assert_evals_to!("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", 42, i64);
+    }
+
+    #[test]
     fn branch_first_float() {
         assert_evals_to!(
             indoc!(
                 r#"
-                        when 1.23 is
-                            1.23 -> 12
-                            _ -> 34
-                    "#
+                    when 1.23 is
+                        1.23 -> 12
+                        _ -> 34
+                "#
             ),
             12,
             i64

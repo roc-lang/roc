@@ -21,7 +21,7 @@ mod test_infer_uniq {
 
         assert_correct_variable_usage(&constraint);
 
-        for (name, var) in output.rigids {
+        for (var, name) in output.ftv {
             subs.rigid_var(var, name);
         }
 
@@ -1024,7 +1024,7 @@ mod test_infer_uniq {
                     \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr * (Attr (* | a | b) { left : (Attr a c), right : (Attr b d) }* -> Attr * { left : (Attr a c), right : (Attr b d) })",
+            "Attr * (Attr (* | a | b) { left : (Attr a c), right : (Attr b d) }* -> Attr * { left : (Attr a c), right : (Attr b d) })"
         );
     }
 
@@ -1066,7 +1066,7 @@ mod test_infer_uniq {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr * (Attr (* | a | b) [ Foo (Attr b c) (Attr a *) ]* -> Attr * [ Foo (Attr b c) (Attr * Str) ]*)",
+            "Attr * (Attr (* | a | b) [ Foo (Attr a c) (Attr b *) ]* -> Attr * [ Foo (Attr a c) (Attr * Str) ]*)"
         );
     }
 
@@ -1289,7 +1289,7 @@ mod test_infer_uniq {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
+            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
         );
     }
 
@@ -1307,7 +1307,7 @@ mod test_infer_uniq {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e)"
+            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e)"
         );
     }
 
@@ -1342,12 +1342,8 @@ mod test_infer_uniq {
                             r.tic.tac.toe
                 "#
             ),
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (a | d | e) { tac : (Attr (d | e) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (c | d | e) { bar : (Attr (c | d) { baz : (Attr c f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (a | c) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | d | e) { bar : (Attr (b | d) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (b | c) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (b | c | e) { bar : (Attr (b | e) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | d) { tac : (Attr (b | d) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (b | c | e) { tac : (Attr (c | e) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | c | d) { bar : (Attr (c | d) { baz : (Attr d f) }*) }*), tic : (Attr (b | d | e) { tac : (Attr (b | d) { toe : (Attr d f) }*) }*) }* -> Attr d f)"
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | e) { bar : (Attr (a | e) { baz : (Attr e f) }*) }*), tic : (Attr (c | d | e) { tac : (Attr (d | e) { toe : (Attr e f) }*) }*) }* -> Attr e f)"
+            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | c) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (c | d | e) { tac : (Attr (c | d) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
         );
     }
 
@@ -1891,19 +1887,6 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn list_set() {
-        infer_eq(
-            indoc!(
-                r#"
-                    [1, 2 ]
-                        |> List.set 1 42
-               "#
-            ),
-            "Attr * (List (Attr * Int))",
-        );
-    }
-
-    #[test]
     fn float_div_builtins() {
         infer_eq(
             indoc!(
@@ -1980,7 +1963,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \list -> 
+                \list ->
                     p = List.get list 1
                     q = List.get list 1
 
@@ -1996,12 +1979,12 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \list -> 
+                \list ->
                     when List.get list 0 is
-                        Ok v -> 
+                        Ok v ->
                             List.set list 0 (v + 1)
 
-                        Err _ -> 
+                        Err _ ->
                             list
                "#
             ),
@@ -2014,14 +1997,93 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \list -> 
+                \list ->
                     if List.isEmpty list then
                         list
                     else
                         List.set list 0 42
                "#
             ),
-            "Attr * (Attr (a | b) (List (Attr a Int)) -> Attr (a | b) (List (Attr a Int)))",
+            "Attr * (Attr (a | b) (List (Attr b Int)) -> Attr (a | b) (List (Attr b Int)))",
+        );
+    }
+
+    #[test]
+    fn list_set() {
+        infer_eq(indoc!(r#"List.set"#), "Attr * (Attr (* | a | b) (List (Attr a c)), Attr * Int, Attr (a | b) c -> Attr * (List (Attr a c)))");
+    }
+
+    #[test]
+    fn list_map() {
+        infer_eq(
+            indoc!(r#"List.map"#),
+            "Attr * (Attr * (List a), Attr Shared (a -> b) -> Attr * (List b))",
+        );
+    }
+
+    #[test]
+    fn list_map_identity() {
+        infer_eq(
+            indoc!(r#"\list -> List.map list (\x -> x)"#),
+            "Attr * (Attr * (List a) -> Attr * (List a))",
+        );
+    }
+
+    #[test]
+    fn list_foldr() {
+        infer_eq(
+            indoc!(r#"List.foldr"#),
+            "Attr * (Attr * (List a), Attr Shared (a, b -> b), b -> b)",
+        );
+    }
+
+    #[test]
+    fn list_foldr_sum() {
+        infer_eq(
+            indoc!(
+                r#"
+            sum = \list -> List.foldr list Num.add 0
+
+            sum
+            "#
+            ),
+            "Attr * (Attr * (List (Attr * Int)) -> Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn list_push() {
+        infer_eq(
+            indoc!(r#"List.push"#),
+            "Attr * (Attr (* | a | b) (List (Attr a c)), Attr (a | b) c -> Attr * (List (Attr a c)))"
+        );
+    }
+
+    #[test]
+    fn list_push_singleton() {
+        infer_eq(
+            indoc!(
+                r#"
+                singleton = \x -> List.push [] x
+
+                singleton
+                "#
+            ),
+            "Attr * (Attr (* | a) b -> Attr * (List (Attr a b)))",
+        );
+    }
+
+    #[test]
+    fn list_foldr_reverse() {
+        infer_eq(
+            indoc!(
+                r#"
+            reverse = \list -> List.foldr list (\e, l -> List.push l e) []
+
+            reverse
+            "#
+            ),
+            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
         );
     }
 }

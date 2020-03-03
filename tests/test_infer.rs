@@ -38,7 +38,7 @@ mod test_infer {
 
         assert_correct_variable_usage(&constraint);
 
-        for (name, var) in output.rigids {
+        for (var, name) in output.ftv {
             subs.rigid_var(var, name);
         }
 
@@ -2228,10 +2228,10 @@ mod test_infer {
                             list
                                 |> List.set i atJ
                                 |> List.set j atI
-    
+
                         _ ->
                             list
-    
+
                 partition : Int, Int, List Int -> [ Pair Int (List Int) ]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
@@ -2244,19 +2244,19 @@ mod test_infer {
                                                 go (i + 1) (j + 1) (swap (i + 1) j list)
                                             else
                                                 go i (j + 1) list
-    
+
                                         Err _ ->
                                             Pair i list
                                 else
                                     Pair i list
-    
+
                             when go (low - 1) low initialList is
                                 Pair newI newList ->
                                     Pair (newI + 1) (swap (newI + 1) high newList)
-    
+
                         Err _ ->
                             Pair (low - 1) initialList
-    
+
                 partition
             "#
             ),
@@ -2280,6 +2280,36 @@ mod test_infer {
             "#
             ),
             "List Int -> List Int",
+        );
+    }
+
+    #[test]
+    fn list_get() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List.get [ 10, 9, 8, 7 ] 1
+                "#
+            ),
+            "Result Int [ IndexOutOfBounds ]*",
+        );
+    }
+
+    #[test]
+    fn use_rigid_twice() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                id1 : q -> q
+                id1 = \x -> x
+
+                id2 : q -> q
+                id2 = \x -> x
+
+                { id1, id2 }
+                "#
+            ),
+            "{ id1 : q -> q, id2 : q -> q }",
         );
     }
 }

@@ -719,6 +719,10 @@ fn canonicalize_pending_def<'a>(
                 output.rigids.insert(k, v);
             }
 
+            for (k, v) in ann.ftv {
+                output.ftv.insert(k, v);
+            }
+
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
             let typ = ann.typ;
@@ -842,6 +846,10 @@ fn canonicalize_pending_def<'a>(
             for (k, v) in can_ann.rigids {
                 output.rigids.insert(k, v);
             }
+
+            for (k, v) in can_ann.ftv {
+                output.ftv.insert(k, v);
+            }
         }
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             let ann =
@@ -863,6 +871,10 @@ fn canonicalize_pending_def<'a>(
             // union seen rigids with already found ones
             for (k, v) in ann.rigids {
                 output.rigids.insert(k, v);
+            }
+
+            for (k, v) in ann.ftv {
+                output.ftv.insert(k, v);
             }
 
             // bookkeeping for tail-call detection. If we're assigning to an
@@ -1147,6 +1159,7 @@ pub fn can_defs_with_return<'a>(
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
 
     output.rigids = output.rigids.union(defs_output.rigids);
+    output.ftv = output.ftv.union(defs_output.ftv);
     output.references = output.references.union(defs_output.references);
 
     // Now that we've collected all the references, check to see if any of the new idents

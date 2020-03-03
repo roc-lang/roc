@@ -26,6 +26,7 @@ pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
     pub rigids: SendMap<Lowercase, Variable>,
+    pub ftv: SendMap<Variable, Lowercase>,
     pub aliases: SendMap<Symbol, Alias>,
 }
 
@@ -37,7 +38,7 @@ pub enum Expr {
     Str(Box<str>),
     BlockStr(Box<str>),
     List {
-        entry_var: Variable,
+        elem_var: Variable,
         loc_elems: Vec<Located<Expr>>,
     },
 
@@ -201,7 +202,7 @@ pub fn canonicalize_expr<'a>(
             if loc_elems.is_empty() {
                 (
                     List {
-                        entry_var: var_store.fresh(),
+                        elem_var: var_store.fresh(),
                         loc_elems: Vec::new(),
                     },
                     Output::default(),
@@ -228,7 +229,7 @@ pub fn canonicalize_expr<'a>(
 
                 (
                     List {
-                        entry_var: var_store.fresh(),
+                        elem_var: var_store.fresh(),
                         loc_elems: can_elems,
                     },
                     output,

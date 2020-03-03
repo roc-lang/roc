@@ -119,7 +119,9 @@ pub fn uniq_expr_with(
         expected2,
     );
 
-    let types = unique_builtins::types();
+    let stdlib = unique_builtins::uniqueness_stdlib();
+
+    let types = stdlib.types;
     let imports: Vec<_> = types
         .iter()
         .map(|(symbol, (solved_type, region))| Import {
@@ -133,11 +135,8 @@ pub fn uniq_expr_with(
         roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
 
     // load builtin types
-    let mut constraint = roc::constrain::module::load_builtin_aliases(
-        &unique_builtins::aliases(),
-        constraint,
-        &var_store,
-    );
+    let mut constraint =
+        roc::constrain::module::load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
 
     constraint.instantiate_aliases(&var_store);
 
