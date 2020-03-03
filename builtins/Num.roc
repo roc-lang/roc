@@ -27,18 +27,18 @@ Num range : @Num range
 ##
 ## Some languages have a unary `-` operator (for example, `-(a + b)`), but Roc does not. If you want to negate a number, calling this function is the way to do it!
 ##
-## > Num.negate 5
+## > Num.neg 5
 ##
-## > Num.negate -2.5
+## > Num.neg -2.5
 ##
-## > Num.negate 0
+## > Num.neg 0
 ##
-## > Num.negate 0.0
+## > Num.neg 0.0
 ##
 ## This will crash when given #Int.lowestValue, because doing so will result in a number higher than #Int.highestValue.
 ##
 ## (It will never crash when given a #Float, however, because of how floating point numbers represent positive and negative numbers.)
-negate : Num range -> Num range
+neg : Num range -> Num range
 
 ## Return the absolute value of the number.
 ##

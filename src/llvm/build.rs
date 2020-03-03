@@ -589,6 +589,15 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
+        Symbol::NUM_NEG => {
+            debug_assert!(args.len() == 1);
+
+            let int_val = env
+                .builder
+                .build_int_neg(args[0].into_int_value(), "NEGATE_I64");
+
+            BasicValueEnum::IntValue(int_val)
+        }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
 
