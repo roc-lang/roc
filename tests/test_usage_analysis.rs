@@ -721,7 +721,7 @@ mod test_usage_analysis {
                 r#"
                     \r ->
                         p = List.get r 0
-                        q = List.get r 0 
+                        q = List.get r 0
 
                         r
                 "#
@@ -755,10 +755,10 @@ mod test_usage_analysis {
                 list = [1,2,3]
 
                 when List.get list 0 is
-                    Ok v -> 
+                    Ok v ->
                         List.set list 0 (v + 1)
 
-                    Err _ -> 
+                    Err _ ->
                         list
                "#
             ),
