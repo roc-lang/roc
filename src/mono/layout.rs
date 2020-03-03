@@ -205,37 +205,24 @@ fn layout_from_flat_type<'a>(
                     let (tag, args) = tags.into_iter().next().unwrap();
 
                     match tag {
-                        TagName::Private(Symbol::NUM_AT_NUM) if args.len() == 1 => {
+                        TagName::Private(Symbol::ATTR_AT_ATTR) => {
+                            debug_assert!(args.len() == 2);
+
+                            // The first argument is the uniqueness info;
+                            // we don't need that here.
+                            let wrapped_var = args[1];
+
+                            // For now, layout is unaffected by uniqueness.
+                            // (Incorporating refcounting may change this.)
+                            // Unwrap and continue
+                            Layout::from_var(arena, wrapped_var, subs)
+                        }
+                        TagName::Private(Symbol::NUM_AT_NUM) => {
+                            debug_assert!(args.len() == 1);
+
                             let var = args.into_iter().next().unwrap();
 
-                            match subs.get_without_compacting(var).content {
-                                Content::Structure(flat_type) => match flat_type {
-                                    _ => {
-                                        panic!("TODO handle Num.@Num flat_type {:?}", flat_type);
-                                    }
-                                },
-                                Content::Alias(Symbol::INT_INTEGER, args, _) => {
-                                    debug_assert!(args.is_empty());
-                                    Ok(Layout::Builtin(Builtin::Int64))
-                                }
-                                Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
-                                    debug_assert!(args.is_empty());
-                                    Ok(Layout::Builtin(Builtin::Float64))
-                                }
-                                other => {
-                                    panic!("TODO non structure Num.@Num flat_type {:?}", other);
-                                } // Symbol::INT_INT => {
-                                  //     debug_assert!(args.is_empty());
-                                  //     types::I64
-                                  // }
-                                  // Symbol::FLOAT_FLOAT => {
-                                  //     debug_assert!(args.is_empty());
-                                  //     types::F64
-                                  // }
-                                  // tag => {
-                                  //     panic!("TODO gracefully handle unrecognized Num.Num variant {:?} {:?}", tag, args);
-                                  // }
-                            }
+                            unwrap_num_tag(subs, var)
                         }
                         TagName::Private(Symbol::STR_AT_STR) => Ok(Layout::Builtin(Builtin::Str)),
                         TagName::Private(symbol) => {
@@ -337,4 +324,32 @@ fn flatten_record(fields: &mut MutMap<Lowercase, Variable>, ext_var: Variable, s
             panic!("Compiler error: flatten_record encountered an ext_var in a record that wasn't itself a record; instead, it was: {:?}", invalid);
         }
     };
+}
+
+fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(flat_type) => match flat_type {
+            _ => {
+                panic!("TODO handle Num.@Num flat_type {:?}", flat_type);
+            }
+        },
+        Content::Alias(Symbol::INT_INTEGER, args, _) => {
+            debug_assert!(args.is_empty());
+            Ok(Layout::Builtin(Builtin::Int64))
+        }
+        Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+            debug_assert!(args.is_empty());
+            Ok(Layout::Builtin(Builtin::Float64))
+        }
+        Content::Alias(Symbol::ATTR_ATTR, args, _) => {
+            debug_assert!(args.len() == 2);
+
+            let (_name, arg_var) = args.get(1).unwrap();
+
+            unwrap_num_tag(subs, *arg_var)
+        }
+        other => {
+            panic!("TODO non structure Num.@Num flat_type {:?}", other);
+        }
+    }
 }
