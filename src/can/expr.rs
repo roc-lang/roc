@@ -26,6 +26,7 @@ pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
     pub rigids: SendMap<Lowercase, Variable>,
+    pub ftv: SendMap<Variable, Lowercase>,
     pub aliases: SendMap<Symbol, Alias>,
 }
 

@@ -21,7 +21,7 @@ mod test_infer_uniq {
 
         assert_correct_variable_usage(&constraint);
 
-        for (name, var) in output.rigids {
+        for (var, name) in output.ftv {
             subs.rigid_var(var, name);
         }
 
