@@ -452,6 +452,11 @@ mod test_gen {
         );
     }
 
+    #[test]
+    fn int_negate() {
+        assert_evals_to!("Num.neg 123", -123, i64);
+    }
+
     // #[test]
     // fn gen_large_when_float() {
     //     assert_evals_to!(

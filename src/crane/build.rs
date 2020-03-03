@@ -584,6 +584,10 @@ fn call_with_args<'a, B: Backend>(
             debug_assert!(args.len() == 2);
             builder.ins().imul(args[0], args[1])
         }
+        Symbol::NUM_NEG => {
+            debug_assert!(args.len() == 1);
+            builder.ins().ineg(args[0])
+        }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
 
