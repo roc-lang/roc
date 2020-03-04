@@ -227,6 +227,13 @@ impl Type {
             0
         }
     }
+    pub fn is_recursive(&self) -> bool {
+        match self {
+            Type::RecursiveTagUnion(_, _, _) => true,
+            Type::Alias(Symbol::ATTR_ATTR, _, actual) => actual.is_recursive(),
+            _ => false,
+        }
+    }
 
     pub fn variables(&self) -> ImSet<Variable> {
         let mut result = ImSet::default();
