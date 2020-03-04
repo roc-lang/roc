@@ -68,6 +68,7 @@ pub fn can_expr(expr_str: &str) -> CanExprOut {
 pub fn uniq_expr(
     expr_str: &str,
 ) -> (
+    Located<Expr>,
     Output,
     Vec<Problem>,
     Subs,
@@ -87,6 +88,7 @@ pub fn uniq_expr_with(
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
 ) -> (
+    Located<Expr>,
     Output,
     Vec<Problem>,
     Subs,
@@ -114,7 +116,7 @@ pub fn uniq_expr_with(
         home,
         &var_store,
         Region::zero(),
-        loc_expr,
+        &loc_expr,
         declared_idents,
         expected2,
     );
@@ -142,7 +144,9 @@ pub fn uniq_expr_with(
 
     let subs2 = Subs::new(var_store.into());
 
-    (output, problems, subs2, var, constraint, home, interns)
+    (
+        loc_expr, output, problems, subs2, var, constraint, home, interns,
+    )
 }
 
 pub struct CanExprOut {

@@ -39,7 +39,7 @@ pub fn constrain_declaration(
     home: ModuleId,
     var_store: &VarStore,
     region: Region,
-    loc_expr: Located<Expr>,
+    loc_expr: &Located<Expr>,
     _declared_idents: &ImMap<Ident, (Symbol, Region)>,
     expected: Expected<Type>,
 ) -> Constraint {
