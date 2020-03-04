@@ -2087,4 +2087,16 @@ mod test_infer_uniq {
             "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
         );
     }
+
+    #[test]
+    fn set_then_get() {
+        infer_eq(
+            indoc!(
+                r#"
+            List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1
+                "#
+            ),
+            "Attr * Int",
+        );
+    }
 }
