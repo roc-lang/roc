@@ -846,11 +846,11 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-                    alwaysIdentity : Num.Num Int.Integer -> (Num.Num Float.FloatingPoint -> Num.Num Float.FloatingPoint)
-                    alwaysIdentity = \num ->
+                    alwaysFloatIdentity : Int -> (Float -> Float)
+                    alwaysFloatIdentity = \num ->
                         (\a -> a)
 
-                    (alwaysIdentity 2) 3.14
+                    (alwaysFloatIdentity 2) 3.14
                 "#
             ),
             3.14,
