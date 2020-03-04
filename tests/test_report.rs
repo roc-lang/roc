@@ -12,10 +12,10 @@ mod test_report {
     use crate::helpers::{assert_correct_variable_usage, can_expr, CanExprOut};
     use roc::can;
     use roc::infer::infer_expr;
-    use roc::module::symbol::{Interns, ModuleId};
+    use roc::module::symbol::{Interns, ModuleId, Symbol};
     use roc::pretty_print_types::name_all_type_vars;
-    use roc::reporting;
-    use roc::reporting::ReportText::{Plain, Value};
+    use roc::region;
+    use roc::reporting::ReportText::{EmText, Plain, Region, Url, Value};
     use roc::reporting::{Report, ReportText};
     use roc::subs::Subs;
     use roc::types;
@@ -58,7 +58,7 @@ mod test_report {
         }
 
         let mut unify_problems = Vec::new();
-        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let (_content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
         let mut subs = solved.into_inner();
 
         name_all_type_vars(var, &mut subs);
@@ -91,8 +91,83 @@ mod test_report {
                     x
                 "#
             ),
-            to_simple_report(Plain(Box::from("hello"))),
-            "good bye",
+            to_simple_report(Plain(Box::from("y"))),
+            "y",
+        );
+    }
+
+    #[test]
+    fn report_emphasized_text() {
+        report_renders_as(
+            indoc!(
+                r#"
+                    x = 1
+                    y = 2
+
+                    x
+                "#
+            ),
+            to_simple_report(EmText(Box::from("y"))),
+            "*y*",
+        );
+    }
+
+    #[test]
+    fn report_url() {
+        report_renders_as(
+            indoc!(
+                r#"
+                    x = 1
+                    y = 2
+
+                    x
+                "#
+            ),
+            to_simple_report(Url(Box::from("y"))),
+            "<y>",
+        );
+    }
+
+    // #[test]
+    // fn report_symbol() {
+    //     report_renders_as(
+    //         indoc!(
+    //             r#"
+    //                 x = 1
+    //                 y = 2
+    //
+    //                 x
+    //             "#
+    //         ),
+    //         to_simple_report(Value(Symbol::new("Test" ))),
+    //         "x",
+    //     );
+    // }
+
+    #[test]
+    fn report_region() {
+        report_renders_as(
+            indoc!(
+                r#"
+                    x = 1
+                    y = 2
+
+                    x
+                "#
+            ),
+            to_simple_report(Region(region::Region {
+                start_line: 1,
+                end_line: 4,
+                start_col: 0,
+                end_col: 0,
+            })),
+            indoc!(
+                r#"
+                1 | y = 2
+                2 |
+                3 | x
+            "#
+            ),
         );
     }
 }
