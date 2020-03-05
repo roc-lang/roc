@@ -12,20 +12,21 @@ pub struct Report {
 }
 
 impl Report {
-    pub fn can_problem(_filename: PathBuf, problem: Problem) -> Self {
-        let _text = match problem {
-            Problem::UnusedDef(_symbol, _region) => {
-                panic!("TODO implelment me!");
-            }
-            _ => {
-                panic!("TODO implement others");
-            }
-        };
+    pub fn can_problem(_filename: PathBuf, _problem: Problem) -> Self {
+        panic!("TODO Implement Problem reporting");
+        // let _text = match problem {
+        //     Problem::UnusedDef(_symbol, _region) => {
+        //         panic!("TODO implelment me!");
+        //     }
+        //     _ => {
+        //         panic!("TODO implement others");
+        //     }
+        // };
 
-        Report {
-            filename: _filename,
-            text: _text,
-        }
+        // Report {
+        //     filename: _filename,
+        //     text: _text,
+        // }
     }
 }
 
