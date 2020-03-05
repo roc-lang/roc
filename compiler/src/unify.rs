@@ -246,8 +246,8 @@ fn unify_record(
         let other_fields = union(unique_fields1.clone(), &unique_fields2);
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
-        let flat_type1 = FlatType::Record(unique_fields1, rec1.ext);
-        let flat_type2 = FlatType::Record(unique_fields2, rec2.ext);
+        let flat_type1 = FlatType::Record(unique_fields1, ext);
+        let flat_type2 = FlatType::Record(unique_fields2, ext);
 
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
