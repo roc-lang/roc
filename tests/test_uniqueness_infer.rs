@@ -1980,13 +1980,13 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \list ->
-                    when List.get list 0 is
-                        Ok v ->
-                            List.set list 0 (v + 1)
+                    \list ->
+                        when List.get list 0 is
+                            Ok v ->
+                                List.set list 0 (v + 1)
 
-                        Err _ ->
-                            list
+                            Err _ ->
+                                list
                "#
             ),
             "Attr * (Attr a (List (Attr Shared Int)) -> Attr a (List (Attr Shared Int)))",
@@ -1998,11 +1998,11 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                \list ->
-                    if List.isEmpty list then
-                        list
-                    else
-                        List.set list 0 42
+                    \list ->
+                        if List.isEmpty list then
+                            list
+                        else
+                            List.set list 0 42
                "#
             ),
             "Attr * (Attr (a | b) (List (Attr b Int)) -> Attr (a | b) (List (Attr b Int)))",
@@ -2043,10 +2043,10 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-            sum = \list -> List.foldr list Num.add 0
+                    sum = \list -> List.foldr list Num.add 0
 
-            sum
-            "#
+                    sum
+                "#
             ),
             "Attr * (Attr * (List (Attr * Int)) -> Attr * Int)",
         );
@@ -2065,9 +2065,9 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-                singleton = \x -> List.push [] x
+                    singleton = \x -> List.push [] x
 
-                singleton
+                    singleton
                 "#
             ),
             "Attr * (Attr (* | a) b -> Attr * (List (Attr a b)))",
@@ -2079,10 +2079,10 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-            reverse = \list -> List.foldr list (\e, l -> List.push l e) []
+                    reverse = \list -> List.foldr list (\e, l -> List.push l e) []
 
-            reverse
-            "#
+                    reverse
+                "#
             ),
             "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
         );
@@ -2093,7 +2093,7 @@ mod test_infer_uniq {
         infer_eq(
             indoc!(
                 r#"
-            List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1
+                    List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1
                 "#
             ),
             "Attr * Int",
