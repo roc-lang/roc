@@ -40,7 +40,7 @@ pub struct Module {
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
-    pub rigid_variables: MutMap<Lowercase, Variable>,
+    pub rigid_variables: MutMap<Variable, Lowercase>,
     pub imported_modules: MutSet<ModuleId>,
 }
 
@@ -859,7 +859,7 @@ fn solve_module(
 
     let mut subs = Subs::new(var_store.into());
 
-    for (name, var) in module.rigid_variables {
+    for (var, name) in module.rigid_variables {
         subs.rigid_var(var, name);
     }
 
