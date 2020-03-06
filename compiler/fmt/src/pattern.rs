@@ -1,4 +1,4 @@
-use crate::fmt::spaces::{fmt_comments_only, fmt_spaces};
+use crate::spaces::{fmt_comments_only, fmt_spaces};
 use bumpalo::collections::String;
 use roc_parse::ast::{Base, Pattern};
 

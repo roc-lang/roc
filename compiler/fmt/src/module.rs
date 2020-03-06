@@ -1,4 +1,4 @@
-use crate::fmt::spaces::{fmt_spaces, INDENT};
+use crate::spaces::{fmt_spaces, INDENT};
 use bumpalo::collections::{String, Vec};
 use roc_parse::ast::{AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, Module};
 use roc_region::all::Located;

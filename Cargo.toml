@@ -15,6 +15,7 @@ members = [
     "compiler/unify",
     "compiler/solve",
     "compiler/reporting",
+    "compiler/fmt",
     "vendor/ena",
     "vendor/pathfinding"
 ]

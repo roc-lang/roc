@@ -10,10 +10,8 @@
 // and encouraging shortcuts here creates bad incentives. I would rather temporarily
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
-
-pub mod string;
-
-pub mod crane;
-pub mod llvm;
-pub mod load;
-pub mod mono;
+pub mod def;
+pub mod expr;
+pub mod module;
+pub mod pattern;
+pub mod spaces;

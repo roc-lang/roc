@@ -17,6 +17,7 @@ roc_constrain = { path = "./constrain" }
 roc_uniq = { path = "./uniq" }
 roc_unify = { path = "./unify" }
 roc_solve = { path = "./solve" }
+roc_fmt = { path = "./fmt" }
 log = "0.4.8"
 petgraph = { version = "0.4.5", optional = true }
 im    = "14" # im and im-rc should always have the same version!

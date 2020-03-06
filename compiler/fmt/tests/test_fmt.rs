@@ -3,7 +3,7 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 extern crate bumpalo;
-extern crate roc;
+extern crate roc_fmt;
 #[macro_use]
 extern crate roc_parse;
 
@@ -11,9 +11,9 @@ extern crate roc_parse;
 mod test_format {
     use bumpalo::collections::String;
     use bumpalo::Bump;
-    use roc::fmt::def::fmt_def;
-    use roc::fmt::expr::fmt_expr;
-    use roc::fmt::module::fmt_module;
+    use roc_fmt::def::fmt_def;
+    use roc_fmt::expr::fmt_expr;
+    use roc_fmt::module::fmt_module;
     use roc_parse::ast::{Attempting, Expr};
     use roc_parse::blankspace::space0_before;
     use roc_parse::module::{self, module_defs};

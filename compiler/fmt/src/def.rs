@@ -1,6 +1,6 @@
-use crate::fmt::expr::{fmt_expr, is_multiline_expr};
-use crate::fmt::pattern::fmt_pattern;
-use crate::fmt::spaces::{fmt_spaces, newline, INDENT};
+use crate::expr::{fmt_expr, is_multiline_expr};
+use crate::pattern::fmt_pattern;
+use crate::spaces::{fmt_spaces, newline, INDENT};
 use bumpalo::collections::String;
 use roc_parse::ast::{Def, Expr};
 

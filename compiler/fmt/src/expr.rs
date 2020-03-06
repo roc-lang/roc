@@ -1,6 +1,6 @@
-use crate::fmt::def::fmt_def;
-use crate::fmt::pattern::fmt_pattern;
-use crate::fmt::spaces::{
+use crate::def::fmt_def;
+use crate::pattern::fmt_pattern;
+use crate::spaces::{
     add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, is_comment, newline, INDENT,
 };
 use bumpalo::collections::{String, Vec};
