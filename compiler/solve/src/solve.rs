@@ -472,16 +472,8 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
-        EmptyRec => {
-            let content = Content::Structure(FlatType::EmptyRecord);
-
-            register(subs, rank, pools, content)
-        }
-        EmptyTagUnion => {
-            let content = Content::Structure(FlatType::EmptyTagUnion);
-
-            register(subs, rank, pools, content)
-        }
+        EmptyRec => Variable::EMPTY_RECORD,
+        EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
         // This case is important for the rank of boolean variables
         Boolean(boolean_algebra::Bool(Atom::Variable(var), rest)) if rest.is_empty() => *var,

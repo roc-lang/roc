@@ -2082,7 +2082,7 @@ mod test_infer_uniq {
                     reverse
                 "#
             ),
-            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
+            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
         );
     }
 
@@ -2112,7 +2112,7 @@ mod test_infer_uniq {
                 f
                 "#
             ),
-            "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * Int)",
+            "Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * Int)",
         );
     }
 }

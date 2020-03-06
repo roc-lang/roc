@@ -386,6 +386,8 @@ pub fn variable_usage(con: &Constraint) -> (SeenVariables, Vec<Variable>) {
     variable_usage_help(con, &mut declared, &mut used);
 
     used.remove(unsafe { &Variable::unsafe_test_debug_variable(1) });
+    used.remove(unsafe { &Variable::unsafe_test_debug_variable(2) });
+    used.remove(unsafe { &Variable::unsafe_test_debug_variable(3) });
 
     let mut used_vec: Vec<Variable> = used.into_iter().collect();
     used_vec.sort();
