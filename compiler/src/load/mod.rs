@@ -844,7 +844,10 @@ fn solve_module(
     }
 
     // Wrap the existing module constraint in these imported constraints.
-    let constraint = constrain_imported_values(imported_symbols, constraint, &var_store);
+
+    // TODO what to do with the introduced rigids?
+    let (_introduced_rigids, constraint) =
+        constrain_imported_values(imported_symbols, constraint, &var_store);
     let constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
     let mut constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
 

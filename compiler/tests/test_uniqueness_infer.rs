@@ -2097,4 +2097,22 @@ mod test_infer_uniq {
             "Attr * Int",
         );
     }
+
+    #[test]
+    fn update_cost() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \r ->
+                    g = r.q
+                    h = r.p
+
+                    42
+
+                f
+                "#
+            ),
+            "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * Int)",
+        );
+    }
 }

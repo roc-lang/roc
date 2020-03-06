@@ -269,12 +269,13 @@ mod test_canonicalize {
                         0 -> 0
                         _ -> g (x - 1)
 
-                h = \x ->
+                # use parens to force the ordering!
+                (h = \x ->
                     when x is
                         0 -> 0
                         _ -> g (x - 1)
 
-                p = \x ->
+                (p = \x ->
                     when x is
                         0 -> 0
                         1 -> g (x - 1)
@@ -283,6 +284,7 @@ mod test_canonicalize {
 
                 # variables must be (indirectly) referenced in the body for analysis to work
                 { x: p, y: h }
+                ))
             "#
         );
         let arena = Bump::new();
@@ -297,11 +299,10 @@ mod test_canonicalize {
         }));
 
         let actual = loc_expr.value;
-        // NOTE: the indices associated with each of these can change!
-        // They come out of a hashmap, and are not sorted.
+
         let g_detected = get_closure(&actual, 0);
-        let h_detected = get_closure(&actual, 2);
-        let p_detected = get_closure(&actual, 1);
+        let h_detected = get_closure(&actual, 1);
+        let p_detected = get_closure(&actual, 2);
 
         assert_eq!(g_detected, Recursive::TailRecursive);
         assert_eq!(h_detected, Recursive::NotRecursive);

@@ -152,7 +152,9 @@ pub fn uniq_expr_with(
         .collect();
 
     // load builtin values
-    let constraint =
+
+    // TODO what to do with those rigids?
+    let (_introduced_rigids, constraint) =
         roc_constrain::module::constrain_imported_values(imports, constraint, &var_store);
 
     // load builtin types
@@ -234,8 +236,13 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         .collect();
 
     //load builtin values
-    let constraint =
+    let (_introduced_rigids, constraint) =
         roc_constrain::module::constrain_imported_values(imports, constraint, &var_store);
+
+    // TODO determine what to do with those rigids
+    //    for var in introduced_rigids {
+    //        output.ftv.insert(var, format!("internal_{:?}", var).into());
+    //    }
 
     //load builtin types
     let mut constraint = roc_constrain::module::load_builtin_aliases(

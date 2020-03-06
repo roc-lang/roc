@@ -368,8 +368,8 @@ fn unify_tag_union(
         let other_tags = union(unique_tags1.clone(), &unique_tags2);
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
-        let flat_type1 = FlatType::TagUnion(unique_tags1, rec1.ext);
-        let flat_type2 = FlatType::TagUnion(unique_tags2, rec2.ext);
+        let flat_type1 = FlatType::TagUnion(unique_tags1, ext);
+        let flat_type2 = FlatType::TagUnion(unique_tags2, ext);
 
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));

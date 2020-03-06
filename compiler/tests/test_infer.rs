@@ -2310,4 +2310,103 @@ mod test_infer {
             "{ id1 : q -> q, id2 : q -> q }",
         );
     }
+
+    #[test]
+    fn map_insert() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Map.insert
+                "#
+            ),
+            "Map a b, a, b -> Map a b",
+        );
+    }
+
+    #[test]
+    fn num_to_float() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.toFloat
+                "#
+            ),
+            "Num * -> Float",
+        );
+    }
+
+    #[test]
+    fn reconstruct_path() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                reconstructPath : Map position position, position -> List position
+                reconstructPath = \cameFrom, goal ->
+                    when Map.get cameFrom goal is
+                        Err KeyNotFound ->
+                            []
+
+                        Ok next ->
+                            List.push (reconstructPath cameFrom next) goal
+
+                reconstructPath
+                "#
+            ),
+            "Map position position, position -> List position",
+        );
+    }
+
+    #[test]
+    fn use_correct_ext_record() {
+        // Related to a bug solved in 81fbab0b3fe4765bc6948727e603fc2d49590b1c
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f = \r ->
+                    g = r.q
+                    h = r.p
+
+                    42
+
+                f
+                "#
+            ),
+            "{ p : *, q : * }* -> Int",
+        );
+    }
+
+    #[test]
+    fn use_correct_ext_tag_union() {
+        // related to a bug solved in 08c82bf151a85e62bce02beeed1e14444381069f
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                boom = \_ -> boom {}
+
+                Model position : { openSet : Set position }
+
+                cheapestOpen : Model position -> Result position [ KeyNotFound ]*
+                cheapestOpen = \model ->
+
+                    folder = \position, resSmallestSoFar ->
+                                    when resSmallestSoFar is
+                                        Err _ -> resSmallestSoFar
+                                        Ok smallestSoFar ->
+                                            if position == smallestSoFar.position then resSmallestSoFar
+
+                                            else
+                                                Ok { position, cost: 0.0 }
+
+                    Set.foldl model.openSet folder (Ok { position: boom {}, cost: 0.0 })
+                        |> Result.map (\x -> x.position)
+
+                astar : Model position -> Result position [ KeyNotFound ]*
+                astar = \model -> cheapestOpen model
+
+                astar
+                "#
+            ),
+            "Model position -> Result position [ KeyNotFound ]*",
+        );
+    }
 }

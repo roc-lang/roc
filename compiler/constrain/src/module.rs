@@ -43,7 +43,7 @@ pub fn constrain_imported_values(
     imports: Vec<Import<'_>>,
     body_con: Constraint,
     var_store: &VarStore,
-) -> Constraint {
+) -> (Vec<Variable>, Constraint) {
     use Constraint::*;
     let mut def_types = SendMap::default();
     let mut rigid_vars = Vec::new();
@@ -81,14 +81,17 @@ pub fn constrain_imported_values(
         }
     }
 
-    Let(Box::new(LetConstraint {
-        rigid_vars,
-        flex_vars: Vec::new(),
-        def_types,
-        def_aliases: SendMap::default(),
-        defs_constraint: True,
-        ret_constraint: body_con,
-    }))
+    (
+        rigid_vars.clone(),
+        Let(Box::new(LetConstraint {
+            rigid_vars,
+            flex_vars: Vec::new(),
+            def_types,
+            def_aliases: SendMap::default(),
+            defs_constraint: True,
+            ret_constraint: body_con,
+        })),
+    )
 }
 
 pub fn load_builtin_aliases(
@@ -110,10 +113,14 @@ pub fn load_builtin_aliases(
         let mut vars = Vec::with_capacity(builtin_alias.vars.len());
 
         for (loc_lowercase, index) in builtin_alias.vars.iter().zip(1..) {
-            let var = free_vars
-                .unnamed_vars
-                .get(&VarId::from_u32(index))
-                .expect("var_id was not instantiated (is it phantom?)");
+            let var = if let Some(result) = free_vars.unnamed_vars.get(&VarId::from_u32(index)) {
+                result
+            } else {
+                panic!(
+                    "var_id {:?} was not instantiated in the body of {:?} : {:?} (is it phantom?)",
+                    index, symbol, &builtin_alias
+                )
+            };
 
             vars.push(Located::at(
                 loc_lowercase.region,
