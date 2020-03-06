@@ -5,7 +5,7 @@ extern crate indoc;
 
 extern crate bumpalo;
 extern crate inkwell;
-extern crate roc;
+extern crate roc_gen;
 
 mod helpers;
 
@@ -24,12 +24,12 @@ mod test_gen {
     use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc::crane::build::{declare_proc, define_proc_body, ScopeEntry};
-    use roc::crane::convert::type_from_layout;
-    use roc::crane::imports::define_malloc;
-    use roc::llvm::build::{build_proc, build_proc_header};
-    use roc::llvm::convert::basic_type_from_layout;
     use roc_collections::all::{ImMap, MutMap};
+    use roc_gen::crane::build::{declare_proc, define_proc_body, ScopeEntry};
+    use roc_gen::crane::convert::type_from_layout;
+    use roc_gen::crane::imports::define_malloc;
+    use roc_gen::llvm::build::{build_proc, build_proc_header};
+    use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::expr::Expr;
     use roc_mono::layout::Layout;
     use roc_types::subs::Subs;
@@ -63,7 +63,7 @@ mod test_gen {
 
             // Compile and add all the Procs before adding main
             let mut procs = MutMap::default();
-            let mut env = roc::crane::build::Env {
+            let mut env = roc_gen::crane::build::Env {
                 arena: &arena,
                 subs,
                 interns,
@@ -135,7 +135,7 @@ mod test_gen {
                 builder.append_block_params_for_function_params(block);
 
                 let main_body =
-                    roc::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
+                    roc_gen::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
                 builder.ins().return_(&[main_body]);
                 // TODO re-enable this once Switch stops making unsealed blocks, e.g.
@@ -210,7 +210,7 @@ mod test_gen {
             let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
 
             // Compile and add all the Procs before adding main
-            let mut env = roc::llvm::build::Env {
+            let mut env = roc_gen::llvm::build::Env {
                 arena: &arena,
                 subs,
                 builder: &builder,
@@ -265,7 +265,7 @@ mod test_gen {
 
             builder.position_at_end(basic_block);
 
-            let ret = roc::llvm::build::build_expr(
+            let ret = roc_gen::llvm::build::build_expr(
                 &env,
                 &ImMap::default(),
                 main_fn,
@@ -346,7 +346,7 @@ mod test_gen {
             let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
 
             // Compile and add all the Procs before adding main
-            let mut env = roc::llvm::build::Env {
+            let mut env = roc_gen::llvm::build::Env {
                 arena: &arena,
                 subs,
                 builder: &builder,
@@ -401,7 +401,7 @@ mod test_gen {
 
             builder.position_at_end(basic_block);
 
-            let ret = roc::llvm::build::build_expr(
+            let ret = roc_gen::llvm::build::build_expr(
                 &env,
                 &ImMap::default(),
                 main_fn,

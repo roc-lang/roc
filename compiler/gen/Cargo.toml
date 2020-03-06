@@ -1,30 +1,23 @@
 [package]
-name = "roc"
+name = "roc_gen"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
 
 [dependencies]
-roc_collections = { path = "./collections" }
-roc_region = { path = "./region" }
-roc_module = { path = "./module" }
-roc_parse = { path = "./parse" }
-roc_problem = { path = "./problem" }
-roc_types = { path = "./types" }
-roc_can = { path = "./can" }
-roc_builtins = { path = "./builtins" }
-roc_constrain = { path = "./constrain" }
-roc_uniq = { path = "./uniq" }
-roc_unify = { path = "./unify" }
-roc_solve = { path = "./solve" }
-roc_fmt = { path = "./fmt" }
-roc_mono = { path = "./mono" }
-log = "0.4.8"
-petgraph = { version = "0.4.5", optional = true }
+roc_collections = { path = "../collections" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_problem = { path = "../problem" }
+roc_types = { path = "../types" }
+roc_builtins = { path = "../builtins" }
+roc_constrain = { path = "../constrain" }
+roc_uniq = { path = "../uniq" }
+roc_unify = { path = "../unify" }
+roc_solve = { path = "../solve" }
+roc_mono = { path = "../mono" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
-wyhash = "0.3"
-tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = "2.6"
 inlinable_string = "0.1.0"
 # NOTE: Breaking API changes get pushed directly to this Inkwell branch, so be
@@ -34,8 +27,6 @@ inlinable_string = "0.1.0"
 # `rev` works locally, it causes an error on GitHub Actions. (It's unclear why,
 # but after several hours of trying unsuccessfully to fix it, `branch` is it.)
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "llvm8-0" }
-futures = "0.3"
-lazy_static = "1.4"
 target-lexicon = "0.10" # NOTE: we must use the same version of target-lexicon as cranelift!
 cranelift           = "0.59" # All cranelift crates should have the same version!
 cranelift-simplejit = "0.59" # All cranelift crates should have the same version!
@@ -43,8 +34,12 @@ cranelift-module    = "0.59" # All cranelift crates should have the same version
 cranelift-codegen   = "0.59" # All cranelift crates should have the same version!
 
 [dev-dependencies]
+roc_can = { path = "../can" }
+roc_parse = { path = "../parse" }
 pretty_assertions = "0.5.1 "
 maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
+tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
+bumpalo = "2.6"
