@@ -7,7 +7,7 @@ interface AStar
 
 Model position :
     { evaluated : Set position
-    , openSet : Set  position
+    , openSet : Set position
     , costs : Map.Map position Float
     , cameFrom : Map.Map position position
     }
@@ -22,12 +22,12 @@ initialModel = \start ->
     }
 
 
-cheapestOpen : (position -> Float), Model position -> Result position [ KeyNotFound ]* 
+cheapestOpen : (position -> Float), Model position -> Result position [ KeyNotFound ]*
 cheapestOpen = \costFunction, model ->
 
     folder = \position, resSmallestSoFar ->
             when Map.get model.costs position is
-                Err e -> 
+                Err e ->
                     Err e
 
                 Ok cost ->
@@ -35,7 +35,7 @@ cheapestOpen = \costFunction, model ->
 
                     when resSmallestSoFar is
                         Err _ -> Ok { position, cost: cost + positionCost }
-                        Ok smallestSoFar -> 
+                        Ok smallestSoFar ->
                             if positionCost + cost < smallestSoFar.cost then
                                 Ok { position, cost: cost + positionCost }
 
@@ -51,16 +51,16 @@ reconstructPath : Map position position, position -> List position
 reconstructPath = \cameFrom, goal ->
     when Map.get cameFrom goal is
         Err KeyNotFound ->
-            [] 
+            []
 
         Ok next ->
             List.push (reconstructPath cameFrom next) goal
 
 updateCost : position, position, Model position -> Model position
 updateCost = \current, neighbour, model ->
-    newCameFrom = Map.insert model.cameFrom neighbour current 
+    newCameFrom = Map.insert model.cameFrom neighbour current
 
-    newCosts = Map.insert model.costs neighbour distanceTo 
+    newCosts = Map.insert model.costs neighbour distanceTo
 
     distanceTo = reconstructPath newCameFrom neighbour
             |> List.length
@@ -81,7 +81,7 @@ updateCost = \current, neighbour, model ->
 
 
 findPath : { costFunction: (position, position -> Float), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [ KeyNotFound ]*
-findPath = \{ costFunction, moveFunction, start, end } -> 
+findPath = \{ costFunction, moveFunction, start, end } ->
     astar costFunction moveFunction end (initialModel start)
 
 
@@ -105,7 +105,7 @@ astar = \costFn, moveFn, goal, model ->
 
                modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
 
-               modelWithCosts = Set.foldl newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours 
+               modelWithCosts = Set.foldl newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
 
-               astar costFn moveFn goal modelWithCosts 
+               astar costFn moveFn goal modelWithCosts
 
