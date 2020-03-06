@@ -1,10 +1,10 @@
-use crate::can::problem::RuntimeError;
-use crate::subs::Variable;
-use crate::types::{Alias, Type};
+use crate::problem::RuntimeError;
 use roc_collections::all::ImMap;
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
+use roc_types::subs::Variable;
+use roc_types::types::{Alias, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {

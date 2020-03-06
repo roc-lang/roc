@@ -1,30 +1,50 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
-use roc::builtins;
-use roc::can::env::Env;
-use roc::can::expr::Output;
-use roc::can::expr::{canonicalize_expr, Expr};
-use roc::can::operator;
-use roc::can::problem::Problem;
-use roc::can::scope::Scope;
 use roc::constrain::expr::constrain_expr;
 use roc::constrain::module::Import;
-use roc::subs::{Subs, VarStore, Variable};
-use roc::types::{Constraint, Expected, Type};
 use roc::unique_builtins;
-use roc_collections::all::{ImMap, ImSet, MutMap, SendSet};
+use roc::{builtins, solve};
+use roc_can::constraint::Constraint;
+use roc_can::env::Env;
+use roc_can::expected::Expected;
+use roc_can::expr::Output;
+use roc_can::expr::{canonicalize_expr, Expr};
+use roc_can::operator;
+use roc_can::problem::Problem;
+use roc_can::scope::Scope;
+use roc_collections::all::{ImMap, ImSet, MutMap, SendMap, SendSet};
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_region::all::{Located, Region};
+use roc_types::subs::{Content, Subs, VarStore, Variable};
+use roc_types::types::Type;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
 pub fn test_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"Test".into())
+}
+
+#[allow(dead_code)]
+pub fn infer_expr(
+    subs: Subs,
+    problems: &mut Vec<roc_types::types::Problem>,
+    constraint: &Constraint,
+    expr_var: Variable,
+) -> (Content, Subs) {
+    let env = solve::Env {
+        aliases: MutMap::default(),
+        vars_by_symbol: SendMap::default(),
+    };
+    let (solved, _) = solve::run(&env, problems, subs, constraint);
+
+    let content = solved.inner().get_without_compacting(expr_var).content;
+
+    (content, solved.into_inner())
 }
 
 /// In --release builds, don't increase the stack size. Run the test normally.

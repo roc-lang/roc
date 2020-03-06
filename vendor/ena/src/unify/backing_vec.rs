@@ -1,4 +1,4 @@
-use crate::ena::snapshot_vec as sv;
+use crate::snapshot_vec as sv;
 #[cfg(feature = "persistent")]
 use im_rc::Vector;
 use std::fmt::{self, Debug};

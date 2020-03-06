@@ -1,9 +1,9 @@
-use crate::subs::{Content, FlatType, Subs, Variable};
-use crate::types::name_type_var;
-use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use roc_collections::all::{ImSet, MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_types::boolean_algebra::{Atom, Bool};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::types::name_type_var;
 
 static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -74,8 +74,8 @@ fn find_names_needed(
     root_appearances: &mut MutMap<Variable, Appearances>,
     names_taken: &mut MutSet<Lowercase>,
 ) {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
 
     while let Some((recursive, _)) = subs.occurs(variable) {
         if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
@@ -230,7 +230,7 @@ fn name_root(
 }
 
 fn set_root_name(root: Variable, name: &Lowercase, subs: &mut Subs) {
-    use crate::subs::Content::*;
+    use roc_types::subs::Content::*;
 
     let mut descriptor = subs.get(root);
 
@@ -263,7 +263,7 @@ pub fn content_to_string(
 }
 
 fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String, parens: Parens) {
-    use crate::subs::Content::*;
+    use roc_types::subs::Content::*;
 
     match content {
         FlexVar(Some(name)) => buf.push_str(name.as_str()),
@@ -337,7 +337,7 @@ fn write_flat_type(
     buf: &mut String,
     parens: Parens,
 ) {
-    use crate::subs::FlatType::*;
+    use roc_types::subs::FlatType::*;
 
     match flat_type {
         Apply(symbol, args) => write_apply(env, symbol, args, subs, buf, parens),

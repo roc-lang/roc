@@ -11,8 +11,6 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-pub mod can;
-pub mod graph;
 pub mod uniqueness;
 
 pub mod string;
@@ -22,18 +20,11 @@ pub mod unique_builtins;
 
 pub mod constrain;
 pub mod crane;
-pub mod ena;
 pub mod fmt;
-pub mod infer;
 pub mod llvm;
 pub mod load;
 pub mod mono;
 pub mod pretty_print_types;
 pub mod reporting;
 pub mod solve;
-pub mod subs;
-pub mod types;
 pub mod unify;
-
-#[macro_use]
-extern crate log;

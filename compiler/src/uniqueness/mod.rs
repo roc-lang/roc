@@ -1,29 +1,24 @@
-use crate::can::def::{Declaration, Def};
-use crate::can::expr::Expr;
-use crate::can::expr::Field;
-use crate::can::pattern::{Pattern, RecordDestruct};
 use crate::constrain::expr::{exists, exists_with_aliases, Info};
-use crate::subs::{VarStore, Variable};
-use crate::types::Alias;
-use crate::types::AnnotationSource::{self, *};
-use crate::types::Constraint::{self, *};
-use crate::types::Expected::{self};
-use crate::types::LetConstraint;
-use crate::types::PExpected::{self};
-use crate::types::PReason::{self};
-use crate::types::Reason;
-use crate::types::Type::{self, *};
-use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use crate::uniqueness::builtins::{attr_type, list_type, str_type};
 use crate::uniqueness::sharing::{Container, FieldAccess, Mark, Usage, VarUsage};
+use roc_can::constraint::Constraint::{self, *};
+use roc_can::constraint::LetConstraint;
+use roc_can::def::{Declaration, Def};
+use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::{Expr, Field};
+use roc_can::pattern::{Pattern, RecordDestruct};
 use roc_collections::all::{ImMap, ImSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
+use roc_types::boolean_algebra::{Atom, Bool};
+use roc_types::subs::{VarStore, Variable};
+use roc_types::types::AnnotationSource::{self, *};
+use roc_types::types::Type::{self, *};
+use roc_types::types::{Alias, PReason, Reason};
 
-pub use crate::can::expr::Expr::*;
+pub use roc_can::expr::Expr::*;
 
-pub mod boolean_algebra;
 pub mod builtins;
 pub mod sharing;
 
@@ -147,8 +142,8 @@ fn constrain_pattern(
     pattern: &Located<Pattern>,
     expected: PExpected<Type>,
 ) {
-    use crate::can::pattern::Pattern::*;
-    use crate::types::PatternCategory;
+    use roc_can::pattern::Pattern::*;
+    use roc_types::types::PatternCategory;
 
     match &pattern.value {
         Identifier(symbol) => {
@@ -343,7 +338,7 @@ pub fn constrain_expr(
     expr: &Expr,
     expected: Expected<Type>,
 ) -> Constraint {
-    pub use crate::can::expr::Expr::*;
+    pub use roc_can::expr::Expr::*;
 
     match expr {
         Int(var, _) => {
@@ -540,7 +535,7 @@ pub fn constrain_expr(
             )
         }
         Closure(fn_var, _symbol, recursion, args, boxed) => {
-            use crate::can::expr::Recursive;
+            use roc_can::expr::Recursive;
 
             let (loc_body_expr, ret_var) = &**boxed;
             let mut state = PatternState {
@@ -1402,7 +1397,7 @@ fn annotation_to_attr_type(
     rigids: &mut ImMap<Variable, Variable>,
     change_var_kind: bool,
 ) -> (Vec<Variable>, Type) {
-    use crate::types::Type::*;
+    use roc_types::types::Type::*;
 
     match ann {
         Variable(var) => {

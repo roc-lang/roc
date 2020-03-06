@@ -4,7 +4,8 @@ extern crate pretty_assertions;
 extern crate indoc;
 
 extern crate bumpalo;
-extern crate roc;
+extern crate roc_can;
+extern crate roc_parse;
 extern crate roc_region;
 
 mod helpers;
@@ -13,9 +14,9 @@ mod helpers;
 mod test_canonicalize {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
-    use roc::can::expr::Expr::{self, *};
-    use roc::can::expr::Recursive;
-    use roc::can::problem::{Problem, RuntimeError};
+    use roc_can::expr::Expr::{self, *};
+    use roc_can::expr::Recursive;
+    use roc_can::problem::{Problem, RuntimeError};
     use roc_region::all::{Located, Region};
     use std::{f64, i64};
 
@@ -221,7 +222,7 @@ mod test_canonicalize {
     //     );
     // }
 
-    fn get_closure(expr: &Expr, i: usize) -> roc::can::expr::Recursive {
+    fn get_closure(expr: &Expr, i: usize) -> roc_can::expr::Recursive {
         match expr {
             LetRec(assignments, body, _, _) => {
                 match &assignments.get(i).map(|def| &def.loc_expr.value) {

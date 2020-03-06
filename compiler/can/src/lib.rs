@@ -1,6 +1,8 @@
 pub mod annotation;
+pub mod constraint;
 pub mod def;
 pub mod env;
+pub mod expected;
 pub mod expr;
 pub mod module;
 pub mod num;

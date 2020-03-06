@@ -11,9 +11,9 @@ use inkwell::{FloatPredicate, IntPredicate};
 use crate::llvm::convert::{basic_type_from_layout, get_fn_type};
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::Layout;
-use crate::subs::{Subs, Variable};
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
+use roc_types::subs::{Subs, Variable};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!

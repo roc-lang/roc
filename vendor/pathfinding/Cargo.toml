@@ -1,0 +1,16 @@
+[package]
+name = "ven_graph"
+description = "Pathfinding, flow, and graph algorithms"
+repository = "https://github.com/samueltardieu/pathfinding"
+keywords = ["shortest-path", "astar", "dijkstra", "flow", "graph"]
+license = "Apache-2.0/MIT"
+homepage = "https://rfc1149.net/devel/pathfinding.html"
+documentation = "https://docs.rs/pathfinding/"
+version = "2.0.5-pre"
+authors = ["Samuel Tardieu <sam@rfc1149.net>"]
+categories = ["algorithms"]
+readme = "README.md"
+edition = "2018"
+
+[dependencies]
+roc_collections = { path = "../../compiler/collections" }

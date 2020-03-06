@@ -1,12 +1,14 @@
-use crate::can::pattern::Pattern::{self, *};
-use crate::can::pattern::RecordDestruct;
 use crate::constrain::builtins;
-use crate::subs::Variable;
-use crate::types::{Constraint, Expected, PExpected, PatternCategory, Type};
+use roc_can::constraint::Constraint;
+use roc_can::expected::{Expected, PExpected};
+use roc_can::pattern::Pattern::{self, *};
+use roc_can::pattern::RecordDestruct;
 use roc_collections::all::SendMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
+use roc_types::subs::Variable;
+use roc_types::types::{PatternCategory, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,

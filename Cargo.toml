@@ -5,5 +5,9 @@ members = [
     "compiler/region",
     "compiler/collections",
     "compiler/module",
-    "compiler/parse"
+    "compiler/parse",
+    "compiler/can",
+    "compiler/types",
+    "vendor/ena",
+    "vendor/pathfinding"
 ]

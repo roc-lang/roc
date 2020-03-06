@@ -10,18 +10,17 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer {
-    use crate::helpers::{assert_correct_variable_usage, can_expr, CanExprOut};
-    use roc::infer::infer_expr;
+    use crate::helpers::{assert_correct_variable_usage, can_expr, infer_expr, CanExprOut};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
-    use roc::subs::Subs;
+    use roc_types::subs::Subs;
 
     // HELPERS
 
     fn infer_eq_help(
         src: &str,
     ) -> (
-        Vec<roc::types::Problem>,
-        Vec<roc::can::problem::Problem>,
+        Vec<roc_types::types::Problem>,
+        Vec<roc_can::problem::Problem>,
         String,
     ) {
         let CanExprOut {
@@ -43,8 +42,7 @@ mod test_infer {
         }
 
         let mut unify_problems = Vec::new();
-        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
-        let mut subs = solved.into_inner();
+        let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
         name_all_type_vars(var, &mut subs);
 

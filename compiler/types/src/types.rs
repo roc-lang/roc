@@ -1,6 +1,5 @@
-use crate::can::pattern::Pattern;
+use crate::boolean_algebra;
 use crate::subs::{VarStore, Variable};
-use crate::uniqueness::boolean_algebra;
 use inlinable_string::InlinableString;
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -589,43 +588,6 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Expected<T> {
-    NoExpectation(T),
-    FromAnnotation(Located<Pattern>, usize, AnnotationSource, T),
-    ForReason(Reason, T, Region),
-}
-
-/// Like Expected, but for Patterns.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PExpected<T> {
-    NoExpectation(T),
-    ForReason(PReason, T, Region),
-}
-
-impl<T> PExpected<T> {
-    pub fn get_type(self) -> T {
-        match self {
-            PExpected::NoExpectation(val) => val,
-            PExpected::ForReason(_, val, _) => val,
-        }
-    }
-
-    pub fn get_type_ref(&self) -> &T {
-        match self {
-            PExpected::NoExpectation(val) => val,
-            PExpected::ForReason(_, val, _) => val,
-        }
-    }
-
-    pub fn get_type_mut_ref(&mut self) -> &mut T {
-        match self {
-            PExpected::NoExpectation(val) => val,
-            PExpected::ForReason(_, val, _) => val,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PReason {
     TypedArg { name: Box<str>, index: usize },
@@ -633,32 +595,6 @@ pub enum PReason {
     CtorArg { name: Box<str>, index: usize },
     ListEntry { index: usize },
     Tail,
-}
-
-impl<T> Expected<T> {
-    pub fn get_type(self) -> T {
-        match self {
-            Expected::NoExpectation(val) => val,
-            Expected::ForReason(_, val, _) => val,
-            Expected::FromAnnotation(_, _, _, val) => val,
-        }
-    }
-
-    pub fn get_type_ref(&self) -> &T {
-        match self {
-            Expected::NoExpectation(val) => val,
-            Expected::ForReason(_, val, _) => val,
-            Expected::FromAnnotation(_, _, _, val) => val,
-        }
-    }
-
-    pub fn get_type_mut_ref(&mut self) -> &mut T {
-        match self {
-            Expected::NoExpectation(val) => val,
-            Expected::ForReason(_, val, _) => val,
-            Expected::FromAnnotation(_, _, _, val) => val,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -687,87 +623,6 @@ pub enum Reason {
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Constraint {
-    Eq(Type, Expected<Type>, Region),
-    Lookup(Symbol, Expected<Type>, Region),
-    Pattern(Region, PatternCategory, Type, PExpected<Type>),
-    True, // Used for things that always unify, e.g. blanks and runtime errors
-    SaveTheEnvironment,
-    Let(Box<LetConstraint>),
-    And(Vec<Constraint>),
-}
-
-impl Constraint {
-    pub fn instantiate_aliases(&mut self, var_store: &VarStore) {
-        Self::instantiate_aliases_help(self, &ImMap::default(), var_store, &mut ImSet::default())
-    }
-
-    fn instantiate_aliases_help(
-        &mut self,
-        aliases: &ImMap<Symbol, Alias>,
-        var_store: &VarStore,
-        introduced: &mut ImSet<Variable>,
-    ) {
-        use Constraint::*;
-
-        match self {
-            True | SaveTheEnvironment => {}
-
-            Eq(typ, expected, _) => {
-                expected
-                    .get_type_mut_ref()
-                    .instantiate_aliases(aliases, var_store, introduced);
-                typ.instantiate_aliases(aliases, var_store, introduced);
-            }
-
-            Lookup(_, expected, _) => {
-                expected
-                    .get_type_mut_ref()
-                    .instantiate_aliases(aliases, var_store, introduced);
-            }
-
-            Pattern(_, _, typ, pexpected) => {
-                pexpected
-                    .get_type_mut_ref()
-                    .instantiate_aliases(aliases, var_store, introduced);
-                typ.instantiate_aliases(aliases, var_store, introduced);
-            }
-
-            And(nested) => {
-                for c in nested.iter_mut() {
-                    c.instantiate_aliases_help(aliases, var_store, introduced);
-                }
-            }
-
-            Let(letcon) => {
-                let mut new_aliases = aliases.clone();
-                for (k, v) in letcon.def_aliases.iter() {
-                    new_aliases.insert(*k, v.clone());
-                }
-
-                let mut introduced = ImSet::default();
-                for Located { value: typ, .. } in letcon.def_types.iter_mut() {
-                    typ.instantiate_aliases(&new_aliases, var_store, &mut introduced);
-                }
-
-                letcon.defs_constraint.instantiate_aliases_help(
-                    &new_aliases,
-                    var_store,
-                    &mut introduced,
-                );
-                letcon.ret_constraint.instantiate_aliases_help(
-                    &new_aliases,
-                    var_store,
-                    &mut introduced,
-                );
-
-                letcon.flex_vars.extend(introduced);
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternCategory {
     Record,
@@ -779,16 +634,6 @@ pub enum PatternCategory {
     Int,
     Str,
     Float,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct LetConstraint {
-    pub rigid_vars: Vec<Variable>,
-    pub flex_vars: Vec<Variable>,
-    pub def_types: SendMap<Symbol, Located<Type>>,
-    pub def_aliases: SendMap<Symbol, Alias>,
-    pub defs_constraint: Constraint,
-    pub ret_constraint: Constraint,
 }
 
 #[derive(Clone, Debug, PartialEq)]
