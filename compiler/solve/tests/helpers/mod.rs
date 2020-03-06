@@ -151,7 +151,10 @@ pub fn uniq_expr_with(
         .collect();
 
     // load builtin values
-    let constraint = constrain_imported_values(imports, constraint, &var_store);
+
+    // TODO what to do with those rigids?
+    let (_introduced_rigids, constraint) =
+        constrain_imported_values(imports, constraint, &var_store);
 
     // load builtin types
     let mut constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
@@ -231,7 +234,8 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         .collect();
 
     //load builtin values
-    let constraint = constrain_imported_values(imports, constraint, &var_store);
+    let (_introduced_rigids, constraint) =
+        constrain_imported_values(imports, constraint, &var_store);
 
     //load builtin types
     let mut constraint =
