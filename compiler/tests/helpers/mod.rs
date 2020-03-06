@@ -1,7 +1,6 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
-use roc::solve;
 use roc::unique_builtins;
 use roc_can::constraint::Constraint;
 use roc_can::env::Env;
@@ -20,6 +19,7 @@ use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
+use roc_solve::solve;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;

@@ -886,7 +886,9 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_solve",
  "roc_types",
+ "roc_unify",
  "roc_uniqueness",
  "target-lexicon",
  "tokio",
@@ -1010,6 +1012,23 @@ name = "roc_region"
 version = "0.1.0"
 
 [[package]]
+name = "roc_solve"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_can",
+ "roc_collections",
+ "roc_module",
+ "roc_region",
+ "roc_types",
+ "roc_unify",
+]
+
+[[package]]
 name = "roc_types"
 version = "0.1.0"
 dependencies = [
@@ -1025,6 +1044,20 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "ven_ena",
+]
+
+[[package]]
+name = "roc_unify"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_collections",
+ "roc_module",
+ "roc_types",
 ]
 
 [[package]]

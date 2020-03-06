@@ -1,4 +1,3 @@
-use crate::unify::{unify, Unified};
 use roc_can::constraint::Constraint::{self, *};
 use roc_collections::all::{ImMap, MutMap, SendMap};
 use roc_module::ident::TagName;
@@ -9,6 +8,7 @@ use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{Alias, Problem};
+use roc_unify::unify::{unify, Unified};
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler

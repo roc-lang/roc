@@ -345,8 +345,7 @@ fn write_flat_type(
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, ret) => write_fn(env, args, ret, subs, buf, parens),
         Record(fields, ext_var) => {
-            use crate::unify::gather_fields;
-            use crate::unify::RecordStructure;
+            use roc_unify::unify::{gather_fields, RecordStructure};
 
             // If the `ext` has concrete fields (e.g. { foo : Int}{ bar : Bool }), merge them
             let RecordStructure { fields, ext } = gather_fields(subs, fields, ext_var);

@@ -12,6 +12,8 @@ members = [
     "compiler/uniqueness",
     "compiler/builtins",
     "compiler/constrain",
+    "compiler/unify",
+    "compiler/solve",
     "vendor/ena",
     "vendor/pathfinding"
 ]

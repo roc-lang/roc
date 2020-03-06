@@ -1,4 +1,3 @@
-use crate::solve::{self, ExposedModuleTypes, SubsByModule};
 use bumpalo::Bump;
 use roc_builtins::all::Mode;
 use roc_builtins::all::StdLib;
@@ -17,6 +16,7 @@ use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHead
 use roc_parse::module::module_defs;
 use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
+use roc_solve::solve::{self, ExposedModuleTypes, SubsByModule};
 use roc_types::solved_types::{BuiltinAlias, Solved, SolvedType};
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{self, Alias};
