@@ -155,7 +155,7 @@ pub fn uniq_expr_with(
 
     // TODO what to do with those rigids?
     let (_introduced_rigids, constraint) =
-        roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
+        roc_constrain::module::constrain_imported_values(imports, constraint, &var_store);
 
     // load builtin types
     let mut constraint =
@@ -207,7 +207,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let mut scope = Scope::new(home);
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
-    let (loc_expr, mut output) = canonicalize_expr(
+    let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &var_store,
         &mut scope,
@@ -237,7 +237,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     //load builtin values
     let (_introduced_rigids, constraint) =
-        roc::constrain::module::constrain_imported_values(imports, constraint, &var_store);
+        roc_constrain::module::constrain_imported_values(imports, constraint, &var_store);
 
     // TODO determine what to do with those rigids
     //    for var in introduced_rigids {
