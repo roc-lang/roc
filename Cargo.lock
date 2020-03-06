@@ -884,6 +884,7 @@ dependencies = [
  "roc_constrain",
  "roc_fmt",
  "roc_module",
+ "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
@@ -996,6 +997,29 @@ dependencies = [
  "pretty_assertions",
  "roc_collections",
  "roc_region",
+]
+
+[[package]]
+name = "roc_mono"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
 ]
 
 [[package]]

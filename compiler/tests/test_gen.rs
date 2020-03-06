@@ -29,9 +29,9 @@ mod test_gen {
     use roc::crane::imports::define_malloc;
     use roc::llvm::build::{build_proc, build_proc_header};
     use roc::llvm::convert::basic_type_from_layout;
-    use roc::mono::expr::Expr;
-    use roc::mono::layout::Layout;
     use roc_collections::all::{ImMap, MutMap};
+    use roc_mono::expr::Expr;
+    use roc_mono::layout::Layout;
     use roc_types::subs::Subs;
     use std::ffi::{CStr, CString};
     use std::mem;

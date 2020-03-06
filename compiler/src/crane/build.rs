@@ -14,10 +14,10 @@ use cranelift_codegen::Context;
 use cranelift_module::{Backend, FuncId, Linkage, Module};
 
 use crate::crane::convert::{sig_from_layout, type_from_layout};
-use crate::mono::expr::{Expr, Proc, Procs};
-use crate::mono::layout::{Builtin, Layout};
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
+use roc_mono::expr::{Expr, Proc, Procs};
+use roc_mono::layout::{Builtin, Layout};
 use roc_types::subs::{Subs, Variable};
 
 type Scope = ImMap<Symbol, ScopeEntry>;
@@ -46,7 +46,7 @@ pub fn build_expr<'a, B: Backend>(
     expr: &Expr<'a>,
     procs: &Procs<'a>,
 ) -> Value {
-    use crate::mono::expr::Expr::*;
+    use roc_mono::expr::Expr::*;
 
     match expr {
         Int(num) => builder.ins().iconst(types::I64, *num),

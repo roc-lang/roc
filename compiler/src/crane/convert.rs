@@ -3,11 +3,11 @@ use cranelift_codegen::ir::{types, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
 use cranelift_module::{Backend, Module};
 
-use crate::mono::layout::Layout;
+use roc_mono::layout::Layout;
 
 pub fn type_from_layout(cfg: TargetFrontendConfig, layout: &Layout<'_>) -> Type {
-    use crate::mono::layout::Builtin::*;
-    use crate::mono::layout::Layout::*;
+    use roc_mono::layout::Builtin::*;
+    use roc_mono::layout::Layout::*;
 
     match layout {
         Pointer(_) | FunctionPointer(_, _) => cfg.pointer_type(),

@@ -9,10 +9,10 @@ use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::llvm::convert::{basic_type_from_layout, get_fn_type};
-use crate::mono::expr::{Expr, Proc, Procs};
-use crate::mono::layout::Layout;
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
+use roc_mono::expr::{Expr, Proc, Procs};
+use roc_mono::layout::Layout;
 use roc_types::subs::{Subs, Variable};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -42,7 +42,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
     expr: &Expr<'a>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use crate::mono::expr::Expr::*;
+    use roc_mono::expr::Expr::*;
 
     match expr {
         Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),

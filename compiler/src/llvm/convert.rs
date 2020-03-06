@@ -3,7 +3,7 @@ use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{BasicType, FunctionType};
 use inkwell::AddressSpace;
 
-use crate::mono::layout::Layout;
+use roc_mono::layout::Layout;
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn get_fn_type<'ctx>(
@@ -24,8 +24,8 @@ pub fn basic_type_from_layout<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
 ) -> BasicTypeEnum<'ctx> {
-    use crate::mono::layout::Builtin::*;
-    use crate::mono::layout::Layout::*;
+    use roc_mono::layout::Builtin::*;
+    use roc_mono::layout::Layout::*;
 
     match layout {
         FunctionPointer(args, ret_layout) => {

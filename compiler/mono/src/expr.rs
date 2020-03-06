@@ -1,8 +1,8 @@
-use crate::mono::layout::{Builtin, Layout};
+use crate::layout::{Builtin, Layout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_can;
 use roc_can::pattern::Pattern;
-use roc_can::{self};
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
