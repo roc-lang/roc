@@ -12,7 +12,7 @@ extern crate roc_module;
 mod helpers;
 
 #[cfg(test)]
-mod test_uniqueness_load {
+mod test_uniq_load {
     use crate::helpers::fixtures_dir;
     use inlinable_string::InlinableString;
     use roc::load::{load, LoadedModule};
@@ -45,13 +45,7 @@ mod test_uniqueness_load {
     ) -> LoadedModule {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
-        let loaded = load(
-            &unique::uniqueness_stdlib(),
-            src_dir,
-            filename,
-            subs_by_module,
-        )
-        .await;
+        let loaded = load(&unique::uniq_stdlib(), src_dir, filename, subs_by_module).await;
         let loaded_module = loaded.expect("Test module failed to load");
 
         assert_eq!(loaded_module.can_problems, Vec::new());

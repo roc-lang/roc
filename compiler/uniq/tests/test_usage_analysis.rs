@@ -6,9 +6,9 @@ extern crate pretty_assertions;
 extern crate indoc;
 
 extern crate bumpalo;
-extern crate roc;
 extern crate roc_collections;
 extern crate roc_module;
+extern crate roc_uniq;
 
 mod helpers;
 
@@ -18,10 +18,10 @@ mod test_usage_analysis {
     use roc_collections::all::{ImMap, ImSet};
     use roc_module::ident::Lowercase;
     use roc_module::symbol::{Interns, Symbol};
-    use roc_uniqueness::sharing;
-    use roc_uniqueness::sharing::FieldAccess;
-    use roc_uniqueness::sharing::VarUsage;
-    use roc_uniqueness::sharing::{Container, Mark, Usage};
+    use roc_uniq::sharing;
+    use roc_uniq::sharing::FieldAccess;
+    use roc_uniq::sharing::VarUsage;
+    use roc_uniq::sharing::{Container, Mark, Usage};
 
     use Container::*;
     use Mark::*;
@@ -196,7 +196,7 @@ mod test_usage_analysis {
             loc_expr, interns, ..
         } = can_expr(src);
 
-        use roc_uniqueness::sharing::annotate_usage;
+        use roc_uniq::sharing::annotate_usage;
         let mut usage = VarUsage::default();
         annotate_usage(&loc_expr.value, &mut usage);
 

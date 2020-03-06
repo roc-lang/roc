@@ -613,7 +613,7 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    let is_uniqueness_infer = match subs.get(var).content {
+    let is_uniq_infer = match subs.get(var).content {
         Content::Alias(Symbol::ATTR_ATTR, _, _) => true,
         _ => false,
     };
@@ -625,7 +625,7 @@ fn check_for_infinite_type(
         // try to make a tag union recursive, see if that helps
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                if !is_uniqueness_infer {
+                if !is_uniq_infer {
                     let rec_var = subs.fresh_unnamed_flex_var();
                     subs.set_rank(rec_var, description.rank);
 

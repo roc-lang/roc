@@ -4,12 +4,11 @@ extern crate pretty_assertions;
 extern crate indoc;
 
 extern crate bumpalo;
-extern crate roc;
 
 mod helpers;
 
 #[cfg(test)]
-mod test_infer_uniq {
+mod test_uniq_solve {
     use crate::helpers::{
         assert_correct_variable_usage, infer_expr, uniq_expr, with_larger_debug_stack,
     };

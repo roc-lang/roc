@@ -46,31 +46,6 @@ pub fn infer_expr(
     (content, solved.into_inner())
 }
 
-/// Used in the with_larger_debug_stack() function, for tests that otherwise
-/// run out of stack space in debug builds (but don't in --release builds)
-#[allow(dead_code)]
-const EXPANDED_STACK_SIZE: usize = 4 * 1024 * 1024;
-
-/// Without this, some tests pass in `cargo test --release` but fail without
-/// the --release flag because they run out of stack space. This increases
-/// stack size for debug builds only, while leaving the stack space at the default
-/// amount for release builds.
-#[allow(dead_code)]
-#[cfg(debug_assertions)]
-pub fn with_larger_debug_stack<F>(run_test: F)
-where
-    F: FnOnce() -> (),
-    F: Send,
-    F: 'static,
-{
-    std::thread::Builder::new()
-        .stack_size(EXPANDED_STACK_SIZE)
-        .spawn(run_test)
-        .expect("Error while spawning expanded dev stack size thread")
-        .join()
-        .expect("Error while joining expanded dev stack size thread")
-}
-
 /// In --release builds, don't increase the stack size. Run the test normally.
 /// This way, we find out if any of our tests are blowing the stack even after
 /// optimizations in release builds.
@@ -176,10 +151,7 @@ pub fn uniq_expr_with(
         .collect();
 
     // load builtin values
-
-    // TODO what to do with those rigids?
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(imports, constraint, &var_store);
+    let constraint = constrain_imported_values(imports, constraint, &var_store);
 
     // load builtin types
     let mut constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
@@ -259,13 +231,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         .collect();
 
     //load builtin values
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(imports, constraint, &var_store);
-
-    // TODO determine what to do with those rigids
-    //    for var in introduced_rigids {
-    //        output.ftv.insert(var, format!("internal_{:?}", var).into());
-    //    }
+    let constraint = constrain_imported_values(imports, constraint, &var_store);
 
     //load builtin types
     let mut constraint =

@@ -12,7 +12,7 @@ roc_parse = { path = "../parse" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_builtins = { path = "../builtins" }
-roc_uniqueness = { path = "../uniqueness" }
+roc_uniq = { path = "../uniq" }
 
 [dev-dependencies]
 pretty_assertions = "0.5.1 "

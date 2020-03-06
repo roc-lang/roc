@@ -889,7 +889,7 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
- "roc_uniqueness",
+ "roc_uniq",
  "target-lexicon",
  "tokio",
  "wyhash",
@@ -959,7 +959,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_types",
- "roc_uniqueness",
+ "roc_uniq",
 ]
 
 [[package]]
@@ -1031,15 +1031,21 @@ dependencies = [
 name = "roc_solve"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "indoc",
  "maplit",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+ "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_constrain",
  "roc_module",
+ "roc_parse",
+ "roc_problem",
  "roc_region",
+ "roc_solve",
  "roc_types",
  "roc_unify",
 ]
@@ -1077,9 +1083,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "roc_uniqueness"
+name = "roc_uniq"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "im",
  "im-rc",
  "indoc",
@@ -1087,10 +1094,15 @@ dependencies = [
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+ "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_constrain",
  "roc_module",
+ "roc_parse",
+ "roc_problem",
  "roc_region",
+ "roc_solve",
  "roc_types",
 ]
 

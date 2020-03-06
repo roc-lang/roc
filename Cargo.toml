@@ -9,7 +9,7 @@ members = [
     "compiler/can",
     "compiler/problem",
     "compiler/types",
-    "compiler/uniqueness",
+    "compiler/uniq",
     "compiler/builtins",
     "compiler/constrain",
     "compiler/unify",

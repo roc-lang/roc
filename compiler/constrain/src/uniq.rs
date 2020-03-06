@@ -15,8 +15,8 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{Alias, PReason, Reason};
-use roc_uniqueness::builtins::{attr_type, empty_list_type, list_type, str_type};
-use roc_uniqueness::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
+use roc_uniq::builtins::{attr_type, empty_list_type, list_type, str_type};
+use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
 
 pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),

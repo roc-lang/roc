@@ -4,12 +4,11 @@ extern crate pretty_assertions;
 extern crate indoc;
 
 extern crate bumpalo;
-extern crate roc;
 
 mod helpers;
 
 #[cfg(test)]
-mod test_infer {
+mod test_solve {
     use crate::helpers::{assert_correct_variable_usage, can_expr, infer_expr, CanExprOut};
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
