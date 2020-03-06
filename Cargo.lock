@@ -986,6 +986,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_load"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "inlinable_string",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+ "tokio",
+]
+
+[[package]]
 name = "roc_module"
 version = "0.1.0"
 dependencies = [
