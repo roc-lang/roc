@@ -292,8 +292,6 @@ mod test_canonicalize {
             loc_expr, problems, ..
         } = can_expr_with(&arena, test_home(), src);
 
-        dbg!(&loc_expr);
-
         assert_eq!(problems, Vec::new());
         assert!(problems.iter().all(|problem| match problem {
             Problem::UnusedDef(_, _) => true,
