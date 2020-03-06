@@ -1,61 +1,57 @@
-succeed = \val =>
-    Success val
+succeed = \val -> Success val
 
 
-fail = \val =>
-    Failure val
+fail = \val -> Failure val
 
 
-echo = \str =>
-    Echo fail succeed str
+echo = \str -> Echo fail succeed str
 
 
-readInput =
-    Read fail succeed
+readInput = Read fail succeed
 
 
-map = \convert task =>
-    after task \output =>
-        succeed (convert output)
+map = \convert, task ->
+    after task \output ->
+    succeed (convert output)
 
 
-mapErr = \convert task =>
-    fallback task \err =>
-        fail (convert err)
+mapErr = \convert, task ->
+    fallback task \err ->
+    fail (convert err)
 
 
-after = \task cont =>
-    case task
-        when Success val then cont val
-        when Failure val then Failure val
+after = \task, cont ->
+    when task is
+        Success val -> cont val
+        Failure val -> Failure val
 
-        when Echo onFailure prevCont str then
+        Echo onFailure prevCont str ->
             Echo
-                (\ioErr => after (onFailure ioErr) cont)
-                (\{} => after (prevCont {}) cont)
+                (\ioErr -> after (onFailure ioErr) cont)
+                (\{} -> after (prevCont {}) cont)
                 str
 
-        when Read onFailure prevCont then
+        Read onFailure prevCont ->
             Read
-                (\ioErr => after (onFailure ioErr) cont)
-                (\str => after (prevCont str) cont)
+                (\ioErr -> after (onFailure ioErr) cont)
+                (\str -> after (prevCont str) cont)
 
 
-fallback = \task onFailure =>
-    case task
-        when Success val then Success val
-        when Failure val then onFailure val
+fallback = \task onFailure ->
+    when task is
+        Success val -> Success val
+        Failure val -> onFailure val
 
-        when Echo prevOnFailure cont str then
+        Echo prevOnFailure cont str ->
             Echo
-                (\ioErr => fallback (prevOnFailure ioErr) onFailure)
-                (\{} => fallback (cont {}) onFailure)
+                (\ioErr -> fallback (prevOnFailure ioErr) onFailure)
+                (\{} -> fallback (cont {}) onFailure)
                 str
 
-        when Read prevOnFailure cont then
+        Read prevOnFailure cont ->
             Read
-                (\ioErr => fallback (prevOnFailure ioErr) onFailure)
-                (\str => fallback (cont str) onFailure)
+                (\ioErr -> fallback (prevOnFailure ioErr) onFailure)
+                (\str -> fallback (cont str) onFailure)
 
 
 ###############################################################
@@ -63,10 +59,10 @@ fallback = \task onFailure =>
 ###############################################################
 
 program =
-    after (echo "What is your first name?") \{} =>
-    after readInput \firstName =>
-    after (echo "Hi \(firstName)! What is your last name?") \{} =>
-    after readInput \lastName =>
-        echo "Your full name is: \(firstName) \(lastName)"
+    after (echo "What is your first name?") \{} ->
+    after readInput \firstName ->
+    after (echo "Hi \(firstName)! What is your last name?") \{} ->
+    after readInput \lastName ->
+    echo "Your full name is: \(firstName) \(lastName)"
 
 program
