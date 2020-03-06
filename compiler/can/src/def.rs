@@ -199,7 +199,7 @@ pub fn canonicalize_defs<'a>(
                             region: loc_lowercase.region,
                         });
                     } else {
-                        panic!("TODO handle phantom type variables, they are not allowed!");
+                        panic!("TODO handle phantom type variables, they are not allowed!\nThe {:?} variable in the definition of {:?} gives trouble", loc_lowercase, symbol);
                     }
                 }
 
