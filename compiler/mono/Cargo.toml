@@ -1,5 +1,5 @@
 [package]
-name = "roc_solve"
+name = "roc_mono"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
@@ -11,6 +11,7 @@ roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
+bumpalo = "2.6"
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
@@ -23,4 +24,3 @@ maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
-bumpalo = "2.6"

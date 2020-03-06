@@ -55,7 +55,7 @@ fn disjunction(free: VarId, rest: Vec<VarId>) -> SolvedType {
     SolvedType::Boolean(SolvedAtom::Variable(free), solved_rest)
 }
 
-pub fn uniqueness_stdlib() -> StdLib {
+pub fn uniq_stdlib() -> StdLib {
     use crate::std::Mode;
 
     let types = types();

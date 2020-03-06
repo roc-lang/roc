@@ -1,4 +1,4 @@
-fibonacci = \num =>
+fibonacci = \num ->
     if num < 2 then
         num
     else

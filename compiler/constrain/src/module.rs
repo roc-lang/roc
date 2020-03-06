@@ -29,7 +29,7 @@ pub fn constrain_module(
 
     match mode {
         Standard => constrain_decls(home, decls, send_aliases),
-        Uniqueness => crate::uniqueness::constrain_decls(home, decls, send_aliases, var_store),
+        Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, var_store),
     }
 }
 

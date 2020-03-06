@@ -1,7 +1,6 @@
 [workspace]
 
 members = [
-    "compiler",
     "compiler/region",
     "compiler/collections",
     "compiler/module",
@@ -9,12 +8,16 @@ members = [
     "compiler/can",
     "compiler/problem",
     "compiler/types",
-    "compiler/uniqueness",
+    "compiler/uniq",
     "compiler/builtins",
     "compiler/constrain",
     "compiler/unify",
     "compiler/solve",
     "compiler/reporting",
+    "compiler/fmt",
+    "compiler/mono",
+    "compiler/load",
+    "compiler/gen",
     "vendor/ena",
     "vendor/pathfinding"
 ]
