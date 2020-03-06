@@ -241,6 +241,26 @@ mod test_load {
     }
 
     #[test]
+    fn load_astar() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module = load_fixture("interface_with_deps", "AStar", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "findPath" => "{ costFunction : (position, position -> Float), end : position, moveFunction : (position -> Set position), start : position } -> Result (List position) [ KeyNotFound ]*",
+                    "initialModel" => "position -> Model position",
+                    "reconstructPath" => "Map position position, position -> List position",
+                    "updateCost" => "position, position, Model position -> Model position",
+                    "cheapestOpen" => "(position -> Float), Model position -> Result position [ KeyNotFound ]*",
+                    "astar" => "(position, position -> Float), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",
+                },
+            );
+        });
+    }
+
+    #[test]
     fn load_principal_types() {
         test_async(async {
             let subs_by_module = MutMap::default();
