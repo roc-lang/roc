@@ -1,4 +1,5 @@
 use crate::expr::{exists, exists_with_aliases, Info};
+use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
 use roc_can::def::{Declaration, Def};
@@ -59,7 +60,7 @@ pub fn constrain_declaration(
 pub fn constrain_decls(
     home: ModuleId,
     decls: &[Declaration],
-    aliases: SendMap<Symbol, Alias>,
+    mut aliases: SendMap<Symbol, Alias>,
     var_store: &VarStore,
 ) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
@@ -80,6 +81,8 @@ pub fn constrain_decls(
             Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
         }
     }
+
+    aliases_to_attr_type(var_store, &mut aliases);
 
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
@@ -1635,14 +1638,15 @@ fn constrain_def(
     let mut new_rigids = Vec::new();
 
     let expr_con = match &def.annotation {
-        Some((annotation, free_vars, ann_def_aliases)) => {
+        Some((annotation, introduced_vars, ann_def_aliases)) => {
             def_aliases = ann_def_aliases.clone();
             let arity = annotation.arity();
             let mut ftv = env.rigids.clone();
+
             let annotation = instantiate_rigids(
                 var_store,
                 annotation,
-                &free_vars,
+                &introduced_vars,
                 &mut new_rigids,
                 &mut ftv,
                 &def.loc_pattern,
@@ -1709,7 +1713,7 @@ fn constrain_def(
 fn instantiate_rigids(
     var_store: &VarStore,
     annotation: &Type,
-    free_vars: &SendMap<Lowercase, Variable>,
+    introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
     ftv: &mut ImMap<Lowercase, (Variable, Variable)>,
     loc_pattern: &Located<Pattern>,
@@ -1720,7 +1724,7 @@ fn instantiate_rigids(
 
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
 
-    for (name, var) in free_vars {
+    for (name, var) in introduced_vars.var_by_name.iter() {
         if let Some((existing_rigid, existing_uvar)) = ftv.get(&name) {
             rigid_substitution.insert(
                 *var,
@@ -1764,6 +1768,7 @@ fn instantiate_rigids(
     }
 
     new_rigids.extend(uniq_vars);
+    new_rigids.extend(introduced_vars.wildcards.iter().cloned());
 
     for (_, v) in new_rigid_pairs {
         new_rigids.push(v);
@@ -1854,7 +1859,7 @@ pub fn rec_defs_help(
                 flex_info.def_types.extend(pattern_state.headers);
             }
 
-            Some((annotation, free_vars, ann_def_aliases)) => {
+            Some((annotation, introduced_vars, ann_def_aliases)) => {
                 for (symbol, alias) in ann_def_aliases.clone() {
                     def_aliases.insert(symbol, alias);
                 }
@@ -1863,7 +1868,7 @@ pub fn rec_defs_help(
                 let annotation = instantiate_rigids(
                     var_store,
                     annotation,
-                    &free_vars,
+                    &introduced_vars,
                     &mut new_rigids,
                     &mut ftv,
                     &def.loc_pattern,
