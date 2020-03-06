@@ -6,7 +6,7 @@ use roc_types::solved_types::{BuiltinAlias, SolvedType};
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Mode {
     Standard,
     Uniqueness,

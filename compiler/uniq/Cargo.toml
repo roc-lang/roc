@@ -1,5 +1,5 @@
 [package]
-name = "roc_solve"
+name = "roc_uniq"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
@@ -10,7 +10,8 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
-roc_unify = { path = "../unify" }
+im    = "14" # im and im-rc should always have the same version!
+im-rc = "14" # im and im-rc should always have the same version!
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }

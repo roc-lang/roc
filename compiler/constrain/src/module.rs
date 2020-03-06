@@ -29,7 +29,7 @@ pub fn constrain_module(
 
     match mode {
         Standard => constrain_decls(home, decls, send_aliases),
-        Uniqueness => crate::uniqueness::constrain_decls(home, decls, send_aliases, var_store),
+        Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, var_store),
     }
 }
 
@@ -69,6 +69,10 @@ pub fn constrain_imported_values(
                 );
 
                 for (_, var) in free_vars.named_vars {
+                    rigid_vars.push(var);
+                }
+
+                for var in free_vars.wildcards {
                     rigid_vars.push(var);
                 }
 
@@ -151,9 +155,10 @@ pub fn load_builtin_aliases(
 pub struct FreeVars {
     pub named_vars: ImMap<Lowercase, Variable>,
     pub unnamed_vars: ImMap<VarId, Variable>,
+    pub wildcards: Vec<Variable>,
 }
 
-pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
+fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
     use roc_types::solved_types::SolvedType::*;
 
     match solved_type {
@@ -196,7 +201,11 @@ pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &V
                 Type::Variable(var)
             }
         }
-        Wildcard => Type::Variable(var_store.fresh()),
+        Wildcard => {
+            let var = var_store.fresh();
+            free_vars.wildcards.push(var);
+            Type::Variable(var)
+        }
         Record { fields, ext } => {
             let mut new_fields = SendMap::default();
 

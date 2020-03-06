@@ -1,5 +1,5 @@
 [package]
-name = "roc_solve"
+name = "roc_fmt"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
@@ -8,19 +8,17 @@ edition = "2018"
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
+roc_parse = { path = "../parse" }
+roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
-roc_can = { path = "../can" }
-roc_unify = { path = "../unify" }
+im    = "14" # im and im-rc should always have the same version!
+im-rc = "14" # im and im-rc should always have the same version!
+bumpalo = "2.6"
+inlinable_string = "0.1.0"
 
 [dev-dependencies]
-roc_constrain = { path = "../constrain" }
-roc_builtins = { path = "../builtins" }
-roc_problem = { path = "../problem" }
-roc_parse = { path = "../parse" }
-roc_solve = { path = "../solve" }
 pretty_assertions = "0.5.1 "
 maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
-bumpalo = "2.6"

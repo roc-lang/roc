@@ -25,6 +25,22 @@ const UVAR4: VarId = VarId::from_u32(1004);
 const UVAR5: VarId = VarId::from_u32(1005);
 const UVAR6: VarId = VarId::from_u32(1006);
 
+pub struct IDStore(u32);
+
+impl IDStore {
+    fn new() -> Self {
+        IDStore(2000)
+    }
+
+    fn fresh(&mut self) -> VarId {
+        let result = VarId::from_u32(self.0);
+
+        self.0 += 1;
+
+        result
+    }
+}
+
 fn shared() -> SolvedType {
     SolvedType::Boolean(SolvedAtom::Zero, vec![])
 }
@@ -39,7 +55,7 @@ fn disjunction(free: VarId, rest: Vec<VarId>) -> SolvedType {
     SolvedType::Boolean(SolvedAtom::Variable(free), solved_rest)
 }
 
-pub fn uniqueness_stdlib() -> StdLib {
+pub fn uniq_stdlib() -> StdLib {
     use crate::std::Mode;
 
     let types = types();
@@ -309,6 +325,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // toFloat : Num a -> Float
+    add_type(
+        Symbol::NUM_TO_FLOAT,
+        unique_function(vec![num_type(UVAR1, TVAR1)], float_type(UVAR2)),
+    );
+
     // Int module
 
     // highest : Int
@@ -362,6 +384,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(Symbol::FLOAT_LOWEST, float_type(UVAR1));
 
     // Bool module
+
+    // isEq or (==) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    add_type(
+        Symbol::BOOL_EQ,
+        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+    );
+
+    // isNeq or (!=) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    add_type(
+        Symbol::BOOL_NEQ,
+        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+    );
 
     // and or (&&) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
     add_type(
@@ -524,6 +558,267 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // Map module
+
+    // empty : Map k v
+    add_type(Symbol::MAP_EMPTY, map_type(UVAR1, TVAR1, TVAR2));
+
+    // singleton : k, v -> Map k v
+    add_type(
+        Symbol::MAP_SINGLETON,
+        unique_function(
+            vec![flex(TVAR1), flex(TVAR2)],
+            map_type(UVAR1, TVAR1, TVAR2),
+        ),
+    );
+
+    // get : Attr (u | v | *) (Map (Attr u key) (Attr v val), (Attr * key) -> Attr * (Result (Attr v val) [ KeyNotFound ]*)
+    let key_not_found = SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![
+            SolvedType::Wildcard,
+            SolvedType::TagUnion(
+                vec![(TagName::Global("KeyNotFound".into()), vec![])],
+                Box::new(SolvedType::Wildcard),
+            ),
+        ],
+    );
+
+    add_type(Symbol::MAP_GET, {
+        let mut store = IDStore::new();
+
+        let u = store.fresh();
+        let v = store.fresh();
+        let key = store.fresh();
+        let val = store.fresh();
+        let star1 = store.fresh();
+        let star2 = store.fresh();
+        let star3 = store.fresh();
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star1, vec![u, v]),
+                        SolvedType::Apply(
+                            Symbol::MAP_MAP,
+                            vec![attr_type(u, key), attr_type(v, val)],
+                        ),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![disjunction(star2, vec![u]), flex(key)],
+                ),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(
+                        Symbol::RESULT_RESULT,
+                        vec![attr_type(v, val), key_not_found],
+                    ),
+                ],
+            ),
+        )
+    });
+
+    // insert : Attr (u | v | *) (Map (Attr u key) (Attr v val)), Attr (u | *) key, Attr (v | *) val -> Attr * (Map (Attr u key) (Attr v val))
+    add_type(Symbol::MAP_INSERT, {
+        let mut store = IDStore::new();
+
+        let u = store.fresh();
+        let v = store.fresh();
+        let key = store.fresh();
+        let val = store.fresh();
+        let star1 = store.fresh();
+        let star2 = store.fresh();
+        let star3 = store.fresh();
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star1, vec![u, v]),
+                        SolvedType::Apply(
+                            Symbol::MAP_MAP,
+                            vec![attr_type(u, key), attr_type(v, val)],
+                        ),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![disjunction(star2, vec![u]), flex(key)],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![disjunction(star2, vec![v]), flex(val)],
+                ),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::MAP_MAP, vec![attr_type(u, key), attr_type(v, val)]),
+                ],
+            ),
+        )
+    });
+
+    // Set module
+
+    // empty : Set a
+    add_type(Symbol::SET_EMPTY, set_type(UVAR1, TVAR1));
+
+    // singleton : a -> Set a
+    add_type(
+        Symbol::SET_SINGLETON,
+        unique_function(vec![flex(TVAR1)], set_type(UVAR1, TVAR1)),
+    );
+
+    // op : Attr (u | *) (Set (Attr u a)), Attr (u | *) (Set (Attr u a)) -> Attr * Set (Attr u a)
+    let set_combine = {
+        let mut store = IDStore::new();
+
+        let u = store.fresh();
+        let a = store.fresh();
+        let star1 = store.fresh();
+        let star2 = store.fresh();
+        let star3 = store.fresh();
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star1, vec![u]),
+                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star2, vec![u]),
+                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                    ],
+                ),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                ],
+            ),
+        )
+    };
+
+    // union : Set a, Set a -> Set a
+    add_type(Symbol::SET_UNION, set_combine.clone());
+
+    // diff : Set a, Set a -> Set a
+    add_type(Symbol::SET_DIFF, set_combine);
+
+    // foldl : Attr (u | *) (Set (Attr u a)), Attr Shared (Attr u a -> b -> b), b -> b
+    add_type(Symbol::SET_FOLDL, {
+        let mut store = IDStore::new();
+
+        let u = store.fresh();
+        let a = store.fresh();
+        let b = store.fresh();
+        let star1 = store.fresh();
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star1, vec![u]),
+                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        shared(),
+                        SolvedType::Func(vec![attr_type(u, a), flex(b)], Box::new(flex(b))),
+                    ],
+                ),
+                flex(b),
+            ],
+            flex(b),
+        )
+    });
+
+    // insert : Attr (u | *) (Set (Attr u a)), Attr (u | *) a -> Attr * (Set (Attr u a))
+    add_type(Symbol::SET_INSERT, {
+        let mut store = IDStore::new();
+
+        let u = store.fresh();
+        let a = store.fresh();
+        let star1 = store.fresh();
+        let star2 = store.fresh();
+        let star3 = store.fresh();
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star1, vec![u]),
+                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![disjunction(star2, vec![u]), flex(a)],
+                ),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                ],
+            ),
+        )
+    });
+
+    // we can remove a key that is shared from a set of unique keys
+    // remove : Attr (u | *) (Set (Attr u a)), Attr * a -> Attr * (Set (Attr u a))
+    add_type(Symbol::SET_REMOVE, {
+        let mut store = IDStore::new();
+
+        let u = store.fresh();
+        let a = store.fresh();
+        let star1 = store.fresh();
+        let star2 = store.fresh();
+        let star3 = store.fresh();
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        disjunction(star1, vec![u]),
+                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                    ],
+                ),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![flex(star2), flex(a)]),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                ],
+            ),
+        )
+    });
+
     // Str module
 
     // isEmpty : Attr u Str -> Attr v Bool
@@ -653,5 +948,24 @@ fn list_type(u: VarId, a: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![flex(u), SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)])],
+    )
+}
+
+#[inline(always)]
+fn set_type(u: VarId, a: VarId) -> SolvedType {
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![flex(u), SolvedType::Apply(Symbol::SET_SET, vec![flex(a)])],
+    )
+}
+
+#[inline(always)]
+fn map_type(u: VarId, key: VarId, value: VarId) -> SolvedType {
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![
+            flex(u),
+            SolvedType::Apply(Symbol::MAP_MAP, vec![flex(key), flex(value)]),
+        ],
     )
 }
