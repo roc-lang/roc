@@ -121,7 +121,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    for (var, lowercase) in output.ftv.clone() {
+    for (var, lowercase) in output.introduced_variables.name_by_var.clone() {
         rigid_variables.insert(var, lowercase);
     }
 

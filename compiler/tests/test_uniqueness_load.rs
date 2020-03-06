@@ -223,6 +223,26 @@ mod test_uniqueness_load {
     }
 
     #[test]
+    fn load_astar() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module = load_fixture("interface_with_deps", "AStar", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "findPath" => "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr Shared position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))",
+                    "initialModel" => "Attr * (Attr Shared position -> Attr * (Model (Attr Shared position)))",
+                    "reconstructPath" => "Attr Shared (Attr Shared (Map (Attr Shared position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))",
+                    "updateCost" => "Attr * (Attr Shared position, Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr Shared (Model (Attr Shared position)))",
+                    "cheapestOpen" => "Attr * (Attr * (Attr Shared position -> Attr Shared Float), Attr * (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))",
+                    "astar" => "Attr Shared (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float), Attr Shared (Attr Shared position -> Attr * (Set (Attr Shared position))), Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr * [ Err (Attr * [ KeyNotFound ]*), Ok (Attr * (List (Attr Shared position))) ]*)",
+                },
+            );
+        });
+    }
+
+    #[test]
     fn load_and_typecheck_quicksort() {
         test_async(async {
             let subs_by_module = MutMap::default();

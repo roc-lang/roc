@@ -1,4 +1,5 @@
 use crate::annotation::canonicalize_annotation;
+use crate::annotation::IntroducedVariables;
 use crate::env::Env;
 use crate::expr::Expr::{self, *};
 use crate::expr::{
@@ -28,7 +29,7 @@ pub struct Def {
     pub loc_expr: Located<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
-    pub annotation: Option<(Type, SendMap<Lowercase, Variable>, SendMap<Symbol, Alias>)>,
+    pub annotation: Option<(Type, IntroducedVariables, SendMap<Symbol, Alias>)>,
 }
 
 #[derive(Debug)]
@@ -192,7 +193,10 @@ pub fn canonicalize_defs<'a>(
                     Vec::with_capacity(vars.len());
 
                 for loc_lowercase in vars {
-                    if let Some(var) = can_ann.rigids.get(&loc_lowercase.value) {
+                    if let Some(var) = can_ann
+                        .introduced_variables
+                        .var_by_name(&loc_lowercase.value)
+                    {
                         // This is a valid lowercase rigid var for the alias.
                         can_vars.push(Located {
                             value: (loc_lowercase.value.clone(), *var),
@@ -713,14 +717,7 @@ fn canonicalize_pending_def<'a>(
                 aliases.insert(symbol, alias);
             }
 
-            // union seen rigids with already found ones
-            for (k, v) in ann.rigids {
-                output.rigids.insert(k, v);
-            }
-
-            for (k, v) in ann.ftv {
-                output.ftv.insert(k, v);
-            }
+            output.introduced_variables.union(&ann.introduced_variables);
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
@@ -790,7 +787,11 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((typ.clone(), output.rigids.clone(), ann.aliases.clone())),
+                        annotation: Some((
+                            typ.clone(),
+                            output.introduced_variables.clone(),
+                            ann.aliases.clone(),
+                        )),
                     },
                 );
             }
@@ -810,7 +811,10 @@ fn canonicalize_pending_def<'a>(
             let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
 
             for loc_lowercase in vars {
-                if let Some(var) = can_ann.rigids.get(&loc_lowercase.value) {
+                if let Some(var) = can_ann
+                    .introduced_variables
+                    .var_by_name(&loc_lowercase.value)
+                {
                     // This is a valid lowercase rigid var for the alias.
                     can_vars.push(Located {
                         value: (loc_lowercase.value.clone(), *var),
@@ -840,15 +844,9 @@ fn canonicalize_pending_def<'a>(
             let alias = scope.lookup_alias(symbol).expect("alias was not added");
             aliases.insert(symbol, alias.clone());
 
-            // aliases cannot introduce new rigids that are visible in other annotations
-            // but the rigids can show up in type error messages, so still register them
-            for (k, v) in can_ann.rigids {
-                output.rigids.insert(k, v);
-            }
-
-            for (k, v) in can_ann.ftv {
-                output.ftv.insert(k, v);
-            }
+            output
+                .introduced_variables
+                .union(&can_ann.introduced_variables);
         }
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             let ann =
@@ -867,14 +865,7 @@ fn canonicalize_pending_def<'a>(
                 aliases.insert(symbol, alias);
             }
 
-            // union seen rigids with already found ones
-            for (k, v) in ann.rigids {
-                output.rigids.insert(k, v);
-            }
-
-            for (k, v) in ann.ftv {
-                output.ftv.insert(k, v);
-            }
+            output.introduced_variables.union(&ann.introduced_variables);
 
             // bookkeeping for tail-call detection. If we're assigning to an
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
@@ -991,7 +982,11 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((typ.clone(), output.rigids.clone(), ann.aliases.clone())),
+                        annotation: Some((
+                            typ.clone(),
+                            output.introduced_variables.clone(),
+                            ann.aliases.clone(),
+                        )),
                     },
                 );
             }
@@ -1157,8 +1152,9 @@ pub fn can_defs_with_return<'a>(
     let (ret_expr, mut output) =
         canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
 
-    output.rigids = output.rigids.union(defs_output.rigids);
-    output.ftv = output.ftv.union(defs_output.ftv);
+    output
+        .introduced_variables
+        .union(&defs_output.introduced_variables);
     output.references = output.references.union(defs_output.references);
 
     // Now that we've collected all the references, check to see if any of the new idents

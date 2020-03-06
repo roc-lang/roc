@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
+use roc_collections::all::{MutSet, SendMap};
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -13,19 +13,13 @@ use roc_types::types::{Alias, Problem, Type};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
     pub typ: Type,
-    pub ftv: MutMap<Variable, Lowercase>,
-    pub rigids: ImMap<Lowercase, Variable>,
+    pub introduced_variables: IntroducedVariables,
     pub references: MutSet<Symbol>,
     pub aliases: SendMap<Symbol, Alias>,
 }
 
-pub fn canonicalize_annotation(
-    env: &mut Env,
-    scope: &mut Scope,
-    annotation: &roc_parse::ast::TypeAnnotation,
-    region: Region,
-    var_store: &VarStore,
-) -> Annotation {
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct IntroducedVariables {
     // NOTE on rigids
     //
     // Rigids must be unique within a type annoation.
@@ -36,7 +30,44 @@ pub fn canonicalize_annotation(
     // But then between annotations, the same name can occur multiple times,
     // but a variable can only have one name. Therefore
     // `ftv : SendMap<Variable, Lowercase>`.
-    let mut rigids = ImMap::default();
+    pub wildcards: Vec<Variable>,
+    pub var_by_name: SendMap<Lowercase, Variable>,
+    pub name_by_var: SendMap<Variable, Lowercase>,
+}
+
+impl IntroducedVariables {
+    pub fn insert_named(&mut self, name: Lowercase, var: Variable) {
+        self.var_by_name.insert(name.clone(), var);
+        self.name_by_var.insert(var, name);
+    }
+
+    pub fn insert_wildcard(&mut self, var: Variable) {
+        self.wildcards.push(var);
+    }
+
+    pub fn union(&mut self, other: &Self) {
+        self.wildcards.extend(other.wildcards.iter().cloned());
+        self.var_by_name.extend(other.var_by_name.clone());
+        self.name_by_var.extend(other.name_by_var.clone());
+    }
+
+    pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
+        self.var_by_name.get(name)
+    }
+
+    pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
+        self.name_by_var.get(&var)
+    }
+}
+
+pub fn canonicalize_annotation(
+    env: &mut Env,
+    scope: &mut Scope,
+    annotation: &roc_parse::ast::TypeAnnotation,
+    region: Region,
+    var_store: &VarStore,
+) -> Annotation {
+    let mut introduced_variables = IntroducedVariables::default();
     let mut aliases = SendMap::default();
     let mut references = MutSet::default();
     let typ = can_annotation_help(
@@ -45,22 +76,15 @@ pub fn canonicalize_annotation(
         region,
         scope,
         var_store,
-        &mut rigids,
+        &mut introduced_variables,
         &mut aliases,
         &mut references,
     );
 
-    let mut ftv = MutMap::default();
-
-    for (k, v) in rigids.clone() {
-        ftv.insert(v, k);
-    }
-
     Annotation {
         typ,
-        ftv,
+        introduced_variables,
         references,
-        rigids,
         aliases,
     }
 }
@@ -72,7 +96,7 @@ fn can_annotation_help(
     region: Region,
     scope: &mut Scope,
     var_store: &VarStore,
-    rigids: &mut ImMap<Lowercase, Variable>,
+    introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
     references: &mut MutSet<Symbol>,
 ) -> Type {
@@ -89,7 +113,7 @@ fn can_annotation_help(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     references,
                 );
@@ -103,7 +127,7 @@ fn can_annotation_help(
                 region,
                 scope,
                 var_store,
-                rigids,
+                introduced_variables,
                 local_aliases,
                 references,
             );
@@ -148,7 +172,7 @@ fn can_annotation_help(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     references,
                 );
@@ -161,12 +185,12 @@ fn can_annotation_help(
         BoundVariable(v) => {
             let name = Lowercase::from(*v);
 
-            match rigids.get(&name) {
+            match introduced_variables.var_by_name(&name) {
                 Some(var) => Type::Variable(*var),
                 None => {
                     let var = var_store.fresh();
 
-                    rigids.insert(name, var);
+                    introduced_variables.insert_named(name, var);
 
                     Type::Variable(var)
                 }
@@ -200,7 +224,7 @@ fn can_annotation_help(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     references,
                 );
@@ -214,12 +238,12 @@ fn can_annotation_help(
                         BoundVariable(ident) => {
                             let var_name = Lowercase::from(ident);
 
-                            if let Some(var) = rigids.get(&var_name) {
+                            if let Some(var) = introduced_variables.var_by_name(&var_name) {
                                 vars.push((var_name, Type::Variable(*var)));
                             } else {
                                 let var = var_store.fresh();
 
-                                rigids.insert(var_name.clone(), var);
+                                introduced_variables.insert_named(var_name.clone(), var);
                                 vars.push((var_name.clone(), Type::Variable(var)));
 
                                 lowercase_vars.push(Located::at(loc_var.region, (var_name, var)));
@@ -276,7 +300,7 @@ fn can_annotation_help(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     &mut field_types,
                     references,
@@ -290,7 +314,7 @@ fn can_annotation_help(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     references,
                 ),
@@ -309,7 +333,7 @@ fn can_annotation_help(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     &mut tag_types,
                     references,
@@ -323,7 +347,7 @@ fn can_annotation_help(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     references,
                 ),
@@ -338,12 +362,14 @@ fn can_annotation_help(
             region,
             scope,
             var_store,
-            rigids,
+            introduced_variables,
             local_aliases,
             references,
         ),
         Wildcard | Malformed(_) => {
             let var = var_store.fresh();
+
+            introduced_variables.insert_wildcard(var);
 
             Type::Variable(var)
         }
@@ -358,7 +384,7 @@ fn can_assigned_field<'a>(
     region: Region,
     scope: &mut Scope,
     var_store: &VarStore,
-    rigids: &mut ImMap<Lowercase, Variable>,
+    introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
     field_types: &mut SendMap<Lowercase, Type>,
     references: &mut MutSet<Symbol>,
@@ -373,7 +399,7 @@ fn can_assigned_field<'a>(
                 region,
                 scope,
                 var_store,
-                rigids,
+                introduced_variables,
                 local_aliases,
                 references,
             );
@@ -385,11 +411,11 @@ fn can_assigned_field<'a>(
             // Interpret { a, b } as { a : a, b : b }
             let field_name = Lowercase::from(loc_field_name.value);
             let field_type = {
-                if let Some(var) = rigids.get(&field_name) {
+                if let Some(var) = introduced_variables.var_by_name(&field_name) {
                     Type::Variable(*var)
                 } else {
                     let field_var = var_store.fresh();
-                    rigids.insert(field_name.clone(), field_var);
+                    introduced_variables.insert_named(field_name.clone(), field_var);
                     Type::Variable(field_var)
                 }
             };
@@ -402,7 +428,7 @@ fn can_assigned_field<'a>(
             region,
             scope,
             var_store,
-            rigids,
+            introduced_variables,
             local_aliases,
             field_types,
             references,
@@ -419,7 +445,7 @@ fn can_tag<'a>(
     region: Region,
     scope: &mut Scope,
     var_store: &VarStore,
-    rigids: &mut ImMap<Lowercase, Variable>,
+    introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
     tag_types: &mut Vec<(TagName, Vec<Type>)>,
     references: &mut MutSet<Symbol>,
@@ -436,7 +462,7 @@ fn can_tag<'a>(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     references,
                 );
@@ -458,7 +484,7 @@ fn can_tag<'a>(
                     region,
                     scope,
                     var_store,
-                    rigids,
+                    introduced_variables,
                     local_aliases,
                     references,
                 );
@@ -474,7 +500,7 @@ fn can_tag<'a>(
             region,
             scope,
             var_store,
-            rigids,
+            introduced_variables,
             local_aliases,
             tag_types,
             references,
