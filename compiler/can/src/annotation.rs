@@ -1,7 +1,5 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Problem, Type};
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName};
@@ -9,6 +7,8 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
 use roc_region::all::Located;
 use roc_region::all::Region;
+use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{Alias, Problem, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {

@@ -2,8 +2,8 @@ use crate::env::Env;
 use crate::expr::Expr;
 use crate::problem::Problem;
 use crate::problem::RuntimeError::*;
-use roc_types::subs::VarStore;
 use roc_parse::ast::Base;
+use roc_types::subs::VarStore;
 use std::i64;
 
 #[inline(always)]

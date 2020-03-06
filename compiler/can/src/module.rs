@@ -5,8 +5,6 @@ use crate::operator::desugar_def;
 use crate::pattern::PatternType;
 use crate::problem::{Problem, RuntimeError};
 use crate::scope::Scope;
-use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Alias;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::Ident;
@@ -14,6 +12,8 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_region::all::{Located, Region};
+use roc_types::subs::{VarStore, Variable};
+use roc_types::types::Alias;
 
 #[derive(Debug)]
 pub struct ModuleOutput {

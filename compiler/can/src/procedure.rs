@@ -1,9 +1,9 @@
 use crate::expr::Expr;
 use crate::pattern::Pattern;
-use roc_types::subs::Variable;
 use roc_collections::all::ImSet;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
+use roc_types::subs::Variable;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Procedure {

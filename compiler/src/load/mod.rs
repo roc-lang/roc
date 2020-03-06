@@ -7,6 +7,7 @@ use crate::constrain::module::{
 use crate::solve::{self, BuiltinAlias, ExposedModuleTypes, Solved, SolvedType, SubsByModule};
 use bumpalo::Bump;
 use roc_can;
+use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, ModuleOutput};
 use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
@@ -18,7 +19,6 @@ use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{self, Alias};
-use roc_can::constraint::{Constraint};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::io;
