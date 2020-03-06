@@ -359,10 +359,7 @@ fn write_flat_type(
                 // Sort the fields so they always end up in the same order.
                 let mut sorted_fields = Vec::with_capacity(fields.len());
 
-                for (label, field_var) in fields {
-                    sorted_fields.push((label, field_var));
-                }
-
+                sorted_fields.extend(fields);
                 sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
 
                 let mut any_written_yet = false;
@@ -397,110 +394,101 @@ fn write_flat_type(
             }
         }
         TagUnion(tags, ext_var) => {
-            if tags.is_empty() {
-                buf.push_str(EMPTY_TAG_UNION)
-            } else {
-                let interns = &env.interns;
-                let home = env.home;
+            let interns = &env.interns;
+            let home = env.home;
 
-                buf.push_str("[ ");
+            buf.push_str("[ ");
 
-                // Sort the fields so they always end up in the same order.
-                let mut sorted_fields = Vec::with_capacity(tags.len());
+            // Sort the fields so they always end up in the same order.
+            let mut sorted_fields = Vec::with_capacity(tags.len());
 
-                for (label, vars) in tags {
-                    sorted_fields.push((label.clone(), vars));
-                }
-
-                sorted_fields.sort_by(|(a, _), (b, _)| {
-                    a.clone()
-                        .into_string(interns, home)
-                        .cmp(&b.clone().into_string(&interns, home))
-                });
-
-                let mut any_written_yet = false;
-
-                for (label, vars) in sorted_fields {
-                    if any_written_yet {
-                        buf.push_str(", ");
-                    } else {
-                        any_written_yet = true;
-                    }
-
-                    buf.push_str(&label.into_string(&interns, home));
-
-                    for var in vars {
-                        buf.push(' ');
-                        write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
-                    }
-                }
-
-                buf.push_str(" ]");
+            for (label, vars) in tags {
+                sorted_fields.push((label.clone(), vars));
             }
 
-            match subs.get(ext_var).content {
-                Content::Structure(EmptyTagUnion) => {
-                    // This is a closed record. We're done!
+            // If the `ext` contains tags, merge them into the list of tags.
+            // this can occur when inferring mutually recursive tags
+            let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
+
+            sorted_fields.sort_by(|(a, _), (b, _)| {
+                a.clone()
+                    .into_string(interns, home)
+                    .cmp(&b.clone().into_string(&interns, home))
+            });
+
+            let mut any_written_yet = false;
+
+            for (label, vars) in sorted_fields {
+                if any_written_yet {
+                    buf.push_str(", ");
+                } else {
+                    any_written_yet = true;
                 }
-                content => {
-                    // This is an open tag union, so print the variable
-                    // right after the ']'
-                    //
-                    // e.g. the "*" at the end of `{ x: Int }*`
-                    // or the "r" at the end of `{ x: Int }r`
-                    write_content(env, content, subs, buf, parens)
+
+                buf.push_str(&label.into_string(&interns, home));
+
+                for var in vars {
+                    buf.push(' ');
+                    write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
                 }
+            }
+
+            buf.push_str(" ]");
+
+            if let Some(content) = ext_content {
+                // This is an open tag union, so print the variable
+                // right after the ']'
+                //
+                // e.g. the "*" at the end of `{ x: Int }*`
+                // or the "r" at the end of `{ x: Int }r`
+                write_content(env, content, subs, buf, parens)
             }
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
-            if tags.is_empty() {
-                buf.push_str(EMPTY_TAG_UNION)
-            } else {
-                let interns = &env.interns;
-                let home = env.home;
+            let interns = &env.interns;
+            let home = env.home;
 
-                buf.push_str("[ ");
+            buf.push_str("[ ");
 
-                // Sort the fields so they always end up in the same order.
-                let mut sorted_fields = Vec::with_capacity(tags.len());
+            // Sort the fields so they always end up in the same order.
+            let mut sorted_fields = Vec::with_capacity(tags.len());
 
-                for (label, vars) in tags {
-                    sorted_fields.push((label.clone(), vars));
+            for (label, vars) in tags {
+                sorted_fields.push((label.clone(), vars));
+            }
+
+            // If the `ext` contains tags, merge them into the list of tags.
+            // this can occur when inferring mutually recursive tags
+            let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
+
+            sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+            let mut any_written_yet = false;
+
+            for (label, vars) in sorted_fields {
+                if any_written_yet {
+                    buf.push_str(", ");
+                } else {
+                    any_written_yet = true;
                 }
+                buf.push_str(&label.into_string(&interns, home));
 
-                // If the `ext` contains tags, merge them into the list of tags.
-                // this can occur when inferring mutually recursive tags
-                let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
-
-                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-                let mut any_written_yet = false;
-
-                for (label, vars) in sorted_fields {
-                    if any_written_yet {
-                        buf.push_str(", ");
-                    } else {
-                        any_written_yet = true;
-                    }
-                    buf.push_str(&label.into_string(&interns, home));
-
-                    for var in vars {
-                        buf.push(' ');
-                        write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
-                    }
+                for var in vars {
+                    buf.push(' ');
+                    write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
                 }
+            }
 
-                buf.push_str(" ]");
+            buf.push_str(" ]");
 
-                if let Some(content) = ext_content {
-                    // This is an open tag union, so print the variable
-                    // right after the ']'
-                    //
-                    // e.g. the "*" at the end of `{ x: Int }*`
-                    // or the "r" at the end of `{ x: Int }r`
-                    write_content(env, content, subs, buf, parens)
-                }
+            if let Some(content) = ext_content {
+                // This is an open tag union, so print the variable
+                // right after the ']'
+                //
+                // e.g. the "*" at the end of `{ x: Int }*`
+                // or the "r" at the end of `{ x: Int }r`
+                write_content(env, content, subs, buf, parens)
             }
 
             buf.push_str(" as ");
