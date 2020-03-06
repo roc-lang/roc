@@ -9,8 +9,14 @@ roc_collections = { path = "./collections" }
 roc_region = { path = "./region" }
 roc_module = { path = "./module" }
 roc_parse = { path = "./parse" }
+roc_problem = { path = "./problem" }
 roc_types = { path = "./types" }
 roc_can = { path = "./can" }
+roc_builtins = { path = "./builtins" }
+roc_constrain = { path = "./constrain" }
+roc_uniqueness = { path = "./uniqueness" }
+roc_unify = { path = "./unify" }
+roc_solve = { path = "./solve" }
 log = "0.4.8"
 petgraph = { version = "0.4.5", optional = true }
 im    = "14" # im and im-rc should always have the same version!

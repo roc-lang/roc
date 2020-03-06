@@ -7,7 +7,14 @@ members = [
     "compiler/module",
     "compiler/parse",
     "compiler/can",
+    "compiler/problem",
     "compiler/types",
+    "compiler/uniqueness",
+    "compiler/builtins",
+    "compiler/constrain",
+    "compiler/unify",
+    "compiler/solve",
+    "compiler/reporting",
     "vendor/ena",
     "vendor/pathfinding"
 ]

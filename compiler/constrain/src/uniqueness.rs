@@ -1,6 +1,4 @@
-use crate::constrain::expr::{exists, exists_with_aliases, Info};
-use crate::uniqueness::builtins::{attr_type, list_type, str_type};
-use crate::uniqueness::sharing::{Container, FieldAccess, Mark, Usage, VarUsage};
+use crate::expr::{exists, exists_with_aliases, Info};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
 use roc_can::def::{Declaration, Def};
@@ -16,11 +14,8 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{Alias, PReason, Reason};
-
-pub use roc_can::expr::Expr::*;
-
-pub mod builtins;
-pub mod sharing;
+use roc_uniqueness::builtins::{attr_type, empty_list_type, list_type, str_type};
+use roc_uniqueness::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
 
 pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
@@ -493,7 +488,7 @@ pub fn constrain_expr(
         } => {
             let uniq_var = var_store.fresh();
             if loc_elems.is_empty() {
-                let inferred = builtins::empty_list_type(Bool::variable(uniq_var), *elem_var);
+                let inferred = empty_list_type(Bool::variable(uniq_var), *elem_var);
                 exists(vec![*elem_var, uniq_var], Eq(inferred, expected, region))
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
@@ -1571,10 +1566,7 @@ fn annotation_to_attr_type(
 
                 (
                     actual_vars,
-                    crate::constrain::builtins::builtin_type(
-                        Symbol::ATTR_ATTR,
-                        vec![uniq_type, alias],
-                    ),
+                    crate::builtins::builtin_type(Symbol::ATTR_ATTR, vec![uniq_type, alias]),
                 )
             } else {
                 panic!("lifted type is not Attr")
@@ -1757,7 +1749,7 @@ fn instantiate_rigids(
 
     if let Pattern::Identifier(symbol) = loc_pattern.value {
         headers.insert(symbol, Located::at(loc_pattern.region, annotation.clone()));
-    } else if let Some(new_headers) = crate::constrain::pattern::headers_from_annotation(
+    } else if let Some(new_headers) = crate::pattern::headers_from_annotation(
         &loc_pattern.value,
         &Located::at(loc_pattern.region, unlifed_annotation),
     ) {

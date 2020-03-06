@@ -421,11 +421,6 @@ impl Composable for VarUsage {
     }
 }
 
-// #[derive(Debug, Default, Clone, PartialEq, PartialOrd)]
-// pub struct FieldAccess {
-//     pub fields: ImMap<String, (Usage, FieldAccess)>,
-// }
-//
 // type FAMap = std::collections::HashMap<String, Usage>;
 //
 // impl Into<FAMap> for FieldAccess {

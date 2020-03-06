@@ -1,7 +1,7 @@
-use crate::pretty_print_types::content_to_string;
-use roc_can::problem::Problem;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_problem::can::Problem;
 use roc_region::all::Region;
+use roc_types::pretty_print::content_to_string;
 use roc_types::subs::{Content, Subs};
 use std::path::PathBuf;
 
@@ -32,7 +32,7 @@ pub enum ReportText {
     /// A value. Render it qualified unless it was defined in the current module.
     Value(Symbol),
 
-    /// A type. Render it using pretty_print_types for now, but maybe
+    /// A type. Render it using roc_types::pretty_print for now, but maybe
     /// do something fancier later.
     Type(Content),
 

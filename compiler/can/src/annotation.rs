@@ -119,7 +119,7 @@ fn can_annotation_help(
                 match scope.lookup(&ident, region) {
                     Ok(symbol) => symbol,
                     Err(problem) => {
-                        env.problem(crate::problem::Problem::RuntimeError(problem));
+                        env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
                         return Type::Erroneous(Problem::UnrecognizedIdent(ident.into()));
                     }
@@ -130,7 +130,7 @@ fn can_annotation_help(
                     Err(problem) => {
                         // Either the module wasn't imported, or
                         // it was imported but it doesn't expose this ident.
-                        env.problem(crate::problem::Problem::RuntimeError(problem));
+                        env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
                         return Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
                     }
@@ -183,10 +183,12 @@ fn can_annotation_help(
                     Ok(symbol) => symbol,
 
                     Err((original_region, shadow)) => {
-                        let problem = Problem::Shadowed(original_region, shadow);
-                        env.problem(crate::problem::Problem::ErroneousAnnotation(
-                            problem.clone(),
-                        ));
+                        let problem = Problem::Shadowed(original_region, shadow.clone());
+
+                        env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                            original_region,
+                            shadow,
+                        });
 
                         return Type::Erroneous(problem);
                     }

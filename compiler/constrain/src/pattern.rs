@@ -1,4 +1,4 @@
-use crate::constrain::builtins;
+use crate::builtins;
 use roc_can::constraint::Constraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};

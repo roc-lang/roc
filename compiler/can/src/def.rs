@@ -5,16 +5,15 @@ use crate::expr::{
     canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
     Recursive,
 };
-use crate::pattern::PatternType;
 use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
-use crate::problem::Problem;
-use crate::problem::RuntimeError;
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
+use roc_parse::pattern::PatternType;
+use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Type};

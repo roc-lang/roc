@@ -16,14 +16,13 @@ mod helpers;
 mod test_load {
     use crate::helpers::fixtures_dir;
     use inlinable_string::InlinableString;
-    use roc::builtins;
     use roc::load::{load, LoadedModule};
-    use roc::pretty_print_types::{content_to_string, name_all_type_vars};
-    use roc::solve::SubsByModule;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_collections::all::MutMap;
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_solve::solve::SubsByModule;
+    use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
     use std::collections::HashMap;
 
@@ -47,7 +46,7 @@ mod test_load {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
         let loaded = load(
-            &builtins::standard_stdlib(),
+            &roc_builtins::std::standard_stdlib(),
             src_dir,
             filename,
             subs_by_module,
@@ -141,7 +140,7 @@ mod test_load {
 
         test_async(async {
             let loaded = load(
-                &builtins::standard_stdlib(),
+                &roc_builtins::std::standard_stdlib(),
                 src_dir,
                 filename,
                 subs_by_module,

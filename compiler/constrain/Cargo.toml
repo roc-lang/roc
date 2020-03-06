@@ -1,5 +1,5 @@
 [package]
-name = "roc_types"
+name = "roc_constrain"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
@@ -9,9 +9,10 @@ roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
-roc_problem = { path = "../problem" }
-ven_ena = { path = "../../vendor/ena" }
-inlinable_string = "0.1.0"
+roc_types = { path = "../types" }
+roc_can = { path = "../can" }
+roc_builtins = { path = "../builtins" }
+roc_uniqueness = { path = "../uniqueness" }
 
 [dev-dependencies]
 pretty_assertions = "0.5.1 "

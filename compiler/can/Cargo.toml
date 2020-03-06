@@ -9,6 +9,7 @@ roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
+roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 ven_graph = { path = "../../vendor/pathfinding" }
 im    = "14" # im and im-rc should always have the same version!
