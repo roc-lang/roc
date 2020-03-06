@@ -565,6 +565,7 @@ define_builtins! {
         8 NUM_LE: "isLte"
         9 NUM_GT: "isGt"
         10 NUM_GE: "isGte"
+        11 NUM_TO_FLOAT: "toFloat"
     }
     2 INT: "Int" => {
         0 INT_INT: "Int" imported // the Int.Int type alias
@@ -616,6 +617,25 @@ define_builtins! {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
         1 RESULT_MAP: "map"
     }
+    8 MAP: "Map" => {
+        0 MAP_MAP: "Map" imported // the Map.Map type alias
+        1 MAP_AT_MAP: "@Map" // the Map.@Map private tag
+        2 MAP_EMPTY: "empty"
+        3 MAP_SINGLETON: "singleton"
+        4 MAP_GET: "get"
+        5 MAP_INSERT: "insert"
+    }
+    9 SET: "Set" => {
+        0 SET_SET: "Set" imported // the Set.Set type alias
+        1 SET_AT_SET: "@Set" // the Set.@Set private tag
+        2 SET_EMPTY: "empty"
+        3 SET_SINGLETON: "singleton"
+        4 SET_UNION: "union"
+        5 SET_FOLDL: "foldl"
+        6 SET_INSERT: "insert"
+        7 SET_REMOVE: "remove"
+        8 SET_DIFF: "diff"
+    }
 
-    num_modules: 8 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
+    num_modules: 10 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
 }

@@ -159,6 +159,29 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Map key value : [ @Map key value ]
+    add_alias(
+        Symbol::MAP_MAP,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![
+                Located::at(Region::zero(), "key".into()),
+                Located::at(Region::zero(), "value".into()),
+            ],
+            typ: single_private_tag(Symbol::MAP_AT_MAP, vec![flex(TVAR1), flex(TVAR2)]),
+        },
+    );
+
+    // Set key : [ @Set key ]
+    add_alias(
+        Symbol::SET_SET,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![Located::at(Region::zero(), "key".into())],
+            typ: single_private_tag(Symbol::SET_AT_SET, vec![flex(TVAR1)]),
+        },
+    );
+
     // Str : [ @Str ]
     add_alias(
         Symbol::STR_STR,
@@ -229,6 +252,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(num_type(flex(TVAR1)))),
     );
 
+    // isEq or (==) : a, a -> Bool
+    add_type(
+        Symbol::BOOL_EQ,
+        SolvedType::Func(vec![flex(TVAR1), flex(TVAR1)], Box::new(bool_type())),
+    );
+
+    // isNeq or (!=) : a, a -> Bool
+    add_type(
+        Symbol::BOOL_NEQ,
+        SolvedType::Func(vec![flex(TVAR1), flex(TVAR1)], Box::new(bool_type())),
+    );
+
     // isLt or (<) : Num a, Num a -> Bool
     add_type(
         Symbol::NUM_LT,
@@ -263,6 +298,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
             Box::new(bool_type()),
         ),
+    );
+
+    // toFloat : Num a -> Float
+    add_type(
+        Symbol::NUM_TO_FLOAT,
+        SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(float_type())),
     );
 
     // Int module
@@ -430,7 +471,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_PUSH,
         SolvedType::Func(
-            vec![list_type(flex(TVAR1))],
+            vec![list_type(flex(TVAR1)), flex(TVAR1)],
             Box::new(list_type(flex(TVAR1))),
         ),
     );
@@ -439,6 +480,100 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_LENGTH,
         SolvedType::Func(vec![list_type(flex(TVAR1))], Box::new(int_type())),
+    );
+
+    // Map module
+
+    // empty : Map k v
+    add_type(Symbol::MAP_EMPTY, map_type(flex(TVAR1), flex(TVAR2)));
+
+    // singleton : k, v -> Map k v
+    add_type(
+        Symbol::MAP_SINGLETON,
+        SolvedType::Func(
+            vec![flex(TVAR1), flex(TVAR2)],
+            Box::new(map_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // get : Map k v, k -> Result v [ KeyNotFound ]*
+    let key_not_found = SolvedType::TagUnion(
+        vec![(TagName::Global("KeyNotFound".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(
+        Symbol::MAP_GET,
+        SolvedType::Func(
+            vec![map_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1)],
+            Box::new(result_type(flex(TVAR2), key_not_found)),
+        ),
+    );
+
+    add_type(
+        Symbol::MAP_INSERT,
+        SolvedType::Func(
+            vec![map_type(flex(TVAR1), flex(TVAR2)), flex(TVAR1), flex(TVAR2)],
+            Box::new(map_type(flex(TVAR1), flex(TVAR2))),
+        ),
+    );
+
+    // Set module
+
+    // empty : Set a
+    add_type(Symbol::SET_EMPTY, set_type(flex(TVAR1)));
+
+    // singleton : a -> Set a
+    add_type(
+        Symbol::SET_SINGLETON,
+        SolvedType::Func(vec![flex(TVAR1)], Box::new(set_type(flex(TVAR1)))),
+    );
+
+    // union : Set a, Set a -> Set a
+    add_type(
+        Symbol::SET_UNION,
+        SolvedType::Func(
+            vec![set_type(flex(TVAR1)), set_type(flex(TVAR1))],
+            Box::new(set_type(flex(TVAR1))),
+        ),
+    );
+
+    // diff : Set a, Set a -> Set a
+    add_type(
+        Symbol::SET_DIFF,
+        SolvedType::Func(
+            vec![set_type(flex(TVAR1)), set_type(flex(TVAR1))],
+            Box::new(set_type(flex(TVAR1))),
+        ),
+    );
+
+    // foldl : Set a, (a -> b -> b), b -> b
+    add_type(
+        Symbol::SET_FOLDL,
+        SolvedType::Func(
+            vec![
+                set_type(flex(TVAR1)),
+                SolvedType::Func(vec![flex(TVAR1), flex(TVAR2)], Box::new(flex(TVAR2))),
+                flex(TVAR2),
+            ],
+            Box::new(flex(TVAR2)),
+        ),
+    );
+
+    add_type(
+        Symbol::SET_INSERT,
+        SolvedType::Func(
+            vec![set_type(flex(TVAR1)), flex(TVAR1)],
+            Box::new(set_type(flex(TVAR1))),
+        ),
+    );
+
+    add_type(
+        Symbol::SET_REMOVE,
+        SolvedType::Func(
+            vec![set_type(flex(TVAR1)), flex(TVAR1)],
+            Box::new(set_type(flex(TVAR1))),
+        ),
     );
 
     // Result module
@@ -496,4 +631,14 @@ fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
 #[inline(always)]
 fn list_type(a: SolvedType) -> SolvedType {
     SolvedType::Apply(Symbol::LIST_LIST, vec![a])
+}
+
+#[inline(always)]
+fn set_type(a: SolvedType) -> SolvedType {
+    SolvedType::Apply(Symbol::SET_SET, vec![a])
+}
+
+#[inline(always)]
+fn map_type(key: SolvedType, value: SolvedType) -> SolvedType {
+    SolvedType::Apply(Symbol::MAP_MAP, vec![key, value])
 }
