@@ -1,13 +1,13 @@
-use crate::can::pattern::Pattern;
-use crate::can::{self};
 use crate::mono::layout::{Builtin, Layout};
-use crate::subs::{Content, Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_can::pattern::Pattern;
+use roc_can::{self};
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::Located;
+use roc_types::subs::{Content, Subs, Variable};
 
 pub type Procs<'a> = MutMap<Symbol, Option<Proc<'a>>>;
 
@@ -115,7 +115,7 @@ impl<'a> Expr<'a> {
     pub fn new(
         arena: &'a Bump,
         subs: &'a Subs,
-        can_expr: can::expr::Expr,
+        can_expr: roc_can::expr::Expr,
         procs: &mut Procs<'a>,
         home: ModuleId,
         ident_ids: &mut IdentIds,
@@ -133,12 +133,12 @@ impl<'a> Expr<'a> {
 
 fn from_can<'a>(
     env: &mut Env<'a, '_>,
-    can_expr: can::expr::Expr,
+    can_expr: roc_can::expr::Expr,
     procs: &mut Procs<'a>,
     name: Option<Symbol>,
 ) -> Expr<'a> {
-    use crate::can::expr::Expr::*;
-    use crate::can::pattern::Pattern::*;
+    use roc_can::expr::Expr::*;
+    use roc_can::pattern::Pattern::*;
 
     match can_expr {
         Int(_, val) => Expr::Int(val),
@@ -349,7 +349,7 @@ fn from_can<'a>(
 fn add_closure<'a>(
     env: &mut Env<'a, '_>,
     symbol: Symbol,
-    can_body: can::expr::Expr,
+    can_body: roc_can::expr::Expr,
     ret_var: Variable,
     loc_args: &[(Variable, Located<Pattern>)],
     procs: &mut Procs<'a>,
@@ -396,12 +396,12 @@ fn add_closure<'a>(
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     can_pat: Pattern,
-    can_expr: can::expr::Expr,
+    can_expr: roc_can::expr::Expr,
     var: Variable,
     procs: &mut Procs<'a>,
     stored: &mut Vec<'a, (Symbol, Variable, Expr<'a>)>,
 ) {
-    use crate::can::pattern::Pattern::*;
+    use roc_can::pattern::Pattern::*;
 
     // If we're defining a named closure, insert it into Procs and then
     // remove the Let. When code gen later goes to look it up, it'll be in Procs!
@@ -442,11 +442,14 @@ fn from_can_when<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,
     expr_var: Variable,
-    loc_cond: Located<can::expr::Expr>,
-    branches: std::vec::Vec<(Located<can::pattern::Pattern>, Located<can::expr::Expr>)>,
+    loc_cond: Located<roc_can::expr::Expr>,
+    branches: std::vec::Vec<(
+        Located<roc_can::pattern::Pattern>,
+        Located<roc_can::expr::Expr>,
+    )>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
-    use crate::can::pattern::Pattern::*;
+    use roc_can::pattern::Pattern::*;
 
     match branches.len() {
         0 => {

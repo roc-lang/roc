@@ -1,26 +1,26 @@
-use crate::can::annotation::canonicalize_annotation;
-use crate::can::env::Env;
-use crate::can::expr::Expr::{self, *};
-use crate::can::expr::{
+use crate::annotation::canonicalize_annotation;
+use crate::env::Env;
+use crate::expr::Expr::{self, *};
+use crate::expr::{
     canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
     Recursive,
 };
-use crate::can::pattern::PatternType;
-use crate::can::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
-use crate::can::problem::Problem;
-use crate::can::problem::RuntimeError;
-use crate::can::procedure::References;
-use crate::can::scope::Scope;
-use crate::graph::{strongly_connected_components, topological_sort_into_groups};
-use crate::subs::{VarStore, Variable};
-use crate::types::{Alias, Type};
+use crate::pattern::PatternType;
+use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
+use crate::problem::Problem;
+use crate::problem::RuntimeError;
+use crate::procedure::References;
+use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_region::all::{Located, Region};
+use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 
 #[allow(clippy::type_complexity)]
 #[derive(Clone, Debug, PartialEq)]
@@ -208,7 +208,7 @@ pub fn canonicalize_defs<'a>(
                     make_tag_union_recursive(symbol, &mut can_ann.typ, var_store);
                 }
 
-                let alias = crate::types::Alias {
+                let alias = roc_types::types::Alias {
                     region: ann.region,
                     vars: can_vars,
                     typ: can_ann.typ,

@@ -1,14 +1,16 @@
-use crate::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, VarId, Variable};
-use crate::types::Alias;
-use crate::types::Constraint::{self, *};
-use crate::types::Problem;
-use crate::types::Type::{self, *};
 use crate::unify::{unify, Unified};
-use crate::uniqueness::boolean_algebra::{self, Atom};
+use roc_can::constraint::Constraint::{self, *};
 use roc_collections::all::{ImMap, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
+use roc_types::boolean_algebra::{self, Atom};
+use roc_types::subs::{
+    Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, VarId, Variable,
+};
+use roc_types::types::Alias;
+use roc_types::types::Problem;
+use roc_types::types::Type::{self, *};
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
@@ -83,7 +85,7 @@ impl SolvedType {
     }
 
     pub fn from_type(solved_subs: &Solved<Subs>, typ: Type) -> Self {
-        use crate::types::Type::*;
+        use roc_types::types::Type::*;
 
         match typ {
             EmptyRec => SolvedType::EmptyRecord,
@@ -207,7 +209,7 @@ impl SolvedType {
     }
 
     fn from_flat_type(subs: &Subs, flat_type: FlatType) -> Self {
-        use crate::subs::FlatType::*;
+        use roc_types::subs::FlatType::*;
 
         match flat_type {
             Apply(symbol, args) => {
@@ -653,12 +655,14 @@ fn solve(
                                 .get(next_rank)
                                 .iter()
                                 .filter(|var| {
-                                    subs.get_without_compacting(crate::subs::Variable::clone(var))
-                                        .rank
-                                        .into_usize()
+                                    subs.get_without_compacting(roc_types::subs::Variable::clone(
+                                        var,
+                                    ))
+                                    .rank
+                                    .into_usize()
                                         > next_rank.into_usize()
                                 })
-                                .collect::<Vec<&crate::subs::Variable>>();
+                                .collect::<Vec<&roc_types::subs::Variable>>();
 
                             offenders.is_empty()
                         });
@@ -1191,8 +1195,8 @@ fn adjust_rank_content(
     group_rank: Rank,
     content: Content,
 ) -> Rank {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
 
     match content {
         FlexVar(_) | RigidVar(_) | Error => group_rank,
@@ -1313,8 +1317,8 @@ fn deep_copy_var_help(
     pools: &mut Pools,
     var: Variable,
 ) -> Variable {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
 
     let desc = subs.get_without_compacting(var);
 

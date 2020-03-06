@@ -13,3 +13,6 @@
 
 pub mod snapshot_vec;
 pub mod unify;
+
+#[macro_use]
+extern crate log;

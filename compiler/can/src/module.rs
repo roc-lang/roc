@@ -1,12 +1,10 @@
-use crate::can::def::{canonicalize_defs, sort_can_defs, Declaration};
-use crate::can::env::Env;
-use crate::can::expr::Output;
-use crate::can::operator::desugar_def;
-use crate::can::pattern::PatternType;
-use crate::can::problem::{Problem, RuntimeError};
-use crate::can::scope::Scope;
-use crate::subs::{VarStore, Variable};
-use crate::types::Alias;
+use crate::def::{canonicalize_defs, sort_can_defs, Declaration};
+use crate::env::Env;
+use crate::expr::Output;
+use crate::operator::desugar_def;
+use crate::pattern::PatternType;
+use crate::problem::{Problem, RuntimeError};
+use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::Ident;
@@ -14,6 +12,8 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_region::all::{Located, Region};
+use roc_types::subs::{VarStore, Variable};
+use roc_types::types::Alias;
 
 #[derive(Debug)]
 pub struct ModuleOutput {
@@ -139,7 +139,7 @@ pub fn canonicalize_module_defs<'a>(
 
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(declarations), output) => {
-            use crate::can::def::Declaration::*;
+            use crate::def::Declaration::*;
 
             let mut exposed_vars_by_symbol = Vec::with_capacity(exposed_symbols.len());
 

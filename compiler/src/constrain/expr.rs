@@ -1,23 +1,23 @@
-use crate::can::def::{Declaration, Def};
-use crate::can::expr::Expr::{self, *};
-use crate::can::expr::Field;
-use crate::can::pattern::Pattern;
 use crate::constrain::builtins::{
     empty_list_type, float_literal, int_literal, list_type, str_type,
 };
 use crate::constrain::pattern::{constrain_pattern, PatternState};
-use crate::subs::Variable;
-use crate::types::Alias;
-use crate::types::AnnotationSource::{self, *};
-use crate::types::Constraint::{self, *};
-use crate::types::Expected::{self, *};
-use crate::types::PReason;
-use crate::types::Type::{self, *};
-use crate::types::{LetConstraint, PExpected, Reason};
+use roc_can::constraint::Constraint::{self, *};
+use roc_can::constraint::LetConstraint;
+use roc_can::def::{Declaration, Def};
+use roc_can::expected::Expected::{self, *};
+use roc_can::expected::PExpected;
+use roc_can::expr::Expr::{self, *};
+use roc_can::expr::Field;
+use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
+use roc_types::subs::Variable;
+use roc_types::types::AnnotationSource::{self, *};
+use roc_types::types::Type::{self, *};
+use roc_types::types::{Alias, PReason, Reason};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]

@@ -1,11 +1,11 @@
 use crate::builtins;
 use crate::builtins::StdLib;
 use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
-use crate::subs::VarId;
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
+use roc_types::subs::VarId;
 use std::collections::HashMap;
 
 /// Keep this up to date by hand!

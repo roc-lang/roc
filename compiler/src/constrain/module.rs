@@ -1,15 +1,16 @@
 use crate::builtins;
-use crate::can::def::Declaration;
 use crate::constrain::expr::constrain_decls;
 use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
-use crate::subs::{VarId, VarStore, Variable};
-use crate::types::{Alias, Constraint, LetConstraint, Type};
 use crate::uniqueness;
-use crate::uniqueness::boolean_algebra::{Atom, Bool};
+use roc_can::constraint::{Constraint, LetConstraint};
+use roc_can::def::Declaration;
 use roc_collections::all::{ImMap, MutMap, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Located;
+use roc_types::boolean_algebra::{Atom, Bool};
+use roc_types::subs::{VarId, VarStore, Variable};
+use roc_types::types::{Alias, Type};
 
 #[inline(always)]
 pub fn constrain_module(

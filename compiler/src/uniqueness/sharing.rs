@@ -1,9 +1,9 @@
-use crate::can::expr::Expr;
-use crate::subs::Variable;
+use roc_can::expr::Expr;
 use roc_collections::all::{ImMap, ImSet};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::Located;
+use roc_types::subs::Variable;
 
 // fake field names for container elements
 // e.g. for lists, internally it's a record with a `list_elem` field

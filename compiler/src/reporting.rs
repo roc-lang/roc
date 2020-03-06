@@ -1,8 +1,8 @@
-use crate::can::problem::Problem;
 use crate::pretty_print_types::content_to_string;
-use crate::subs::{Content, Subs};
+use roc_can::problem::Problem;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::Region;
+use roc_types::subs::{Content, Subs};
 use std::path::PathBuf;
 
 /// A textual report.

@@ -1,8 +1,5 @@
-use crate::can;
-use crate::can::env::Env;
-use crate::can::scope::Scope;
-use crate::subs::{VarStore, Variable};
-use crate::types::{Alias, Problem, Type};
+use crate::env::Env;
+use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName};
@@ -10,6 +7,8 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
 use roc_region::all::Located;
 use roc_region::all::Region;
+use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{Alias, Problem, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -120,7 +119,7 @@ fn can_annotation_help(
                 match scope.lookup(&ident, region) {
                     Ok(symbol) => symbol,
                     Err(problem) => {
-                        env.problem(crate::can::problem::Problem::RuntimeError(problem));
+                        env.problem(crate::problem::Problem::RuntimeError(problem));
 
                         return Type::Erroneous(Problem::UnrecognizedIdent(ident.into()));
                     }
@@ -131,7 +130,7 @@ fn can_annotation_help(
                     Err(problem) => {
                         // Either the module wasn't imported, or
                         // it was imported but it doesn't expose this ident.
-                        env.problem(crate::can::problem::Problem::RuntimeError(problem));
+                        env.problem(crate::problem::Problem::RuntimeError(problem));
 
                         return Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
                     }
@@ -185,7 +184,9 @@ fn can_annotation_help(
 
                     Err((original_region, shadow)) => {
                         let problem = Problem::Shadowed(original_region, shadow);
-                        env.problem(can::problem::Problem::ErroneousAnnotation(problem.clone()));
+                        env.problem(crate::problem::Problem::ErroneousAnnotation(
+                            problem.clone(),
+                        ));
 
                         return Type::Erroneous(problem);
                     }

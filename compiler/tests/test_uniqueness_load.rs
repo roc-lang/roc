@@ -16,15 +16,15 @@ mod test_uniqueness_load {
     use crate::helpers::fixtures_dir;
     use inlinable_string::InlinableString;
     use roc::builtins;
-    use roc::can::def::Declaration::*;
-    use roc::can::def::Def;
     use roc::load::{load, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::solve::SubsByModule;
-    use roc::subs::Subs;
     use roc::unique_builtins;
+    use roc_can::def::Declaration::*;
+    use roc_can::def::Def;
     use roc_collections::all::MutMap;
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_types::subs::Subs;
     use std::collections::HashMap;
 
     // HELPERS

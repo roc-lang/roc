@@ -1,10 +1,10 @@
-use crate::can::pattern::PatternType;
-use crate::types;
+use crate::pattern::PatternType;
 use inlinable_string::InlinableString;
 use roc_module::ident::Ident;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::operator::BinOp;
 use roc_region::all::{Located, Region};
+use roc_types::types;
 
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]

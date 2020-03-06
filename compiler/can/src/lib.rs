@@ -10,21 +10,17 @@
 // and encouraging shortcuts here creates bad incentives. I would rather temporarily
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
-
-pub mod uniqueness;
-
+pub mod annotation;
+pub mod constraint;
+pub mod def;
+pub mod env;
+pub mod expected;
+pub mod expr;
+pub mod module;
+pub mod num;
+pub mod operator;
+pub mod pattern;
+pub mod problem;
+pub mod procedure;
+pub mod scope;
 pub mod string;
-
-pub mod builtins;
-pub mod unique_builtins;
-
-pub mod constrain;
-pub mod crane;
-pub mod fmt;
-pub mod llvm;
-pub mod load;
-pub mod mono;
-pub mod pretty_print_types;
-pub mod reporting;
-pub mod solve;
-pub mod unify;

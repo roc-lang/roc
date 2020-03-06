@@ -1,13 +1,12 @@
-use crate::can::env::Env;
-use crate::can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
-use crate::can::problem::{Problem, RuntimeError};
-use crate::can::scope::Scope;
-use crate::subs::VarStore;
-use crate::subs::Variable;
+use crate::env::Env;
+use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use crate::problem::{Problem, RuntimeError};
+use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_region::all::{Located, Region};
+use roc_types::subs::{VarStore, Variable};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.

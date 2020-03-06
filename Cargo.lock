@@ -878,13 +878,36 @@ dependencies = [
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+ "roc_can",
  "roc_collections",
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_types",
  "target-lexicon",
  "tokio",
  "wyhash",
+]
+
+[[package]]
+name = "roc_can"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "im",
+ "im-rc",
+ "indoc",
+ "inlinable_string",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_collections",
+ "roc_module",
+ "roc_parse",
+ "roc_region",
+ "roc_types",
+ "ven_graph",
 ]
 
 [[package]]
@@ -929,6 +952,23 @@ dependencies = [
 [[package]]
 name = "roc_region"
 version = "0.1.0"
+
+[[package]]
+name = "roc_types"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "inlinable_string",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_collections",
+ "roc_module",
+ "roc_parse",
+ "roc_region",
+ "ven_ena",
+]
 
 [[package]]
 name = "rustc_version"
@@ -1075,6 +1115,20 @@ name = "unindent"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63f18aa3b0e35fed5a0048f029558b1518095ffe2a0a31fb87c93dece93a4993"
+
+[[package]]
+name = "ven_ena"
+version = "0.13.1"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "ven_graph"
+version = "2.0.5-pre"
+dependencies = [
+ "roc_collections",
+]
 
 [[package]]
 name = "version_check"

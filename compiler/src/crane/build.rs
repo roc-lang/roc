@@ -16,9 +16,9 @@ use cranelift_module::{Backend, FuncId, Linkage, Module};
 use crate::crane::convert::{sig_from_layout, type_from_layout};
 use crate::mono::expr::{Expr, Proc, Procs};
 use crate::mono::layout::{Builtin, Layout};
-use crate::subs::{Subs, Variable};
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
+use roc_types::subs::{Subs, Variable};
 
 type Scope = ImMap<Symbol, ScopeEntry>;
 

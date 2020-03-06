@@ -1,5 +1,5 @@
-use crate::can::problem::{Problem, RuntimeError};
-use crate::can::procedure::References;
+use crate::problem::{Problem, RuntimeError};
+use crate::procedure::References;
 use inlinable_string::InlinableString;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};

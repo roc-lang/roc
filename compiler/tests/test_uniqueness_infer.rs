@@ -10,13 +10,12 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer_uniq {
-    use crate::helpers::{assert_correct_variable_usage, uniq_expr};
-    use roc::infer::infer_expr;
+    use crate::helpers::{assert_correct_variable_usage, infer_expr, uniq_expr};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
 
     // HELPERS
 
-    fn infer_eq_help(src: &str) -> (Vec<roc::types::Problem>, String) {
+    fn infer_eq_help(src: &str) -> (Vec<roc_types::types::Problem>, String) {
         let (_loc_expr, output, _problems, mut subs, variable, constraint, home, interns) =
             uniq_expr(src);
 
@@ -27,8 +26,7 @@ mod test_infer_uniq {
         }
 
         let mut unify_problems = Vec::new();
-        let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, variable);
-        let mut subs = solved.into_inner();
+        let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, variable);
 
         name_all_type_vars(variable, &mut subs);
 

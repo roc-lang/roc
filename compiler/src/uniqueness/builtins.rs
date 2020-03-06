@@ -1,12 +1,13 @@
-use crate::subs::Variable;
-use crate::types::Constraint::{self, *};
-use crate::types::Expected::{self, *};
-use crate::types::Type::{self, *};
-use crate::types::{LetConstraint, Reason};
-use crate::uniqueness::boolean_algebra::Bool;
+use roc_can::constraint::Constraint::{self, *};
+use roc_can::constraint::LetConstraint;
+use roc_can::expected::Expected::{self, *};
 use roc_collections::all::SendMap;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
+use roc_types::boolean_algebra::Bool;
+use roc_types::subs::Variable;
+use roc_types::types::Reason;
+use roc_types::types::Type::{self, *};
 
 #[inline(always)]
 pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {

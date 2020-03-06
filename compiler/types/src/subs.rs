@@ -1,12 +1,12 @@
-use crate::ena::unify::{InPlace, UnificationTable, UnifyKey};
+use crate::boolean_algebra;
 use crate::types::{name_type_var, ErrorType, Problem, TypeExt};
-use crate::uniqueness::boolean_algebra;
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator};
 use std::sync::atomic::{AtomicU32, Ordering};
+use ven_ena::unify::{InPlace, UnificationTable, UnifyKey};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -1015,8 +1015,8 @@ fn get_fresh_var_name(state: &mut NameState) -> Lowercase {
 }
 
 fn restore_content(subs: &mut Subs, content: &Content) {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
+    use Content::*;
+    use FlatType::*;
 
     match content {
         FlexVar(_) | RigidVar(_) | Error => (),

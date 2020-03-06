@@ -1,9 +1,9 @@
-use crate::can::env::Env;
-use crate::can::expr::Expr;
-use crate::can::problem::Problem;
-use crate::can::problem::RuntimeError::*;
-use crate::subs::VarStore;
+use crate::env::Env;
+use crate::expr::Expr;
+use crate::problem::Problem;
+use crate::problem::RuntimeError::*;
 use roc_parse::ast::Base;
+use roc_types::subs::VarStore;
 use std::i64;
 
 #[inline(always)]

@@ -1,9 +1,9 @@
-use crate::subs::{Content, FlatType, Subs, Variable};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use roc_types::subs::{Content, FlatType, Subs, Variable};
 
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,7 +34,7 @@ impl<'a> Layout<'a> {
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
     pub fn from_content(arena: &'a Bump, content: Content, subs: &Subs) -> Result<Self, ()> {
-        use crate::subs::Content::*;
+        use roc_types::subs::Content::*;
 
         match content {
             var @ FlexVar(_) | var @ RigidVar(_) => {
@@ -103,7 +103,7 @@ fn layout_from_flat_type<'a>(
     flat_type: FlatType,
     subs: &Subs,
 ) -> Result<Layout<'a>, ()> {
-    use crate::subs::FlatType::*;
+    use roc_types::subs::FlatType::*;
 
     match flat_type {
         Apply(symbol, args) => {
@@ -253,8 +253,8 @@ fn layout_from_flat_type<'a>(
 }
 
 fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
 
     match content {
         var @ FlexVar(_) | var @ RigidVar(_) => {
@@ -287,8 +287,8 @@ fn flatten_union(
     ext_var: Variable,
     subs: &Subs,
 ) {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
 
     match subs.get_without_compacting(ext_var).content {
         Structure(EmptyTagUnion) => (),
@@ -308,8 +308,8 @@ fn flatten_union(
 /// Recursively inline the contents ext_var into this record until we have
 /// a flat record containing all the fields.
 fn flatten_record(fields: &mut MutMap<Lowercase, Variable>, ext_var: Variable, subs: &Subs) {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
 
     match subs.get_without_compacting(ext_var).content {
         Structure(EmptyRecord) => (),

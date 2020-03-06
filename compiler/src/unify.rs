@@ -1,10 +1,10 @@
-use crate::subs::Content::{self, *};
-use crate::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use crate::types::{Mismatch, Problem};
-use crate::uniqueness::boolean_algebra::{Atom, Bool};
 use roc_collections::all::{relative_complement, union, MutMap, SendSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use roc_types::boolean_algebra::{Atom, Bool};
+use roc_types::subs::Content::{self, *};
+use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
+use roc_types::types::{Mismatch, Problem};
 use std::hash::Hash;
 
 macro_rules! mismatch {
@@ -446,7 +446,7 @@ fn unify_flat_type(
     left: &FlatType,
     right: &FlatType,
 ) -> Outcome {
-    use crate::subs::FlatType::*;
+    use roc_types::subs::FlatType::*;
 
     match (left, right) {
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
@@ -668,7 +668,7 @@ pub fn gather_fields(
     fields: MutMap<Lowercase, Variable>,
     var: Variable,
 ) -> RecordStructure {
-    use crate::subs::FlatType::*;
+    use roc_types::subs::FlatType::*;
 
     match subs.get(var).content {
         Structure(Record(sub_fields, sub_ext)) => {
@@ -689,7 +689,7 @@ fn gather_tags(
     tags: MutMap<TagName, Vec<Variable>>,
     var: Variable,
 ) -> TagUnionStructure {
-    use crate::subs::FlatType::*;
+    use roc_types::subs::FlatType::*;
 
     match subs.get(var).content {
         Structure(TagUnion(sub_tags, sub_ext)) => {

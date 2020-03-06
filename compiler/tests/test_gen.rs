@@ -11,7 +11,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_gen {
-    use crate::helpers::{can_expr, uniq_expr, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
     use bumpalo::Bump;
     use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
     use cranelift_codegen::ir::InstBuilder;
@@ -27,13 +27,12 @@ mod test_gen {
     use roc::crane::build::{declare_proc, define_proc_body, ScopeEntry};
     use roc::crane::convert::type_from_layout;
     use roc::crane::imports::define_malloc;
-    use roc::infer::infer_expr;
     use roc::llvm::build::{build_proc, build_proc_header};
     use roc::llvm::convert::basic_type_from_layout;
     use roc::mono::expr::Expr;
     use roc::mono::layout::Layout;
-    use roc::subs::Subs;
     use roc_collections::all::{ImMap, MutMap};
+    use roc_types::subs::Subs;
     use std::ffi::{CStr, CString};
     use std::mem;
     use std::os::raw::c_char;
@@ -44,7 +43,7 @@ mod test_gen {
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
             let mut module: Module<SimpleJITBackend> =
@@ -58,7 +57,6 @@ mod test_gen {
             let main_fn_name = "$Test.main";
 
             // Compute main_fn_ret_type before moving subs to Env
-            let subs = solved.into_inner();
             let layout = Layout::from_content(&arena, content, &subs)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert content to layout. Err was {:?} and Subs were {:?}", err, subs));
             let main_ret_type = type_from_layout(cfg, &layout);
@@ -174,7 +172,7 @@ mod test_gen {
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
             let context = Context::create();
             let module = context.create_module("app");
@@ -198,7 +196,6 @@ mod test_gen {
             fpm.initialize();
 
             // Compute main_fn_type before moving subs to Env
-            let subs = solved.into_inner();
             let layout = Layout::from_content(&arena, content, &subs)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
             let main_fn_type = basic_type_from_layout(&context, &layout)
@@ -311,7 +308,7 @@ mod test_gen {
             let (loc_expr, _output, _problems, subs, var, constraint, home, interns) = uniq_expr($src);
 
             let mut unify_problems = Vec::new();
-            let (content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
             let context = Context::create();
             let module = context.create_module("app");
@@ -335,7 +332,6 @@ mod test_gen {
             fpm.initialize();
 
             // Compute main_fn_type before moving subs to Env
-            let subs = solved.into_inner();
             let layout = Layout::from_content(&arena, content, &subs)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
             let main_fn_type = basic_type_from_layout(&context, &layout)
