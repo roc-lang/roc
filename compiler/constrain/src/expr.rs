@@ -1,5 +1,6 @@
 use crate::builtins::{empty_list_type, float_literal, int_literal, list_type, str_type};
 use crate::pattern::{constrain_pattern, PatternState};
+use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
 use roc_can::def::{Declaration, Def};
@@ -754,7 +755,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let mut new_rigids = Vec::new();
 
     let expr_con = match &def.annotation {
-        Some((annotation, free_vars, ann_def_aliases)) => {
+        Some((annotation, introduced_vars, ann_def_aliases)) => {
             def_aliases = ann_def_aliases.clone();
 
             let arity = annotation.arity();
@@ -763,7 +764,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
 
             let annotation = instantiate_rigids(
                 annotation,
-                &free_vars,
+                &introduced_vars,
                 &mut new_rigids,
                 &mut ftv,
                 &def.loc_pattern,
@@ -821,7 +822,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
 
 fn instantiate_rigids(
     annotation: &Type,
-    free_vars: &SendMap<Lowercase, Variable>,
+    introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
     ftv: &mut ImMap<Lowercase, Variable>,
     loc_pattern: &Located<Pattern>,
@@ -830,8 +831,8 @@ fn instantiate_rigids(
     let mut annotation = annotation.clone();
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
 
-    for (name, var) in free_vars {
-        if let Some(existing_rigid) = ftv.get(name) {
+    for (name, var) in introduced_vars.var_by_name.iter() {
+        if let Some(existing_rigid) = ftv.get(&name) {
             rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
         } else {
             // It's possible to use this rigid in nested defs
@@ -853,6 +854,8 @@ fn instantiate_rigids(
             headers.insert(symbol, loc_type);
         }
     }
+
+    new_rigids.extend(introduced_vars.wildcards.iter().cloned());
 
     annotation
 }
@@ -922,7 +925,7 @@ pub fn rec_defs_help(
                 flex_info.def_types.extend(pattern_state.headers);
             }
 
-            Some((annotation, free_vars, ann_def_aliases)) => {
+            Some((annotation, introduced_vars, ann_def_aliases)) => {
                 for (symbol, alias) in ann_def_aliases.clone() {
                     def_aliases.insert(symbol, alias);
                 }
@@ -932,7 +935,7 @@ pub fn rec_defs_help(
 
                 let annotation = instantiate_rigids(
                     annotation,
-                    &free_vars,
+                    &introduced_vars,
                     &mut new_rigids,
                     &mut ftv,
                     &def.loc_pattern,

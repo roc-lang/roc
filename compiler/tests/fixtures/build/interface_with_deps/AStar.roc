@@ -5,11 +5,11 @@ interface AStar
 
 # a port of https://github.com/krisajenkins/elm-astar/blob/2.1.3/src/AStar/Generalised.elm
 
-Model xyz : 
-    { evaluated : Set xyz
-    , openSet : Set  xyz
-    , costs : Map.Map xyz Float
-    , cameFrom : Map.Map xyz xyz
+Model position :
+    { evaluated : Set position
+    , openSet : Set  position
+    , costs : Map.Map position Float
+    , cameFrom : Map.Map position position
     }
 
 

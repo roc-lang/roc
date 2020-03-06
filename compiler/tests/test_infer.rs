@@ -37,7 +37,7 @@ mod test_infer {
 
         assert_correct_variable_usage(&constraint);
 
-        for (var, name) in output.ftv {
+        for (var, name) in output.introduced_variables.name_by_var {
             subs.rigid_var(var, name);
         }
 

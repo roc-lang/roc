@@ -1,3 +1,4 @@
+use crate::annotation::IntroducedVariables;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
@@ -25,8 +26,7 @@ use std::ops::Neg;
 pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
-    pub rigids: SendMap<Lowercase, Variable>,
-    pub ftv: SendMap<Variable, Lowercase>,
+    pub introduced_variables: IntroducedVariables,
     pub aliases: SendMap<Symbol, Alias>,
 }
 
