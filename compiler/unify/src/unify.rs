@@ -4,7 +4,7 @@ use roc_module::symbol::Symbol;
 use roc_types::boolean_algebra::{Atom, Bool};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use roc_types::types::{Mismatch, Problem};
+use roc_types::types::{gather_fields, Mismatch, Problem, RecordStructure};
 use std::hash::Hash;
 
 macro_rules! mismatch {
@@ -30,20 +30,15 @@ struct Context {
     second_desc: Descriptor,
 }
 
-pub struct RecordStructure {
-    pub fields: MutMap<Lowercase, Variable>,
-    pub ext: Variable,
+pub struct Unified {
+    pub vars: Pool,
+    pub mismatches: Vec<Problem>,
 }
 
 #[derive(Debug)]
 struct TagUnionStructure {
     tags: MutMap<TagName, Vec<Variable>>,
     ext: Variable,
-}
-
-pub struct Unified {
-    pub vars: Pool,
-    pub mismatches: Vec<Problem>,
 }
 
 type Outcome = Vec<Mismatch>;
@@ -663,48 +658,6 @@ fn unify_flex(
     }
 }
 
-pub fn gather_fields(
-    subs: &mut Subs,
-    fields: MutMap<Lowercase, Variable>,
-    var: Variable,
-) -> RecordStructure {
-    use roc_types::subs::FlatType::*;
-
-    match subs.get(var).content {
-        Structure(Record(sub_fields, sub_ext)) => {
-            gather_fields(subs, union(fields, &sub_fields), sub_ext)
-        }
-
-        Alias(_, _, var) => {
-            // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
-            gather_fields(subs, fields, var)
-        }
-
-        _ => RecordStructure { fields, ext: var },
-    }
-}
-
-fn gather_tags(
-    subs: &mut Subs,
-    tags: MutMap<TagName, Vec<Variable>>,
-    var: Variable,
-) -> TagUnionStructure {
-    use roc_types::subs::FlatType::*;
-
-    match subs.get(var).content {
-        Structure(TagUnion(sub_tags, sub_ext)) => {
-            gather_tags(subs, union(tags, &sub_tags), sub_ext)
-        }
-
-        Alias(_, _, var) => {
-            // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
-            gather_tags(subs, tags, var)
-        }
-
-        _ => TagUnionStructure { tags, ext: var },
-    }
-}
-
 fn merge(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome {
     let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
     let desc = Descriptor {
@@ -738,4 +691,26 @@ fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> V
         },
         pool,
     )
+}
+
+fn gather_tags(
+    subs: &mut Subs,
+    tags: MutMap<TagName, Vec<Variable>>,
+    var: Variable,
+) -> TagUnionStructure {
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
+
+    match subs.get(var).content {
+        Structure(TagUnion(sub_tags, sub_ext)) => {
+            gather_tags(subs, union(tags, &sub_tags), sub_ext)
+        }
+
+        Alias(_, _, var) => {
+            // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+            gather_tags(subs, tags, var)
+        }
+
+        _ => TagUnionStructure { tags, ext: var },
+    }
 }

@@ -1,7 +1,7 @@
 use crate::boolean_algebra;
-use crate::subs::{VarStore, Variable};
+use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
-use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_collections::all::{union, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::operator::{ArgSide, BinOp};
@@ -587,6 +587,11 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     }
 }
 
+pub struct RecordStructure {
+    pub fields: MutMap<Lowercase, Variable>,
+    pub ext: Variable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PReason {
     TypedArg { name: Box<str>, index: usize },
@@ -714,5 +719,27 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
         taken.insert(generated_name.clone());
 
         (generated_name, letters_used + 1)
+    }
+}
+
+pub fn gather_fields(
+    subs: &mut Subs,
+    fields: MutMap<Lowercase, Variable>,
+    var: Variable,
+) -> RecordStructure {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match subs.get(var).content {
+        Structure(Record(sub_fields, sub_ext)) => {
+            gather_fields(subs, union(fields, &sub_fields), sub_ext)
+        }
+
+        Alias(_, _, var) => {
+            // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+            gather_fields(subs, fields, var)
+        }
+
+        _ => RecordStructure { fields, ext: var },
     }
 }

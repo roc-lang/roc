@@ -11,7 +11,7 @@ mod helpers;
 #[cfg(test)]
 mod test_infer_uniq {
     use crate::helpers::{assert_correct_variable_usage, infer_expr, uniq_expr};
-    use roc::pretty_print_types::{content_to_string, name_all_type_vars};
+    use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
     // HELPERS
 

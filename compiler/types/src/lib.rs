@@ -11,6 +11,7 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 pub mod boolean_algebra;
+pub mod pretty_print;
 pub mod solved_types;
 pub mod subs;
 pub mod types;
