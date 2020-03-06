@@ -10,7 +10,9 @@ mod helpers;
 
 #[cfg(test)]
 mod test_infer_uniq {
-    use crate::helpers::{assert_correct_variable_usage, infer_expr, uniq_expr};
+    use crate::helpers::{
+        assert_correct_variable_usage, infer_expr, uniq_expr, with_larger_debug_stack,
+    };
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
     // HELPERS
@@ -21,7 +23,7 @@ mod test_infer_uniq {
 
         assert_correct_variable_usage(&constraint);
 
-        for (var, name) in output.ftv {
+        for (var, name) in output.introduced_variables.name_by_var {
             subs.rigid_var(var, name);
         }
 
@@ -2082,7 +2084,7 @@ mod test_infer_uniq {
                     reverse
                 "#
             ),
-            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
+            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
         );
     }
 
@@ -2099,7 +2101,7 @@ mod test_infer_uniq {
     }
 
     #[test]
-    fn update_cost() {
+    fn use_correct_ext_var() {
         infer_eq(
             indoc!(
                 r#"
@@ -2113,6 +2115,252 @@ mod test_infer_uniq {
                 "#
             ),
             "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn reconstruct_path() {
+        infer_eq(
+            indoc!(
+                r#"
+                reconstructPath : Map position position, position -> List position
+                reconstructPath = \cameFrom, goal ->
+                    when Map.get cameFrom goal is
+                        Err KeyNotFound ->
+                            []
+
+                        Ok next ->
+                            List.push (reconstructPath cameFrom next) goal
+
+                reconstructPath
+                "#
+            ),
+            "Attr Shared (Attr Shared (Map (Attr Shared position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))"
+        );
+    }
+
+    #[test]
+    fn cheapest_open() {
+        infer_eq(
+            indoc!(
+                r#"
+                Model position : { evaluated : Set position
+                    , openSet : Set  position
+                    , costs : Map.Map position Float
+                    , cameFrom : Map.Map position position
+                    }
+
+                cheapestOpen : (position -> Float), Model position -> Result position [ KeyNotFound ]*
+                cheapestOpen = \costFunction, model ->
+
+                    folder = \position, resSmallestSoFar ->
+                            when Map.get model.costs position is
+                                Err e ->
+                                    Err e
+
+                                Ok cost ->
+                                    positionCost = costFunction position
+
+                                    when resSmallestSoFar is
+                                        Err _ -> Ok { position, cost: cost + positionCost }
+                                        Ok smallestSoFar ->
+                                            if positionCost + cost < smallestSoFar.cost then
+                                                Ok { position, cost: cost + positionCost }
+
+                                            else
+                                                Ok smallestSoFar
+
+                    Set.foldl model.openSet folder (Err KeyNotFound)
+                        |> Result.map (\x -> x.position)
+
+                cheapestOpen
+                "#
+            ),
+            "Attr * (Attr * (Attr Shared position -> Attr Shared Float), Attr * (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))"
+        );
+    }
+
+    #[test]
+    fn update_cost() {
+        infer_eq(
+            indoc!(
+                r#"
+                Model position : { evaluated : Set position
+                    , openSet : Set  position
+                    , costs : Map.Map position Float
+                    , cameFrom : Map.Map position position
+                    }
+
+                reconstructPath : Map position position, position -> List position
+                reconstructPath = \cameFrom, goal ->
+                    when Map.get cameFrom goal is
+                        Err KeyNotFound ->
+                            []
+
+                        Ok next ->
+                            List.push (reconstructPath cameFrom next) goal
+
+                updateCost : position, position, Model position -> Model position
+                updateCost = \current, neighbour, model ->
+                    newCameFrom = Map.insert model.cameFrom neighbour current
+
+                    newCosts = Map.insert model.costs neighbour distanceTo
+
+                    distanceTo = reconstructPath newCameFrom neighbour
+                            |> List.length
+                            |> Num.toFloat
+
+                    newModel = { model & costs : newCosts , cameFrom : newCameFrom }
+
+                    when Map.get model.costs neighbour is
+                        Err KeyNotFound ->
+                            newModel
+
+                        Ok previousDistance ->
+                            if distanceTo < previousDistance then
+                                newModel
+
+                            else
+                                model
+                updateCost
+                "#
+            ),
+            "Attr * (Attr Shared position, Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr Shared (Model (Attr Shared position)))"
+        );
+    }
+
+    #[test]
+    fn astar_full_code() {
+        with_larger_debug_stack(|| {
+            infer_eq(
+            indoc!(
+                r#"
+                Model position : { evaluated : Set position
+                    , openSet : Set  position
+                    , costs : Map.Map position Float
+                    , cameFrom : Map.Map position position
+                    }
+
+
+                initialModel : position -> Model position
+                initialModel = \start ->
+                    { evaluated : Set.empty
+                    , openSet : Set.singleton start
+                    , costs : Map.singleton start 0.0
+                    , cameFrom : Map.empty
+                    }
+
+
+                cheapestOpen : (position -> Float), Model position -> Result position [ KeyNotFound ]*
+                cheapestOpen = \costFunction, model ->
+
+                    folder = \position, resSmallestSoFar ->
+                            when Map.get model.costs position is
+                                Err e ->
+                                    Err e
+
+                                Ok cost ->
+                                    positionCost = costFunction position
+
+                                    when resSmallestSoFar is
+                                        Err _ -> Ok { position, cost: cost + positionCost }
+                                        Ok smallestSoFar ->
+                                            if positionCost + cost < smallestSoFar.cost then
+                                                Ok { position, cost: cost + positionCost }
+
+                                            else
+                                                Ok smallestSoFar
+
+                    Set.foldl model.openSet folder (Err KeyNotFound)
+                        |> Result.map (\x -> x.position)
+
+
+
+                reconstructPath : Map position position, position -> List position
+                reconstructPath = \cameFrom, goal ->
+                    when Map.get cameFrom goal is
+                        Err KeyNotFound ->
+                            []
+
+                        Ok next ->
+                            List.push (reconstructPath cameFrom next) goal
+
+                updateCost : position, position, Model position -> Model position
+                updateCost = \current, neighbour, model ->
+                    newCameFrom = Map.insert model.cameFrom neighbour current
+
+                    newCosts = Map.insert model.costs neighbour distanceTo
+
+                    distanceTo = reconstructPath newCameFrom neighbour
+                            |> List.length
+                            |> Num.toFloat
+
+                    newModel = { model & costs : newCosts , cameFrom : newCameFrom }
+
+                    when Map.get model.costs neighbour is
+                        Err KeyNotFound ->
+                            newModel
+
+                        Ok previousDistance ->
+                            if distanceTo < previousDistance then
+                                newModel
+
+                            else
+                                model
+
+
+                findPath : { costFunction: (position, position -> Float), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [ KeyNotFound ]*
+                findPath = \{ costFunction, moveFunction, start, end } ->
+                    astar costFunction moveFunction end (initialModel start)
+
+
+                astar : (position, position -> Float), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*
+                astar = \costFn, moveFn, goal, model ->
+                    when cheapestOpen (\position -> costFn goal position) model is
+                        Err _ ->
+                            Err KeyNotFound
+
+                        Ok current ->
+                            if current == goal then
+                                Ok (reconstructPath model.cameFrom goal)
+
+                            else
+
+                               modelPopped = { model & openSet : Set.remove model.openSet current, evaluated : Set.insert model.evaluated current }
+
+                               neighbours = moveFn current
+
+                               newNeighbours = Set.diff neighbours modelPopped.evaluated
+
+                               modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
+
+                               modelWithCosts = Set.foldl newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
+
+                               astar costFn moveFn goal modelWithCosts
+
+                findPath
+                "#
+            ),
+            "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr Shared position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))"
+        )
+        });
+    }
+
+    #[test]
+    fn instantiated_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+                Model a : { foo : Set a }
+
+
+                initialModel : position -> Model Int
+                initialModel = \_ -> { foo : Set.empty }
+
+                initialModel
+                "#
+            ),
+            "Attr * (Attr * position -> Attr * (Model (Attr * Int)))",
         );
     }
 }
