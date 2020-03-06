@@ -29,6 +29,7 @@ pub mod llvm;
 pub mod load;
 pub mod mono;
 pub mod pretty_print_types;
+pub mod reporting;
 pub mod solve;
 pub mod subs;
 pub mod types;
