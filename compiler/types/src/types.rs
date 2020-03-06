@@ -485,7 +485,10 @@ impl Type {
                         *self = Type::Alias(*symbol, named_args, Box::new(actual));
                     }
                 } else {
-                    // do nothing, maybe this alias gets instantiated later?
+                    // one of the special-cased Apply types.
+                    for x in args {
+                        x.instantiate_aliases(aliases, var_store, introduced);
+                    }
                 }
             }
             EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}

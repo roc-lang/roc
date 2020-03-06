@@ -116,19 +116,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         )
     };
 
-    // Attr u a : [ @Attr u a ]
-    add_alias(
-        Symbol::ATTR_ATTR,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![
-                Located::at(Region::zero(), "u".into()),
-                Located::at(Region::zero(), "a".into()),
-            ],
-            typ: single_private_tag(Symbol::ATTR_AT_ATTR, vec![flex(TVAR1), flex(TVAR2)]),
-        },
-    );
-
     // Num : Num Integer
     add_alias(
         Symbol::NUM_NUM,
@@ -207,16 +194,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // List a : [ @List a ]
-    add_alias(
-        Symbol::LIST_LIST,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "elem".into())],
-            typ: single_private_tag(Symbol::LIST_AT_LIST, vec![flex(TVAR1)]),
-        },
-    );
-
     // Result a e : [ Ok a, Err e ]
     add_alias(
         Symbol::RESULT_RESULT,
@@ -233,16 +210,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 ],
                 Box::new(SolvedType::EmptyTagUnion),
             ),
-        },
-    );
-
-    // Str : [ @Str ]
-    add_alias(
-        Symbol::STR_STR,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: single_private_tag(Symbol::STR_AT_STR, Vec::new()),
         },
     );
 

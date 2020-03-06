@@ -149,49 +149,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // List elem : [ @List elem ]
-    add_alias(
-        Symbol::LIST_LIST,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "elem".into())],
-            typ: single_private_tag(Symbol::LIST_AT_LIST, vec![flex(TVAR1)]),
-        },
-    );
-
-    // Map key value : [ @Map key value ]
-    add_alias(
-        Symbol::MAP_MAP,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![
-                Located::at(Region::zero(), "key".into()),
-                Located::at(Region::zero(), "value".into()),
-            ],
-            typ: single_private_tag(Symbol::MAP_AT_MAP, vec![flex(TVAR1), flex(TVAR2)]),
-        },
-    );
-
-    // Set key : [ @Set key ]
-    add_alias(
-        Symbol::SET_SET,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "key".into())],
-            typ: single_private_tag(Symbol::SET_AT_SET, vec![flex(TVAR1)]),
-        },
-    );
-
-    // Str : [ @Str ]
-    add_alias(
-        Symbol::STR_STR,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![],
-            typ: single_private_tag(Symbol::STR_AT_STR, vec![]),
-        },
-    );
-
     aliases
 }
 
