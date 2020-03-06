@@ -1,8 +1,8 @@
 use crate::can::problem::Problem;
-use crate::module::symbol::{Interns, ModuleId, Symbol};
 use crate::pretty_print_types::content_to_string;
-use crate::region::Region;
 use crate::subs::{Content, Subs};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_region::all::Region;
 use std::path::PathBuf;
 
 /// A textual report.
@@ -12,17 +12,18 @@ pub struct Report {
 }
 
 impl Report {
-    pub fn can_problem(filename: PathBuf, problem: Problem) -> Self {
-        let text = match problem {
-            Problem::UnusedDef(symbol, region) => {
-                panic!("TODO implelment me!");
-            }
-            _ => {
-                panic!("TODO implement others");
-            }
-        };
+    pub fn can_problem(_filename: PathBuf, _problem: Problem) -> Self {
+        // let text = match problem {
+        //     Problem::UnusedDef(symbol, region) => {
+        //         panic!("TODO implelment me!");
+        //     }
+        //     _ => {
+        //         panic!("TODO implement others");
+        //     }
+        // };
 
-        Report { filename, text }
+        // Report { filename, text }
+        panic!("TODO implement me!");
     }
 }
 
