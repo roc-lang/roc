@@ -46,7 +46,7 @@ mod test_load {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
         let loaded = load(
-            &roc_builtins::all::standard_stdlib(),
+            &roc_builtins::std::standard_stdlib(),
             src_dir,
             filename,
             subs_by_module,
@@ -140,7 +140,7 @@ mod test_load {
 
         test_async(async {
             let loaded = load(
-                &roc_builtins::all::standard_stdlib(),
+                &roc_builtins::std::standard_stdlib(),
                 src_dir,
                 filename,
                 subs_by_module,

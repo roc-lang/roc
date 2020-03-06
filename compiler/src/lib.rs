@@ -13,8 +13,6 @@
 
 pub mod string;
 
-pub mod unique_builtins;
-
 pub mod crane;
 pub mod fmt;
 pub mod llvm;

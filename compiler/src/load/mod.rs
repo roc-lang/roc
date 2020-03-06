@@ -1,6 +1,6 @@
 use bumpalo::Bump;
-use roc_builtins::all::Mode;
-use roc_builtins::all::StdLib;
+use roc_builtins::std::Mode;
+use roc_builtins::std::StdLib;
 use roc_can;
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;

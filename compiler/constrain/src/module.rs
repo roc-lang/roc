@@ -1,5 +1,5 @@
 use crate::expr::constrain_decls;
-use roc_builtins::all::Mode;
+use roc_builtins::std::Mode;
 use roc_can::constraint::{Constraint, LetConstraint};
 use roc_can::def::Declaration;
 use roc_collections::all::{ImMap, MutMap, SendMap};

@@ -1,4 +1,4 @@
-use roc_builtins::all::StdLib;
+use crate::std::StdLib;
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
@@ -40,7 +40,7 @@ fn disjunction(free: VarId, rest: Vec<VarId>) -> SolvedType {
 }
 
 pub fn uniqueness_stdlib() -> StdLib {
-    use roc_builtins::all::Mode;
+    use crate::std::Mode;
 
     let types = types();
     let aliases = aliases();

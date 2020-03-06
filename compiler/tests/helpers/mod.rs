@@ -1,7 +1,7 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
-use roc::unique_builtins;
+use roc_builtins::unique;
 use roc_can::constraint::Constraint;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
@@ -140,7 +140,7 @@ pub fn uniq_expr_with(
         expected2,
     );
 
-    let stdlib = unique_builtins::uniqueness_stdlib();
+    let stdlib = unique::uniqueness_stdlib();
 
     let types = stdlib.types;
     let imports: Vec<_> = types
@@ -223,7 +223,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         expected,
     );
 
-    let types = roc_builtins::all::types();
+    let types = roc_builtins::std::types();
 
     let imports: Vec<_> = types
         .iter()
@@ -239,7 +239,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     //load builtin types
     let mut constraint = roc_constrain::module::load_builtin_aliases(
-        &roc_builtins::all::aliases(),
+        &roc_builtins::std::aliases(),
         constraint,
         &var_store,
     );
