@@ -1,6 +1,6 @@
 use crate::pretty_print_types::content_to_string;
-use roc_can::problem::Problem;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_problem::can::Problem;
 use roc_region::all::Region;
 use roc_types::subs::{Content, Subs};
 use std::path::PathBuf;

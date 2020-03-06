@@ -1,10 +1,9 @@
-use crate::pattern::PatternType;
 use inlinable_string::InlinableString;
 use roc_module::ident::Ident;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::operator::BinOp;
+use roc_parse::pattern::PatternType;
 use roc_region::all::{Located, Region};
-use roc_types::types;
 
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]
@@ -15,7 +14,10 @@ pub enum Problem {
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(PatternType, Region),
-    ErroneousAnnotation(types::Problem),
+    ShadowingInAnnotation {
+        original_region: Region,
+        shadow: Located<Ident>,
+    },
     RuntimeError(RuntimeError),
 }
 

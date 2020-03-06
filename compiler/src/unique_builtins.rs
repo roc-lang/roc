@@ -1,10 +1,9 @@
-use crate::builtins;
-use crate::builtins::StdLib;
-use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
+use roc_builtins::all::StdLib;
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
+use roc_types::solved_types::{BuiltinAlias, SolvedAtom, SolvedType};
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 
@@ -41,7 +40,7 @@ fn disjunction(free: VarId, rest: Vec<VarId>) -> SolvedType {
 }
 
 pub fn uniqueness_stdlib() -> StdLib {
-    use builtins::Mode;
+    use roc_builtins::all::Mode;
 
     let types = types();
     let aliases = aliases();

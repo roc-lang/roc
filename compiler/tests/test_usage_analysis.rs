@@ -15,13 +15,13 @@ mod helpers;
 #[cfg(test)]
 mod test_usage_analysis {
     use crate::helpers::{can_expr, test_home, CanExprOut};
-    use roc::uniqueness::sharing;
-    use roc::uniqueness::sharing::FieldAccess;
-    use roc::uniqueness::sharing::VarUsage;
-    use roc::uniqueness::sharing::{Container, Mark, Usage};
     use roc_collections::all::{ImMap, ImSet};
     use roc_module::ident::Lowercase;
     use roc_module::symbol::{Interns, Symbol};
+    use roc_uniqueness::sharing;
+    use roc_uniqueness::sharing::FieldAccess;
+    use roc_uniqueness::sharing::VarUsage;
+    use roc_uniqueness::sharing::{Container, Mark, Usage};
 
     use Container::*;
     use Mark::*;
@@ -196,7 +196,7 @@ mod test_usage_analysis {
             loc_expr, interns, ..
         } = can_expr(src);
 
-        use roc::uniqueness::sharing::annotate_usage;
+        use roc_uniqueness::sharing::annotate_usage;
         let mut usage = VarUsage::default();
         annotate_usage(&loc_expr.value, &mut usage);
 

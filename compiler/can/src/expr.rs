@@ -4,9 +4,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result,
 };
-use crate::pattern::PatternType::*;
 use crate::pattern::{canonicalize_pattern, Pattern};
-use crate::problem::{Problem, RuntimeError};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
@@ -14,6 +12,8 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::operator::CalledVia;
+use roc_parse::pattern::PatternType::*;
+use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;

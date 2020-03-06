@@ -1,22 +1,23 @@
-use crate::builtins;
-use crate::builtins::StdLib;
-use crate::constrain::module::{
-    constrain_imported_aliases, constrain_imported_values, constrain_module, load_builtin_aliases,
-    Import,
-};
-use crate::solve::{self, BuiltinAlias, ExposedModuleTypes, Solved, SolvedType, SubsByModule};
+use crate::solve::{self, ExposedModuleTypes, SubsByModule};
 use bumpalo::Bump;
+use roc_builtins::all::Mode;
+use roc_builtins::all::StdLib;
 use roc_can;
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, ModuleOutput};
 use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
+use roc_constrain::module::{
+    constrain_imported_aliases, constrain_imported_values, constrain_module, load_builtin_aliases,
+    Import,
+};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
+use roc_types::solved_types::{BuiltinAlias, Solved, SolvedType};
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{self, Alias};
 use std::collections::{HashMap, HashSet};
@@ -50,7 +51,7 @@ pub struct LoadedModule {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub solved: Solved<Subs>,
-    pub can_problems: Vec<roc_can::problem::Problem>,
+    pub can_problems: Vec<roc_problem::can::Problem>,
     pub type_problems: Vec<types::Problem>,
     pub declarations: Vec<Declaration>,
 }
@@ -84,7 +85,7 @@ enum Msg {
         module: Module,
         constraint: Constraint,
         ident_ids: IdentIds,
-        problems: Vec<roc_can::problem::Problem>,
+        problems: Vec<roc_problem::can::Problem>,
         var_store: VarStore,
     },
     Solved {
@@ -924,7 +925,7 @@ fn solve_module(
 #[allow(clippy::too_many_arguments)]
 fn spawn_parse_and_constrain(
     header: ModuleHeader,
-    mode: builtins::Mode,
+    mode: Mode,
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: &SubsByModule,
@@ -995,7 +996,7 @@ fn spawn_parse_and_constrain(
 /// Parse the module, canonicalize it, and generate constraints for it.
 fn parse_and_constrain(
     header: ModuleHeader,
-    mode: builtins::Mode,
+    mode: Mode,
     module_ids: ModuleIds,
     dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,

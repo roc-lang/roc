@@ -20,7 +20,6 @@ pub mod module;
 pub mod num;
 pub mod operator;
 pub mod pattern;
-pub mod problem;
 pub mod procedure;
 pub mod scope;
 pub mod string;

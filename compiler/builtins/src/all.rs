@@ -1,8 +1,8 @@
-use crate::solve::{BuiltinAlias, SolvedType};
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
+use roc_types::solved_types::{BuiltinAlias, SolvedType};
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 

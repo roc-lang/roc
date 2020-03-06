@@ -16,7 +16,7 @@ mod test_canonicalize {
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::Recursive;
-    use roc_can::problem::{Problem, RuntimeError};
+    use roc_problem::can::{Problem, RuntimeError};
     use roc_region::all::{Located, Region};
     use std::{f64, i64};
 

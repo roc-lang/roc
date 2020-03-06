@@ -1,10 +1,11 @@
 use crate::env::Env;
 use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
-use crate::problem::{Problem, RuntimeError};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
+use roc_parse::pattern::PatternType;
+use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 
@@ -64,18 +65,6 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
 
         Shadowed(_, _) => {}
     }
-}
-
-/// Different patterns are supported in different circumstances.
-/// For example, when branches can pattern match on number literals, but
-/// assignments and function args can't. Underscore is supported in function
-/// arg patterns and in when branch patterns, but not in assignments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PatternType {
-    TopLevelDef,
-    DefExpr,
-    FunctionArg,
-    WhenBranch,
 }
 
 pub fn canonicalize_pattern<'a>(

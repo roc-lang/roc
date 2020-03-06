@@ -1,7 +1,5 @@
-use crate::builtins;
-use crate::constrain::expr::constrain_decls;
-use crate::solve::{BuiltinAlias, SolvedAtom, SolvedType};
-use crate::uniqueness;
+use crate::expr::constrain_decls;
+use roc_builtins::all::Mode;
 use roc_can::constraint::{Constraint, LetConstraint};
 use roc_can::def::Declaration;
 use roc_collections::all::{ImMap, MutMap, SendMap};
@@ -9,18 +7,19 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Located;
 use roc_types::boolean_algebra::{Atom, Bool};
+use roc_types::solved_types::{BuiltinAlias, SolvedAtom, SolvedType};
 use roc_types::subs::{VarId, VarStore, Variable};
 use roc_types::types::{Alias, Type};
 
 #[inline(always)]
 pub fn constrain_module(
     home: ModuleId,
-    mode: builtins::Mode,
+    mode: Mode,
     decls: &[Declaration],
     aliases: &MutMap<Symbol, Alias>,
     var_store: &VarStore,
 ) -> Constraint {
-    use builtins::Mode::*;
+    use Mode::*;
 
     let mut send_aliases = SendMap::default();
 
@@ -30,7 +29,7 @@ pub fn constrain_module(
 
     match mode {
         Standard => constrain_decls(home, decls, send_aliases),
-        Uniqueness => uniqueness::constrain_decls(home, decls, send_aliases, var_store),
+        Uniqueness => crate::uniqueness::constrain_decls(home, decls, send_aliases, var_store),
     }
 }
 
@@ -148,7 +147,7 @@ pub struct FreeVars {
 }
 
 pub fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
-    use crate::solve::SolvedType::*;
+    use roc_types::solved_types::SolvedType::*;
 
     match solved_type {
         Func(args, ret) => {

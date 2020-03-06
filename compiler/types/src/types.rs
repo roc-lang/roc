@@ -5,8 +5,7 @@ use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::operator::{ArgSide, BinOp};
-use roc_region::all::Located;
-use roc_region::all::Region;
+use roc_region::all::{Located, Region};
 use std::fmt;
 
 pub const TYPE_NUM: &str = "Num";

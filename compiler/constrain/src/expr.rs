@@ -1,7 +1,5 @@
-use crate::constrain::builtins::{
-    empty_list_type, float_literal, int_literal, list_type, str_type,
-};
-use crate::constrain::pattern::{constrain_pattern, PatternState};
+use crate::builtins::{empty_list_type, float_literal, int_literal, list_type, str_type};
+use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
 use roc_can::def::{Declaration, Def};
@@ -846,7 +844,7 @@ fn instantiate_rigids(
         annotation.substitute(&rigid_substitution);
     }
 
-    if let Some(new_headers) = crate::constrain::pattern::headers_from_annotation(
+    if let Some(new_headers) = crate::pattern::headers_from_annotation(
         &loc_pattern.value,
         &Located::at(loc_pattern.region, annotation.clone()),
     ) {

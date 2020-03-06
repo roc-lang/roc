@@ -7,7 +7,11 @@ members = [
     "compiler/module",
     "compiler/parse",
     "compiler/can",
+    "compiler/problem",
     "compiler/types",
+    "compiler/uniqueness",
+    "compiler/builtins",
+    "compiler/constrain",
     "vendor/ena",
     "vendor/pathfinding"
 ]

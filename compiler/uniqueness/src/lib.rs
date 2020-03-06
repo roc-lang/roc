@@ -10,7 +10,8 @@
 // and encouraging shortcuts here creates bad incentives. I would rather temporarily
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
-pub mod boolean_algebra;
-pub mod solved_types;
-pub mod subs;
-pub mod types;
+
+pub use roc_can::expr::Expr::*;
+
+pub mod builtins;
+pub mod sharing;

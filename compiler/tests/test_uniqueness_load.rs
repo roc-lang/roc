@@ -15,7 +15,6 @@ mod helpers;
 mod test_uniqueness_load {
     use crate::helpers::fixtures_dir;
     use inlinable_string::InlinableString;
-    use roc::builtins;
     use roc::load::{load, LoadedModule};
     use roc::pretty_print_types::{content_to_string, name_all_type_vars};
     use roc::solve::SubsByModule;
@@ -141,7 +140,7 @@ mod test_uniqueness_load {
 
         test_async(async {
             let loaded = load(
-                &builtins::standard_stdlib(),
+                &roc_builtins::all::standard_stdlib(),
                 src_dir,
                 filename,
                 subs_by_module,

@@ -20,7 +20,7 @@ mod test_infer {
         src: &str,
     ) -> (
         Vec<roc_types::types::Problem>,
-        Vec<roc_can::problem::Problem>,
+        Vec<roc_problem::can::Problem>,
         String,
     ) {
         let CanExprOut {

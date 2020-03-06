@@ -1,7 +1,7 @@
-use crate::problem::RuntimeError;
 use roc_collections::all::ImMap;
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Alias, Type};
