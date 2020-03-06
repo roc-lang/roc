@@ -1012,6 +1012,22 @@ name = "roc_region"
 version = "0.1.0"
 
 [[package]]
+name = "roc_reporting"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_collections",
+ "roc_module",
+ "roc_problem",
+ "roc_region",
+ "roc_types",
+]
+
+[[package]]
 name = "roc_solve"
 version = "0.1.0"
 dependencies = [
