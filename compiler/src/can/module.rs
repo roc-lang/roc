@@ -18,7 +18,7 @@ use roc_region::all::{Located, Region};
 #[derive(Debug)]
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
-    pub rigid_variables: MutMap<Lowercase, Variable>,
+    pub rigid_variables: MutMap<Variable, Lowercase>,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
@@ -121,7 +121,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    for (var, lowercase) in output.rigids.clone() {
+    for (var, lowercase) in output.ftv.clone() {
         rigid_variables.insert(var, lowercase);
     }
 

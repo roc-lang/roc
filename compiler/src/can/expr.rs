@@ -707,17 +707,24 @@ fn call_successors<'a>(
     call_symbol: Symbol,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
-    // TODO (this comment should be moved to a GH issue) this may cause an infinite loop if 2 definitions reference each other; may need to track visited definitions!
-    match closures.get(&call_symbol) {
-        Some(references) => {
-            let mut answer = local_successors(&references, closures);
+    let mut answer = im_rc::hashset::HashSet::default();
+    let mut seen = MutSet::default();
+    let mut queue = vec![call_symbol];
 
-            answer.insert(call_symbol.clone());
-
-            answer
+    while let Some(symbol) = queue.pop() {
+        if seen.contains(&symbol) {
+            continue;
         }
-        None => ImSet::default(),
+
+        if let Some(references) = closures.get(&symbol) {
+            answer.extend(references.lookups.iter().copied());
+            queue.extend(references.calls.iter().copied());
+
+            seen.insert(symbol);
+        }
     }
+
+    answer
 }
 
 pub fn references_from_local<'a, T>(
