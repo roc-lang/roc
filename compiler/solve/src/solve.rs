@@ -472,16 +472,8 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
-        EmptyRec => {
-            let content = Content::Structure(FlatType::EmptyRecord);
-
-            register(subs, rank, pools, content)
-        }
-        EmptyTagUnion => {
-            let content = Content::Structure(FlatType::EmptyTagUnion);
-
-            register(subs, rank, pools, content)
-        }
+        EmptyRec => Variable::EMPTY_RECORD,
+        EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
         // This case is important for the rank of boolean variables
         Boolean(boolean_algebra::Bool(Atom::Variable(var), rest)) if rest.is_empty() => *var,
@@ -651,17 +643,17 @@ fn check_for_infinite_type(
                     // forward in the recursion and find the `Attr` there.
                     let index = 0;
                     match subs.get(chain[index]).content {
-                        Content::Alias(Symbol::ATTR_ATTR, args, _actual) => {
+                        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
                             debug_assert!(args.len() == 2);
                             debug_assert!(
                                 subs.get_root_key_without_compacting(recursive)
-                                    == subs.get_root_key_without_compacting(args[1].1)
+                                    == subs.get_root_key_without_compacting(args[1])
                             );
 
                             // NOTE this ensures we use the same uniqueness var for the whole spine
                             // that might add too much uniqueness restriction.
                             // using `subs.fresh_unnamed_flex_var()` loosens it.
-                            let uniq_var = args[0].1;
+                            let uniq_var = args[0];
                             let tag_union_var = recursive;
                             let recursive = chain[index];
 
@@ -678,10 +670,10 @@ fn check_for_infinite_type(
                     }
                 }
             }
-            Content::Alias(Symbol::ATTR_ATTR, args, _actual) => {
+            Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
                 debug_assert!(args.len() == 2);
-                let uniq_var = args[0].1;
-                let tag_union_var = args[1].1;
+                let uniq_var = args[0];
+                let tag_union_var = args[1];
                 let nested_description = subs.get(tag_union_var);
                 match nested_description.content {
                     Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
@@ -702,21 +694,8 @@ fn check_for_infinite_type(
     }
 }
 
-fn content_attr_alias(subs: &mut Subs, u: Variable, a: Variable) -> Content {
-    let actual = subs.fresh_unnamed_flex_var();
-    let ext_var = subs.fresh_unnamed_flex_var();
-
-    let mut attr_at_attr = MutMap::default();
-    attr_at_attr.insert(TagName::Private(Symbol::ATTR_AT_ATTR), vec![u, a]);
-    let attr_tag = FlatType::TagUnion(attr_at_attr, ext_var);
-
-    subs.set_content(actual, Content::Structure(attr_tag));
-
-    Content::Alias(
-        Symbol::ATTR_ATTR,
-        vec![("u".into(), u), ("a".into(), a)],
-        actual,
-    )
+fn content_attr(u: Variable, a: Variable) -> Content {
+    Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, vec![u, a]))
 }
 
 fn correct_recursive_attr(
@@ -730,7 +709,7 @@ fn correct_recursive_attr(
     let rec_var = subs.fresh_unnamed_flex_var();
     let attr_var = subs.fresh_unnamed_flex_var();
 
-    let content = content_attr_alias(subs, uniq_var, rec_var);
+    let content = content_attr(uniq_var, rec_var);
     subs.set_content(attr_var, content);
 
     let mut new_tags = MutMap::default();
@@ -748,7 +727,7 @@ fn correct_recursive_attr(
     let new_tag_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
     subs.set_content(tag_union_var, Content::Structure(new_tag_type));
 
-    let new_recursive = content_attr_alias(subs, uniq_var, tag_union_var);
+    let new_recursive = content_attr(uniq_var, tag_union_var);
 
     subs.set_content(recursive, new_recursive);
 }

@@ -149,7 +149,11 @@ impl Variable {
     // to it in bulk - which is relevant, because Descriptors get initialized in bulk.
     const NULL: Variable = Variable(0);
 
-    const FIRST_USER_SPACE_VAR: Variable = Variable(1);
+    pub const EMPTY_RECORD: Variable = Variable(1);
+    pub const EMPTY_TAG_UNION: Variable = Variable(2);
+
+    // variables 1 and 2 are reserved for EmptyRecord and EmptyTagUnion
+    const FIRST_USER_SPACE_VAR: Variable = Variable(3);
 
     /// # Safety
     ///
@@ -223,6 +227,9 @@ impl Subs {
         for _ in 0..entries {
             subs.utable.new_key(flex_var_descriptor());
         }
+
+        subs.set_content(Variable(1), Content::Structure(FlatType::EmptyRecord));
+        subs.set_content(Variable(2), Content::Structure(FlatType::EmptyTagUnion));
 
         subs
     }

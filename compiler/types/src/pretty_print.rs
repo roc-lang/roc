@@ -282,32 +282,33 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
                     let content = subs.get(*arg_var).content;
 
                     match &content {
-                        Alias(nested, nested_args, _) => match *nested {
+                        Alias(nested, _, _) => match *nested {
                             Symbol::INT_INTEGER => buf.push_str("Int"),
                             Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
-                            Symbol::ATTR_ATTR => {
-                                let attr_content = subs.get(nested_args[1].1).content;
-                                match &attr_content {
-                                    Alias(nested, _, _) => match *nested {
-                                        Symbol::INT_INTEGER => buf.push_str("Int"),
-                                        Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
-                                        _ => write_parens!(write_parens, buf, {
-                                            buf.push_str("Num ");
-                                            write_content(env, content, subs, buf, parens);
-                                        }),
-                                    },
-                                    _ => write_parens!(write_parens, buf, {
-                                        buf.push_str("Num ");
-                                        write_content(env, content, subs, buf, parens);
-                                    }),
-                                }
-                            }
 
                             _ => write_parens!(write_parens, buf, {
                                 buf.push_str("Num ");
                                 write_content(env, content, subs, buf, parens);
                             }),
                         },
+
+                        Structure(FlatType::Apply(Symbol::ATTR_ATTR, nested_args)) => {
+                            let attr_content = subs.get(nested_args[1]).content;
+                            match &attr_content {
+                                Alias(nested, _, _) => match *nested {
+                                    Symbol::INT_INTEGER => buf.push_str("Int"),
+                                    Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
+                                    _ => write_parens!(write_parens, buf, {
+                                        buf.push_str("Num ");
+                                        write_content(env, content, subs, buf, parens);
+                                    }),
+                                },
+                                _ => write_parens!(write_parens, buf, {
+                                    buf.push_str("Num ");
+                                    write_content(env, content, subs, buf, parens);
+                                }),
+                            }
+                        }
 
                         _ => write_parens!(write_parens, buf, {
                             buf.push_str("Num ");

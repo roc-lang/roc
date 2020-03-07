@@ -105,6 +105,15 @@ pub fn uniq_stdlib() -> StdLib {
         mode: Mode::Uniqueness,
         types,
         aliases,
+        applies: vec![
+            Symbol::ATTR_ATTR,
+            Symbol::LIST_LIST,
+            Symbol::SET_SET,
+            Symbol::MAP_MAP,
+            Symbol::STR_STR,
+        ]
+        .into_iter()
+        .collect(),
     }
 }
 
@@ -131,19 +140,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             Box::new(SolvedType::EmptyTagUnion),
         )
     };
-
-    // Attr u a : [ @Attr u a ]
-    add_alias(
-        Symbol::ATTR_ATTR,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![
-                Located::at(Region::zero(), "u".into()),
-                Located::at(Region::zero(), "a".into()),
-            ],
-            typ: single_private_tag(Symbol::ATTR_AT_ATTR, vec![flex(TVAR1), flex(TVAR2)]),
-        },
-    );
 
     // Num : Num Integer
     add_alias(
@@ -239,49 +235,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 ],
                 Box::new(SolvedType::EmptyTagUnion),
             ),
-        },
-    );
-
-    // List a : [ @List a ]
-    add_alias(
-        Symbol::LIST_LIST,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "elem".into())],
-            typ: single_private_tag(Symbol::LIST_AT_LIST, vec![flex(TVAR1)]),
-        },
-    );
-
-    // Map key value : [ @Map key value ]
-    add_alias(
-        Symbol::MAP_MAP,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![
-                Located::at(Region::zero(), "key".into()),
-                Located::at(Region::zero(), "value".into()),
-            ],
-            typ: single_private_tag(Symbol::MAP_AT_MAP, vec![flex(TVAR1), flex(TVAR2)]),
-        },
-    );
-
-    // Set key : [ @Set key ]
-    add_alias(
-        Symbol::SET_SET,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "key".into())],
-            typ: single_private_tag(Symbol::SET_AT_SET, vec![flex(TVAR1)]),
-        },
-    );
-
-    // Str : [ @Str ]
-    add_alias(
-        Symbol::STR_STR,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: single_private_tag(Symbol::STR_AT_STR, Vec::new()),
         },
     );
 

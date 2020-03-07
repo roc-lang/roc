@@ -125,6 +125,19 @@ fn layout_from_flat_type<'a>(
 
                     layout_from_num_content(content)
                 }
+                Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
+                Symbol::ATTR_ATTR => {
+                    debug_assert!(args.len() == 2);
+
+                    // The first argument is the uniqueness info;
+                    // we don't need that here.
+                    let wrapped_var = args[1];
+
+                    // For now, layout is unaffected by uniqueness.
+                    // (Incorporating refcounting may change this.)
+                    // Unwrap and continue
+                    Layout::from_var(arena, wrapped_var, subs)
+                }
                 _ => {
                     panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
                 }
@@ -205,18 +218,6 @@ fn layout_from_flat_type<'a>(
                     let (tag, args) = tags.into_iter().next().unwrap();
 
                     match tag {
-                        TagName::Private(Symbol::ATTR_AT_ATTR) => {
-                            debug_assert!(args.len() == 2);
-
-                            // The first argument is the uniqueness info;
-                            // we don't need that here.
-                            let wrapped_var = args[1];
-
-                            // For now, layout is unaffected by uniqueness.
-                            // (Incorporating refcounting may change this.)
-                            // Unwrap and continue
-                            Layout::from_var(arena, wrapped_var, subs)
-                        }
                         TagName::Private(Symbol::NUM_AT_NUM) => {
                             debug_assert!(args.len() == 1);
 
@@ -224,7 +225,6 @@ fn layout_from_flat_type<'a>(
 
                             unwrap_num_tag(subs, var)
                         }
-                        TagName::Private(Symbol::STR_AT_STR) => Ok(Layout::Builtin(Builtin::Str)),
                         TagName::Private(symbol) => {
                             panic!("TODO emit wrapped private tag for {:?} {:?}", symbol, args);
                         }
@@ -329,6 +329,13 @@ fn flatten_record(fields: &mut MutMap<Lowercase, Variable>, ext_var: Variable, s
 fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
     match subs.get_without_compacting(var).content {
         Content::Structure(flat_type) => match flat_type {
+            FlatType::Apply(Symbol::ATTR_ATTR, args) => {
+                debug_assert!(args.len() == 2);
+
+                let arg_var = args.get(1).unwrap();
+
+                unwrap_num_tag(subs, *arg_var)
+            }
             _ => {
                 panic!("TODO handle Num.@Num flat_type {:?}", flat_type);
             }
@@ -340,13 +347,6 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
         Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
             debug_assert!(args.is_empty());
             Ok(Layout::Builtin(Builtin::Float64))
-        }
-        Content::Alias(Symbol::ATTR_ATTR, args, _) => {
-            debug_assert!(args.len() == 2);
-
-            let (_name, arg_var) = args.get(1).unwrap();
-
-            unwrap_num_tag(subs, *arg_var)
         }
         other => {
             panic!("TODO non structure Num.@Num flat_type {:?}", other);
