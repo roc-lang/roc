@@ -17,7 +17,7 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
 use roc_solve::solve::{self, ExposedModuleTypes, SubsByModule};
-use roc_types::solved_types::{BuiltinAlias, Solved, SolvedType};
+use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{self, Alias};
 use std::collections::{HashMap, HashSet};
@@ -779,24 +779,22 @@ fn solve_module(
                         solved_type,
                     });
                 }
-                // This wasn't a builtin value; maybe it was a builtin alias.
-                None => match stdlib.aliases.get(&symbol) {
-                    Some(BuiltinAlias { region, typ, .. }) => {
-                        let loc_symbol = Located {
-                            value: symbol,
-                            region: *region,
-                        };
-
-                        imported_symbols.push(Import {
-                            loc_symbol,
-                            solved_type: typ,
-                        });
+                None => {
+                    if stdlib.applies.contains(&symbol) {
+                        // do nothing
+                    } else {
+                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
+                        match stdlib.aliases.get(&symbol) {
+                            Some(_) => {
+                                // do nothing
+                            }
+                            None => panic!(
+                                "Could not find {:?} in builtin types {:?} or aliases {:?}",
+                                symbol, stdlib.types, stdlib.aliases
+                            ),
+                        }
                     }
-                    None => panic!(
-                        "Could not find {:?} in builtin types {:?} or aliases {:?}",
-                        symbol, stdlib.types, stdlib.aliases
-                    ),
-                },
+                }
             }
         } else if module_id != home {
             // We already have constraints for our own symbols.

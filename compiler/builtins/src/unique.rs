@@ -105,6 +105,15 @@ pub fn uniq_stdlib() -> StdLib {
         mode: Mode::Uniqueness,
         types,
         aliases,
+        applies: vec![
+            Symbol::ATTR_ATTR,
+            Symbol::LIST_LIST,
+            Symbol::SET_SET,
+            Symbol::MAP_MAP,
+            Symbol::STR_STR,
+        ]
+        .into_iter()
+        .collect(),
     }
 }
 

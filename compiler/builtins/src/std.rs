@@ -1,4 +1,4 @@
-use roc_collections::all::{default_hasher, MutMap};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -16,6 +16,7 @@ pub struct StdLib {
     pub mode: Mode,
     pub types: MutMap<Symbol, (SolvedType, Region)>,
     pub aliases: MutMap<Symbol, BuiltinAlias>,
+    pub applies: MutSet<Symbol>,
 }
 
 pub fn standard_stdlib() -> StdLib {
@@ -23,6 +24,14 @@ pub fn standard_stdlib() -> StdLib {
         mode: Mode::Standard,
         types: types(),
         aliases: aliases(),
+        applies: vec![
+            Symbol::LIST_LIST,
+            Symbol::SET_SET,
+            Symbol::MAP_MAP,
+            Symbol::STR_STR,
+        ]
+        .into_iter()
+        .collect(),
     }
 }
 
