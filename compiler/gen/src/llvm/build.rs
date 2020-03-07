@@ -631,6 +631,24 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             list_ptr.into()
         }
+        Symbol::LIST_SET_IN_PLACE => {
+            debug_assert!(args.len() == 3);
+
+            let list_ptr = args[0].into_pointer_value();
+            let elem_index = args[1].into_int_value();
+            let elem = args[2];
+
+            let builder = env.builder;
+            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
+            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
+            let offset = builder.build_int_mul(elem_index, elem_size, "MUL_OFFSET");
+
+            let elem_ptr = unsafe { builder.build_gep(list_ptr, &[offset], "elem") };
+
+            builder.build_store(elem_ptr, elem);
+
+            list_ptr.into()
+        }
         _ => {
             let fn_val = env
                 .module

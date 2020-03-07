@@ -225,22 +225,18 @@ fn from_can<'a>(
                                 )) => {
                                     debug_assert!(attr_args.len() == 2);
 
+                                    // If the first argument (the List) is unique,
+                                    // then we can safely upgrade to List.set_in_place
                                     let attr_arg_content =
                                         subs.get_without_compacting(attr_args[0]).content;
 
-                                    let is_unique = match attr_arg_content {
-                                        Content::Structure(FlatType::Boolean(boolean)) => {
-                                            boolean.is_unique(subs)
-                                        }
-                                        Content::FlexVar(_) => true,
-                                        _ => false,
+                                    let new_name = if attr_arg_content.is_unique(subs) {
+                                        Symbol::LIST_SET_IN_PLACE
+                                    } else {
+                                        Symbol::LIST_SET
                                     };
 
-                                    dbg!(is_unique);
-
-                                    let _wrapped_var = attr_args[1];
-
-                                    call_by_name(env, procs, proc_name, loc_args)
+                                    call_by_name(env, procs, new_name, loc_args)
                                 }
                                 _ => call_by_name(env, procs, proc_name, loc_args),
                             }
