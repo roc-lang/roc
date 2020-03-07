@@ -43,7 +43,7 @@ mod test_format {
                 assert_eq!(buf, expected)
             },
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", input, error)
-        }
+        };
     }
 
     fn expr_formats_same(input: &str) {
