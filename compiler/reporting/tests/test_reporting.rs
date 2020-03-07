@@ -6,18 +6,17 @@ extern crate bumpalo;
 extern crate roc_reporting;
 mod helpers;
 
-
 #[cfg(test)]
 mod test_report {
-    use std::path::PathBuf;
-    use roc_reporting::report::{ReportText, Report};
-    use roc_types::types;
-    use roc_types::subs::Subs;
-    use roc_module::symbol::{ModuleId, Interns};
+    use roc_module::symbol::{Interns, ModuleId};
+    use roc_reporting::report::{Report, ReportText};
     use roc_types::pretty_print::name_all_type_vars;
+    use roc_types::subs::Subs;
+    use roc_types::types;
+    use std::path::PathBuf;
     // use roc_region::all;
-    use roc_reporting::report::ReportText::{Plain, EmText, Url, Region};
     use crate::helpers::{assert_correct_variable_usage, can_expr, infer_expr, CanExprOut};
+    use roc_reporting::report::ReportText::{EmText, Plain, Region, Url};
 
     // use roc_problem::can;
     fn to_simple_report(text: ReportText) -> Report {
