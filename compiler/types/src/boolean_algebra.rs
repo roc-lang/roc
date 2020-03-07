@@ -27,6 +27,22 @@ impl Atom {
             },
         }
     }
+
+    pub fn is_unique(&self, subs: &Subs) -> bool {
+        match self {
+            Atom::Zero => false,
+            Atom::One => true,
+            Atom::Variable(var) => match subs.get_without_compacting(*var).content {
+                Content::Structure(FlatType::Boolean(Bool(atom, rest))) => {
+                    atom.is_unique(subs) && rest.iter().all(|other_atom| other_atom.is_unique(subs))
+                }
+                _ => {
+                    // TODO is this correct?!
+                    false
+                }
+            },
+        }
+    }
 }
 
 impl Bool {
@@ -133,5 +149,11 @@ impl Bool {
             }
         }
         Bool(new_free, new_bound)
+    }
+
+    pub fn is_unique(&self, subs: &Subs) -> bool {
+        let Bool(atom, rest) = self;
+
+        atom.is_unique(subs) && rest.iter().all(|other_atom| other_atom.is_unique(subs))
     }
 }

@@ -7,7 +7,7 @@ use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::Located;
-use roc_types::subs::{Content, Subs, Variable};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
 
 pub type Procs<'a> = MutMap<Symbol, Option<Proc<'a>>>;
 
@@ -202,11 +202,6 @@ fn from_can<'a>(
 
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, _) = *boxed;
-            let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
-
-            for (_, loc_arg) in loc_args {
-                args.push(from_can(env, loc_arg.value, procs, None));
-            }
 
             match from_can(env, loc_expr.value, procs, None) {
                 Expr::Load(proc_name) => {
@@ -215,26 +210,42 @@ fn from_can<'a>(
                     match proc_name {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
-                            let fn_content = subs.get_without_compacting(fn_var).content;
+                            // The first arg is the one with the List in it.
+                            // List.set : List elem, Int, elem -> List elem
+                            let (list_arg_var, _) = loc_args.get(0).unwrap();
 
-                            match fn_content {
-                                Content::Alias(Symbol::ATTR_ATTR, attr_args, _) => {
+                            let content = subs.get_without_compacting(*list_arg_var).content;
+
+                            dbg!("content: {:?}", &content);
+
+                            match content {
+                                Content::Structure(FlatType::Apply(
+                                    Symbol::ATTR_ATTR,
+                                    attr_args,
+                                )) => {
                                     debug_assert!(attr_args.len() == 2);
 
-                                    let _is_unique =
-                                        match subs.get_without_compacting(attr_args[0].1).content {
-                                            Content::FlexVar(_) => true,
-                                            _ => false,
-                                        };
+                                    let attr_arg_content =
+                                        subs.get_without_compacting(attr_args[0]).content;
 
-                                    let _wrapped_var = attr_args[1].1;
+                                    let is_unique = match attr_arg_content {
+                                        Content::Structure(FlatType::Boolean(boolean)) => {
+                                            boolean.is_unique(subs)
+                                        }
+                                        Content::FlexVar(_) => true,
+                                        _ => false,
+                                    };
 
-                                    Expr::CallByName(proc_name, args.into_bump_slice())
+                                    dbg!(is_unique);
+
+                                    let _wrapped_var = attr_args[1];
+
+                                    call_by_name(env, procs, proc_name, loc_args)
                                 }
-                                _ => Expr::CallByName(proc_name, args.into_bump_slice()),
+                                _ => call_by_name(env, procs, proc_name, loc_args),
                             }
                         }
-                        _ => Expr::CallByName(proc_name, args.into_bump_slice()),
+                        _ => call_by_name(env, procs, proc_name, loc_args),
                     }
                 }
                 ptr => {
@@ -245,6 +256,12 @@ fn from_can<'a>(
                     // It might even be the anonymous result of a conditional:
                     //
                     // ((if x > 0 then \a -> a else \_ -> 0) 5)
+                    let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+                    for (_, loc_arg) in loc_args {
+                        args.push(from_can(env, loc_arg.value, procs, None));
+                    }
+
                     Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice(), fn_var)
                 }
             }
@@ -630,4 +647,19 @@ fn from_can_when<'a>(
             }
         }
     }
+}
+
+fn call_by_name<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    proc_name: Symbol,
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+) -> Expr<'a> {
+    let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+    for (_, loc_arg) in loc_args {
+        args.push(from_can(env, loc_arg.value, procs, None));
+    }
+
+    Expr::CallByName(proc_name, args.into_bump_slice())
 }
