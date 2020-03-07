@@ -51,13 +51,12 @@ mod test_report {
 
         assert_correct_variable_usage(&constraint);
 
-        for (var, name) in output.ftv {
+        for (var, name) in output.introduced_variables.name_by_var {
             subs.rigid_var(var, name);
         }
 
         let mut unify_problems = Vec::new();
-        let (_content, solved) = infer_expr(subs, &mut unify_problems, &constraint, var);
-        let mut subs = solved;
+        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
         name_all_type_vars(var, &mut subs);
 
