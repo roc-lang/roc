@@ -27,10 +27,7 @@ pub fn type_from_layout(cfg: TargetFrontendConfig, layout: &Layout<'_>) -> Type 
         Builtin(builtin) => match builtin {
             Int64 => types::I64,
             Float64 => types::F64,
-            Str => cfg.pointer_type(),
-            Map(_, _) => panic!("TODO layout_to_crane_type for Builtin::Map"),
-            Set(_) => panic!("TODO layout_to_crane_type for Builtin::Set"),
-            List(_) => panic!("TODO layout_to_crane_type for Builtin::List"),
+            Str | Map(_, _) | Set(_) | List(_) => cfg.pointer_type(),
         },
     }
 }
