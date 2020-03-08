@@ -27,6 +27,19 @@ impl Atom {
             },
         }
     }
+
+    pub fn is_unique(self, subs: &Subs) -> bool {
+        match self {
+            Atom::Zero => false,
+            Atom::One => true,
+            Atom::Variable(var) => match subs.get_without_compacting(var).content {
+                Content::Structure(FlatType::Boolean(boolean)) => boolean.is_unique(subs),
+                // for rank-related reasons, boolean attributes can be "unwrapped" flex vars
+                Content::FlexVar(_) => true,
+                _ => false,
+            },
+        }
+    }
 }
 
 impl Bool {
@@ -76,7 +89,7 @@ impl Bool {
         }
     }
 
-    pub fn simplify(&self, subs: &mut Subs) -> Result<Vec<Variable>, Atom> {
+    pub fn simplify(&self, subs: &Subs) -> Result<Vec<Variable>, Atom> {
         match self.0 {
             Atom::Zero => Err(Atom::Zero),
             Atom::One => Err(Atom::One),
@@ -88,7 +101,7 @@ impl Bool {
                     match atom {
                         Atom::Zero => {}
                         Atom::One => return Err(Atom::One),
-                        Atom::Variable(v) => match subs.get(*v).content {
+                        Atom::Variable(v) => match subs.get_without_compacting(*v).content {
                             Content::Structure(FlatType::Boolean(nested)) => {
                                 match nested.simplify(subs) {
                                     Ok(variables) => {
@@ -133,5 +146,12 @@ impl Bool {
             }
         }
         Bool(new_free, new_bound)
+    }
+
+    pub fn is_unique(&self, subs: &Subs) -> bool {
+        match self.simplify(subs) {
+            Ok(_variables) => true,
+            Err(atom) => atom.is_unique(subs),
+        }
     }
 }

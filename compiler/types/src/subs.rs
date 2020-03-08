@@ -499,6 +499,14 @@ impl Content {
             _ => false,
         }
     }
+
+    pub fn is_unique(&self, subs: &Subs) -> bool {
+        match self {
+            Content::Structure(FlatType::Boolean(boolean)) => boolean.is_unique(subs),
+            Content::FlexVar(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

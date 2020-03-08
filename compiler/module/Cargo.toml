@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 roc_region = { path = "../region" }
 roc_collections = { path = "../collections" }
-bumpalo = "2.6"
+bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1.0"
 lazy_static = "1.4"
 

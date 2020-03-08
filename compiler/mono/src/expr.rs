@@ -7,16 +7,16 @@ use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::Located;
-use roc_types::subs::{Content, Subs, Variable};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
 
 pub type Procs<'a> = MutMap<Symbol, Option<Proc<'a>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
-    pub args: &'a [(Layout<'a>, Symbol, Variable)],
+    pub args: &'a [(Layout<'a>, Symbol)],
     pub body: Expr<'a>,
     pub closes_over: Layout<'a>,
-    pub ret_var: Variable,
+    pub ret_layout: Layout<'a>,
 }
 
 struct Env<'a, 'i> {
@@ -44,12 +44,12 @@ pub enum Expr<'a> {
 
     // Load/Store
     Load(Symbol),
-    Store(&'a [(Symbol, Variable, Expr<'a>)], &'a Expr<'a>),
+    Store(&'a [(Symbol, Layout<'a>, Expr<'a>)], &'a Expr<'a>),
 
     // Functions
     FunctionPointer(Symbol),
-    CallByName(Symbol, &'a [Expr<'a>]),
-    CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Variable),
+    CallByName(Symbol, &'a [(Expr<'a>, Layout<'a>)]),
+    CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Layout<'a>),
 
     // Exactly two conditional branches, e.g. if/else
     Cond {
@@ -62,7 +62,7 @@ pub enum Expr<'a> {
         // What to do if the condition either passes or fails
         pass: &'a Expr<'a>,
         fail: &'a Expr<'a>,
-        ret_var: Variable,
+        ret_layout: Layout<'a>,
     },
     /// More than two conditional branches, e.g. a 3-way when-expression
     Branches {
@@ -72,24 +72,24 @@ pub enum Expr<'a> {
         /// ( cond_rhs, pass, fail )
         branches: &'a [(Expr<'a>, Expr<'a>, Expr<'a>)],
         default: &'a Expr<'a>,
-        ret_var: Variable,
+        ret_layout: Layout<'a>,
     },
     /// Conditional branches for integers. These are more efficient.
     Switch {
         /// This *must* be an integer, because Switch potentially compiles to a jump table.
         cond: &'a Expr<'a>,
-        cond_var: Variable,
+        cond_layout: Layout<'a>,
         /// The u64 in the tuple will be compared directly to the condition Expr.
         /// If they are equal, this branch will be taken.
         branches: &'a [(u64, Expr<'a>)],
         /// If no other branches pass, this default branch will be taken.
         default_branch: &'a Expr<'a>,
         /// Each branch must return a value of this type.
-        ret_var: Variable,
+        ret_layout: Layout<'a>,
     },
     Tag {
-        variant_var: Variable,
-        ext_var: Variable,
+        tag_layout: Layout<'a>,
+        ext_layout: Layout<'a>,
         name: TagName,
         arguments: &'a [Expr<'a>],
     },
@@ -202,11 +202,6 @@ fn from_can<'a>(
 
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, _) = *boxed;
-            let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
-
-            for (_, loc_arg) in loc_args {
-                args.push(from_can(env, loc_arg.value, procs, None));
-            }
 
             match from_can(env, loc_expr.value, procs, None) {
                 Expr::Load(proc_name) => {
@@ -215,26 +210,36 @@ fn from_can<'a>(
                     match proc_name {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
-                            let fn_content = subs.get_without_compacting(fn_var).content;
+                            // The first arg is the one with the List in it.
+                            // List.set : List elem, Int, elem -> List elem
+                            let (list_arg_var, _) = loc_args.get(0).unwrap();
 
-                            match fn_content {
-                                Content::Alias(Symbol::ATTR_ATTR, attr_args, _) => {
+                            let content = subs.get_without_compacting(*list_arg_var).content;
+
+                            match content {
+                                Content::Structure(FlatType::Apply(
+                                    Symbol::ATTR_ATTR,
+                                    attr_args,
+                                )) => {
                                     debug_assert!(attr_args.len() == 2);
 
-                                    let _is_unique =
-                                        match subs.get_without_compacting(attr_args[0].1).content {
-                                            Content::FlexVar(_) => true,
-                                            _ => false,
-                                        };
+                                    // If the first argument (the List) is unique,
+                                    // then we can safely upgrade to List.set_in_place
+                                    let attr_arg_content =
+                                        subs.get_without_compacting(attr_args[0]).content;
 
-                                    let _wrapped_var = attr_args[1].1;
+                                    let new_name = if attr_arg_content.is_unique(subs) {
+                                        Symbol::LIST_SET_IN_PLACE
+                                    } else {
+                                        Symbol::LIST_SET
+                                    };
 
-                                    Expr::CallByName(proc_name, args.into_bump_slice())
+                                    call_by_name(env, procs, new_name, loc_args)
                                 }
-                                _ => Expr::CallByName(proc_name, args.into_bump_slice()),
+                                _ => call_by_name(env, procs, proc_name, loc_args),
                             }
                         }
-                        _ => Expr::CallByName(proc_name, args.into_bump_slice()),
+                        _ => call_by_name(env, procs, proc_name, loc_args),
                     }
                 }
                 ptr => {
@@ -245,7 +250,17 @@ fn from_can<'a>(
                     // It might even be the anonymous result of a conditional:
                     //
                     // ((if x > 0 then \a -> a else \_ -> 0) 5)
-                    Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice(), fn_var)
+                    let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+                    for (_, loc_arg) in loc_args {
+                        args.push(from_can(env, loc_arg.value, procs, None));
+                    }
+
+                    let layout =
+                        Layout::from_var(env.arena, fn_var, env.subs).unwrap_or_else(|err| {
+                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                        });
+                    Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice(), layout)
                 }
             }
         }
@@ -268,8 +283,7 @@ fn from_can<'a>(
                 field_bodies.push((label, expr));
             }
 
-            let struct_content = subs.get_without_compacting(ext_var).content;
-            let struct_layout = match Layout::from_content(arena, struct_content, subs) {
+            let struct_layout = match Layout::from_var(arena, ext_var, subs) {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -292,8 +306,7 @@ fn from_can<'a>(
             let subs = env.subs;
             let arena = env.arena;
 
-            let struct_content = subs.get_without_compacting(ext_var).content;
-            let struct_layout = match Layout::from_content(arena, struct_content, subs) {
+            let struct_layout = match Layout::from_var(arena, ext_var, subs) {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -301,8 +314,7 @@ fn from_can<'a>(
                 }
             };
 
-            let field_content = subs.get_without_compacting(field_var).content;
-            let field_layout = match Layout::from_content(arena, field_content, subs) {
+            let field_layout = match Layout::from_var(arena, field_var, subs) {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -323,8 +335,7 @@ fn from_can<'a>(
         } => {
             let subs = env.subs;
             let arena = env.arena;
-            let content = subs.get_without_compacting(elem_var).content;
-            let elem_layout = match Layout::from_content(arena, content, subs) {
+            let elem_layout = match Layout::from_var(arena, elem_var, subs) {
                 Ok(layout) => layout,
                 Err(()) => {
                     panic!("TODO gracefully handle List with invalid element layout");
@@ -359,9 +370,7 @@ fn add_closure<'a>(
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), arena);
 
     for (arg_var, loc_arg) in loc_args.iter() {
-        let content = subs.get_without_compacting(*arg_var).content;
-
-        let layout = match Layout::from_content(arena, content, subs) {
+        let layout = match Layout::from_var(arena, *arg_var, subs) {
             Ok(layout) => layout,
             Err(()) => {
                 // Invalid closure!
@@ -378,14 +387,17 @@ fn add_closure<'a>(
             }
         };
 
-        proc_args.push((layout, arg_name, *arg_var));
+        proc_args.push((layout, arg_name));
     }
+
+    let ret_layout = Layout::from_var(arena, ret_var, subs)
+        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     let proc = Proc {
         args: proc_args.into_bump_slice(),
         body: from_can(env, can_body, procs, None),
         closes_over: Layout::Struct(&[]),
-        ret_var,
+        ret_layout,
     };
 
     procs.insert(symbol, Some(proc));
@@ -399,9 +411,16 @@ fn store_pattern<'a>(
     can_expr: roc_can::expr::Expr,
     var: Variable,
     procs: &mut Procs<'a>,
-    stored: &mut Vec<'a, (Symbol, Variable, Expr<'a>)>,
+    stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) {
     use roc_can::pattern::Pattern::*;
+
+    let layout = match Layout::from_var(env.arena, var, env.subs) {
+        Ok(layout) => layout,
+        Err(()) => {
+            panic!("TODO gen a runtime error here");
+        }
+    };
 
     // If we're defining a named closure, insert it into Procs and then
     // remove the Let. When code gen later goes to look it up, it'll be in Procs!
@@ -417,12 +436,12 @@ fn store_pattern<'a>(
     //     identity 5
     //
     match can_pat {
-        Identifier(symbol) => stored.push((symbol, var, from_can(env, can_expr, procs, None))),
+        Identifier(symbol) => stored.push((symbol, layout, from_can(env, can_expr, procs, None))),
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
             stored.push((
                 Symbol::UNDERSCORE,
-                var,
+                layout,
                 from_can(env, can_expr, procs, None),
             ))
         }
@@ -490,6 +509,10 @@ fn from_can_when<'a>(
                     let cond_rhs = arena.alloc(Expr::Int(*int));
                     let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
                     let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
+                    let ret_layout =
+                        Layout::from_var(arena, expr_var, env.subs).unwrap_or_else(|err| {
+                            panic!("TODO turn this into a RuntimeError {:?}", err)
+                        });
 
                     Expr::Cond {
                         cond_layout: Layout::Builtin(Builtin::Int64),
@@ -497,7 +520,7 @@ fn from_can_when<'a>(
                         cond_rhs,
                         pass,
                         fail,
-                        ret_var: expr_var,
+                        ret_layout,
                     }
                 }
                 (FloatLiteral(float), FloatLiteral(_)) | (FloatLiteral(float), Underscore) => {
@@ -505,6 +528,10 @@ fn from_can_when<'a>(
                     let cond_rhs = arena.alloc(Expr::Float(*float));
                     let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
                     let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
+                    let ret_layout =
+                        Layout::from_var(arena, expr_var, env.subs).unwrap_or_else(|err| {
+                            panic!("TODO turn this into a RuntimeError {:?}", err)
+                        });
 
                     Expr::Cond {
                         cond_layout: Layout::Builtin(Builtin::Float64),
@@ -512,7 +539,7 @@ fn from_can_when<'a>(
                         cond_rhs,
                         pass,
                         fail,
-                        ret_var: expr_var,
+                        ret_layout,
                     }
                 }
                 _ => {
@@ -525,8 +552,7 @@ fn from_can_when<'a>(
             let arena = env.arena;
             let cond = from_can(env, loc_cond.value, procs, None);
             let subs = &env.subs;
-            let content = subs.get_without_compacting(cond_var).content;
-            let layout = Layout::from_content(arena, content, subs)
+            let layout = Layout::from_var(arena, cond_var, subs)
                 .unwrap_or_else(|_| panic!("TODO generate a runtime error in from_can_when here!"));
 
             // We can Switch on integers and tags, because they both have
@@ -607,12 +633,21 @@ fn from_can_when<'a>(
                 debug_assert!(opt_default_branch.is_some());
                 let default_branch = opt_default_branch.unwrap();
 
+                let cond_layout =
+                    Layout::from_var(arena, cond_var, env.subs).unwrap_or_else(|err| {
+                        panic!("TODO turn cond_layout into a RuntimeError {:?}", err)
+                    });
+                let ret_layout =
+                    Layout::from_var(arena, expr_var, env.subs).unwrap_or_else(|err| {
+                        panic!("TODO turn ret_layout into a RuntimeError {:?}", err)
+                    });
+
                 Expr::Switch {
                     cond: arena.alloc(cond),
                     branches: jumpable_branches.into_bump_slice(),
                     default_branch,
-                    ret_var: expr_var,
-                    cond_var,
+                    ret_layout,
+                    cond_layout,
                 }
             } else {
                 // /// More than two conditional branches, e.g. a 3-way when-expression
@@ -630,4 +665,24 @@ fn from_can_when<'a>(
             }
         }
     }
+}
+
+fn call_by_name<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    proc_name: Symbol,
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+) -> Expr<'a> {
+    let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
+    let subs = env.subs;
+    let arena = env.arena;
+
+    for (var, loc_arg) in loc_args {
+        let layout = Layout::from_var(arena, var, subs)
+            .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
+
+        args.push((from_can(env, loc_arg.value, procs, None), layout));
+    }
+
+    Expr::CallByName(proc_name, args.into_bump_slice())
 }
