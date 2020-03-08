@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
-#[macro_use]
-extern crate indoc;
+// #[macro_use]
+// extern crate indoc;
 
 extern crate bumpalo;
 extern crate roc_mono;
@@ -14,7 +14,9 @@ mod test_mono {
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use bumpalo::Bump;
     use roc_collections::all::MutMap;
+    use roc_module::symbol::Symbol;
     use roc_mono::expr::Expr::{self, *};
+    use roc_mono::layout::{Builtin, Layout};
     use roc_types::subs::Subs;
 
     // HELPERS
@@ -59,5 +61,37 @@ mod test_mono {
     #[test]
     fn float_literal() {
         compiles_to("0.5", Float(0.5));
+    }
+
+    #[test]
+    fn set_unique_int_list() {
+        compiles_to(
+            "List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1",
+            CallByName(
+                Symbol::LIST_GET_UNSAFE,
+                &vec![
+                    (
+                        CallByName(
+                            Symbol::LIST_SET,
+                            &vec![
+                                (
+                                    Array {
+                                        elem_layout: Layout::Builtin(Builtin::Int64),
+                                        elems: &vec![Int(12), Int(9), Int(7), Int(3)],
+                                    },
+                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
+                                        Builtin::Int64,
+                                    ))),
+                                ),
+                                (Int(1), Layout::Builtin(Builtin::Int64)),
+                                (Int(42), Layout::Builtin(Builtin::Int64)),
+                            ],
+                        ),
+                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                    ),
+                    (Int(1), Layout::Builtin(Builtin::Int64)),
+                ],
+            ),
+        );
     }
 }
