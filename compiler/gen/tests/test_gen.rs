@@ -444,7 +444,6 @@ mod test_gen {
             {
                 assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
             }
-
             {
                 assert_opt_evals_to!($src, $expected, $ty, (|val| val));
             }
@@ -488,25 +487,25 @@ mod test_gen {
         assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64);
     }
 
-    // #[test]
-    // fn set_unique_int_list() {
-    //     assert_evals_to!("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", 42, i64);
-    // }
+    #[test]
+    fn set_unique_int_list() {
+        assert_evals_to!("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", 42, i64);
+    }
 
-    // #[test]
-    // fn set_shared_int_list() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 shared = [ 2, 4 ]
+    #[test]
+    fn set_shared_int_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    shared = [ 2, 4 ]
 
-    //                 List.getUnsafe shared 1
-    //             "#
-    //         ),
-    //         4,
-    //         i64
-    //     );
-    // }
+                    List.getUnsafe shared 1
+                "#
+            ),
+            4,
+            i64
+        );
+    }
 
     #[test]
     fn branch_first_float() {

@@ -56,7 +56,9 @@ pub fn basic_type_from_layout<'ctx>(
                 .as_basic_type_enum(),
             Map(_, _) => panic!("TODO layout_to_basic_type for Builtin::Map"),
             Set(_) => panic!("TODO layout_to_basic_type for Builtin::Set"),
-            List(_) => panic!("TODO layout_to_basic_type for Builtin::List"),
+            List(elem_layout) => basic_type_from_layout(context, elem_layout)
+                .ptr_type(AddressSpace::Generic)
+                .as_basic_type_enum(),
         },
     }
 }

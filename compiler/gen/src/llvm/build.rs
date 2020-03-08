@@ -593,12 +593,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             builder.build_load(elem_ptr, "List.get")
         }
-        Symbol::LIST_SET => {
-            debug_assert!(args.len() == 3);
-
-            panic!("TODO List.set with clone");
-        }
-        Symbol::LIST_SET_IN_PLACE => {
+        Symbol::LIST_SET /* TODO clone first for LIST_SET! */ | Symbol::LIST_SET_IN_PLACE => {
             debug_assert!(args.len() == 3);
 
             let list_ptr = args[0].into_pointer_value();
