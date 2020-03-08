@@ -13,7 +13,6 @@ use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::Layout;
-use roc_types::subs::{Subs, Variable};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -23,7 +22,7 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
-type Scope<'ctx> = ImMap<Symbol, (Variable, PointerValue<'ctx>)>;
+type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
@@ -31,13 +30,12 @@ pub struct Env<'a, 'ctx, 'env> {
     pub builder: &'env Builder<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
-    pub subs: Subs,
     pub pointer_bytes: u32,
 }
 
 pub fn build_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'ctx>,
+    scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     expr: &Expr<'a>,
     procs: &Procs<'a>,
@@ -52,7 +50,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             cond_rhs,
             pass,
             fail,
-            ret_var,
+            ret_layout,
             ..
         } => {
             let cond = Branch2 {
@@ -60,7 +58,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 cond_rhs,
                 pass,
                 fail,
-                ret_var: *ret_var,
+                ret_layout: ret_layout.clone(),
             };
 
             build_branch2(env, scope, parent, cond, procs)
@@ -72,16 +70,12 @@ pub fn build_expr<'a, 'ctx, 'env>(
             cond,
             branches,
             default_branch,
-            ret_var,
-            cond_var,
+            ret_layout,
+            cond_layout,
         } => {
-            let subs = &env.subs;
-            let ret_content = subs.get_without_compacting(*ret_var).content;
-            let ret_layout = Layout::from_content(env.arena, ret_content, subs)
-                .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_expr here!"));
             let ret_type = basic_type_from_layout(env.context, &ret_layout);
             let switch_args = SwitchArgs {
-                cond_var: *cond_var,
+                cond_layout: cond_layout.clone(),
                 cond_expr: cond,
                 branches,
                 default_branch,
@@ -90,16 +84,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             build_switch(env, scope, parent, switch_args, procs)
         }
-        Store(ref stores, ref ret) => {
+        Store(stores, ret) => {
             let mut scope = im_rc::HashMap::clone(scope);
-            let subs = &env.subs;
             let context = &env.context;
 
-            for (symbol, var, expr) in stores.iter() {
-                let content = subs.get_without_compacting(*var).content;
-                let layout = Layout::from_content(env.arena, content, &subs).unwrap_or_else(|_| {
-                    panic!("TODO generate a runtime error in build_branch2 here!")
-                });
+            for (symbol, layout, expr) in stores.iter() {
                 let val = build_expr(env, &scope, parent, &expr, procs);
                 let expr_bt = basic_type_from_layout(context, &layout);
                 let alloca = create_entry_block_alloca(
@@ -118,12 +107,12 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // access itself!
                 scope = im_rc::HashMap::clone(&scope);
 
-                scope.insert(*symbol, (*var, alloca));
+                scope.insert(*symbol, (layout.clone(), alloca));
             }
 
             build_expr(env, &scope, parent, ret, procs)
         }
-        CallByName(ref symbol, ref args) => match *symbol {
+        CallByName(symbol, args) => match *symbol {
             Symbol::BOOL_OR => {
                 panic!("TODO create a phi node for ||");
             }
@@ -134,14 +123,14 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 let mut arg_vals: Vec<BasicValueEnum> =
                     Vec::with_capacity_in(args.len(), env.arena);
 
-                for arg in args.iter() {
+                for (arg, _layout) in args.iter() {
                     arg_vals.push(build_expr(env, scope, parent, arg, procs));
                 }
 
                 call_with_args(*symbol, arg_vals.into_bump_slice(), env)
             }
         },
-        FunctionPointer(ref symbol) => {
+        FunctionPointer(symbol) => {
             let ptr = env
                 .module
                 .get_function(symbol.ident_string(&env.interns))
@@ -151,7 +140,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             BasicValueEnum::PointerValue(ptr)
         }
-        CallByPointer(ref sub_expr, ref args, _var) => {
+        CallByPointer(sub_expr, args, _var) => {
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
             for arg in args.iter() {
@@ -266,22 +255,18 @@ struct Branch2<'a> {
     cond_rhs: &'a Expr<'a>,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
-    ret_var: Variable,
+    ret_layout: Layout<'a>,
 }
 
 fn build_branch2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'ctx>,
+    scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     cond: Branch2<'a>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let subs = &env.subs;
-
-    let ret_content = subs.get_without_compacting(cond.ret_var).content;
-    let ret_layout = Layout::from_content(env.arena, ret_content, &subs)
-        .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_branch2 here!"));
+    let ret_layout = cond.ret_layout;
     let ret_type = basic_type_from_layout(env.context, &ret_layout);
 
     let lhs = build_expr(env, scope, parent, cond.cond_lhs, procs);
@@ -313,7 +298,7 @@ fn build_branch2<'a, 'ctx, 'env>(
 
 struct SwitchArgs<'a, 'ctx> {
     pub cond_expr: &'a Expr<'a>,
-    pub cond_var: Variable,
+    pub cond_layout: Layout<'a>,
     pub branches: &'a [(u64, Expr<'a>)],
     pub default_branch: &'a Expr<'a>,
     pub ret_type: BasicTypeEnum<'ctx>,
@@ -321,7 +306,7 @@ struct SwitchArgs<'a, 'ctx> {
 
 fn build_switch<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'ctx>,
+    scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     switch_args: SwitchArgs<'a, 'ctx>,
     procs: &Procs<'a>,
@@ -392,7 +377,7 @@ fn build_switch<'a, 'ctx, 'env>(
 #[allow(clippy::too_many_arguments)]
 fn build_phi2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'ctx>,
+    scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
     pass: &'a Expr<'a>,
@@ -474,17 +459,12 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 ) -> (FunctionValue<'ctx>, Vec<'a, BasicTypeEnum<'ctx>>) {
     let args = proc.args;
     let arena = env.arena;
-    let subs = &env.subs;
     let context = &env.context;
-    let ret_content = subs.get_without_compacting(proc.ret_var).content;
-    // TODO this Layout::from_content is duplicated when building this Proc
-    let ret_layout = Layout::from_content(env.arena, ret_content, &subs)
-        .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_proc here!"));
-    let ret_type = basic_type_from_layout(context, &ret_layout);
+    let ret_type = basic_type_from_layout(context, &proc.ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
     let mut arg_symbols = Vec::new_in(arena);
 
-    for (layout, arg_symbol, _var) in args.iter() {
+    for (layout, arg_symbol) in args.iter() {
         let arg_type = basic_type_from_layout(env.context, &layout);
 
         arg_basic_types.push(arg_type);
@@ -521,7 +501,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let mut scope = ImMap::default();
 
     // Add args to scope
-    for ((arg_val, arg_type), (_, arg_symbol, var)) in
+    for ((arg_val, arg_type), (layout, arg_symbol)) in
         fn_val.get_param_iter().zip(arg_basic_types).zip(args)
     {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
@@ -531,7 +511,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
         builder.build_store(alloca, arg_val);
 
-        scope.insert(*arg_symbol, (*var, alloca));
+        scope.insert(*arg_symbol, (layout.clone(), alloca));
     }
 
     let body = build_expr(env, &scope, fn_val, &proc.body, procs);
@@ -614,6 +594,11 @@ fn call_with_args<'a, 'ctx, 'env>(
             builder.build_load(elem_ptr, "List.get")
         }
         Symbol::LIST_SET => {
+            debug_assert!(args.len() == 3);
+
+            panic!("TODO List.set with clone");
+        }
+        Symbol::LIST_SET_IN_PLACE => {
             debug_assert!(args.len() == 3);
 
             let list_ptr = args[0].into_pointer_value();

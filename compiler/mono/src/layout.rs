@@ -22,17 +22,19 @@ pub enum Builtin<'a> {
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
+    List(&'a Layout<'a>),
 }
 
 impl<'a> Layout<'a> {
+    /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
+    /// Panics if given a FlexVar or RigidVar, since those should have been
+    /// monomorphized away already!
     pub fn from_var(arena: &'a Bump, var: Variable, subs: &Subs) -> Result<Self, ()> {
         let content = subs.get_without_compacting(var).content;
 
         Self::from_content(arena, content, subs)
     }
-    /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
-    /// Panics if given a FlexVar or RigidVar, since those should have been
-    /// monomorphized away already!
+
     pub fn from_content(arena: &'a Bump, content: Content, subs: &Subs) -> Result<Self, ()> {
         use roc_types::subs::Content::*;
 
@@ -84,6 +86,7 @@ impl<'a> Builtin<'a> {
     const STR_WORDS: u32 = 3;
     const MAP_WORDS: u32 = 6;
     const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
+    const LIST_WORDS: u32 = 3;
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         use Builtin::*;
@@ -94,6 +97,7 @@ impl<'a> Builtin<'a> {
             Str => Builtin::STR_WORDS * pointer_size,
             Map(_, _) => Builtin::MAP_WORDS * pointer_size,
             Set(_) => Builtin::SET_WORDS * pointer_size,
+            List(_) => Builtin::LIST_WORDS * pointer_size,
         }
     }
 }
@@ -126,11 +130,16 @@ fn layout_from_flat_type<'a>(
                     layout_from_num_content(content)
                 }
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
+                Symbol::LIST_LIST => {
+                    let elem_layout = Layout::from_var(arena, args[0], subs)?;
+
+                    Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
+                }
                 Symbol::ATTR_ATTR => {
                     debug_assert!(args.len() == 2);
 
                     // The first argument is the uniqueness info;
-                    // we don't need that here.
+                    // that doesn't affect layout, so we don't need it here.
                     let wrapped_var = args[1];
 
                     // For now, layout is unaffected by uniqueness.
