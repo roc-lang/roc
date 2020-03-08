@@ -849,6 +849,20 @@ mod test_gen {
     }
 
     #[test]
+    // https://math.berkeley.edu/~gbergman/misc/numbers/ord_ops.html
+    fn gen_order_of_arithmetic_ops_complex() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    48 / 2 * (9 + 3)
+                "#
+            ),
+            288,
+            i64
+        );
+    }
+
+    #[test]
     fn return_unnamed_fn() {
         assert_evals_to!(
             indoc!(
