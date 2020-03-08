@@ -44,6 +44,9 @@ mod test_gen {
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
             let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+
+            assert_eq!(unify_problems, Vec::new(), "Encountered one or more type mismatches: {:?}", unify_problems);
+
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
             let mut module: Module<SimpleJITBackend> =
