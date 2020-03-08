@@ -41,7 +41,7 @@ mod test_format {
                 fmt_expr(&mut buf, &actual, 0, false, true);
 
                 assert_eq!(buf, expected)
-            },
+            }
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
     }
@@ -71,7 +71,7 @@ mod test_format {
                 }
 
                 assert_eq!(buf, expected)
-            },
+            }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
     }
@@ -494,6 +494,7 @@ mod test_format {
             ),
         );
     }
+
     #[test]
     fn doesnt_detect_comment_in_comment() {
         expr_formats_same(indoc!(
@@ -1655,6 +1656,59 @@ mod test_format {
             "#
         ));
     }
+
+    // PRECEDENCE CONFLICT
+    //
+    // All of these tests pass, but only because
+    // they are not being parsed as a precedence
+    // conflicts
+    //
+    // #[test]
+    // fn precedence_conflict() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         True == False == True
+    //         "#
+    //     ));
+    // }
+    //
+    // #[test]
+    // fn precedence_conflict_functions() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         f x == g y == h z
+    //         "#
+    //     ));
+    // }
+    //
+    // #[test]
+    // fn precedence_conflict_exponents() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         6 ^ 6 ^ 7 ^ 8
+    //         "#
+    //     ));
+    // }
+    //
+    //
+    // #[test]
+    // fn precedence_conflict_greater_than() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         3 > 4 > 10
+    //         "#
+    //     ));
+    // }
+    //
+    // #[test]
+    // fn precedence_conflict_greater_than_and_less_than() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         1 < 4 > 1
+    //         "#
+    //     ));
+    // }
+
     // UNARY OP
 
     #[test]
