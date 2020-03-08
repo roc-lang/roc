@@ -13,7 +13,7 @@ roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = "2.6"
+bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1.0"
 
 [dev-dependencies]

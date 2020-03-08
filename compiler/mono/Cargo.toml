@@ -11,7 +11,7 @@ roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
-bumpalo = "2.6"
+bumpalo = { version = "3.2", features = ["collections"] }
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }

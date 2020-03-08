@@ -8,4 +8,4 @@ edition = "2018"
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 wyhash = "0.3"
-bumpalo = "2.6"
+bumpalo = { version = "3.2", features = ["collections"] }
