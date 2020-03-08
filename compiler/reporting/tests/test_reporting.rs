@@ -20,8 +20,7 @@ mod test_report {
     use crate::helpers::{assert_correct_variable_usage, can_expr, infer_expr, CanExprOut};
     use roc_reporting::report::ReportText::{EmText, Plain, Region, Type, Url, Value};
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
-    use roc_types::subs::FlatType::{EmptyRecord, Erroneous, Record};
-    use roc_types::types::Problem::CanonicalizationProblem;
+    use roc_types::subs::FlatType::{EmptyRecord, Record};
 
     // use roc_problem::can;
     fn to_simple_report(text: ReportText) -> Report {
