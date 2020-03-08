@@ -24,4 +24,4 @@ maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
-bumpalo = "2.6"
+bumpalo = { version = "3.2", features = ["collections"] }
