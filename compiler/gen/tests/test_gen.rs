@@ -839,6 +839,19 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_div_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    48.0 / 2.0
+                "#
+            ),
+            24.0,
+            f64
+        );
+    }
+
+    #[test]
     fn gen_order_of_arithmetic_ops() {
         assert_evals_to!(
             indoc!(
@@ -853,15 +866,28 @@ mod test_gen {
 
     #[test]
     // https://math.berkeley.edu/~gbergman/misc/numbers/ord_ops.html
-    fn gen_order_of_arithmetic_ops_complex() {
+    // fn gen_order_of_arithmetic_ops_complex() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 48 / 2 * (9 + 3)
+    //             "#
+    //         ),
+    //         288,
+    //         i64
+    //     );
+    // }
+
+    #[test]
+    fn gen_order_of_arithmetic_ops_complex_float() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    48 / 2 * (9 + 3)
+                    48.0 / 2.0 + 3.0
                 "#
             ),
-            288,
-            i64
+            24.0,
+            f64
         );
     }
 

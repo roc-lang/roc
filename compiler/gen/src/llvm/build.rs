@@ -578,6 +578,28 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
+        Symbol::FLOAT_DIV => {
+            debug_assert!(args.len() == 2);
+
+            let float_val = env.builder.build_float_div(
+                args[0].into_float_value(),
+                args[1].into_float_value(),
+                "DIV_F64",
+            );
+
+            BasicValueEnum::FloatValue(float_val)
+        }
+        // Symbol::INT_DIV => {
+        //     debug_assert!(args.len() == 2);
+        //
+        //     let int_val = env.builder.build_int_signed_div(
+        //         args[0].into_int_value(),
+        //         args[1].into_int_value(),
+        //         "DIV_I64",
+        //     );
+        //
+        //     BasicValueEnum::IntValue(int_val)
+        // }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
 

@@ -574,6 +574,20 @@ fn call_by_name<'a, B: Backend>(
 
             builder.ins().ineg(num)
         }
+        Symbol::FLOAT_DIV => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().fdiv(a, b)
+        }
+        // Symbol::INT_DIV => {
+        //     debug_assert!(args.len() == 2);
+        //     let a = build_arg(&args[0], env, scope, module, builder, procs);
+        //     let b = build_arg(&args[1], env, scope, module, builder, procs);
+        //
+        //     builder.ins().sdiv(a, b)
+        // }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
 
