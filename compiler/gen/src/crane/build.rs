@@ -674,7 +674,7 @@ fn call_by_name<'a, B: Backend>(
             let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
             let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
 
-            for (arg, _layout) in args.into_iter() {
+            for (arg, _layout) in args {
                 arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
             }
 

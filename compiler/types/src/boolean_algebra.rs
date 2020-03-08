@@ -28,11 +28,11 @@ impl Atom {
         }
     }
 
-    pub fn is_unique(&self, subs: &Subs) -> bool {
+    pub fn is_unique(self, subs: &Subs) -> bool {
         match self {
             Atom::Zero => false,
             Atom::One => true,
-            Atom::Variable(var) => match subs.get_without_compacting(*var).content {
+            Atom::Variable(var) => match subs.get_without_compacting(var).content {
                 Content::Structure(FlatType::Boolean(boolean)) => boolean.is_unique(subs),
                 // for rank-related reasons, boolean attributes can be "unwrapped" flex vars
                 Content::FlexVar(_) => true,
