@@ -89,10 +89,19 @@ impl ReportText {
             }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
             Region(region) => {
-                panic!(
-                    "TODO convert these source lines and this region into a String: {:?}, {:?}",
-                    src_lines, region
-                );
+                for i in region.start_line..region.end_line {
+                    buf.push_str(i.to_string().as_str());
+                    buf.push_str(" |");
+
+                    let line = src_lines[i as usize];
+
+                    if !line.is_empty() {
+                        buf.push(' ');
+                        buf.push_str(src_lines[i as usize]);
+                    }
+
+                    buf.push('\n');
+                }
             }
             Docs(_) => {
                 panic!("TODO implment docs");
