@@ -18,7 +18,6 @@ use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
-use roc_types::subs::{Subs, Variable};
 
 type Scope = ImMap<Symbol, ScopeEntry>;
 
@@ -33,7 +32,6 @@ pub enum ScopeEntry {
 pub struct Env<'a> {
     pub arena: &'a Bump,
     pub cfg: TargetFrontendConfig,
-    pub subs: Subs,
     pub interns: Interns,
     pub malloc: FuncId,
 }
@@ -59,7 +57,7 @@ pub fn build_expr<'a, B: Backend>(
             pass,
             fail,
             cond_layout,
-            ret_var,
+            ret_layout,
         } => {
             let branch = Branch2 {
                 cond_lhs,
@@ -67,7 +65,7 @@ pub fn build_expr<'a, B: Backend>(
                 pass,
                 fail,
                 cond_layout,
-                ret_var: *ret_var,
+                ret_layout,
             };
 
             build_branch2(env, scope, module, builder, branch, procs)
@@ -76,16 +74,12 @@ pub fn build_expr<'a, B: Backend>(
             cond,
             branches,
             default_branch,
-            ret_var,
-            cond_var,
+            ret_layout,
+            cond_layout,
         } => {
-            let subs = &env.subs;
-            let ret_content = subs.get_without_compacting(*ret_var).content;
-            let ret_layout = Layout::from_content(env.arena, ret_content, subs)
-                .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_expr here!"));
             let ret_type = type_from_layout(env.cfg, &ret_layout);
             let switch_args = SwitchArgs {
-                cond_var: *cond_var,
+                cond_layout,
                 cond_expr: cond,
                 branches,
                 default_branch,
@@ -94,17 +88,12 @@ pub fn build_expr<'a, B: Backend>(
 
             build_switch(env, scope, module, builder, switch_args, procs)
         }
-        Store(ref stores, ref ret) => {
+        Store(stores, ret) => {
             let mut scope = im_rc::HashMap::clone(scope);
-            let arena = &env.arena;
-            let subs = &env.subs;
             let cfg = env.cfg;
 
-            for (name, var, expr) in stores.iter() {
+            for (name, layout, expr) in stores.iter() {
                 let val = build_expr(env, &scope, module, builder, &expr, procs);
-                let content = subs.get_without_compacting(*var).content;
-                let layout = Layout::from_content(arena, content, subs)
-                    .unwrap_or_else(|()| panic!("TODO generate a runtime error for this Store!"));
                 let expr_type = type_from_layout(cfg, &layout);
 
                 let slot = builder.create_stack_slot(StackSlotData::new(
@@ -126,16 +115,8 @@ pub fn build_expr<'a, B: Backend>(
 
             build_expr(env, &scope, module, builder, ret, procs)
         }
-        CallByName(ref symbol, ref args) => {
-            let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
-
-            for arg in args.iter() {
-                arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
-            }
-
-            call_with_args(*symbol, arg_vals.into_bump_slice(), scope, module, builder)
-        }
-        FunctionPointer(ref name) => {
+        CallByName(symbol, args) => call_by_name(env, *symbol, args, scope, module, builder, procs),
+        FunctionPointer(name) => {
             let fn_id = match scope.get(name) {
                 Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
                 other => panic!(
@@ -148,17 +129,13 @@ pub fn build_expr<'a, B: Backend>(
 
             builder.ins().func_addr(env.cfg.pointer_type(), func_ref)
         }
-        CallByPointer(ref sub_expr, ref args, ref fn_var) => {
-            let subs = &env.subs;
+        CallByPointer(sub_expr, args, layout) => {
             let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
 
             for arg in args.iter() {
                 arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
             }
 
-            let content = subs.get_without_compacting(*fn_var).content;
-            let layout = Layout::from_content(env.arena, content, &subs)
-                .unwrap_or_else(|()| panic!("TODO generate a runtime error here!"));
             let sig = sig_from_layout(env.cfg, module, layout);
             let callee = build_expr(env, scope, module, builder, sub_expr, procs);
             let sig_ref = builder.import_signature(sig);
@@ -296,7 +273,7 @@ struct Branch2<'a> {
     cond_layout: &'a Layout<'a>,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
-    ret_var: Variable,
+    ret_layout: &'a Layout<'a>,
 }
 
 fn build_branch2<'a, B: Backend>(
@@ -307,10 +284,7 @@ fn build_branch2<'a, B: Backend>(
     branch: Branch2<'a>,
     procs: &Procs<'a>,
 ) -> Value {
-    let subs = &env.subs;
-    let ret_content = subs.get_without_compacting(branch.ret_var).content;
-    let ret_layout = Layout::from_content(env.arena, ret_content, subs)
-        .unwrap_or_else(|_| panic!("TODO generate a runtime error in build_branch2 here!"));
+    let ret_layout = branch.ret_layout;
     let ret_type = type_from_layout(env.cfg, &ret_layout);
     // Declare a variable which each branch will mutate to be the value of that branch.
     // At the end of the expression, we will evaluate to this.
@@ -378,7 +352,7 @@ fn build_branch2<'a, B: Backend>(
 }
 struct SwitchArgs<'a> {
     pub cond_expr: &'a Expr<'a>,
-    pub cond_var: Variable,
+    pub cond_layout: &'a Layout<'a>,
     pub branches: &'a [(u64, Expr<'a>)],
     pub default_branch: &'a Expr<'a>,
     pub ret_type: Type,
@@ -471,13 +445,9 @@ pub fn declare_proc<'a, B: Backend>(
     proc: &Proc<'a>,
 ) -> (FuncId, Signature) {
     let args = proc.args;
-    let subs = &env.subs;
     let cfg = env.cfg;
     // TODO this Layout::from_content is duplicated when building this Proc
-    let ret_content = subs.get_without_compacting(proc.ret_var).content;
-    let ret_layout = Layout::from_content(env.arena, ret_content, subs)
-        .unwrap_or_else(|_| panic!("TODO generate a runtime error in declare_proc here!"));
-    let ret_type = type_from_layout(cfg, &ret_layout);
+    let ret_type = type_from_layout(cfg, &proc.ret_layout);
 
     // Create a signature for the function
     let mut sig = module.make_signature();
@@ -486,7 +456,7 @@ pub fn declare_proc<'a, B: Backend>(
     sig.returns.push(AbiParam::new(ret_type));
 
     // Add params to the signature
-    for (layout, _name, _var) in args.iter() {
+    for (layout, _name) in args.iter() {
         let arg_type = type_from_layout(cfg, &layout);
 
         sig.params.push(AbiParam::new(arg_type));
@@ -513,13 +483,11 @@ pub fn define_proc_body<'a, B: Backend>(
     procs: &Procs<'a>,
 ) {
     let args = proc.args;
-    let subs = &env.subs;
     let cfg = env.cfg;
 
     // Build the body of the function
     {
         let mut scope = scope.clone();
-        let arena = env.arena;
 
         ctx.func.signature = sig;
         ctx.func.name = ExternalName::user(0, fn_id.as_u32());
@@ -533,13 +501,7 @@ pub fn define_proc_body<'a, B: Backend>(
         builder.append_block_params_for_function_params(block);
 
         // Add args to scope
-        for (&param, (_, arg_symbol, var)) in builder.block_params(block).iter().zip(args) {
-            let content = subs.get_without_compacting(*var).content;
-            // TODO this Layout::from_content is duplicated when building this Proc
-            //
-            let layout = Layout::from_content(arena, content, subs).unwrap_or_else(|()| {
-                panic!("TODO generate a runtime error in define_proc_body here!")
-            });
+        for (&param, (layout, arg_symbol)) in builder.block_params(block).iter().zip(args) {
             let expr_type = type_from_layout(cfg, &layout);
 
             scope.insert(*arg_symbol, ScopeEntry::Arg { expr_type, param });
@@ -563,36 +525,60 @@ pub fn define_proc_body<'a, B: Backend>(
     module.clear_context(ctx);
 }
 
-#[inline(always)]
-fn call_with_args<'a, B: Backend>(
-    symbol: Symbol,
-    args: &'a [Value],
+fn build_arg<'a, B: Backend>(
+    (arg, _): &'a (Expr<'a>, Layout<'a>),
+    env: &Env<'a>,
     scope: &Scope,
     module: &mut Module<B>,
     builder: &mut FunctionBuilder,
+    procs: &Procs<'a>,
+) -> Value {
+    build_expr(env, scope, module, builder, arg, procs)
+}
+
+#[inline(always)]
+fn call_by_name<'a, B: Backend>(
+    env: &Env<'a>,
+    symbol: Symbol,
+    args: &'a [(Expr<'a>, Layout<'a>)],
+    scope: &Scope,
+    module: &mut Module<B>,
+    builder: &mut FunctionBuilder,
+    procs: &Procs<'a>,
 ) -> Value {
     match symbol {
         Symbol::NUM_ADD => {
             debug_assert!(args.len() == 2);
-            builder.ins().iadd(args[0], args[1])
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().iadd(a, b)
         }
         Symbol::NUM_SUB => {
             debug_assert!(args.len() == 2);
-            builder.ins().isub(args[0], args[1])
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().isub(a, b)
         }
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);
-            builder.ins().imul(args[0], args[1])
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().imul(a, b)
         }
         Symbol::NUM_NEG => {
             debug_assert!(args.len() == 1);
-            builder.ins().ineg(args[0])
+            let num = build_arg(&args[0], env, scope, module, builder, procs);
+
+            builder.ins().ineg(num)
         }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
 
-            let list_ptr = args[0];
-            let elem_index = args[1];
+            let list_ptr = build_arg(&args[0], env, scope, module, builder, procs);
+            let elem_index = build_arg(&args[1], env, scope, module, builder, procs);
 
             let elem_type = Type::int(64).unwrap(); // TODO Look this up instead of hardcoding it!
             let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
@@ -609,50 +595,73 @@ fn call_with_args<'a, B: Backend>(
             )
         }
         Symbol::LIST_SET => {
-            // set : List elem, Int, elem -> List elem
-            debug_assert!(args.len() == 3);
+            let (_list_expr, list_layout) = &args[0];
 
-            let list_ptr = args[0];
-            let elem_index = args[1];
-            let elem = args[2];
+            match list_layout {
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    // TODO try memcpy for shallow clones; it's probably faster
+                    // let list_val = build_expr(env, scope, module, builder, list_expr, procs);
 
-            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
-            let elem_size = builder.ins().iconst(types::I64, elem_bytes);
+                    let num_elems = 10; // TODO FIXME read from List.len
+                    let elem_bytes =
+                        elem_layout.stack_size(env.cfg.pointer_bytes() as u32) as usize;
+                    let bytes_len = (elem_bytes * num_elems) + 1/* TODO drop the +1 when we have structs and this is no longer NUL-terminated. */;
+                    let ptr = call_malloc(env, module, builder, bytes_len);
+                    // let mem_flags = MemFlags::new();
 
-            // Multiply the requested index by the size of each element.
-            let offset = builder.ins().imul(elem_index, elem_size);
+                    // Copy the elements from the literal into the array
+                    // for (index, elem) in elems.iter().enumerate() {
+                    //     let offset = Offset32::new(elem_bytes as i32 * index as i32);
+                    //     let val = build_expr(env, scope, module, builder, elem, procs);
 
-            builder.ins().store_complex(
-                MemFlags::new(),
-                elem,
-                &[list_ptr, offset],
-                Offset32::new(0),
-            );
+                    //     builder.ins().store(mem_flags, val, ptr, offset);
+                    // }
 
-            list_ptr
+                    // Add a NUL terminator at the end.
+                    // TODO: Instead of NUL-terminating, return a struct
+                    // with the pointer and also the length and capacity.
+                    // let nul_terminator = builder.ins().iconst(types::I8, 0);
+                    // let index = bytes_len as i32 - 1;
+                    // let offset = Offset32::new(index);
+
+                    // builder.ins().store(mem_flags, nul_terminator, ptr, offset);
+
+                    list_set_in_place(
+                        env,
+                        ptr,
+                        build_arg(&args[1], env, scope, module, builder, procs),
+                        build_arg(&args[2], env, scope, module, builder, procs),
+                        elem_layout,
+                        builder,
+                    );
+
+                    ptr
+                }
+                _ => {
+                    unreachable!("Invalid List layout for List.set: {:?}", list_layout);
+                }
+            }
         }
         Symbol::LIST_SET_IN_PLACE => {
             // set : List elem, Int, elem -> List elem
             debug_assert!(args.len() == 3);
 
-            let list_ptr = args[0];
-            let elem_index = args[1];
-            let elem = args[2];
+            let (list_expr, list_layout) = &args[0];
+            let list_val = build_expr(env, scope, module, builder, list_expr, procs);
 
-            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
-            let elem_size = builder.ins().iconst(types::I64, elem_bytes);
-
-            // Multiply the requested index by the size of each element.
-            let offset = builder.ins().imul(elem_index, elem_size);
-
-            builder.ins().store_complex(
-                MemFlags::new(),
-                elem,
-                &[list_ptr, offset],
-                Offset32::new(0),
-            );
-
-            list_ptr
+            match list_layout {
+                Layout::Builtin(Builtin::List(elem_layout)) => list_set_in_place(
+                    env,
+                    list_val,
+                    build_arg(&args[1], env, scope, module, builder, procs),
+                    build_arg(&args[2], env, scope, module, builder, procs),
+                    elem_layout,
+                    builder,
+                ),
+                _ => {
+                    unreachable!("Invalid List layout for List.set: {:?}", list_layout);
+                }
+            }
         }
         _ => {
             let fn_id = match scope.get(&symbol) {
@@ -663,7 +672,13 @@ fn call_with_args<'a, B: Backend>(
                     ),
                 };
             let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
-            let call = builder.ins().call(local_func, args);
+            let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
+
+            for (arg, _layout) in args.into_iter() {
+                arg_vals.push(build_expr(env, scope, module, builder, arg, procs));
+            }
+
+            let call = builder.ins().call(local_func, arg_vals.into_bump_slice());
             let results = builder.inst_results(call);
 
             debug_assert!(results.len() == 1);
@@ -693,4 +708,25 @@ fn call_malloc<B: Backend>(
     debug_assert!(results.len() == 1);
 
     results[0]
+}
+
+fn list_set_in_place<'a>(
+    env: &Env<'a>,
+    list_ptr: Value,
+    elem_index: Value,
+    elem: Value,
+    elem_layout: &Layout<'a>,
+    builder: &mut FunctionBuilder,
+) -> Value {
+    let elem_bytes = elem_layout.stack_size(env.cfg.pointer_bytes() as u32);
+    let elem_size = builder.ins().iconst(types::I64, elem_bytes as i64);
+
+    // Multiply the requested index by the size of each element.
+    let offset = builder.ins().imul(elem_index, elem_size);
+
+    builder
+        .ins()
+        .store_complex(MemFlags::new(), elem, &[list_ptr, offset], Offset32::new(0));
+
+    list_ptr
 }

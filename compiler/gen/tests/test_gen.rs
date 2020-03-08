@@ -65,7 +65,6 @@ mod test_gen {
             let mut procs = MutMap::default();
             let mut env = roc_gen::crane::build::Env {
                 arena: &arena,
-                subs,
                 interns,
                 cfg,
                 malloc
@@ -73,7 +72,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut ident_ids);
+            let mono_expr = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids);
 
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -212,7 +211,6 @@ mod test_gen {
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
                 arena: &arena,
-                subs,
                 builder: &builder,
                 context: &context,
                 interns,
@@ -223,7 +221,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut ident_ids);
+            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -348,7 +346,6 @@ mod test_gen {
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
                 arena: &arena,
-                subs,
                 builder: &builder,
                 context: &context,
                 interns,
@@ -359,7 +356,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &env.subs, loc_expr.value, &mut procs, home, &mut ident_ids);
+            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -492,8 +489,23 @@ mod test_gen {
     }
 
     #[test]
-    fn set_int_list() {
+    fn set_unique_int_list() {
         assert_evals_to!("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", 42, i64);
+    }
+
+    #[test]
+    fn set_shared_int_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    shared = [ 2, 4 ]
+
+                    List.getUnsafe shared 1
+                "#
+            ),
+            4,
+            i64
+        );
     }
 
     #[test]
