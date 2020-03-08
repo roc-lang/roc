@@ -4,10 +4,12 @@ extern crate pretty_assertions;
 extern crate indoc;
 extern crate bumpalo;
 extern crate roc_reporting;
+
 mod helpers;
 
 #[cfg(test)]
 mod test_report {
+    use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{Report, ReportText};
     use roc_types::pretty_print::name_all_type_vars;
@@ -16,7 +18,10 @@ mod test_report {
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{assert_correct_variable_usage, can_expr, infer_expr, CanExprOut};
-    use roc_reporting::report::ReportText::{EmText, Plain, Region, Url};
+    use roc_reporting::report::ReportText::{EmText, Plain, Region, Type, Url, Value};
+    use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
+    use roc_types::subs::FlatType::{EmptyRecord, Erroneous, Record};
+    use roc_types::types::Problem::CanonicalizationProblem;
 
     // use roc_problem::can;
     fn to_simple_report(text: ReportText) -> Report {
@@ -63,12 +68,10 @@ mod test_report {
         (unify_problems, can_problems, subs, home, interns)
     }
 
-    fn report_renders_as(src: &str, report: Report, expected_rendering: &str) {
-        let (_type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+    fn report_renders_as_from_src(src: &str, report: Report, expected_rendering: &str) {
+        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
-
-        dbg!("canonicalization problems: {:?}", can_problems);
 
         report
             .text
@@ -77,9 +80,8 @@ mod test_report {
         assert_eq!(buf, expected_rendering);
     }
 
-    #[test]
-    fn report_plain() {
-        report_renders_as(
+    fn report_renders_as(report: Report, expected_rendering: &str) {
+        report_renders_as_from_src(
             indoc!(
                 r#"
                     x = 1
@@ -88,68 +90,79 @@ mod test_report {
                     x
                 "#
             ),
-            to_simple_report(Plain(Box::from("y"))),
-            "y",
-        );
+            report,
+            expected_rendering,
+        )
+    }
+
+    #[test]
+    fn report_plain() {
+        report_renders_as(to_simple_report(Plain(Box::from("y"))), "y");
     }
 
     #[test]
     fn report_emphasized_text() {
-        report_renders_as(
-            indoc!(
-                r#"
-                    x = 1
-                    y = 2
-
-                    x
-                "#
-            ),
-            to_simple_report(EmText(Box::from("y"))),
-            "*y*",
-        );
+        report_renders_as(to_simple_report(EmText(Box::from("y"))), "*y*");
     }
 
     #[test]
     fn report_url() {
-        report_renders_as(
-            indoc!(
-                r#"
-                    x = 1
-                    y = 2
-
-                    x
-                "#
-            ),
-            to_simple_report(Url(Box::from("y"))),
-            "<y>",
-        );
+        report_renders_as(to_simple_report(Url(Box::from("y"))), "<y>");
     }
 
-    // #[test]
-    // fn report_symbol() {
-    //     report_renders_as(
-    //         indoc!(
-    //             r#"
-    //                 x = 1
-    //                 y = 2
-    //
-    //                 x
-    //             "#
-    //         ),
-    //         to_simple_report(Value(Symbol::new("Test" ))),
-    //         "x",
-    //     );
-    // }
+    #[test]
+    fn report_symbol() {
+        let src: &str = indoc!(
+            r#"
+                x = 1
+                y = 2
+
+                x
+            "#
+        );
+
+        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
+
+        let mut buf = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        to_simple_report(Value(interns.symbol(test_home(), "x".into())))
+            .text
+            .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
+
+        assert_eq!(buf, "x");
+    }
+
+    #[test]
+    fn report_wildcard() {
+        report_renders_as(to_simple_report(Type(FlexVar(None))), "*");
+    }
+
+    #[test]
+    fn report_flex_var() {
+        report_renders_as(to_simple_report(Type(FlexVar(Some("msg".into())))), "msg");
+    }
+
+    #[test]
+    fn report_rigid_var() {
+        report_renders_as(to_simple_report(Type(RigidVar("a".into()))), "a");
+    }
+
+    #[test]
+    fn report_empty_record() {
+        report_renders_as(to_simple_report(Type(Structure(EmptyRecord))), "{}");
+    }
 
     #[test]
     fn report_region() {
-        report_renders_as(
+        report_renders_as_from_src(
             indoc!(
                 r#"
                     x = 1
                     y = 2
+                    f = \a ->  a + 4
 
-                    x
+                    f x
                 "#
             ),
             to_simple_report(Region(roc_region::all::Region {
@@ -161,8 +174,8 @@ mod test_report {
             indoc!(
                 r#"
                     1 | y = 2
-                    2 |
-                    3 | x
+                    2 | f = \a ->  a + 4
+                    3 |
                 "#
             ),
         );
