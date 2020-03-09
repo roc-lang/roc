@@ -353,6 +353,25 @@ fn from_can<'a>(
                 elems: elems.into_bump_slice(),
             }
         }
+
+        Tag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            let subs = &env.subs;
+            let arena = env.arena;
+
+            match Layout::from_var(arena, variant_var, subs) {
+                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => Expr::Bool(name == larger),
+                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&name) {
+                    Some(v) => Expr::Byte(*v),
+                    None => panic!("Tag name is not part of the type"),
+                },
+                _ => panic!(),
+            }
+        }
         other => panic!("TODO convert canonicalized {:?} to ll::Expr", other),
     }
 }

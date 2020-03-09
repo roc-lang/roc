@@ -11,10 +11,11 @@ mod helpers;
 // Test monomorphization
 #[cfg(test)]
 mod test_mono {
-    use crate::helpers::{can_expr, infer_expr, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_collections::all::MutMap;
-    use roc_module::symbol::Symbol;
+    use roc_module::ident::TagName::*;
+    use roc_module::symbol::{Interns, Symbol};
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::layout::{Builtin, Layout};
     use roc_types::subs::Subs;
@@ -22,6 +23,13 @@ mod test_mono {
     // HELPERS
 
     fn compiles_to(src: &str, expected: Expr<'_>) {
+        compiles_to_with_interns(src, |_| expected)
+    }
+
+    fn compiles_to_with_interns<'a, F>(src: &str, get_expected: F)
+    where
+        F: FnOnce(Interns) -> Expr<'a>,
+    {
         let arena = Bump::new();
         let CanExprOut {
             loc_expr,
@@ -50,7 +58,7 @@ mod test_mono {
             &mut ident_ids,
         );
 
-        assert_eq!(mono_expr, expected);
+        assert_eq!(mono_expr, get_expected(interns));
     }
 
     #[test]
@@ -63,10 +71,62 @@ mod test_mono {
         compiles_to("0.5", Float(0.5));
     }
 
+    //    #[test]
+    //    fn bool_literal() {
+    //        compiles_to_with_interns(
+    //            r#"
+    //            x : Bool
+    //            x = True
+    //
+    //            x
+    //            "#,
+    //            |interns| {
+    //                let home = test_home();
+    //                let var_x = interns.symbol(home, "x".into());
+    //
+    //                let stores = [(
+    //                    var_x,
+    //                    Layout::Builtin(Builtin::Bool(Global("False".into()), Global("True".into()))),
+    //                    Bool(true),
+    //                )];
+    //
+    //                let load = Load(var_x);
+    //
+    //                Store(&stores, &load)
+    //            },
+    //        );
+    //    }
+
+    //    #[test]
+    //    fn two_element_enum() {
+    //        compiles_to(
+    //            r#"
+    //            x : [ Yes, No ]
+    //            x = No
+    //
+    //            x
+    //            "#,
+    //            Int(32),
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn three_element_enum() {
+    //        compiles_to(
+    //            r#"
+    //            # this test is brought to you by fruits.com!
+    //            x : [ Apple, Orange, Banana ]
+    //            x = Orange
+    //
+    //            x
+    //            "#,
+    //            Int(32),
+    //        );
+    //    }
+
     #[test]
     fn set_unique_int_list() {
-        compiles_to(
-            "List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1",
+        compiles_to("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", {
             CallByName(
                 Symbol::LIST_GET_UNSAFE,
                 &vec![
@@ -91,7 +151,7 @@ mod test_mono {
                     ),
                     (Int(1), Layout::Builtin(Builtin::Int64)),
                 ],
-            ),
-        );
+            )
+        });
     }
 }

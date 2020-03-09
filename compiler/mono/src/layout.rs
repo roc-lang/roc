@@ -19,6 +19,8 @@ pub enum Layout<'a> {
 pub enum Builtin<'a> {
     Int64,
     Float64,
+    Bool(TagName, TagName),
+    Byte(MutMap<TagName, u8>),
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
@@ -81,6 +83,8 @@ impl<'a> Layout<'a> {
 impl<'a> Builtin<'a> {
     const I64_SIZE: u32 = std::mem::size_of::<i64>() as u32;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
+    const BOOL_SIZE: u32 = std::mem::size_of::<bool>() as u32;
+    const BYTE_SIZE: u32 = std::mem::size_of::<u8>() as u32;
 
     /// Number of machine words in an empty one of these
     const STR_WORDS: u32 = 3;
@@ -94,6 +98,8 @@ impl<'a> Builtin<'a> {
         match self {
             Int64 => Builtin::I64_SIZE,
             Float64 => Builtin::F64_SIZE,
+            Bool(_, _) => Builtin::BOOL_SIZE,
+            Byte(_) => Builtin::BYTE_SIZE,
             Str => Builtin::STR_WORDS * pointer_size,
             Map(_, _) => Builtin::MAP_WORDS * pointer_size,
             Set(_) => Builtin::SET_WORDS * pointer_size,
@@ -243,7 +249,34 @@ fn layout_from_flat_type<'a>(
                     }
                 }
                 _ => {
-                    panic!("TODO handle a tag union with mutliple tags: {:?}", tags);
+                    // Check if we can turn this tag union into an enum
+                    // TODO rather than the arguments being empty, check whether their layout has size 0.
+                    if tags.len() <= 256 && tags.iter().all(|(_, args)| args.is_empty()) {
+                        if tags.len() <= 2 {
+                            // Up to 2 enum tags can be stored (in theory) in one bit
+                            let mut it = tags.keys();
+                            let a: TagName = it.next().unwrap().clone();
+                            let b: TagName = it.next().unwrap().clone();
+
+                            if a < b {
+                                Ok(Layout::Builtin(Builtin::Bool(a, b)))
+                            } else {
+                                Ok(Layout::Builtin(Builtin::Bool(b, a)))
+                            }
+                        } else {
+                            // up to 256 enum tags can be stored in a byte
+                            let mut counter = 0u8;
+                            let mut tag_to_u8 = MutMap::default();
+
+                            for (name, _) in tags {
+                                tag_to_u8.insert(name, counter);
+                                counter += 1;
+                            }
+                            Ok(Layout::Builtin(Builtin::Byte(tag_to_u8)))
+                        }
+                    } else {
+                        panic!("TODO handle a tag union with mutliple tags: {:?}", tags);
+                    }
                 }
             }
         }
@@ -301,13 +334,15 @@ fn flatten_union(
 
     match subs.get_without_compacting(ext_var).content {
         Structure(EmptyTagUnion) => (),
-        Structure(TagUnion(new_tags, new_ext_var)) => {
+        Structure(TagUnion(new_tags, new_ext_var))
+        | Structure(RecursiveTagUnion(_, new_tags, new_ext_var)) => {
             for (tag_name, vars) in new_tags {
                 tags.insert(tag_name, vars);
             }
 
             flatten_union(tags, new_ext_var, subs)
         }
+        Alias(_, _, actual) => flatten_union(tags, actual, subs),
         invalid => {
             panic!("Compiler error: flatten_union got an ext_var in a tag union that wasn't itself a tag union; instead, it was: {:?}", invalid);
         }
@@ -329,6 +364,7 @@ fn flatten_record(fields: &mut MutMap<Lowercase, Variable>, ext_var: Variable, s
 
             flatten_record(fields, new_ext_var, subs)
         }
+        Alias(_, _, actual) => flatten_record(fields, actual, subs),
         invalid => {
             panic!("Compiler error: flatten_record encountered an ext_var in a record that wasn't itself a record; instead, it was: {:?}", invalid);
         }
