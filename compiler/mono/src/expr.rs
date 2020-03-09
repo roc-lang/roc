@@ -355,10 +355,7 @@ fn from_can<'a>(
         }
 
         Tag {
-            variant_var,
-            ext_var,
-            name,
-            arguments,
+            variant_var, name, ..
         } => {
             let subs = &env.subs;
             let arena = env.arena;

@@ -265,12 +265,10 @@ fn layout_from_flat_type<'a>(
                             }
                         } else {
                             // up to 256 enum tags can be stored in a byte
-                            let mut counter = 0u8;
                             let mut tag_to_u8 = MutMap::default();
 
-                            for (name, _) in tags {
-                                tag_to_u8.insert(name, counter);
-                                counter += 1;
+                            for (counter, (name, _)) in tags.into_iter().enumerate() {
+                                tag_to_u8.insert(name, counter as u8);
                             }
                             Ok(Layout::Builtin(Builtin::Byte(tag_to_u8)))
                         }
