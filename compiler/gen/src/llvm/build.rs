@@ -646,8 +646,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             // TODO here, check to see if the requested index exceeds the length of the array.
 
             // Slot 0 in the tuple struct is the pointer to the array data
-            let array_ptr_field = builder.build_extract_value(tuple_struct, 1, "unwrapped_list_len").unwrap().into_pointer_value();
-            let array_data_ptr = builder.build_load(array_ptr_field, "get_array_data").into_pointer_value();
+            let array_data_ptr = builder.build_extract_value(tuple_struct, 0, "unwrapped_list_ptr").unwrap().into_pointer_value();
 
             let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
