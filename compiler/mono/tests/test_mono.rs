@@ -48,6 +48,9 @@ mod test_mono {
         let mut procs = MutMap::default();
         let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
+        // assume 64-bit pointers
+        let pointer_size = std::mem::size_of::<u64>() as u32;
+
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
         let mono_expr = Expr::new(
             &arena,
@@ -56,6 +59,7 @@ mod test_mono {
             &mut procs,
             home,
             &mut ident_ids,
+            pointer_size,
         );
 
         // Put this module's ident_ids back in the interns

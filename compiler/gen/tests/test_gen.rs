@@ -37,6 +37,9 @@ mod test_gen {
     use std::mem;
     use std::os::raw::c_char;
 
+    // Pointer size on 64-bit platforms
+    const POINTER_SIZE: u32 = std::mem::size_of::<u64>() as u32;
+
     macro_rules! assert_crane_evals_to {
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             let arena = Bump::new();
@@ -57,7 +60,7 @@ mod test_gen {
             let main_fn_name = "$Test.main";
 
             // Compute main_fn_ret_type before moving subs to Env
-            let layout = Layout::from_content(&arena, content, &subs)
+            let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert content to layout. Err was {:?} and Subs were {:?}", err, subs));
             let main_ret_type = type_from_layout(cfg, &layout);
 
@@ -72,7 +75,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids);
+            let mono_expr = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -195,7 +198,7 @@ mod test_gen {
             fpm.initialize();
 
             // Compute main_fn_type before moving subs to Env
-            let layout = Layout::from_content(&arena, content, &subs)
+            let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
             let main_fn_type = basic_type_from_layout(&context, &layout)
                 .fn_type(&[], false);
@@ -221,7 +224,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids);
+            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -330,7 +333,7 @@ mod test_gen {
             fpm.initialize();
 
             // Compute main_fn_type before moving subs to Env
-            let layout = Layout::from_content(&arena, content, &subs)
+            let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
             let main_fn_type = basic_type_from_layout(&context, &layout)
                 .fn_type(&[], false);
@@ -356,7 +359,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids);
+            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
