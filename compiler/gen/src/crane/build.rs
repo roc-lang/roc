@@ -233,9 +233,34 @@ pub fn build_expr<'a, B: Backend>(
             }
         }
         Array { elem_layout, elems } => {
+            let cfg = env.cfg;
+            let ptr_bytes = cfg.pointer_bytes() as u32;
+
             if elems.is_empty() {
-                panic!("TODO build an empty Array in Crane");
+                let slot = builder.create_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    ptr_bytes + 64,
+                ));
+                let ptr_type = cfg.pointer_type();
+                let null_ptr = builder.ins().null(ptr_type);
+                let zero = builder.ins().iconst(Type::int(32).unwrap(), 0);
+
+                // Initialize a null pointer for the pointer
+                builder.ins().stack_store(null_ptr, slot, Offset32::new(0));
+
+                // Set both length and capacity to 0
+                let ptr_bytes = ptr_bytes as i32;
+
+                builder
+                    .ins()
+                    .stack_store(zero, slot, Offset32::new(ptr_bytes));
+                builder
+                    .ins()
+                    .stack_store(zero, slot, Offset32::new(ptr_bytes + 32));
+
+                builder.ins().stack_addr(ptr_type, slot, Offset32::new(0))
             } else {
+                panic!("TODO make this work like the empty List, then verify that they both actually work");
                 let elem_bytes = elem_layout.stack_size(env.cfg.pointer_bytes() as u32) as usize;
                 let bytes_len = (elem_bytes * elems.len()) + 1/* TODO drop the +1 when we have structs and this is no longer NUL-terminated. */;
                 let ptr = call_malloc(env, module, builder, bytes_len);
@@ -574,6 +599,22 @@ fn call_by_name<'a, B: Backend>(
 
             builder.ins().ineg(num)
         }
+        Symbol::LIST_LEN => {
+            debug_assert!(args.len() == 1);
+
+            let list = build_arg(&args[0], env, scope, module, builder, procs);
+
+            // Get the 32-bit int length
+            let i32_val = builder.ins().load_complex(
+                Type::int(32).unwrap(),
+                MemFlags::new(),
+                &[list],
+                Offset32::new(0),
+            );
+
+            // Cast the 32-bit int length to a 64-bit integer
+            builder.ins().bitcast(Type::int(64).unwrap(), i32_val)
+        }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
 
@@ -667,7 +708,7 @@ fn call_by_name<'a, B: Backend>(
             let fn_id = match scope.get(&symbol) {
                     Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
                     other => panic!(
-                        "CallByName could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
+                        "CallByName could not find function named {:?} declared in scope (and it was not special-cased in crane::build as a builtin); instead, found {:?} in scope {:?}",
                         symbol, other, scope
                     ),
                 };

@@ -14,7 +14,7 @@ use crate::llvm::convert::{
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Builtin, Layout};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -222,7 +222,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     .build_insert_value(
                         struct_type.const_zero(),
                         BasicValueEnum::PointerValue(ptr_type.const_null()),
-                        0,
+                        Builtin::WRAPPER_PTR,
                         "insert_ptr",
                     )
                     .unwrap();
@@ -258,17 +258,27 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 // Field 0: pointer
                 struct_val = builder
-                    .build_insert_value(struct_type.const_zero(), ptr_val, 0, "insert_ptr")
+                    .build_insert_value(
+                        struct_type.const_zero(),
+                        ptr_val,
+                        Builtin::WRAPPER_PTR,
+                        "insert_ptr",
+                    )
                     .unwrap();
 
                 // Field 1: length
                 struct_val = builder
-                    .build_insert_value(struct_val, len, 1, "insert_len")
+                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
                     .unwrap();
 
                 // Field 2: capacity (initially set to length)
                 struct_val = builder
-                    .build_insert_value(struct_val, len, 2, "insert_capacity")
+                    .build_insert_value(
+                        struct_val,
+                        len,
+                        Builtin::WRAPPER_CAPACITY,
+                        "insert_capacity",
+                    )
                     .unwrap();
 
                 BasicValueEnum::StructValue(struct_val.into_struct_value())
@@ -615,7 +625,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let builder = env.builder;
 
             // Get the 32-bit int length
-            let i32_val = builder.build_extract_value(wrapper_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
+            let i32_val = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
 
             // cast the 32-bit length to a 64-bit int
             BasicValueEnum::IntValue(builder.build_int_cast(i32_val, env.context.i64_type(), "i32_to_i64"))
@@ -641,12 +651,12 @@ fn call_with_args<'a, 'ctx, 'env>(
             let elem_index = args[1].into_int_value();
 
             // Slot 1 in the wrapper struct is the length
-            let _list_len = builder.build_extract_value(wrapper_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
+            let _list_len = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
 
             // TODO here, check to see if the requested index exceeds the length of the array.
 
             // Slot 0 in the wrapper struct is the pointer to the array data
-            let array_data_ptr = builder.build_extract_value(wrapper_struct, 0, "unwrapped_list_ptr").unwrap().into_pointer_value();
+            let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
 
             let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
@@ -669,13 +679,13 @@ fn call_with_args<'a, 'ctx, 'env>(
             let elem = args[2];
 
             // Slot 1 in the wrapper struct is the length
-            let _list_len = builder.build_extract_value(wrapper_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
+            let _list_len = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
 
             // TODO here, check to see if the requested index exceeds the length of the array.
             // If so, bail out and return the list unaltered.
 
             // Slot 0 in the wrapper struct is the pointer to the array data
-            let array_data_ptr = builder.build_extract_value(wrapper_struct, 0, "unwrapped_list_ptr").unwrap().into_pointer_value();
+            let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
 
             let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);

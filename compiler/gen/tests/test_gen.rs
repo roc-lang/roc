@@ -488,14 +488,13 @@ mod test_gen {
     //     }
 
     #[test]
-    fn int_list_len() {
-        // assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, i64);
-        assert_llvm_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, i64, |x| x);
+    fn basic_int_list_len() {
+        assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, i64);
     }
 
     #[test]
     fn loaded_int_list_len() {
-        assert_llvm_evals_to!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     nums = [ 2, 4, 6 ]
@@ -504,14 +503,13 @@ mod test_gen {
                 "#
             ),
             3,
-            i64,
-            |x| x
+            i64
         );
     }
 
     #[test]
     fn fn_int_list_len() {
-        assert_llvm_evals_to!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     # TODO remove this annotation once monomorphization works!
@@ -524,14 +522,13 @@ mod test_gen {
                 "#
             ),
             3,
-            i64,
-            |x| x
+            i64
         );
     }
 
     //     #[test]
     //     fn int_list_is_empty() {
-    //         assert_evals_to!("List.is_empty [ 12, 9, 6, 3 ]", 0, i32, |x| x);
+    //         assert_evals_to!("List.is_empty [ 12, 9, 6, 3 ]", 0, u8, |x| x);
     //     }
 
     #[test]

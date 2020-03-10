@@ -92,6 +92,11 @@ impl<'a> Builtin<'a> {
     const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
     const LIST_WORDS: u32 = 3;
 
+    /// Layout of collection wrapper - a struct of (pointer, length, capacity)
+    pub const WRAPPER_PTR: u32 = 0;
+    pub const WRAPPER_LEN: u32 = 1;
+    pub const WRAPPER_CAPACITY: u32 = 2;
+
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         use Builtin::*;
 
