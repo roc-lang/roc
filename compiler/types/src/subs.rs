@@ -151,9 +151,10 @@ impl Variable {
 
     pub const EMPTY_RECORD: Variable = Variable(1);
     pub const EMPTY_TAG_UNION: Variable = Variable(2);
+    pub const BOOL: Variable = Variable(3);
+    pub const RESERVED: usize = 4;
 
-    // variables 1 and 2 are reserved for EmptyRecord and EmptyTagUnion
-    const FIRST_USER_SPACE_VAR: Variable = Variable(3);
+    const FIRST_USER_SPACE_VAR: Variable = Variable(Self::RESERVED as u32);
 
     /// # Safety
     ///
@@ -228,8 +229,22 @@ impl Subs {
             subs.utable.new_key(flex_var_descriptor());
         }
 
-        subs.set_content(Variable(1), Content::Structure(FlatType::EmptyRecord));
-        subs.set_content(Variable(2), Content::Structure(FlatType::EmptyTagUnion));
+        subs.set_content(
+            Variable::EMPTY_RECORD,
+            Content::Structure(FlatType::EmptyRecord),
+        );
+        subs.set_content(
+            Variable::EMPTY_TAG_UNION,
+            Content::Structure(FlatType::EmptyTagUnion),
+        );
+
+        subs.set_content(Variable::BOOL, {
+            let mut tags = MutMap::default();
+            tags.insert(TagName::Global("False".into()), vec![]);
+            tags.insert(TagName::Global("True".into()), vec![]);
+
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
         subs
     }

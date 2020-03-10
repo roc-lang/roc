@@ -12,6 +12,7 @@ pub fn int_expr_from_result(
     result: Result<i64, &str>,
     env: &mut Env,
 ) -> Expr {
+    // Int stores a variable to generate better error messages
     match result {
         Ok(int) => Expr::Int(var_store.fresh(), int),
         Err(raw) => {
@@ -30,6 +31,7 @@ pub fn float_expr_from_result(
     result: Result<f64, &str>,
     env: &mut Env,
 ) -> Expr {
+    // Float stores a variable to generate better error messages
     match result {
         Ok(float) => Expr::Float(var_store.fresh(), float),
         Err(raw) => {
