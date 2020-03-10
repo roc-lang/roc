@@ -613,12 +613,13 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::LIST_LEN => {
             debug_assert!(args.len() == 1);
 
-            let tuple_struct = dbg!(args[0].into_struct_value());
+            let tuple_struct = args[0].into_struct_value();
             let builder = env.builder;
 
-            // Get the 32-bit int length and cast it to a 64-bit int
-            let i32_val = dbg!(builder.build_extract_value(tuple_struct, 1, "unwrapped_list_len").unwrap().into_int_value());
+            // Get the 32-bit int length
+            let i32_val = builder.build_extract_value(tuple_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
 
+            // cast the 32-bit length to a 64-bit int
             BasicValueEnum::IntValue(builder.build_int_cast(i32_val, env.context.i64_type(), "i32_to_i64"))
         }
         Symbol::LIST_IS_EMPTY => {
