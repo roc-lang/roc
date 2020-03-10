@@ -5,6 +5,8 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 
+const POINTER_SIZE: u32 = std::mem::size_of::<usize>() as u32;
+
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Layout<'a> {
@@ -250,8 +252,26 @@ fn layout_from_flat_type<'a>(
                 }
                 _ => {
                     // Check if we can turn this tag union into an enum
-                    // TODO rather than the arguments being empty, check whether their layout has size 0.
-                    if tags.len() <= 256 && tags.iter().all(|(_, args)| args.is_empty()) {
+                    // The arguments of all tags must have size 0.
+                    // That is trivially the case when there are no arguments
+                    //
+                    //  [ Orange, Apple, Banana ]
+                    //
+                    //  But when one-tag tag unions are optimized away, we can also use an enum for
+                    //
+                    //  [ Foo [ Unit ], Bar [ Unit ] ]
+                    let arguments_have_size_0 = || {
+                        tags.iter().all(|(_, args)| {
+                            args.iter().all(|var| {
+                                Layout::from_var(arena, *var, subs)
+                                    .map(|v| v.stack_size(POINTER_SIZE))
+                                    == Ok(0)
+                            })
+                        })
+                    };
+
+                    // up to 256 enum keys can be stored in a byte
+                    if tags.len() <= std::u8::MAX as usize + 1 && arguments_have_size_0() {
                         if tags.len() <= 2 {
                             // Up to 2 enum tags can be stored (in theory) in one bit
                             let mut it = tags.keys();

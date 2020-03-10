@@ -102,32 +102,63 @@ mod test_mono {
         );
     }
 
-    //    #[test]
-    //    fn two_element_enum() {
-    //        compiles_to(
-    //            r#"
-    //            x : [ Yes, No ]
-    //            x = No
-    //
-    //            x
-    //            "#,
-    //            Int(32),
-    //        );
-    //    }
-    //
-    //    #[test]
-    //    fn three_element_enum() {
-    //        compiles_to(
-    //            r#"
-    //            # this test is brought to you by fruits.com!
-    //            x : [ Apple, Orange, Banana ]
-    //            x = Orange
-    //
-    //            x
-    //            "#,
-    //            Int(32),
-    //        );
-    //    }
+    #[test]
+    fn two_element_enum() {
+        let arena = Bump::new();
+
+        compiles_to_with_interns(
+            r#"
+            x : [ Yes, No ]
+            x = No
+
+            x
+            "#,
+            |interns| {
+                let home = test_home();
+                let var_x = interns.symbol(home, "x".into());
+
+                let stores = [(
+                    var_x,
+                    Layout::Builtin(Builtin::Bool(Global("No".into()), Global("Yes".into()))),
+                    Bool(false),
+                )];
+
+                let load = Load(var_x);
+
+                Store(arena.alloc(stores), arena.alloc(load))
+            },
+        );
+    }
+    #[test]
+    fn three_element_enum() {
+        let arena = Bump::new();
+
+        compiles_to_with_interns(
+            r#"
+            # this test is brought to you by fruits.com!
+            x : [ Apple, Orange, Banana ]
+            x = Orange
+
+            x
+            "#,
+            |interns| {
+                let home = test_home();
+                let var_x = interns.symbol(home, "x".into());
+
+                let mut fruits = MutMap::default();
+
+                fruits.insert(Global("Banana".into()), 0);
+                fruits.insert(Global("Orange".into()), 1);
+                fruits.insert(Global("Apple".into()), 2);
+
+                let stores = [(var_x, Layout::Builtin(Builtin::Byte(fruits)), Byte(1))];
+
+                let load = Load(var_x);
+
+                Store(arena.alloc(stores), arena.alloc(load))
+            },
+        );
+    }
 
     #[test]
     fn set_unique_int_list() {
