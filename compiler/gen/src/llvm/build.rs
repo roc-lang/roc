@@ -253,9 +253,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 let ptr_val = BasicValueEnum::PointerValue(ptr);
                 let struct_type = collection_wrapper(ctx, ptr.get_type());
-                let len = dbg!(BasicValueEnum::IntValue(
-                    ctx.i32_type().const_int(len_u64, false)
-                ));
+                let len = BasicValueEnum::IntValue(ctx.i32_type().const_int(len_u64, false));
                 let mut struct_val;
 
                 // Field 0: pointer
@@ -639,16 +637,16 @@ fn call_with_args<'a, 'ctx, 'env>(
             // List.get : List elem, Int -> Result elem [ OutOfBounds ]*
             debug_assert!(args.len() == 2);
 
-            let tuple_ptr = args[0].into_pointer_value();
+            let tuple_struct = args[0].into_struct_value();
             let elem_index = args[1].into_int_value();
 
             // Slot 1 in the array is the length
-            let _list_len = unsafe { builder.build_struct_gep(tuple_ptr, 1, "list_tuple_len") };
+            let _list_len = builder.build_extract_value(tuple_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
 
             // TODO here, check to see if the requested index exceeds the length of the array.
 
             // Slot 0 in the tuple struct is the pointer to the array data
-            let array_ptr_field = unsafe { builder.build_struct_gep(tuple_ptr, 0, "list_tuple_ptr") };
+            let array_ptr_field = builder.build_extract_value(tuple_struct, 1, "unwrapped_list_len").unwrap().into_pointer_value();
             let array_data_ptr = builder.build_load(array_ptr_field, "get_array_data").into_pointer_value();
 
             let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!

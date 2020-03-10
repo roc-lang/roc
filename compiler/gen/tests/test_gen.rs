@@ -274,7 +274,7 @@ mod test_gen {
             builder.build_return(Some(&ret));
 
             // Uncomment this to see the module's un-optimized LLVM instruction output:
-            env.module.print_to_stderr();
+            // env.module.print_to_stderr();
 
             if main_fn.verify(true) {
                 fpm.run_on(&main_fn);
