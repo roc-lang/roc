@@ -2206,7 +2206,7 @@ mod test_uniq_solve {
                     newCosts = Map.insert model.costs neighbour distanceTo
 
                     distanceTo = reconstructPath newCameFrom neighbour
-                            |> List.length
+                            |> List.len
                             |> Num.toFloat
 
                     newModel = { model & costs : newCosts , cameFrom : newCameFrom }
@@ -2291,7 +2291,7 @@ mod test_uniq_solve {
                     newCosts = Map.insert model.costs neighbour distanceTo
 
                     distanceTo = reconstructPath newCameFrom neighbour
-                            |> List.length
+                            |> List.len
                             |> Num.toFloat
 
                     newModel = { model & costs : newCosts , cameFrom : newCameFrom }
