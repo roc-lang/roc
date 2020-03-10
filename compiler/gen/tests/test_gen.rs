@@ -494,6 +494,42 @@ mod test_gen {
         assert_llvm_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, i64, |x| x);
     }
 
+    #[test]
+    fn loaded_int_list_len() {
+        assert_llvm_evals_to!(
+            indoc!(
+                r#"
+                    nums = [ 2, 4, 6 ]
+
+                    List.len nums
+                "#
+            ),
+            3,
+            i64,
+            |x| x
+        );
+    }
+
+    #[test]
+    fn fn_int_list_len() {
+        assert_llvm_evals_to!(
+            indoc!(
+                r#"
+                    # TODO remove this annotation once monomorphization works!
+                    getLen : List Int -> Int
+                    getLen = \list -> List.len list
+
+                    nums = [ 2, 4, 6 ]
+
+                    getLen nums
+                "#
+            ),
+            3,
+            i64,
+            |x| x
+        );
+    }
+
     //     #[test]
     //     fn int_list_is_empty() {
     //         assert_evals_to!("List.is_empty [ 12, 9, 6, 3 ]", 0, i32, |x| x);
@@ -510,7 +546,7 @@ mod test_gen {
     }
 
     #[test]
-    fn set_shared_int_list() {
+    fn get_shared_int_list() {
         assert_evals_to!(
             indoc!(
                 r#"

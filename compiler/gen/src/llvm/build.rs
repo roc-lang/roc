@@ -216,19 +216,18 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 let array_type = get_array_type(&elem_type, 0);
                 let ptr_type = array_type.ptr_type(AddressSpace::Generic);
                 let struct_type = collection_wrapper(ctx, ptr_type);
-                let struct_val = struct_type.const_zero();
 
                 // The first field in the struct should be the pointer.
-                builder
+                let struct_val = builder
                     .build_insert_value(
-                        struct_val,
+                        struct_type.const_zero(),
                         BasicValueEnum::PointerValue(ptr_type.const_null()),
                         0,
                         "insert_ptr",
                     )
                     .unwrap();
 
-                BasicValueEnum::StructValue(struct_val)
+                BasicValueEnum::StructValue(struct_val.into_struct_value())
             } else {
                 let len_u64 = elems.len() as u64;
                 let elem_bytes = elem_layout.stack_size(env.pointer_bytes) as u64;
@@ -257,24 +256,24 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 let len = dbg!(BasicValueEnum::IntValue(
                     ctx.i32_type().const_int(len_u64, false)
                 ));
-                let struct_val = struct_type.const_zero();
+                let mut struct_val;
 
                 // Field 0: pointer
-                builder
-                    .build_insert_value(struct_val, ptr_val, 0, "insert_ptr")
+                struct_val = builder
+                    .build_insert_value(struct_type.const_zero(), ptr_val, 0, "insert_ptr")
                     .unwrap();
 
                 // Field 1: length
-                builder
+                struct_val = builder
                     .build_insert_value(struct_val, len, 1, "insert_len")
                     .unwrap();
 
                 // Field 2: capacity (initially set to length)
-                builder
+                struct_val = builder
                     .build_insert_value(struct_val, len, 2, "insert_capacity")
                     .unwrap();
 
-                BasicValueEnum::StructValue(struct_val)
+                BasicValueEnum::StructValue(struct_val.into_struct_value())
             }
         }
         _ => {
