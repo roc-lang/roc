@@ -151,8 +151,9 @@ impl Variable {
 
     pub const EMPTY_RECORD: Variable = Variable(1);
     pub const EMPTY_TAG_UNION: Variable = Variable(2);
-    pub const BOOL: Variable = Variable(3);
-    pub const RESERVED: usize = 4;
+    const BOOL_ENUM: Variable = Variable(3);
+    pub const BOOL: Variable = Variable(4);
+    pub const RESERVED: usize = 5;
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(Self::RESERVED as u32);
 
@@ -238,12 +239,16 @@ impl Subs {
             Content::Structure(FlatType::EmptyTagUnion),
         );
 
-        subs.set_content(Variable::BOOL, {
+        subs.set_content(Variable::BOOL_ENUM, {
             let mut tags = MutMap::default();
             tags.insert(TagName::Global("False".into()), vec![]);
             tags.insert(TagName::Global("True".into()), vec![]);
 
             Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
+
+        subs.set_content(Variable::BOOL, {
+            Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL_ENUM)
         });
 
         subs
