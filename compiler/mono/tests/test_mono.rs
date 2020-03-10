@@ -71,31 +71,33 @@ mod test_mono {
         compiles_to("0.5", Float(0.5));
     }
 
-    //    #[test]
-    //    fn bool_literal() {
-    //        compiles_to_with_interns(
-    //            r#"
-    //            x : Bool
-    //            x = True
-    //
-    //            x
-    //            "#,
-    //            |interns| {
-    //                let home = test_home();
-    //                let var_x = interns.symbol(home, "x".into());
-    //
-    //                let stores = [(
-    //                    var_x,
-    //                    Layout::Builtin(Builtin::Bool(Global("False".into()), Global("True".into()))),
-    //                    Bool(true),
-    //                )];
-    //
-    //                let load = Load(var_x);
-    //
-    //                Store(&stores, &load)
-    //            },
-    //        );
-    //    }
+    #[test]
+    fn bool_literal() {
+        let arena = Bump::new();
+
+        compiles_to_with_interns(
+            r#"
+                x : Bool
+                x = True
+
+                x
+            "#,
+            |interns| {
+                let home = test_home();
+                let var_x = interns.symbol(home, "x".into());
+
+                let stores = [(
+                    var_x,
+                    Layout::Builtin(Builtin::Bool(Global("False".into()), Global("True".into()))),
+                    Bool(true),
+                )];
+
+                let load = Load(var_x);
+
+                Store(arena.alloc(stores), arena.alloc(load))
+            },
+        );
+    }
 
     //    #[test]
     //    fn two_element_enum() {
