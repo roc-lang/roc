@@ -1,6 +1,6 @@
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
-use inkwell::types::{BasicType, FunctionType};
+use inkwell::types::{ArrayType, BasicType, FunctionType};
 use inkwell::AddressSpace;
 
 use roc_mono::layout::Layout;
@@ -17,6 +17,18 @@ pub fn get_fn_type<'ctx>(
         PointerType(typ) => typ.fn_type(arg_types, false),
         StructType(typ) => typ.fn_type(arg_types, false),
         VectorType(typ) => typ.fn_type(arg_types, false),
+    }
+}
+
+/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
+pub fn get_array_type<'ctx>(bt_enum: &BasicTypeEnum<'ctx>, size: u32) -> ArrayType<'ctx> {
+    match bt_enum {
+        ArrayType(typ) => typ.array_type(size),
+        IntType(typ) => typ.array_type(size),
+        FloatType(typ) => typ.array_type(size),
+        PointerType(typ) => typ.array_type(size),
+        StructType(typ) => typ.array_type(size),
+        VectorType(typ) => typ.array_type(size),
     }
 }
 

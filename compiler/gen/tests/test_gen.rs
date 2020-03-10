@@ -274,7 +274,7 @@ mod test_gen {
             builder.build_return(Some(&ret));
 
             // Uncomment this to see the module's un-optimized LLVM instruction output:
-            // env.module.print_to_stderr();
+            env.module.print_to_stderr();
 
             if main_fn.verify(true) {
                 fpm.run_on(&main_fn);
@@ -481,6 +481,17 @@ mod test_gen {
     fn basic_float() {
         assert_evals_to!("1234.0", 1234.0, f64);
     }
+
+    #[test]
+    fn int_list_len() {
+        // assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, i64);
+        assert_llvm_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, i64, |x| x);
+    }
+
+    //     #[test]
+    //     fn int_list_is_empty() {
+    //         assert_evals_to!("List.is_empty [ 12, 9, 6, 3 ]", 0, i32, |x| x);
+    //     }
 
     #[test]
     fn get_int_list() {

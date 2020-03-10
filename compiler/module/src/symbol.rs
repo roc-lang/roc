@@ -603,13 +603,13 @@ define_builtins! {
     6 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
         1 LIST_AT_LIST: "@List" // the List.@List private tag
-        2 LIST_ISEMPTY: "isEmpty"
+        2 LIST_IS_EMPTY: "isEmpty"
         3 LIST_GET: "get"
         4 LIST_SET: "set"
         5 LIST_SET_IN_PLACE: "set_in_place"
         6 LIST_PUSH: "push"
         7 LIST_MAP: "map"
-        8 LIST_LENGTH: "length"
+        8 LIST_LEN: "len"
         9 LIST_FOLDL: "foldl"
         10 LIST_FOLDR: "foldr"
         11 LIST_GET_UNSAFE: "getUnsafe" // TODO remove once we can code gen Result

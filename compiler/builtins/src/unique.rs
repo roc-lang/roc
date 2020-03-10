@@ -434,13 +434,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isEmpty : Attr u (List *) -> Attr v Bool
     add_type(
-        Symbol::LIST_ISEMPTY,
+        Symbol::LIST_IS_EMPTY,
         unique_function(vec![list_type(UVAR1, TVAR1)], bool_type(UVAR2)),
     );
 
-    // length : List a -> Int
+    // len : List * -> Int
     add_type(
-        Symbol::LIST_LENGTH,
+        Symbol::LIST_LEN,
         unique_function(vec![list_type(UVAR1, TVAR1)], int_type(UVAR2)),
     );
 
