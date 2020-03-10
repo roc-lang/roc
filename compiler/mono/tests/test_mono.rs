@@ -58,6 +58,9 @@ mod test_mono {
             &mut ident_ids,
         );
 
+        // Put this module's ident_ids back in the interns
+        interns.all_ident_ids.insert(home, ident_ids);
+
         assert_eq!(mono_expr, get_expected(interns));
     }
 
