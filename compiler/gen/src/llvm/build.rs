@@ -611,11 +611,11 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::LIST_LEN => {
             debug_assert!(args.len() == 1);
 
-            let tuple_struct = args[0].into_struct_value();
+            let wrapper_struct = args[0].into_struct_value();
             let builder = env.builder;
 
             // Get the 32-bit int length
-            let i32_val = builder.build_extract_value(tuple_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
+            let i32_val = builder.build_extract_value(wrapper_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
 
             // cast the 32-bit length to a 64-bit int
             BasicValueEnum::IntValue(builder.build_int_cast(i32_val, env.context.i64_type(), "i32_to_i64"))
@@ -637,16 +637,16 @@ fn call_with_args<'a, 'ctx, 'env>(
             // List.get : List elem, Int -> Result elem [ OutOfBounds ]*
             debug_assert!(args.len() == 2);
 
-            let tuple_struct = args[0].into_struct_value();
+            let wrapper_struct = args[0].into_struct_value();
             let elem_index = args[1].into_int_value();
 
-            // Slot 1 in the array is the length
-            let _list_len = builder.build_extract_value(tuple_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
+            // Slot 1 in the wrapper struct is the length
+            let _list_len = builder.build_extract_value(wrapper_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
 
             // TODO here, check to see if the requested index exceeds the length of the array.
 
-            // Slot 0 in the tuple struct is the pointer to the array data
-            let array_data_ptr = builder.build_extract_value(tuple_struct, 0, "unwrapped_list_ptr").unwrap().into_pointer_value();
+            // Slot 0 in the wrapper struct is the pointer to the array data
+            let array_data_ptr = builder.build_extract_value(wrapper_struct, 0, "unwrapped_list_ptr").unwrap().into_pointer_value();
 
             let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
@@ -664,19 +664,18 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             debug_assert!(args.len() == 3);
 
-            let tuple_ptr = args[0].into_pointer_value();
+            let wrapper_struct = args[0].into_struct_value();
             let elem_index = args[1].into_int_value();
             let elem = args[2];
 
-            // Slot 1 in the array is the length
-            let _list_len = unsafe { builder.build_struct_gep(tuple_ptr, 1, "list_tuple_len") };
+            // Slot 1 in the wrapper struct is the length
+            let _list_len = builder.build_extract_value(wrapper_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
 
             // TODO here, check to see if the requested index exceeds the length of the array.
             // If so, bail out and return the list unaltered.
 
-            // Slot 0 in the tuple struct is the pointer to the array data
-            let array_ptr_field = unsafe { builder.build_struct_gep(tuple_ptr, 0, "list_tuple_ptr") };
-            let array_data_ptr = builder.build_load(array_ptr_field, "get_array_data").into_pointer_value();
+            // Slot 0 in the wrapper struct is the pointer to the array data
+            let array_data_ptr = builder.build_extract_value(wrapper_struct, 0, "unwrapped_list_ptr").unwrap().into_pointer_value();
 
             let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
@@ -690,8 +689,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             // Mutate the array in-place.
             builder.build_store(elem_ptr, elem);
 
-            // Return a pointer to the wrapper tuple.
-            tuple_ptr.into()
+            // Return the wrapper unchanged, since pointer, length and capacity are all unchanged
+            wrapper_struct.into()
         }
         _ => {
             let fn_val = env
