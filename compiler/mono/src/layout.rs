@@ -23,6 +23,10 @@ pub enum Builtin<'a> {
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
     List(&'a Layout<'a>),
+    EmptyStr,
+    EmptyList,
+    EmptyMap,
+    EmptySet,
 }
 
 impl<'a> Layout<'a> {
@@ -94,10 +98,10 @@ impl<'a> Builtin<'a> {
         match self {
             Int64 => Builtin::I64_SIZE,
             Float64 => Builtin::F64_SIZE,
-            Str => Builtin::STR_WORDS * pointer_size,
-            Map(_, _) => Builtin::MAP_WORDS * pointer_size,
-            Set(_) => Builtin::SET_WORDS * pointer_size,
-            List(_) => Builtin::LIST_WORDS * pointer_size,
+            Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
+            Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
+            Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
+            List(_) | EmptyList => Builtin::LIST_WORDS * pointer_size,
         }
     }
 }
@@ -131,9 +135,16 @@ fn layout_from_flat_type<'a>(
                 }
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => {
-                    let elem_layout = Layout::from_var(arena, args[0], subs)?;
+                    use roc_types::subs::Content::*;
 
-                    Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
+                    match subs.get_without_compacting(args[0]).content {
+                        FlexVar(_) | RigidVar(_) => Ok(Layout::Builtin(Builtin::EmptyList)),
+                        content => {
+                            let elem_layout = Layout::from_content(arena, content, subs)?;
+
+                            Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
+                        }
+                    }
                 }
                 Symbol::ATTR_ATTR => {
                     debug_assert!(args.len() == 2);

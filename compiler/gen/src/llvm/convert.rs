@@ -1,6 +1,6 @@
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
-use inkwell::types::{ArrayType, BasicType, FunctionType};
+use inkwell::types::{ArrayType, BasicType, FunctionType, PointerType, StructType};
 use inkwell::AddressSpace;
 
 use roc_mono::layout::Layout;
@@ -62,15 +62,36 @@ pub fn basic_type_from_layout<'ctx>(
         Builtin(builtin) => match builtin {
             Int64 => context.i64_type().as_basic_type_enum(),
             Float64 => context.f64_type().as_basic_type_enum(),
-            Str => context
+            Str | EmptyStr => context
                 .i8_type()
                 .ptr_type(AddressSpace::Generic)
                 .as_basic_type_enum(),
-            Map(_, _) => panic!("TODO layout_to_basic_type for Builtin::Map"),
-            Set(_) => panic!("TODO layout_to_basic_type for Builtin::Set"),
-            List(elem_layout) => basic_type_from_layout(context, elem_layout)
-                .ptr_type(AddressSpace::Generic)
-                .as_basic_type_enum(),
+            Map(_, _) | EmptyMap => panic!("TODO layout_to_basic_type for Builtin::Map"),
+            Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
+            List(elem_layout) => {
+                let ptr_type =
+                    basic_type_from_layout(context, elem_layout).ptr_type(AddressSpace::Generic);
+
+                collection_wrapper(context, ptr_type).into()
+            }
+            EmptyList => {
+                let array_type =
+                    get_array_type(&context.opaque_struct_type("empty_list_elem").into(), 0);
+                let ptr_type = array_type.ptr_type(AddressSpace::Generic);
+
+                collection_wrapper(context, ptr_type).into()
+            }
         },
     }
+}
+
+/// (pointer: usize, length: u32, capacity: u32)
+pub fn collection_wrapper<'ctx>(
+    ctx: &'ctx Context,
+    ptr_type: PointerType<'ctx>,
+) -> StructType<'ctx> {
+    let ptr_type_enum = BasicTypeEnum::PointerType(ptr_type);
+    let u32_type = BasicTypeEnum::IntType(ctx.i32_type());
+
+    ctx.struct_type(&[ptr_type_enum, u32_type, u32_type], false)
 }

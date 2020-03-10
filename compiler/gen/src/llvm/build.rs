@@ -3,12 +3,14 @@ use bumpalo::Bump;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicTypeEnum, PointerType, StructType};
+use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
-use crate::llvm::convert::{basic_type_from_layout, get_array_type, get_fn_type};
+use crate::llvm::convert::{
+    basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
+};
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
@@ -208,30 +210,37 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Array { elem_layout, elems } => {
             let ctx = env.context;
             let elem_type = basic_type_from_layout(ctx, elem_layout);
+            let builder = env.builder;
 
             if elems.is_empty() {
                 let array_type = get_array_type(&elem_type, 0);
                 let ptr_type = array_type.ptr_type(AddressSpace::Generic);
-                let struct_type = array_wrapper(ctx, ptr_type);
-                let zero = BasicValueEnum::IntValue(ctx.i32_type().const_zero());
-                let val = struct_type.const_named_struct(&[
-                    BasicValueEnum::PointerValue(ptr_type.const_null()), // pointer
-                    zero,                                                // length
-                    zero,                                                // capacity
-                ]);
+                let struct_type = collection_wrapper(ctx, ptr_type);
+                let struct_val = struct_type.const_zero();
 
-                BasicValueEnum::StructValue(val)
+                // The first field in the struct should be the pointer.
+                builder
+                    .build_insert_value(
+                        struct_val,
+                        BasicValueEnum::PointerValue(ptr_type.const_null()),
+                        0,
+                        "insert_ptr",
+                    )
+                    .unwrap();
+
+                BasicValueEnum::StructValue(struct_val)
             } else {
-                let builder = env.builder;
                 let len_u64 = elems.len() as u64;
                 let elem_bytes = elem_layout.stack_size(env.pointer_bytes) as u64;
-                let bytes_len = elem_bytes * len_u64;
 
-                let len = ctx.i32_type().const_int(bytes_len, false);
-                let ptr = env
-                    .builder
-                    .build_array_malloc(elem_type, len, "create_list_ptr")
-                    .unwrap();
+                let ptr = {
+                    let bytes_len = elem_bytes * len_u64;
+                    let len = ctx.i32_type().const_int(bytes_len, false);
+
+                    env.builder
+                        .build_array_malloc(elem_type, len, "create_list_ptr")
+                        .unwrap()
+                };
 
                 // Copy the elements from the list literal into the array
                 for (index, elem) in elems.iter().enumerate() {
@@ -243,32 +252,29 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     builder.build_store(elem_ptr, val);
                 }
 
-                let struct_type = array_wrapper(ctx, ptr.get_type());
-                let len = BasicValueEnum::IntValue(ctx.i32_type().const_int(len_u64, false));
-                let tuple_ptr = builder.build_alloca(struct_type, "create_list_tuple");
+                let ptr_val = BasicValueEnum::PointerValue(ptr);
+                let struct_type = collection_wrapper(ctx, ptr.get_type());
+                let len = dbg!(BasicValueEnum::IntValue(
+                    ctx.i32_type().const_int(len_u64, false)
+                ));
+                let struct_val = struct_type.const_zero();
 
-                {
-                    let field_ptr =
-                        unsafe { builder.build_struct_gep(tuple_ptr, 0, "list_tuple_ptr") };
+                // Field 0: pointer
+                builder
+                    .build_insert_value(struct_val, ptr_val, 0, "insert_ptr")
+                    .unwrap();
 
-                    builder.build_store(field_ptr, BasicValueEnum::PointerValue(ptr));
-                }
+                // Field 1: length
+                builder
+                    .build_insert_value(struct_val, len, 1, "insert_len")
+                    .unwrap();
 
-                {
-                    let field_ptr =
-                        unsafe { builder.build_struct_gep(tuple_ptr, 1, "list_tuple_len") };
+                // Field 2: capacity (initially set to length)
+                builder
+                    .build_insert_value(struct_val, len, 2, "insert_capacity")
+                    .unwrap();
 
-                    builder.build_store(field_ptr, len);
-                }
-
-                {
-                    let field_ptr =
-                        unsafe { builder.build_struct_gep(tuple_ptr, 2, "list_tuple_capacity") };
-
-                    builder.build_store(field_ptr, len);
-                }
-
-                BasicValueEnum::PointerValue(tuple_ptr)
+                BasicValueEnum::StructValue(struct_val)
             }
         }
         _ => {
@@ -608,12 +614,11 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::LIST_LEN => {
             debug_assert!(args.len() == 1);
 
-            let tuple_ptr = args[0].into_pointer_value();
+            let tuple_struct = dbg!(args[0].into_struct_value());
             let builder = env.builder;
-            let list_len_ptr = unsafe { builder.build_struct_gep(tuple_ptr, 1, "list_tuple_len") };
 
             // Get the 32-bit int length and cast it to a 64-bit int
-            let i32_val = builder.build_load(list_len_ptr, "List.len").into_int_value();
+            let i32_val = dbg!(builder.build_extract_value(tuple_struct, 1, "unwrapped_list_len").unwrap().into_int_value());
 
             BasicValueEnum::IntValue(builder.build_int_cast(i32_val, env.context.i64_type(), "i32_to_i64"))
         }
@@ -704,12 +709,4 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
         }
     }
-}
-
-/// (pointer: usize, length: u32, capacity: u32)
-fn array_wrapper<'ctx>(ctx: &'ctx Context, ptr_type: PointerType<'ctx>) -> StructType<'ctx> {
-    let ptr_type_enum = BasicTypeEnum::PointerType(ptr_type);
-    let u32_type = BasicTypeEnum::IntType(ctx.i32_type());
-
-    ctx.struct_type(&[ptr_type_enum, u32_type, u32_type], false)
 }
