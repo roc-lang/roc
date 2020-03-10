@@ -90,7 +90,6 @@ pub enum Expr<'a> {
     },
     Tag {
         tag_layout: Layout<'a>,
-        ext_layout: Layout<'a>,
         name: TagName,
         arguments: &'a [Expr<'a>],
     },
@@ -300,6 +299,40 @@ fn from_can<'a>(
             }
         }
 
+        Tag {
+            variant_var,
+            name,
+            arguments: args,
+            ..
+        } => {
+            let arena = env.arena;
+
+            match Layout::from_var(arena, variant_var, &env.subs, env.pointer_size) {
+                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => Expr::Bool(name == larger),
+                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&name) {
+                    Some(v) => Expr::Byte(*v),
+                    None => panic!("Tag name is not part of the type"),
+                },
+                Ok(layout) => {
+                    let mut arguments = Vec::with_capacity_in(args.len(), arena);
+
+                    for (_, arg) in args {
+                        arguments.push(from_can(env, arg.value, procs, None));
+                    }
+
+                    Expr::Tag {
+                        tag_layout: layout,
+                        name,
+                        arguments: arguments.into_bump_slice(),
+                    }
+                }
+                Err(()) => {
+                    // Invalid field!
+                    panic!("TODO gracefully handle Access with invalid struct_layout");
+                }
+            }
+        }
+
         Access {
             ext_var,
             field_var,
@@ -357,21 +390,6 @@ fn from_can<'a>(
             }
         }
 
-        Tag {
-            variant_var, name, ..
-        } => {
-            let subs = &env.subs;
-            let arena = env.arena;
-
-            match Layout::from_var(arena, variant_var, subs, env.pointer_size) {
-                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => Expr::Bool(name == larger),
-                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&name) {
-                    Some(v) => Expr::Byte(*v),
-                    None => panic!("Tag name is not part of the type"),
-                },
-                _ => panic!(),
-            }
-        }
         other => panic!("TODO convert canonicalized {:?} to ll::Expr", other),
     }
 }
