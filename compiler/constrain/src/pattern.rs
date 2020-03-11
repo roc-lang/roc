@@ -53,6 +53,7 @@ fn headers_from_annotation_help(
         Underscore
         | Shadowed(_, _)
         | UnsupportedPattern(_)
+        | NumLiteral(_, _)
         | IntLiteral(_)
         | FloatLiteral(_)
         | StrLiteral(_) => true,
@@ -124,10 +125,22 @@ pub fn constrain_pattern(
                 },
             );
         }
+
+        NumLiteral(var, _) => {
+            state.vars.push(*var);
+
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Num,
+                builtins::builtin_type(Symbol::NUM_NUM, vec![Type::Variable(*var)]),
+                expected,
+            ));
+        }
+
         IntLiteral(_) => {
             state.constraints.push(Constraint::Pattern(
                 region,
-                PatternCategory::Int,
+                PatternCategory::Float,
                 builtins::builtin_type(Symbol::INT_INT, vec![]),
                 expected,
             ));

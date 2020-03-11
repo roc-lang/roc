@@ -357,6 +357,10 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
             debug_assert!(args.is_empty());
             Ok(Layout::Builtin(Builtin::Float64))
         }
+        Content::FlexVar(_) => {
+            // If this was still a (Num *) then default to compiling it to i64
+            Ok(Layout::Builtin(Builtin::Int64))
+        }
         other => {
             panic!("TODO non structure Num.@Num flat_type {:?}", other);
         }

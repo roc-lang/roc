@@ -36,7 +36,7 @@ where
 {
     use self::LiteralType::*;
 
-    let mut typ = Int;
+    let mut typ = Num;
 
     // We already parsed 1 character (which may have been a minus sign).
     let mut bytes_parsed = 1;
@@ -71,8 +71,8 @@ where
             } else {
                 return err_unexpected();
             }
-        } else if next_ch == 'b' && typ == Int {
-            // We have to check for typ == Int because otherwise we get a false
+        } else if next_ch == 'b' && typ == Num {
+            // We have to check for typ == Num because otherwise we get a false
             // positive here when parsing a hex literal that happens to have
             // a 'b' in it, e.g. 0xbbbb
             if is_potentially_non_base10() {
@@ -129,7 +129,7 @@ where
     // If the number is malformed (outside the supported range),
     // we'll succeed with an appropriate Expr which records that.
     let expr = match typ {
-        Int => Expr::Int(&state.input[0..bytes_parsed]),
+        Num => Expr::Num(&state.input[0..bytes_parsed]),
         Float => Expr::Float(&state.input[0..bytes_parsed]),
         // For these we trim off the 0x/0o/0b part
         Hex => from_base(Base::Hex),
@@ -144,7 +144,7 @@ where
 
 #[derive(Debug, PartialEq, Eq)]
 enum LiteralType {
-    Int,
+    Num,
     Float,
     Hex,
     Octal,

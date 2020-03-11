@@ -56,7 +56,7 @@ pub fn fmt_pattern<'a>(
             fmt_pattern(buf, &loc_pattern.value, indent, true, only_comments);
         }
 
-        IntLiteral(string) => buf.push_str(string),
+        NumLiteral(string) => buf.push_str(string),
         NonBase10Literal {
             base,
             string,

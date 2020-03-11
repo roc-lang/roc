@@ -154,6 +154,10 @@ fn constrain_pattern(
             );
         }
 
+        NumLiteral(_, _) => {
+            panic!("TODO uniq constraint for NumLiteral");
+        }
+
         IntLiteral(_) => {
             let (num_uvar, int_uvar, num_type) = unique_int(var_store);
             state.constraints.push(exists(
@@ -339,6 +343,9 @@ pub fn constrain_expr(
     pub use roc_can::expr::Expr::*;
 
     match expr {
+        Num(_var, _) => {
+            panic!("TODO uniq::constrain_expr for Num literal");
+        }
         Int(var, _) => {
             let (num_uvar, int_uvar, num_type) = unique_int(var_store);
 

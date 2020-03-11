@@ -3,7 +3,7 @@ use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
-    int_expr_from_result,
+    int_expr_from_result, num_expr_from_result,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -33,6 +33,7 @@ pub struct Output {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
+    Num(Variable, i64),
     Int(Variable, i64),
     Float(Variable, f64),
     Str(Box<str>),
@@ -144,8 +145,8 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Int(string) => {
-            let answer = int_expr_from_result(var_store, finish_parsing_int(*string), env);
+        ast::Expr::Num(string) => {
+            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), env);
 
             (answer, Output::default())
         }

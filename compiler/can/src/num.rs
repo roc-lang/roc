@@ -7,6 +7,27 @@ use roc_types::subs::VarStore;
 use std::i64;
 
 #[inline(always)]
+pub fn num_expr_from_result(
+    var_store: &VarStore,
+    result: Result<i64, &str>,
+    env: &mut Env,
+) -> Expr {
+    match result {
+        Ok(int) => Expr::Num(var_store.fresh(), int),
+        Err(raw) => {
+            // (Num *) compiles to Int if it doesn't
+            // get specialized to something else first,
+            // so use int's overflow bounds here.
+            let runtime_error = IntOutsideRange(raw.into());
+
+            env.problem(Problem::RuntimeError(runtime_error.clone()));
+
+            Expr::RuntimeError(runtime_error)
+        }
+    }
+}
+
+#[inline(always)]
 pub fn int_expr_from_result(
     var_store: &VarStore,
     result: Result<i64, &str>,

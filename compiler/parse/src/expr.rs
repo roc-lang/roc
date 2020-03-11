@@ -299,7 +299,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         }
 
         Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
-        Expr::Int(string) => Ok(Pattern::IntLiteral(string)),
+        Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
         Expr::NonBase10Int {
             string,
             base,
@@ -551,7 +551,7 @@ fn annotation_or_alias<'a>(
         QualifiedIdentifier { .. } => {
             panic!("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`");
         }
-        IntLiteral(_)
+        NumLiteral(_)
         | NonBase10Literal { .. }
         | FloatLiteral(_)
         | StrLiteral(_)

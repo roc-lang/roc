@@ -674,7 +674,12 @@ fn pattern_to_vars_by_symbol(
             }
         }
 
-        IntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | Underscore | UnsupportedPattern(_) => {}
+        NumLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | UnsupportedPattern(_) => {}
 
         Shadowed(_, _) => {}
     }

@@ -141,8 +141,23 @@ fn from_can<'a>(
     use roc_can::pattern::Pattern::*;
 
     match can_expr {
-        Int(_, val) => Expr::Int(val),
-        Float(_, val) => Expr::Float(val),
+        Num(var, num) => match env.subs.get_without_compacting(var).content {
+            Content::Alias(Symbol::INT_INTEGER, args, _) => {
+                debug_assert!(args.len() == 0);
+                Expr::Int(num)
+            }
+            Content::FlexVar(_) => {
+                // If this was still a (Num *), assume compiling it to an Int
+                Expr::Int(num)
+            }
+            Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+                debug_assert!(args.len() == 0);
+                Expr::Float(num as f64)
+            }
+            other => panic!("Unrecognized Num type argument Content: {:?}", other),
+        },
+        Int(_, num) => Expr::Int(num),
+        Float(_, num) => Expr::Float(num),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
         Var(symbol) => Expr::Load(symbol),
         LetNonRec(def, ret_expr, _, _) => {
@@ -353,7 +368,7 @@ fn from_can<'a>(
                 elems: elems.into_bump_slice(),
             }
         }
-        other => panic!("TODO convert canonicalized {:?} to ll::Expr", other),
+        other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
     }
 }
 
@@ -579,6 +594,16 @@ fn from_can_when<'a>(
                     let mono_expr = from_can(env, loc_expr.value, procs, None);
 
                     match &loc_when_pat.value {
+                        NumLiteral(var, num) => {
+                            panic!(
+                                "TODO check if this var is an Int; if so, it's jumpable! var: {:?}, num: {:?}",
+                                var, num
+                            );
+                            // Switch only compares the condition to the
+                            // alternatives based on their bit patterns,
+                            // so casting from i64 to u64 makes no difference here.
+                            // jumpable_branches.push((*int as u64, mono_expr));
+                        }
                         IntLiteral(int) => {
                             // Switch only compares the condition to the
                             // alternatives based on their bit patterns,
