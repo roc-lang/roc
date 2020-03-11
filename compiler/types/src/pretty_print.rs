@@ -504,13 +504,13 @@ fn write_flat_type(
     }
 }
 
-fn chase_ext_tag_union(
-    subs: &mut Subs,
+pub fn chase_ext_tag_union(
+    subs: &Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
 ) -> Option<Content> {
     use FlatType::*;
-    match subs.get(var).content {
+    match subs.get_without_compacting(var).content {
         Content::Structure(EmptyTagUnion) => None,
         Content::Structure(TagUnion(tags, ext_var))
         | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {

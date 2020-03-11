@@ -42,7 +42,7 @@ struct NameState {
     normals: u32,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
 }
@@ -540,6 +540,89 @@ pub enum FlatType {
     EmptyRecord,
     EmptyTagUnion,
     Boolean(boolean_algebra::Bool),
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Copy)]
+pub struct ContentHash(u64);
+
+impl ContentHash {
+    pub fn from_var(var: Variable, subs: &Subs) -> Self {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        Self::from_var_help(var, subs, &mut hasher);
+
+        ContentHash(hasher.finish())
+    }
+
+    pub fn from_var_help<T>(var: Variable, subs: &Subs, hasher: &mut T)
+    where
+        T: std::hash::Hasher,
+    {
+        Self::from_content_help(&subs.get_without_compacting(var).content, subs, hasher)
+    }
+
+    pub fn from_content_help<T>(content: &Content, subs: &Subs, hasher: &mut T)
+    where
+        T: std::hash::Hasher,
+    {
+        match content {
+            Content::Alias(_, _, actual) => Self::from_var_help(*actual, subs, hasher),
+            Content::Structure(flat_type) => {
+                hasher.write_u8(0x10);
+                Self::from_flat_type_help(flat_type, subs, hasher)
+            }
+            Content::FlexVar(_) | Content::RigidVar(_) => {
+                hasher.write_u8(0x11);
+            }
+            Content::Error => {
+                hasher.write_u8(0x12);
+            }
+        }
+    }
+
+    pub fn from_flat_type_help<T>(flat_type: &FlatType, subs: &Subs, hasher: &mut T)
+    where
+        T: std::hash::Hasher,
+    {
+        use std::hash::Hash;
+
+        match flat_type {
+            FlatType::Func(arguments, ret) => {
+                hasher.write_u8(0);
+
+                for var in arguments {
+                    Self::from_var_help(*var, subs, hasher);
+                }
+
+                Self::from_var_help(*ret, subs, hasher);
+            }
+
+            FlatType::TagUnion(tags, ext) => {
+                hasher.write_u8(1);
+
+                // We have to sort by the key, so this clone seems to be required
+                let mut tag_vec = Vec::with_capacity(tags.len());
+                tag_vec.extend(tags.clone().into_iter());
+
+                match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
+                    Some(_) => panic!("Tag union with non-empty ext var"),
+                    None => {
+                        tag_vec.sort();
+                        for (name, arguments) in tag_vec {
+                            name.hash(hasher);
+
+                            for var in arguments {
+                                Self::from_var_help(var, subs, hasher);
+                            }
+                        }
+                    }
+                }
+            }
+
+            _ => todo!(),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
