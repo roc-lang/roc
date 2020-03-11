@@ -85,13 +85,15 @@ mod test_gen {
 
             // Declare all the Procs, then insert them into scope so their bodies
             // can look up their Funcs in scope later when calling each other by value.
-            for (name, opt_proc) in procs.iter() {
-                if let Some(proc) = opt_proc {
-                    let (func_id, sig) = declare_proc(&env, &mut module, name.clone(), proc);
+            for (_name, partial_proc) in procs.iter() {
+                for ( _content_hash, opt_proc ) in partial_proc.specializations.iter() {
+                    if let (name, Some(proc)) = opt_proc {
+                        let (func_id, sig) = declare_proc(&env, &mut module, name.clone(), &proc);
 
-                    declared.push((proc.clone(), sig.clone(), func_id));
+                        declared.push((proc.clone(), sig.clone(), func_id));
 
-                    scope.insert(name.clone(), ScopeEntry::Func { func_id, sig });
+                        scope.insert(name.clone(), ScopeEntry::Func { func_id, sig });
+                    }
                 }
             }
 
@@ -234,11 +236,13 @@ mod test_gen {
             // Add all the Proc headers to the module.
             // We have to do this in a separate pass first,
             // because their bodies may reference each other.
-            for (symbol, opt_proc) in procs.clone().into_iter() {
-                if let Some(proc) = opt_proc {
+            for (_symbol, partial_proc) in procs.clone().into_iter() {
+                for ( _content_hash, opt_proc ) in partial_proc.specializations {
+                if let (symbol, Some(proc)) = opt_proc {
                     let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
 
                     headers.push((proc, fn_val, arg_basic_types));
+                }
                 }
             }
 
@@ -369,12 +373,15 @@ mod test_gen {
             // Add all the Proc headers to the module.
             // We have to do this in a separate pass first,
             // because their bodies may reference each other.
-            for (symbol, opt_proc) in procs.clone().into_iter() {
-                if let Some(proc) = opt_proc {
+            for (_symbol, partial_proc) in procs.clone().into_iter() {
+                for ( _content_hash, opt_proc ) in partial_proc.specializations {
+                if let (symbol, Some(proc)) = opt_proc {
                     let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
 
                     headers.push((proc, fn_val, arg_basic_types));
                 }
+                }
+
             }
 
             // Build each proc using its header info.
