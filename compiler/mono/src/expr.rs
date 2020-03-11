@@ -137,14 +137,8 @@ enum IntOrFloat {
 }
 
 fn to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
-    // TODO FIXME Investigate why both INT_INT and INT_INTEGER (and same with
-    // FLOAT_FLOAT and FLOAT_FLOATINGPOINT) are necessary here. It should
-    // be one or the other, but not both! The fact that both are necessary
-    // isn't a problem for this phase, but it suggests that either something
-    // is wrong with aliases or (more likely) some numeric builtins are being
-    // assigned the wrong types somewhere.
     match subs.get_without_compacting(var).content {
-        Content::Alias(Symbol::INT_INT, args, _) | Content::Alias(Symbol::INT_INTEGER, args, _) => {
+        Content::Alias(Symbol::INT_INTEGER, args, _) => {
             debug_assert!(args.is_empty());
             IntOrFloat::IntType
         }
@@ -152,8 +146,7 @@ fn to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
             // If this was still a (Num *), assume compiling it to an Int
             IntOrFloat::IntType
         }
-        Content::Alias(Symbol::FLOAT_FLOAT, args, _)
-        | Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+        Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
             debug_assert!(args.is_empty());
             IntOrFloat::FloatType
         }
