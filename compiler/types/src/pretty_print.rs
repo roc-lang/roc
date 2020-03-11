@@ -525,6 +525,29 @@ pub fn chase_ext_tag_union(
     }
 }
 
+pub fn chase_ext_record(
+    subs: &Subs,
+    var: Variable,
+    fields: &mut MutMap<Lowercase, Variable>,
+) -> Option<Content> {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match subs.get_without_compacting(var).content {
+        Structure(Record(sub_fields, sub_ext)) => {
+            fields.extend(sub_fields.into_iter());
+
+            chase_ext_record(subs, sub_ext, fields)
+        }
+
+        Structure(EmptyRecord) => None,
+
+        Alias(_, _, var) => chase_ext_record(subs, var, fields),
+
+        content => Some(content),
+    }
+}
+
 fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
     match boolean.simplify(subs) {
         Err(atom) => write_boolean_atom(env, atom, subs, buf, parens),

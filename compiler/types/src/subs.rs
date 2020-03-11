@@ -567,7 +567,10 @@ impl ContentHash {
         T: std::hash::Hasher,
     {
         match content {
-            Content::Alias(_, _, actual) => Self::from_var_help(*actual, subs, hasher),
+            Content::Alias(_, _, actual) => {
+                // ensure an alias has the same hash as just the body of the alias
+                Self::from_var_help(*actual, subs, hasher)
+            }
             Content::Structure(flat_type) => {
                 hasher.write_u8(0x10);
                 Self::from_flat_type_help(flat_type, subs, hasher)
@@ -598,8 +601,48 @@ impl ContentHash {
                 Self::from_var_help(*ret, subs, hasher);
             }
 
-            FlatType::TagUnion(tags, ext) => {
+            FlatType::Apply(symbol, arguments) => {
                 hasher.write_u8(1);
+
+                symbol.hash(hasher);
+
+                for var in arguments {
+                    Self::from_var_help(*var, subs, hasher);
+                }
+            }
+
+            FlatType::EmptyRecord => {
+                hasher.write_u8(2);
+            }
+
+            FlatType::Record(fields, ext) => {
+                hasher.write_u8(3);
+
+                // We have to sort by the key, so this clone seems to be required
+                let mut fields = fields.clone();
+
+                match crate::pretty_print::chase_ext_record(subs, *ext, &mut fields) {
+                    Some(_) => panic!("Record with non-empty ext var"),
+                    None => {
+                        let mut fields_vec = Vec::with_capacity(fields.len());
+                        fields_vec.extend(fields.into_iter());
+
+                        fields_vec.sort();
+
+                        for (name, argument) in fields_vec {
+                            name.hash(hasher);
+                            Self::from_var_help(argument, subs, hasher);
+                        }
+                    }
+                }
+            }
+
+            FlatType::EmptyTagUnion => {
+                hasher.write_u8(4);
+            }
+
+            FlatType::TagUnion(tags, ext) => {
+                hasher.write_u8(5);
 
                 // We have to sort by the key, so this clone seems to be required
                 let mut tag_vec = Vec::with_capacity(tags.len());
@@ -620,7 +663,43 @@ impl ContentHash {
                 }
             }
 
-            _ => todo!(),
+            FlatType::RecursiveTagUnion(_rec, tags, ext) => {
+                // TODO should the rec_var be hashed in?
+                hasher.write_u8(6);
+
+                // We have to sort by the key, so this clone seems to be required
+                let mut tag_vec = Vec::with_capacity(tags.len());
+                tag_vec.extend(tags.clone().into_iter());
+
+                match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
+                    Some(_) => panic!("Tag union with non-empty ext var"),
+                    None => {
+                        tag_vec.sort();
+                        for (name, arguments) in tag_vec {
+                            name.hash(hasher);
+
+                            for var in arguments {
+                                Self::from_var_help(var, subs, hasher);
+                            }
+                        }
+                    }
+                }
+            }
+
+            FlatType::Boolean(boolean) => {
+                hasher.write_u8(7);
+                match boolean.simplify(subs) {
+                    Ok(_variables) => hasher.write_u8(1),
+                    Err(crate::boolean_algebra::Atom::One) => hasher.write_u8(1),
+                    Err(crate::boolean_algebra::Atom::Zero) => hasher.write_u8(0),
+                    Err(crate::boolean_algebra::Atom::Variable(_)) => unreachable!(),
+                }
+            }
+
+            FlatType::Erroneous(_problem) => {
+                hasher.write_u8(8);
+                //TODO hash the problem?
+            }
         }
     }
 }
