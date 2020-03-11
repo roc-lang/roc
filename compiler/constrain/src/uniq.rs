@@ -154,10 +154,10 @@ fn constrain_pattern(
             );
         }
 
-        NumLiteral(_, _) => {
-            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(var_store);
+        NumLiteral(inner_var, _) => {
+            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(*inner_var, var_store);
             state.constraints.push(exists(
-                vec![val_uvar, num_uvar, num_var],
+                vec![val_uvar, num_uvar, num_var, *inner_var],
                 Constraint::Pattern(pattern.region, PatternCategory::Num, num_type, expected),
             ));
         }
@@ -314,12 +314,15 @@ fn constrain_pattern(
     }
 }
 
-fn unique_unbound_num(var_store: &VarStore) -> (Variable, Variable, Type, Variable) {
+fn unique_unbound_num(
+    inner_var: Variable,
+    var_store: &VarStore,
+) -> (Variable, Variable, Type, Variable) {
     let num_var = var_store.fresh();
     let num_uvar = var_store.fresh();
     let val_uvar = var_store.fresh();
 
-    let val_type = Type::Variable(num_var);
+    let val_type = Type::Variable(inner_var);
     let val_utype = attr_type(Bool::variable(val_uvar), val_type);
 
     let num_utype = Type::Apply(Symbol::NUM_NUM, vec![val_utype]);
@@ -361,18 +364,19 @@ pub fn constrain_expr(
     pub use roc_can::expr::Expr::*;
 
     match expr {
-        Num(var, _) => {
-            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(var_store);
+        Num(inner_var, _) => {
+            let var = var_store.fresh();
+            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(*inner_var, var_store);
 
             exists(
-                vec![*var, val_uvar, num_uvar, num_var],
+                vec![var, *inner_var, val_uvar, num_uvar, num_var],
                 And(vec![
                     Eq(
-                        Type::Variable(*var),
+                        Type::Variable(var),
                         Expected::ForReason(Reason::NumLiteral, num_type, region),
                         region,
                     ),
-                    Eq(Type::Variable(*var), expected, region),
+                    Eq(Type::Variable(var), expected, region),
                 ]),
             )
         }
