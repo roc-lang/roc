@@ -13,9 +13,9 @@ mod helpers;
 mod test_opt {
     use crate::helpers::{infer_expr, uniq_expr};
     use bumpalo::Bump;
-    use roc_collections::all::MutMap;
     use roc_module::symbol::Symbol;
     use roc_mono::expr::Expr::{self, *};
+    use roc_mono::expr::Procs;
     use roc_mono::layout::{Builtin, Layout};
 
     // HELPERS
@@ -28,7 +28,7 @@ mod test_opt {
         let (_content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
         // Compile and add all the Procs before adding main
-        let mut procs = MutMap::default();
+        let mut procs = Procs::default();
         let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
         // assume 64-bit pointers
