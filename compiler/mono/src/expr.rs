@@ -7,12 +7,20 @@ use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::Located;
-use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
 
-pub type Procs<'a> = MutMap<Symbol, Option<Proc<'a>>>;
+pub type Procs<'a> = MutMap<Symbol, PartialProc<'a>>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartialProc<'a> {
+    pub annotation: Variable,
+    pub body: roc_can::expr::Expr,
+    pub specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
+    pub name: Symbol,
     pub args: &'a [(Layout<'a>, Symbol)],
     pub body: Expr<'a>,
     pub closes_over: Layout<'a>,
@@ -255,19 +263,29 @@ fn from_can<'a>(
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
 
-        Closure(_, _, _, loc_args, boxed_body) => {
-            let (loc_body, ret_var) = *boxed_body;
+        Closure(annotation, _, _, _loc_args, boxed_body) => {
+            let (loc_body, _ret_var) = *boxed_body;
             let symbol =
                 name.unwrap_or_else(|| gen_closure_name(procs, &mut env.ident_ids, env.home));
 
-            add_closure(env, symbol, loc_body.value, ret_var, &loc_args, procs)
+            procs.insert(
+                symbol,
+                PartialProc {
+                    annotation,
+                    body: loc_body.value,
+                    specializations: MutMap::default(),
+                },
+            );
+
+            // add_closure(env, symbol, loc_body.value, ret_var, &loc_args, procs)
+            Expr::FunctionPointer(symbol)
         }
 
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, ret_var) = *boxed;
 
             let specialize_builtin_functions = {
-                |symbol, subs: &Subs| match dbg!(symbol) {
+                |symbol, subs: &Subs| match symbol {
                     Symbol::NUM_ADD => match to_int_or_float(subs, ret_var) {
                         IntOrFloat::FloatType => Symbol::FLOAT_ADD,
                         IntOrFloat::IntType => Symbol::INT_ADD,
@@ -307,14 +325,19 @@ fn from_can<'a>(
                                         Symbol::LIST_SET
                                     };
 
-                                    call_by_name(env, procs, new_name, loc_args)
+                                    call_by_name(env, procs, fn_var, ret_var, new_name, loc_args)
                                 }
-                                _ => call_by_name(env, procs, proc_name, loc_args),
+                                _ => call_by_name(env, procs, fn_var, ret_var, proc_name, loc_args),
                             }
                         }
-                        specialized_proc_symbol => {
-                            call_by_name(env, procs, specialized_proc_symbol, loc_args)
-                        }
+                        specialized_proc_symbol => call_by_name(
+                            env,
+                            procs,
+                            fn_var,
+                            ret_var,
+                            specialized_proc_symbol,
+                            loc_args,
+                        ),
                     }
                 }
                 ptr => {
@@ -466,6 +489,7 @@ fn from_can<'a>(
     }
 }
 
+/*
 fn add_closure<'a>(
     env: &mut Env<'a, '_>,
     symbol: Symbol,
@@ -513,6 +537,7 @@ fn add_closure<'a>(
 
     Expr::FunctionPointer(symbol)
 }
+*/
 
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
@@ -819,19 +844,133 @@ fn from_can_when<'a>(
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
+    fn_var: Variable,
+    ret_var: Variable,
     proc_name: Symbol,
     loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
 ) -> Expr<'a> {
+    // create specialized procedure to call
+
+    // TODO this seems very wrong!
+    // something with mutable and immutable borrow of procs
+    let procs_clone = procs.clone();
+    let op_partial_proc = procs_clone.get(&proc_name);
+
+    let specialized_proc_name = if let Some(partial_proc) = op_partial_proc {
+        let content_hash = ContentHash::from_var(fn_var, env.subs);
+
+        if let Some(specialization) = partial_proc.specializations.get(&content_hash) {
+            // a specialization with this type hash already exists, use its symbol
+            specialization.0
+        } else {
+            // generate a symbol for this specialization
+            let spec_proc_name = gen_closure_name(procs, &mut env.ident_ids, env.home);
+
+            // register proc, so specialization doesn't loop infinitely
+            // for recursive definitions
+            let mut temp = partial_proc.clone();
+            temp.specializations
+                .insert(content_hash, (spec_proc_name, None));
+            procs.insert(proc_name, temp);
+
+            let proc = specialize_proc_body(
+                env,
+                procs,
+                fn_var,
+                ret_var,
+                spec_proc_name,
+                &loc_args,
+                partial_proc,
+            );
+
+            // we must be careful here, the specialization could have added different
+            // specializations of proc_name, so we must get the partial_proc again!
+            procs.get_mut(&proc_name).map(|partial_proc| {
+                partial_proc
+                    .specializations
+                    .insert(content_hash, (spec_proc_name, proc))
+            });
+
+            spec_proc_name
+        }
+    } else {
+        // This happens for built-in symbols (they are never defined as a Closure)
+        proc_name
+    };
+
+    // generate actual call
     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
-    let subs = env.subs;
-    let arena = env.arena;
 
     for (var, loc_arg) in loc_args {
-        let layout = Layout::from_var(arena, var, subs, env.pointer_size)
+        let layout = Layout::from_var(&env.arena, var, &env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
 
         args.push((from_can(env, loc_arg.value, procs, None), layout));
     }
 
-    Expr::CallByName(proc_name, args.into_bump_slice())
+    Expr::CallByName(specialized_proc_name, args.into_bump_slice())
+}
+
+fn specialize_proc_body<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    fn_var: Variable,
+    ret_var: Variable,
+    proc_name: Symbol,
+    loc_args: &[(Variable, Located<roc_can::expr::Expr>)],
+    partial_proc: &PartialProc<'a>,
+) -> Option<Proc<'a>> {
+    let mut subs: Subs = env.subs.clone();
+    roc_unify::unify::unify(&mut subs, partial_proc.annotation, fn_var);
+
+    // Swap in copied subs, specialize the body, put old subs back
+    let specialized_body = {
+        let mut env = Env {
+            subs: env.arena.alloc(subs),
+            arena: env.arena,
+            home: env.home,
+            ident_ids: &mut env.ident_ids,
+            pointer_size: env.pointer_size,
+        };
+
+        from_can(&mut env, partial_proc.body.clone(), procs, None)
+    };
+
+    let mut proc_args = Vec::with_capacity_in(loc_args.len(), &env.arena);
+
+    for (arg_var, _loc_arg) in loc_args.iter() {
+        let layout = match Layout::from_var(&env.arena, *arg_var, env.subs, env.pointer_size) {
+            Ok(layout) => layout,
+            Err(()) => {
+                // Invalid closure!
+                return None;
+            }
+        };
+
+        // TODO FIXME what is the idea here? arguments don't map to identifiers one-to-one
+        // e.g. underscore and record patterns
+        let arg_name = proc_name;
+
+        //                let arg_name: Symbol = match &loc_arg.value {
+        //                    Pattern::Identifier(symbol) => *symbol,
+        //                    _ => {
+        //                        panic!("TODO determine arg_name for pattern {:?}", loc_arg.value);
+        //                    }
+        //                };
+
+        proc_args.push((layout, arg_name));
+    }
+
+    let ret_layout = Layout::from_var(&env.arena, ret_var, env.subs, env.pointer_size)
+        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+
+    let proc = Proc {
+        name: proc_name,
+        args: proc_args.into_bump_slice(),
+        body: specialized_body,
+        closes_over: Layout::Struct(&[]),
+        ret_layout,
+    };
+
+    Some(proc)
 }

@@ -62,6 +62,8 @@ mod test_mono {
             pointer_size,
         );
 
+        dbg!(&procs);
+
         // Put this module's ident_ids back in the interns
         interns.all_ident_ids.insert(home, ident_ids);
 
@@ -119,6 +121,42 @@ mod test_mono {
                 ],
             ),
         );
+    }
+
+    #[test]
+    fn specialize_closure() {
+        compiles_to(
+            r#"
+            f = \x -> x + 5 
+            
+            { x: f 0x4, y: f 3.14 }
+            "#,
+            {
+                use self::Builtin::*;
+                use Layout::Builtin;
+                let home = test_home();
+
+                let gen_symbol_3 = Interns::from_index(home, 3);
+                let gen_symbol_4 = Interns::from_index(home, 4);
+
+                Struct {
+                    fields: &[
+                        (
+                            "x".into(),
+                            CallByName(gen_symbol_3, &[(Int(4), Builtin(Int64))]),
+                        ),
+                        (
+                            "y".into(),
+                            CallByName(gen_symbol_4, &[(Float(3.14), Builtin(Float64))]),
+                        ),
+                    ],
+                    layout: Layout::Struct(&[
+                        ("x".into(), Builtin(Int64)),
+                        ("y".into(), Builtin(Float64)),
+                    ]),
+                }
+            },
+        )
     }
 
     #[test]
