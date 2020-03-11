@@ -33,6 +33,8 @@ pub struct Output {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
+
+    // Int and Float store a variable to generate better error messages
     Int(Variable, i64),
     Float(Variable, f64),
     Str(Box<str>),

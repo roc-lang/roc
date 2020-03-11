@@ -17,7 +17,7 @@ mod test_report {
     use roc_types::types;
     use std::path::PathBuf;
     // use roc_region::all;
-    use crate::helpers::{assert_correct_variable_usage, can_expr, infer_expr, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use roc_reporting::report::ReportText::{EmText, Plain, Region, Type, Url, Value};
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
     use roc_types::subs::FlatType::EmptyRecord;
@@ -52,8 +52,6 @@ mod test_report {
             ..
         } = can_expr(expr_src);
         let mut subs = Subs::new(var_store.into());
-
-        assert_correct_variable_usage(&constraint);
 
         for (var, name) in output.introduced_variables.name_by_var {
             subs.rigid_var(var, name);

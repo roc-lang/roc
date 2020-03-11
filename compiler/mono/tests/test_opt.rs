@@ -31,6 +31,9 @@ mod test_opt {
         let mut procs = MutMap::default();
         let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
+        // assume 64-bit pointers
+        let pointer_size = std::mem::size_of::<u64>() as u32;
+
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
         let mono_expr = Expr::new(
             &arena,
@@ -39,6 +42,7 @@ mod test_opt {
             &mut procs,
             home,
             &mut ident_ids,
+            pointer_size,
         );
 
         assert_eq!(mono_expr, expected);

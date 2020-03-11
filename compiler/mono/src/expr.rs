@@ -24,6 +24,7 @@ struct Env<'a, 'i> {
     pub subs: &'a Subs,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
+    pub pointer_size: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -89,7 +90,6 @@ pub enum Expr<'a> {
     },
     Tag {
         tag_layout: Layout<'a>,
-        ext_layout: Layout<'a>,
         name: TagName,
         arguments: &'a [Expr<'a>],
     },
@@ -119,12 +119,14 @@ impl<'a> Expr<'a> {
         procs: &mut Procs<'a>,
         home: ModuleId,
         ident_ids: &mut IdentIds,
+        pointer_size: u32,
     ) -> Self {
         let mut env = Env {
             arena,
             subs,
             home,
             ident_ids,
+            pointer_size,
         };
 
         from_can(&mut env, can_expr, procs, None)
@@ -256,8 +258,8 @@ fn from_can<'a>(
                         args.push(from_can(env, loc_arg.value, procs, None));
                     }
 
-                    let layout =
-                        Layout::from_var(env.arena, fn_var, env.subs).unwrap_or_else(|err| {
+                    let layout = Layout::from_var(env.arena, fn_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
                     Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice(), layout)
@@ -283,7 +285,7 @@ fn from_can<'a>(
                 field_bodies.push((label, expr));
             }
 
-            let struct_layout = match Layout::from_var(arena, ext_var, subs) {
+            let struct_layout = match Layout::from_var(arena, ext_var, subs, env.pointer_size) {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -297,6 +299,40 @@ fn from_can<'a>(
             }
         }
 
+        Tag {
+            variant_var,
+            name,
+            arguments: args,
+            ..
+        } => {
+            let arena = env.arena;
+
+            match Layout::from_var(arena, variant_var, &env.subs, env.pointer_size) {
+                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => Expr::Bool(name == larger),
+                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&name) {
+                    Some(v) => Expr::Byte(*v),
+                    None => panic!("Tag name is not part of the type"),
+                },
+                Ok(layout) => {
+                    let mut arguments = Vec::with_capacity_in(args.len(), arena);
+
+                    for (_, arg) in args {
+                        arguments.push(from_can(env, arg.value, procs, None));
+                    }
+
+                    Expr::Tag {
+                        tag_layout: layout,
+                        name,
+                        arguments: arguments.into_bump_slice(),
+                    }
+                }
+                Err(()) => {
+                    // Invalid field!
+                    panic!("TODO gracefully handle Access with invalid struct_layout");
+                }
+            }
+        }
+
         Access {
             ext_var,
             field_var,
@@ -306,7 +342,7 @@ fn from_can<'a>(
             let subs = env.subs;
             let arena = env.arena;
 
-            let struct_layout = match Layout::from_var(arena, ext_var, subs) {
+            let struct_layout = match Layout::from_var(arena, ext_var, subs, env.pointer_size) {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -314,7 +350,7 @@ fn from_can<'a>(
                 }
             };
 
-            let field_layout = match Layout::from_var(arena, field_var, subs) {
+            let field_layout = match Layout::from_var(arena, field_var, subs, env.pointer_size) {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -335,7 +371,7 @@ fn from_can<'a>(
         } => {
             let subs = env.subs;
             let arena = env.arena;
-            let elem_layout = match Layout::from_var(arena, elem_var, subs) {
+            let elem_layout = match Layout::from_var(arena, elem_var, subs, env.pointer_size) {
                 Ok(layout) => layout,
                 Err(()) => {
                     panic!("TODO gracefully handle List with invalid element layout");
@@ -353,6 +389,7 @@ fn from_can<'a>(
                 elems: elems.into_bump_slice(),
             }
         }
+
         other => panic!("TODO convert canonicalized {:?} to ll::Expr", other),
     }
 }
@@ -370,7 +407,7 @@ fn add_closure<'a>(
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), arena);
 
     for (arg_var, loc_arg) in loc_args.iter() {
-        let layout = match Layout::from_var(arena, *arg_var, subs) {
+        let layout = match Layout::from_var(arena, *arg_var, subs, env.pointer_size) {
             Ok(layout) => layout,
             Err(()) => {
                 // Invalid closure!
@@ -390,7 +427,7 @@ fn add_closure<'a>(
         proc_args.push((layout, arg_name));
     }
 
-    let ret_layout = Layout::from_var(arena, ret_var, subs)
+    let ret_layout = Layout::from_var(arena, ret_var, subs, env.pointer_size)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     let proc = Proc {
@@ -415,7 +452,7 @@ fn store_pattern<'a>(
 ) {
     use roc_can::pattern::Pattern::*;
 
-    let layout = match Layout::from_var(env.arena, var, env.subs) {
+    let layout = match Layout::from_var(env.arena, var, env.subs, env.pointer_size) {
         Ok(layout) => layout,
         Err(()) => {
             panic!("TODO gen a runtime error here");
@@ -509,8 +546,8 @@ fn from_can_when<'a>(
                     let cond_rhs = arena.alloc(Expr::Int(*int));
                     let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
                     let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout =
-                        Layout::from_var(arena, expr_var, env.subs).unwrap_or_else(|err| {
+                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
                             panic!("TODO turn this into a RuntimeError {:?}", err)
                         });
 
@@ -528,8 +565,8 @@ fn from_can_when<'a>(
                     let cond_rhs = arena.alloc(Expr::Float(*float));
                     let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
                     let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout =
-                        Layout::from_var(arena, expr_var, env.subs).unwrap_or_else(|err| {
+                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
                             panic!("TODO turn this into a RuntimeError {:?}", err)
                         });
 
@@ -552,7 +589,7 @@ fn from_can_when<'a>(
             let arena = env.arena;
             let cond = from_can(env, loc_cond.value, procs, None);
             let subs = &env.subs;
-            let layout = Layout::from_var(arena, cond_var, subs)
+            let layout = Layout::from_var(arena, cond_var, subs, env.pointer_size)
                 .unwrap_or_else(|_| panic!("TODO generate a runtime error in from_can_when here!"));
 
             // We can Switch on integers and tags, because they both have
@@ -633,12 +670,12 @@ fn from_can_when<'a>(
                 debug_assert!(opt_default_branch.is_some());
                 let default_branch = opt_default_branch.unwrap();
 
-                let cond_layout =
-                    Layout::from_var(arena, cond_var, env.subs).unwrap_or_else(|err| {
+                let cond_layout = Layout::from_var(arena, cond_var, env.subs, env.pointer_size)
+                    .unwrap_or_else(|err| {
                         panic!("TODO turn cond_layout into a RuntimeError {:?}", err)
                     });
-                let ret_layout =
-                    Layout::from_var(arena, expr_var, env.subs).unwrap_or_else(|err| {
+                let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
+                    .unwrap_or_else(|err| {
                         panic!("TODO turn ret_layout into a RuntimeError {:?}", err)
                     });
 
@@ -678,7 +715,7 @@ fn call_by_name<'a>(
     let arena = env.arena;
 
     for (var, loc_arg) in loc_args {
-        let layout = Layout::from_var(arena, var, subs)
+        let layout = Layout::from_var(arena, var, subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
 
         args.push((from_can(env, loc_arg.value, procs, None), layout));

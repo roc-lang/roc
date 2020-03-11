@@ -2114,6 +2114,7 @@ mod test_uniq_solve {
                 "#
             ),
             "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * Int)",
+            // "Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * Int)",
         );
     }
 
