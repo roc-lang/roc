@@ -136,7 +136,7 @@ enum IntOrFloat {
     FloatType,
 }
 
-fn to_int_or_float<'a>(subs: &Subs, var: Variable) -> IntOrFloat {
+fn to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
     // TODO FIXME Investigate why both INT_INT and INT_INTEGER (and same with
     // FLOAT_FLOAT and FLOAT_FLOATINGPOINT) are necessary here. It should
     // be one or the other, but not both! The fact that both are necessary
@@ -145,7 +145,7 @@ fn to_int_or_float<'a>(subs: &Subs, var: Variable) -> IntOrFloat {
     // assigned the wrong types somewhere.
     match subs.get_without_compacting(var).content {
         Content::Alias(Symbol::INT_INT, args, _) | Content::Alias(Symbol::INT_INTEGER, args, _) => {
-            debug_assert!(args.len() == 0);
+            debug_assert!(args.is_empty());
             IntOrFloat::IntType
         }
         Content::FlexVar(_) => {
@@ -154,7 +154,7 @@ fn to_int_or_float<'a>(subs: &Subs, var: Variable) -> IntOrFloat {
         }
         Content::Alias(Symbol::FLOAT_FLOAT, args, _)
         | Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
-            debug_assert!(args.len() == 0);
+            debug_assert!(args.is_empty());
             IntOrFloat::FloatType
         }
         Content::Alias(Symbol::NUM_NUM, args, _) => {
@@ -162,7 +162,7 @@ fn to_int_or_float<'a>(subs: &Subs, var: Variable) -> IntOrFloat {
 
             match subs.get_without_compacting(args[0].1).content {
                 Content::Alias(Symbol::INT_INTEGER, args, _) => {
-                    debug_assert!(args.len() == 0);
+                    debug_assert!(args.is_empty());
                     IntOrFloat::IntType
                 }
                 Content::FlexVar(_) => {
@@ -170,7 +170,7 @@ fn to_int_or_float<'a>(subs: &Subs, var: Variable) -> IntOrFloat {
                     IntOrFloat::IntType
                 }
                 Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
-                    debug_assert!(args.len() == 0);
+                    debug_assert!(args.is_empty());
                     IntOrFloat::FloatType
                 }
                 Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
