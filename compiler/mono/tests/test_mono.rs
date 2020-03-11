@@ -79,6 +79,49 @@ mod test_mono {
     }
 
     #[test]
+    fn float_addition() {
+        compiles_to(
+            "3.0 + 4",
+            CallByName(
+                Symbol::FLOAT_ADD,
+                &[
+                    (Float(3.0), Layout::Builtin(Builtin::Float64)),
+                    (Float(4.0), Layout::Builtin(Builtin::Float64)),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn int_addition() {
+        compiles_to(
+            "0xDEADBEEF + 4",
+            CallByName(
+                Symbol::INT_ADD,
+                &[
+                    (Int(3735928559), Layout::Builtin(Builtin::Int64)),
+                    (Int(4), Layout::Builtin(Builtin::Int64)),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn num_addition() {
+        // Default to Int for `Num *`
+        compiles_to(
+            "3 + 5",
+            CallByName(
+                Symbol::INT_ADD,
+                &[
+                    (Int(3), Layout::Builtin(Builtin::Int64)),
+                    (Int(5), Layout::Builtin(Builtin::Int64)),
+                ],
+            ),
+        );
+    }
+
+    #[test]
     fn bool_literal() {
         let arena = Bump::new();
 

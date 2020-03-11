@@ -264,13 +264,23 @@ fn from_can<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, _) = *boxed;
+            let (fn_var, loc_expr, ret_var) = *boxed;
+
+            let specialize_builtin_functions = {
+                |symbol, subs: &Subs| match dbg!(symbol) {
+                    Symbol::NUM_ADD => match to_int_or_float(subs, ret_var) {
+                        IntOrFloat::FloatType => Symbol::FLOAT_ADD,
+                        IntOrFloat::IntType => Symbol::INT_ADD,
+                    },
+                    _ => symbol,
+                }
+            };
 
             match from_can(env, loc_expr.value, procs, None) {
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
-                    match proc_name {
+                    match specialize_builtin_functions(proc_name, &env.subs) {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
                             // The first arg is the one with the List in it.
@@ -302,7 +312,9 @@ fn from_can<'a>(
                                 _ => call_by_name(env, procs, proc_name, loc_args),
                             }
                         }
-                        _ => call_by_name(env, procs, proc_name, loc_args),
+                        specialized_proc_symbol => {
+                            call_by_name(env, procs, specialized_proc_symbol, loc_args)
+                        }
                     }
                 }
                 ptr => {
