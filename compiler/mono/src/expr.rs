@@ -3,13 +3,66 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can;
 use roc_can::pattern::Pattern;
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::Located;
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
 
-pub type Procs<'a> = MutMap<Symbol, PartialProc<'a>>;
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Procs<'a> {
+    user_defined: MutMap<Symbol, PartialProc<'a>>,
+    builtin: MutSet<Symbol>,
+}
+
+impl<'a> Procs<'a> {
+    fn insert_user_defined(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) {
+        self.user_defined.insert(symbol, partial_proc);
+    }
+
+    fn insert_specialization(
+        &mut self,
+        symbol: Symbol,
+        hash: ContentHash,
+        spec_name: Symbol,
+        proc: Option<Proc<'a>>,
+    ) {
+        self.user_defined
+            .get_mut(&symbol)
+            .map(|partial_proc| partial_proc.specializations.insert(hash, (spec_name, proc)));
+    }
+
+    fn get_user_defined(&self, symbol: Symbol) -> Option<&PartialProc<'a>> {
+        self.user_defined.get(&symbol)
+    }
+
+    pub fn len(&self) -> usize {
+        self.user_defined
+            .values()
+            .map(|v| v.specializations.len())
+            .sum()
+    }
+
+    fn insert_builtin(&mut self, symbol: Symbol) {
+        self.builtin.insert(symbol);
+    }
+
+    pub fn as_map(&self) -> MutMap<Symbol, Option<Proc<'a>>> {
+        let mut result = MutMap::default();
+
+        for partial_proc in self.user_defined.values() {
+            for (_, (symbol, opt_proc)) in partial_proc.specializations.clone().into_iter() {
+                result.insert(symbol, opt_proc);
+            }
+        }
+
+        for symbol in self.builtin.iter() {
+            result.insert(*symbol, None);
+        }
+
+        result
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
@@ -268,7 +321,7 @@ fn from_can<'a>(
             let symbol =
                 name.unwrap_or_else(|| gen_closure_name(procs, &mut env.ident_ids, env.home));
 
-            procs.insert(
+            procs.insert_user_defined(
                 symbol,
                 PartialProc {
                     annotation,
@@ -854,7 +907,7 @@ fn call_by_name<'a>(
     // TODO this seems very wrong!
     // something with mutable and immutable borrow of procs
     let procs_clone = procs.clone();
-    let op_partial_proc = procs_clone.get(&proc_name);
+    let op_partial_proc = procs_clone.get_user_defined(proc_name);
 
     let specialized_proc_name = if let Some(partial_proc) = op_partial_proc {
         let content_hash = ContentHash::from_var(fn_var, env.subs);
@@ -868,10 +921,12 @@ fn call_by_name<'a>(
 
             // register proc, so specialization doesn't loop infinitely
             // for recursive definitions
-            let mut temp = partial_proc.clone();
-            temp.specializations
-                .insert(content_hash, (spec_proc_name, None));
-            procs.insert(proc_name, temp);
+            //            let mut temp = partial_proc.clone();
+            //            temp.specializations
+            //                .insert(content_hash, (spec_proc_name, None));
+            //            procs.insert_user_defined(proc_name, temp);
+
+            procs.insert_specialization(proc_name, content_hash, spec_proc_name, None);
 
             let proc = specialize_proc_body(
                 env,
@@ -883,20 +938,18 @@ fn call_by_name<'a>(
                 partial_proc,
             );
 
-            // we must be careful here, the specialization could have added different
-            // specializations of proc_name, so we must get the partial_proc again!
-            procs.get_mut(&proc_name).map(|partial_proc| {
-                partial_proc
-                    .specializations
-                    .insert(content_hash, (spec_proc_name, proc))
-            });
+            procs.insert_specialization(proc_name, content_hash, spec_proc_name, proc);
 
             spec_proc_name
         }
     } else {
         // This happens for built-in symbols (they are never defined as a Closure)
+        procs.insert_builtin(proc_name);
         proc_name
     };
+
+    dbg!(proc_name);
+    dbg!(specialized_proc_name);
 
     // generate actual call
     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);

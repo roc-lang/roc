@@ -17,6 +17,7 @@ mod test_mono {
     use roc_module::ident::TagName::*;
     use roc_module::symbol::{Interns, Symbol};
     use roc_mono::expr::Expr::{self, *};
+    use roc_mono::expr::Procs;
     use roc_mono::layout::{Builtin, Layout};
     use roc_types::subs::Subs;
 
@@ -45,7 +46,7 @@ mod test_mono {
         let (_content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
         // Compile and add all the Procs before adding main
-        let mut procs = MutMap::default();
+        let mut procs = Procs::default();
         let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
         // assume 64-bit pointers
