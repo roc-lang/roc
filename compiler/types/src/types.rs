@@ -621,6 +621,7 @@ pub enum Reason {
     BinOpRet(BinOp),
     FloatLiteral,
     IntLiteral,
+    NumLiteral,
     InterpolatedStringVar,
     WhenBranch { index: usize },
     IfCondition,
@@ -638,8 +639,9 @@ pub enum PatternCategory {
     Set,
     Map,
     Ctor(TagName),
-    Int,
     Str,
+    Num,
+    Int,
     Float,
 }
 

@@ -691,24 +691,6 @@ Any operation which would result in one of these (such as `sqrt` or `/`) will
 result in a runtime exception. Similarly to overflow, you can opt into handling these
 a different way, such as `Float.trySqrt` which returns a `Result`.
 
-Also like Elm, number literals with decimal points are `Float`. However, number
-literals *without* a decimal point are always `Int`. So `x / 2` will never
-compile in Roc; it would have to be `x / 2.0`, like in Python. Also [like Python](https://www.python.org/dev/peps/pep-0515/)
-Roc permits underscores in number literals for readability purposes, and supports hexadecimal (`0x01`), octal (`0o01`), and binary (`0b01`) `Int` literals.
-
-If you put these into a hypothetical Roc REPL, here's what you'd see:
-
-```elm
-> 1_024 + 1_024
-2048 : Int
-
-> 1.0 + 2.14
-3.14 : Float
-
-> 1 + 2.14
-<type mismatch>
-```
-
 The way `+` works here is also a bit different than in Elm. Imagine if Elm's
 `(+)` operator had this type:
 
@@ -732,6 +714,32 @@ These don't exist in Roc.
 * `appendable` is only used in Elm for the `(++)` operator, and Roc doesn't have that operator.
 * `comparable` is used for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's `List.sort` accepts a `Sorter` argument which specifies how to sort the elements. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), and their keys have no visible type restrictions.
 * `number` is replaced by `Num`, as described earlier.
+
+Like in Elm, number literals with decimal points are `Float`. However, number
+literals *without* a decimal point are `Num *` instead of `number`. 
+Also [like Python](https://www.python.org/dev/peps/pep-0515/)
+Roc permits underscores in number literals for readability purposes. Roc also supports 
+hexadecimal (`0x01`), octal (`0o01`), and binary (`0b01`) integer literals; these 
+literals all have type `Int` instead of `Num *`.
+
+If you put these into a hypothetical Roc REPL, here's what you'd see:
+
+```elm
+> 1_024 + 1_024
+2048 : Num *
+
+> 1 + 2.14
+3.14 : Float
+
+> 1.0 + 1
+2.0 : Float
+
+> 1.1 + 0x11
+<type mismatch between 1.1 : Float and 0x11 : Int>
+
+> 11 + 0x11
+28 : Int
+```
 
 ## Operators
 

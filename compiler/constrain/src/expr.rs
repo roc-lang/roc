@@ -80,6 +80,14 @@ pub fn constrain_expr(
 ) -> Constraint {
     match expr {
         Int(var, _) => int_literal(*var, expected, region),
+        Num(var, _) => exists(
+            vec![*var],
+            Eq(
+                Type::Apply(Symbol::NUM_NUM, vec![Type::Variable(*var)]),
+                expected,
+                region,
+            ),
+        ),
         Float(var, _) => float_literal(*var, expected, region),
         EmptyRecord => constrain_empty_record(region, expected),
         Expr::Record(stored_var, fields) => {

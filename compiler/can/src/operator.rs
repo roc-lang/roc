@@ -62,8 +62,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
     match &loc_expr.value {
         Float(_)
         | Nested(Float(_))
-        | Int(_)
-        | Nested(Int(_))
+        | Num(_)
+        | Nested(Num(_))
         | NonBase10Int { .. }
         | Nested(NonBase10Int { .. })
         | Str(_)

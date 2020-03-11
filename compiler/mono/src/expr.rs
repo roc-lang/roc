@@ -133,6 +133,63 @@ impl<'a> Expr<'a> {
     }
 }
 
+enum IntOrFloat {
+    IntType,
+    FloatType,
+}
+
+fn to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
+    match subs.get_without_compacting(var).content {
+        Content::Alias(Symbol::INT_INTEGER, args, _) => {
+            debug_assert!(args.is_empty());
+            IntOrFloat::IntType
+        }
+        Content::FlexVar(_) => {
+            // If this was still a (Num *), assume compiling it to an Int
+            IntOrFloat::IntType
+        }
+        Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+            debug_assert!(args.is_empty());
+            IntOrFloat::FloatType
+        }
+        Content::Alias(Symbol::NUM_NUM, args, _) => {
+            debug_assert!(args.len() == 1);
+
+            match subs.get_without_compacting(args[0].1).content {
+                Content::Alias(Symbol::INT_INTEGER, args, _) => {
+                    debug_assert!(args.is_empty());
+                    IntOrFloat::IntType
+                }
+                Content::FlexVar(_) => {
+                    // If this was still a (Num *), assume compiling it to an Int
+                    IntOrFloat::IntType
+                }
+                Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+                    debug_assert!(args.is_empty());
+                    IntOrFloat::FloatType
+                }
+                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
+                    debug_assert!(attr_args.len() == 2);
+
+                    // Recurse on the second argument
+                    to_int_or_float(subs, attr_args[1])
+                }
+                other => panic!(
+                    "Unrecognized Num.Num alias type argument Content: {:?}",
+                    other
+                ),
+            }
+        }
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
+            debug_assert!(attr_args.len() == 2);
+
+            // Recurse on the second argument
+            to_int_or_float(subs, attr_args[1])
+        }
+        other => panic!("Unrecognized Num type argument Content: {:?}", other),
+    }
+}
+
 fn from_can<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -143,8 +200,12 @@ fn from_can<'a>(
     use roc_can::pattern::Pattern::*;
 
     match can_expr {
-        Int(_, val) => Expr::Int(val),
-        Float(_, val) => Expr::Float(val),
+        Num(var, num) => match to_int_or_float(env.subs, var) {
+            IntOrFloat::IntType => Expr::Int(num),
+            IntOrFloat::FloatType => Expr::Float(num as f64),
+        },
+        Int(_, num) => Expr::Int(num),
+        Float(_, num) => Expr::Float(num),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
         Var(symbol) => Expr::Load(symbol),
         LetNonRec(def, ret_expr, _, _) => {
@@ -389,8 +450,7 @@ fn from_can<'a>(
                 elems: elems.into_bump_slice(),
             }
         }
-
-        other => panic!("TODO convert canonicalized {:?} to ll::Expr", other),
+        other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
     }
 }
 
@@ -541,6 +601,30 @@ fn from_can_when<'a>(
             let (loc_when_pat2, loc_else) = iter.next().unwrap();
 
             match (&loc_when_pat1.value, &loc_when_pat2.value) {
+                (NumLiteral(var, num), NumLiteral(_, _)) | (NumLiteral(var, num), Underscore) => {
+                    let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
+                    let (builtin, cond_rhs_expr) = match to_int_or_float(env.subs, *var) {
+                        IntOrFloat::IntType => (Builtin::Int64, Expr::Int(*num)),
+                        IntOrFloat::FloatType => (Builtin::Float64, Expr::Float(*num as f64)),
+                    };
+
+                    let cond_rhs = arena.alloc(cond_rhs_expr);
+                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
+                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
+                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn this into a RuntimeError {:?}", err)
+                        });
+
+                    Expr::Cond {
+                        cond_layout: Layout::Builtin(builtin),
+                        cond_lhs,
+                        cond_rhs,
+                        pass,
+                        fail,
+                        ret_layout,
+                    }
+                }
                 (IntLiteral(int), IntLiteral(_)) | (IntLiteral(int), Underscore) => {
                     let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
                     let cond_rhs = arena.alloc(Expr::Int(*int));
@@ -616,6 +700,22 @@ fn from_can_when<'a>(
                     let mono_expr = from_can(env, loc_expr.value, procs, None);
 
                     match &loc_when_pat.value {
+                        NumLiteral(var, num) => {
+                            // This is jumpable iff it's an int
+                            match to_int_or_float(env.subs, *var) {
+                                IntOrFloat::IntType => {
+                                    jumpable_branches.push((*num as u64, mono_expr));
+                                }
+                                IntOrFloat::FloatType => {
+                                    // The type checker should have converted these mismatches into RuntimeErrors already!
+                                    if cfg!(debug_assertions) {
+                                        panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", loc_when_pat);
+                                    } else {
+                                        unreachable!();
+                                    }
+                                }
+                            };
+                        }
                         IntLiteral(int) => {
                             // Switch only compares the condition to the
                             // alternatives based on their bit patterns,
