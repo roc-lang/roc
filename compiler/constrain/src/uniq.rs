@@ -369,7 +369,7 @@ pub fn constrain_expr(
                 And(vec![
                     Eq(
                         Type::Variable(*var),
-                        Expected::ForReason(Reason::IntLiteral, num_type, region),
+                        Expected::ForReason(Reason::NumLiteral, num_type, region),
                         region,
                     ),
                     Eq(Type::Variable(*var), expected, region),
