@@ -672,14 +672,20 @@ fn from_can_when<'a>(
 
                     match &loc_when_pat.value {
                         NumLiteral(var, num) => {
-                            panic!(
-                                "TODO check if this var is an Int; if so, it's jumpable! var: {:?}, num: {:?}",
-                                var, num
-                            );
-                            // Switch only compares the condition to the
-                            // alternatives based on their bit patterns,
-                            // so casting from i64 to u64 makes no difference here.
-                            // jumpable_branches.push((*int as u64, mono_expr));
+                            // This is jumpable iff it's an int
+                            match to_int_or_float(env.subs, *var) {
+                                IntOrFloat::IntType => {
+                                    jumpable_branches.push((*num as u64, mono_expr));
+                                }
+                                IntOrFloat::FloatType => {
+                                    // The type checker should have converted these mismatches into RuntimeErrors already!
+                                    if cfg!(debug_assertions) {
+                                        panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", loc_when_pat);
+                                    } else {
+                                        unreachable!();
+                                    }
+                                }
+                            };
                         }
                         IntLiteral(int) => {
                             // Switch only compares the condition to the
