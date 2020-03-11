@@ -155,7 +155,11 @@ fn constrain_pattern(
         }
 
         NumLiteral(_, _) => {
-            panic!("TODO uniq constraint for NumLiteral");
+            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(var_store);
+            state.constraints.push(exists(
+                vec![val_uvar, num_uvar, num_var],
+                Constraint::Pattern(pattern.region, PatternCategory::Num, num_type, expected),
+            ));
         }
 
         IntLiteral(_) => {
@@ -310,6 +314,20 @@ fn constrain_pattern(
     }
 }
 
+fn unique_unbound_num(var_store: &VarStore) -> (Variable, Variable, Type, Variable) {
+    let num_var = var_store.fresh();
+    let num_uvar = var_store.fresh();
+    let val_uvar = var_store.fresh();
+
+    let val_type = Type::Variable(num_var);
+    let val_utype = attr_type(Bool::variable(val_uvar), val_type);
+
+    let num_utype = Type::Apply(Symbol::NUM_NUM, vec![val_utype]);
+    let num_type = attr_type(Bool::variable(num_uvar), num_utype);
+
+    (num_uvar, val_uvar, num_type, num_var)
+}
+
 fn unique_num(var_store: &VarStore, symbol: Symbol) -> (Variable, Variable, Type) {
     let num_uvar = var_store.fresh();
     let val_uvar = var_store.fresh();
@@ -343,8 +361,20 @@ pub fn constrain_expr(
     pub use roc_can::expr::Expr::*;
 
     match expr {
-        Num(_var, _) => {
-            panic!("TODO uniq::constrain_expr for Num literal");
+        Num(var, _) => {
+            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(var_store);
+
+            exists(
+                vec![*var, val_uvar, num_uvar, num_var],
+                And(vec![
+                    Eq(
+                        Type::Variable(*var),
+                        Expected::ForReason(Reason::IntLiteral, num_type, region),
+                        region,
+                    ),
+                    Eq(Type::Variable(*var), expected, region),
+                ]),
+            )
         }
         Int(var, _) => {
             let (num_uvar, int_uvar, num_type) = unique_int(var_store);
