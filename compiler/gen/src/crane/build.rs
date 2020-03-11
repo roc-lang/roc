@@ -120,9 +120,7 @@ pub fn build_expr<'a, B: Backend>(
             let fn_id = match scope.get(name) {
                 Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
                 other => panic!(
-                    "FunctionPointer could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
-                    name, other, scope
-                ),
+                    "FunctionPointer could not find function named {:?} declared in scope (and it was not special-cased in crane::build as a builtin); instead, found {:?} in scope {:?}", name, other, scope),
             };
 
             let func_ref = module.declare_func_in_func(fn_id, &mut builder.func);
@@ -665,12 +663,9 @@ fn call_by_name<'a, B: Backend>(
         }
         _ => {
             let fn_id = match scope.get(&symbol) {
-                    Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
-                    other => panic!(
-                        "CallByName could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
-                        symbol, other, scope
-                    ),
-                };
+                Some(ScopeEntry::Func { func_id, .. }) => *func_id,
+                other => panic!("CallByName could not find function named {:?} declared in scope (and it was not special-cased in crane::build as a builtin); instead, found {:?} in scope {:?}", symbol, other, scope),
+            };
             let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
             let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
 
