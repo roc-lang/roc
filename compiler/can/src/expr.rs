@@ -33,7 +33,12 @@ pub struct Output {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
+
+    // Num stores the `a` variable in `Num a`. Not the same as the variable
+    // stored in Int and Float below, which is strictly for better error messages
     Num(Variable, i64),
+
+    // Int and Float store a variable to generate better error messages
     Int(Variable, i64),
     Float(Variable, f64),
     Str(Box<str>),

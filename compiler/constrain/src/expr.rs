@@ -10,7 +10,7 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::Field;
 use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
@@ -326,14 +326,7 @@ pub fn constrain_expr(
             branches,
             final_else,
         } => {
-            // TODO use Bool alias here, so we don't allocate this type every time
-            let bool_type = Type::TagUnion(
-                vec![
-                    (TagName::Global("True".into()), vec![]),
-                    (TagName::Global("False".into()), vec![]),
-                ],
-                Box::new(Type::EmptyTagUnion),
-            );
+            let bool_type = Type::Variable(Variable::BOOL);
             let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);
             let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
 

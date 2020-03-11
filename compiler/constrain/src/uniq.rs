@@ -7,7 +7,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::{Expr, Field};
 use roc_can::pattern::{Pattern, RecordDestruct};
 use roc_collections::all::{ImMap, ImSet, SendMap};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::{Atom, Bool};
@@ -802,14 +802,7 @@ pub fn constrain_expr(
             final_else,
         } => {
             // TODO use Bool alias here, so we don't allocate this type every time
-            let bool_type = Type::TagUnion(
-                vec![
-                    (TagName::Global("True".into()), vec![]),
-                    (TagName::Global("False".into()), vec![]),
-                ],
-                Box::new(Type::EmptyTagUnion),
-            );
-
+            let bool_type = Type::Variable(Variable::BOOL);
             let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
             let mut cond_uniq_vars = Vec::with_capacity(branches.len() + 2);
 
