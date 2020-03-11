@@ -131,6 +131,65 @@ impl<'a> Expr<'a> {
     }
 }
 
+fn from_can_num<'a>(subs: &Subs, var: Variable, num: i64) -> Expr<'a> {
+    // TODO FIXME Investigate why both INT_INT and INT_INTEGER (and same with
+    // FLOAT_FLOAT and FLOAT_FLOATINGPOINT) are necessary here. It should
+    // be one or the other, but not both! The fact that both are necessary
+    // isn't a problem for this phase, but it suggests that either something
+    // is wrong with aliases or (more likely) some numeric builtins are being
+    // assigned the wrong types somewhere.
+    match subs.get_without_compacting(var).content {
+        Content::Alias(Symbol::INT_INT, args, _) | Content::Alias(Symbol::INT_INTEGER, args, _) => {
+            debug_assert!(args.len() == 0);
+            Expr::Int(num)
+        }
+        Content::FlexVar(_) => {
+            // If this was still a (Num *), assume compiling it to an Int
+            Expr::Int(num)
+        }
+        Content::Alias(Symbol::FLOAT_FLOAT, args, _)
+        | Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+            debug_assert!(args.len() == 0);
+            Expr::Float(num as f64)
+        }
+        Content::Alias(Symbol::NUM_NUM, args, _) => {
+            debug_assert!(args.len() == 1);
+
+            match subs.get_without_compacting(args[0].1).content {
+                Content::Alias(Symbol::INT_INTEGER, args, _) => {
+                    debug_assert!(args.len() == 0);
+                    Expr::Int(num)
+                }
+                Content::FlexVar(_) => {
+                    // If this was still a (Num *), assume compiling it to an Int
+                    Expr::Int(num)
+                }
+                Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+                    debug_assert!(args.len() == 0);
+                    Expr::Float(num as f64)
+                }
+                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
+                    debug_assert!(attr_args.len() == 2);
+
+                    // Recurse on the second argument
+                    from_can_num(subs, attr_args[1], num)
+                }
+                other => panic!(
+                    "Unrecognized Num.Num alias type argument Content: {:?}",
+                    other
+                ),
+            }
+        }
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
+            debug_assert!(attr_args.len() == 2);
+
+            // Recurse on the second argument
+            from_can_num(subs, attr_args[1], num)
+        }
+        other => panic!("Unrecognized Num type argument Content: {:?}", other),
+    }
+}
+
 fn from_can<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -141,21 +200,7 @@ fn from_can<'a>(
     use roc_can::pattern::Pattern::*;
 
     match can_expr {
-        Num(var, num) => match env.subs.get_without_compacting(var).content {
-            Content::Alias(Symbol::INT_INTEGER, args, _) => {
-                debug_assert!(args.len() == 0);
-                Expr::Int(num)
-            }
-            Content::FlexVar(_) => {
-                // If this was still a (Num *), assume compiling it to an Int
-                Expr::Int(num)
-            }
-            Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
-                debug_assert!(args.len() == 0);
-                Expr::Float(num as f64)
-            }
-            other => panic!("Unrecognized Num type argument Content: {:?}", other),
-        },
+        Num(var, num) => from_can_num(env.subs, var, num),
         Int(_, num) => Expr::Int(num),
         Float(_, num) => Expr::Float(num),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
