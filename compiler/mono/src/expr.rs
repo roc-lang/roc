@@ -101,6 +101,7 @@ pub enum Expr<'a> {
         label: Lowercase,
         field_layout: Layout<'a>,
         struct_layout: Layout<'a>,
+        record: &'a Expr<'a>,
     },
 
     Array {
@@ -398,7 +399,7 @@ fn from_can<'a>(
             ext_var,
             field_var,
             field,
-            ..
+            loc_expr,
         } => {
             let subs = env.subs;
             let arena = env.arena;
@@ -419,10 +420,13 @@ fn from_can<'a>(
                 }
             };
 
+            let record = arena.alloc(from_can(env, loc_expr.value, procs, None));
+
             Expr::Access {
                 label: field,
                 field_layout,
                 struct_layout,
+                record,
             }
         }
 

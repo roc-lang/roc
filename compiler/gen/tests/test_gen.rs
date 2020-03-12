@@ -873,9 +873,7 @@ mod test_gen {
     //     assert_evals_to!(
     //         indoc!(
     //             r#"
-    //                 point = { x: 15, y: 17, z: 19 }
-
-    //                 point.x
+    //                 { y: 17, x: 15, z: 19 }.x
     //             "#
     //         ),
     //         15,
@@ -885,20 +883,17 @@ mod test_gen {
     //     assert_evals_to!(
     //         indoc!(
     //             r#"
-    //                 point = { x: 15, y: 17, z: 19 }
-
-    //                 point.y
+    //                 { x: 15, y: 17, z: 19 }.y
     //             "#
     //         ),
     //         17,
     //         i64
     //     );
+
     //     assert_evals_to!(
     //         indoc!(
     //             r#"
-    //                 point = { x: 15, y: 17, z: 19 }
-
-    //                 point.z
+    //                 { x: 15, y: 17, z: 19 }.z
     //             "#
     //         ),
     //         19,
