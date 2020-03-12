@@ -806,6 +806,21 @@ pub fn constrain_expr(
             let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
             let mut cond_uniq_vars = Vec::with_capacity(branches.len() + 2);
 
+            // TODO why does this cond var exist? is it for error messages?
+            let cond_uniq_var = var_store.fresh();
+            cond_uniq_vars.push(cond_uniq_var);
+            let cond_var_is_bool_con = Eq(
+                Type::Variable(*cond_var),
+                Expected::ForReason(
+                    Reason::IfCondition,
+                    attr_type(Bool::variable(cond_uniq_var), bool_type.clone()),
+                    region,
+                ),
+                Region::zero(),
+            );
+
+            branch_cons.push(cond_var_is_bool_con);
+
             match expected {
                 Expected::FromAnnotation(name, arity, _, tipe) => {
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
@@ -817,11 +832,16 @@ pub fn constrain_expr(
                         );
                         cond_uniq_vars.push(cond_uniq_var);
 
-                        let cond_con = Eq(
-                            Type::Variable(*cond_var),
-                            expect_bool.clone(),
+                        let cond_con = constrain_expr(
+                            env,
+                            var_store,
+                            var_usage,
+                            applied_usage_constraint,
                             loc_cond.region,
+                            &loc_cond.value,
+                            expect_bool,
                         );
+
                         let then_con = constrain_expr(
                             env,
                             var_store,
@@ -879,11 +899,16 @@ pub fn constrain_expr(
                         );
                         cond_uniq_vars.push(cond_uniq_var);
 
-                        let cond_con = Eq(
-                            Type::Variable(*cond_var),
-                            expect_bool.clone(),
+                        let cond_con = constrain_expr(
+                            env,
+                            var_store,
+                            var_usage,
+                            applied_usage_constraint,
                             loc_cond.region,
+                            &loc_cond.value,
+                            expect_bool,
                         );
+
                         let then_con = constrain_expr(
                             env,
                             var_store,
