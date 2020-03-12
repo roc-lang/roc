@@ -547,6 +547,17 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
+        Symbol::FLOAT_ADD => {
+            debug_assert!(args.len() == 2);
+
+            let float_val = env.builder.build_float_add(
+                args[0].into_float_value(),
+                args[1].into_float_value(),
+                "add_f64",
+            );
+
+            BasicValueEnum::FloatValue(float_val)
+        }
         Symbol::NUM_SUB => {
             debug_assert!(args.len() == 2);
 

@@ -801,6 +801,19 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_add_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.1 + 2.4 + 3
+                "#
+            ),
+            6.5,
+            f64
+        );
+    }
+
+    #[test]
     fn gen_add_i64() {
         assert_evals_to!(
             indoc!(

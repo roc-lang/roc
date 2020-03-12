@@ -552,6 +552,13 @@ fn call_by_name<'a, B: Backend>(
 
             builder.ins().iadd(a, b)
         }
+        Symbol::FLOAT_ADD => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().fadd(a, b)
+        }
         Symbol::NUM_SUB => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);

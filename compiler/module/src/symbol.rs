@@ -586,7 +586,7 @@ define_builtins! {
         5 FLOAT_SQRT: "sqrt"
         6 FLOAT_HIGHEST: "highest"
         7 FLOAT_LOWEST: "lowest"
-        8 FLOAT_ADD: "add"
+        8 FLOAT_ADD: "#add"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
