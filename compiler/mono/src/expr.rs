@@ -908,49 +908,62 @@ fn call_by_name<'a>(
 ) -> Expr<'a> {
     // create specialized procedure to call
 
-    // TODO this seems very wrong!
-    // something with mutable and immutable borrow of procs
-    let procs_clone = procs.clone();
-    let op_partial_proc = procs_clone.get_user_defined(proc_name);
+    // If we need to specialize the body, this will get populated with the info
+    // we need to do that. This is defined outside the procs.get_user_defined(...) call
+    // because if we tried to specialize the body inside that match, we would
+    // get a borrow checker error about trying to borrow `procs` as mutable
+    // while there is still an active immutable borrow.
+    let opt_specialize_body: Option<(ContentHash, Variable, roc_can::expr::Expr)>;
 
-    let specialized_proc_name = if let Some(partial_proc) = op_partial_proc {
+    let specialized_proc_name = if let Some(partial_proc) = procs.get_user_defined(proc_name) {
         let content_hash = ContentHash::from_var(fn_var, env.subs);
 
         if let Some(specialization) = partial_proc.specializations.get(&content_hash) {
+            opt_specialize_body = None;
+
             // a specialization with this type hash already exists, use its symbol
             specialization.0
         } else {
+            opt_specialize_body = Some((
+                content_hash,
+                partial_proc.annotation,
+                partial_proc.body.clone(),
+            ));
+
             // generate a symbol for this specialization
-            let spec_proc_name = gen_closure_name(procs, &mut env.ident_ids, env.home);
-
-            // register proc, so specialization doesn't loop infinitely
-            // for recursive definitions
-            //            let mut temp = partial_proc.clone();
-            //            temp.specializations
-            //                .insert(content_hash, (spec_proc_name, None));
-            //            procs.insert_user_defined(proc_name, temp);
-
-            procs.insert_specialization(proc_name, content_hash, spec_proc_name, None);
-
-            let proc = specialize_proc_body(
-                env,
-                procs,
-                fn_var,
-                ret_var,
-                spec_proc_name,
-                &loc_args,
-                partial_proc,
-            );
-
-            procs.insert_specialization(proc_name, content_hash, spec_proc_name, proc);
-
-            spec_proc_name
+            gen_closure_name(procs, &mut env.ident_ids, env.home)
         }
     } else {
+        opt_specialize_body = None;
+
         // This happens for built-in symbols (they are never defined as a Closure)
         procs.insert_builtin(proc_name);
         proc_name
     };
+
+    if let Some((content_hash, annotation, body)) = opt_specialize_body {
+        // register proc, so specialization doesn't loop infinitely
+        // for recursive definitions
+        //            let mut temp = partial_proc.clone();
+        //            temp.specializations
+        //                .insert(content_hash, (spec_proc_name, None));
+        //            procs.insert_user_defined(proc_name, temp);
+
+        procs.insert_specialization(proc_name, content_hash, specialized_proc_name, None);
+
+        let proc = specialize_proc_body(
+            env,
+            procs,
+            fn_var,
+            ret_var,
+            specialized_proc_name,
+            &loc_args,
+            annotation,
+            body,
+        );
+
+        procs.insert_specialization(proc_name, content_hash, specialized_proc_name, proc);
+    }
 
     dbg!(proc_name);
     dbg!(specialized_proc_name);
@@ -975,12 +988,13 @@ fn specialize_proc_body<'a>(
     ret_var: Variable,
     proc_name: Symbol,
     loc_args: &[(Variable, Located<roc_can::expr::Expr>)],
-    partial_proc: &PartialProc<'a>,
+    annotation: Variable,
+    body: roc_can::expr::Expr,
 ) -> Option<Proc<'a>> {
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
-    roc_unify::unify::unify(env.subs, partial_proc.annotation, fn_var);
-    let specialized_body = from_can(env, partial_proc.body.clone(), procs, None);
+    roc_unify::unify::unify(env.subs, annotation, fn_var);
+    let specialized_body = from_can(env, body, procs, None);
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
 
