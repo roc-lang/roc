@@ -436,7 +436,7 @@ fn write_flat_type(
 
             buf.push_str(" ]");
 
-            if let Some(content) = ext_content {
+            if let Err(content) = ext_content {
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
@@ -483,7 +483,7 @@ fn write_flat_type(
 
             buf.push_str(" ]");
 
-            if let Some(content) = ext_content {
+            if let Err(content) = ext_content {
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
@@ -508,10 +508,10 @@ pub fn chase_ext_tag_union(
     subs: &Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Option<Content> {
+) -> Result<(), Content> {
     use FlatType::*;
     match subs.get_without_compacting(var).content {
-        Content::Structure(EmptyTagUnion) => None,
+        Content::Structure(EmptyTagUnion) => Ok(()),
         Content::Structure(TagUnion(tags, ext_var))
         | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             for (label, vars) in tags {
@@ -521,7 +521,7 @@ pub fn chase_ext_tag_union(
             chase_ext_tag_union(subs, ext_var, fields)
         }
 
-        content => Some(content),
+        content => Err(content),
     }
 }
 
@@ -529,7 +529,7 @@ pub fn chase_ext_record(
     subs: &Subs,
     var: Variable,
     fields: &mut MutMap<Lowercase, Variable>,
-) -> Option<Content> {
+) -> Result<(), Content> {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
@@ -540,11 +540,11 @@ pub fn chase_ext_record(
             chase_ext_record(subs, sub_ext, fields)
         }
 
-        Structure(EmptyRecord) => None,
+        Structure(EmptyRecord) => Ok(()),
 
         Alias(_, _, var) => chase_ext_record(subs, var, fields),
 
-        content => Some(content),
+        content => Err(content),
     }
 }
 

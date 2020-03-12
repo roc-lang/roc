@@ -160,6 +160,26 @@ mod test_mono {
         )
     }
 
+    //    #[test]
+    //    fn record_pattern() {
+    //        compiles_to(
+    //            r#"
+    //            \{ x } -> x + 0x5
+    //            "#,
+    //            { Float(3.45) },
+    //        )
+    //    }
+    //
+    //    #[test]
+    //    fn tag_pattern() {
+    //        compiles_to(
+    //            r#"
+    //            \Foo x -> x + 0x5
+    //            "#,
+    //            { Float(3.45) },
+    //        )
+    //    }
+
     #[test]
     fn polymorphic_identity() {
         compiles_to(

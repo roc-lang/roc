@@ -554,7 +554,7 @@ pub enum FlatType {
 pub struct ContentHash(u64);
 
 impl ContentHash {
-    pub fn from_var(var: Variable, subs: &Subs) -> Self {
+    pub fn from_var(var: Variable, subs: &mut Subs) -> Self {
         use std::hash::Hasher;
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -563,14 +563,14 @@ impl ContentHash {
         ContentHash(hasher.finish())
     }
 
-    pub fn from_var_help<T>(var: Variable, subs: &Subs, hasher: &mut T)
+    pub fn from_var_help<T>(var: Variable, subs: &mut Subs, hasher: &mut T)
     where
         T: std::hash::Hasher,
     {
-        Self::from_content_help(&subs.get_without_compacting(var).content, subs, hasher)
+        Self::from_content_help(var, &subs.get_without_compacting(var).content, subs, hasher)
     }
 
-    pub fn from_content_help<T>(content: &Content, subs: &Subs, hasher: &mut T)
+    pub fn from_content_help<T>(var: Variable, content: &Content, subs: &mut Subs, hasher: &mut T)
     where
         T: std::hash::Hasher,
     {
@@ -581,7 +581,7 @@ impl ContentHash {
             }
             Content::Structure(flat_type) => {
                 hasher.write_u8(0x10);
-                Self::from_flat_type_help(flat_type, subs, hasher)
+                Self::from_flat_type_help(var, flat_type, subs, hasher)
             }
             Content::FlexVar(_) | Content::RigidVar(_) => {
                 hasher.write_u8(0x11);
@@ -592,8 +592,12 @@ impl ContentHash {
         }
     }
 
-    pub fn from_flat_type_help<T>(flat_type: &FlatType, subs: &Subs, hasher: &mut T)
-    where
+    pub fn from_flat_type_help<T>(
+        flat_type_var: Variable,
+        flat_type: &FlatType,
+        subs: &mut Subs,
+        hasher: &mut T,
+    ) where
         T: std::hash::Hasher,
     {
         use std::hash::Hash;
@@ -623,25 +627,49 @@ impl ContentHash {
                 hasher.write_u8(2);
             }
 
-            FlatType::Record(fields, ext) => {
+            FlatType::Record(record_fields, ext) => {
                 hasher.write_u8(3);
 
-                // We have to sort by the key, so this clone seems to be required
-                let mut fields = fields.clone();
+                // NOTE: This function will modify the subs, putting all fields from the ext_var
+                // into the record itself, then setting the ext_var to EMPTY_RECORD
 
-                match crate::pretty_print::chase_ext_record(subs, *ext, &mut fields) {
-                    Some(_) => panic!("Record with non-empty ext var"),
-                    None => {
-                        let mut fields_vec = Vec::with_capacity(fields.len());
-                        fields_vec.extend(fields.into_iter());
+                let mut fields = Vec::with_capacity(record_fields.len());
 
-                        fields_vec.sort();
-
-                        for (name, argument) in fields_vec {
-                            name.hash(hasher);
-                            Self::from_var_help(argument, subs, hasher);
+                let mut extracted_fields_from_ext = false;
+                if *ext != Variable::EMPTY_RECORD {
+                    let mut fields_map = MutMap::default();
+                    match crate::pretty_print::chase_ext_record(subs, *ext, &mut fields_map) {
+                        Err(Content::FlexVar(_)) | Ok(()) => {
+                            if !fields_map.is_empty() {
+                                extracted_fields_from_ext = true;
+                                fields.extend(fields_map.into_iter());
+                            }
                         }
+                        Err(content) => panic!("Record with unexpected ext_var: {:?}", content),
                     }
+                }
+
+                fields.extend(record_fields.clone().into_iter());
+                fields.sort();
+
+                for (name, argument) in &fields {
+                    name.hash(hasher);
+                    Self::from_var_help(*argument, subs, hasher);
+                }
+
+                if *ext != Variable::EMPTY_RECORD {
+                    // unify ext with empty record
+                    let desc = subs.get(Variable::EMPTY_RECORD);
+                    subs.union(Variable::EMPTY_RECORD, *ext, desc);
+                }
+
+                if extracted_fields_from_ext {
+                    let fields_map = fields.into_iter().collect();
+
+                    subs.set_content(
+                        flat_type_var,
+                        Content::Structure(FlatType::Record(fields_map, Variable::EMPTY_RECORD)),
+                    );
                 }
             }
 
@@ -652,45 +680,99 @@ impl ContentHash {
             FlatType::TagUnion(tags, ext) => {
                 hasher.write_u8(5);
 
-                // We have to sort by the key, so this clone seems to be required
+                // NOTE: This function will modify the subs, putting all tags from the ext_var
+                // into the tag union itself, then setting the ext_var to EMPTY_TAG_UNION
+
                 let mut tag_vec = Vec::with_capacity(tags.len());
-                tag_vec.extend(tags.clone().into_iter());
 
-                match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
-                    Some(_) => panic!("Tag union with non-empty ext var"),
-                    None => {
-                        tag_vec.sort();
-                        for (name, arguments) in tag_vec {
-                            name.hash(hasher);
-
-                            for var in arguments {
-                                Self::from_var_help(var, subs, hasher);
-                            }
+                let mut extracted_fields_from_ext = false;
+                if *ext != Variable::EMPTY_TAG_UNION {
+                    match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
+                        Err(Content::FlexVar(_)) | Ok(()) => {
+                            extracted_fields_from_ext = !tag_vec.is_empty();
                         }
+                        Err(content) => panic!("TagUnion with unexpected ext_var: {:?}", content),
                     }
+                }
+
+                tag_vec.extend(tags.clone().into_iter());
+                tag_vec.sort();
+                for (name, arguments) in &tag_vec {
+                    name.hash(hasher);
+
+                    for var in arguments {
+                        Self::from_var_help(*var, subs, hasher);
+                    }
+                }
+
+                if *ext != Variable::EMPTY_TAG_UNION {
+                    // unify ext with empty record
+                    let desc = subs.get(Variable::EMPTY_TAG_UNION);
+                    subs.union(Variable::EMPTY_TAG_UNION, *ext, desc);
+                }
+
+                if extracted_fields_from_ext {
+                    let fields_map = tag_vec.into_iter().collect();
+
+                    subs.set_content(
+                        flat_type_var,
+                        Content::Structure(FlatType::TagUnion(
+                            fields_map,
+                            Variable::EMPTY_TAG_UNION,
+                        )),
+                    );
                 }
             }
 
-            FlatType::RecursiveTagUnion(_rec, tags, ext) => {
-                // TODO should the rec_var be hashed in?
+            FlatType::RecursiveTagUnion(rec, tags, ext) => {
+                // NOTE: rec is not hashed in. If all the tags and their arguments are the same,
+                // then the recursive tag unions are the same
                 hasher.write_u8(6);
 
-                // We have to sort by the key, so this clone seems to be required
+                // NOTE: This function will modify the subs, putting all tags from the ext_var
+                // into the tag union itself, then setting the ext_var to EMPTY_TAG_UNION
+
                 let mut tag_vec = Vec::with_capacity(tags.len());
-                tag_vec.extend(tags.clone().into_iter());
 
-                match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
-                    Some(_) => panic!("Tag union with non-empty ext var"),
-                    None => {
-                        tag_vec.sort();
-                        for (name, arguments) in tag_vec {
-                            name.hash(hasher);
-
-                            for var in arguments {
-                                Self::from_var_help(var, subs, hasher);
-                            }
+                let mut extracted_fields_from_ext = false;
+                if *ext != Variable::EMPTY_TAG_UNION {
+                    match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
+                        Err(Content::FlexVar(_)) | Ok(()) => {
+                            extracted_fields_from_ext = !tag_vec.is_empty();
+                        }
+                        Err(content) => {
+                            panic!("RecursiveTagUnion with unexpected ext_var: {:?}", content)
                         }
                     }
+                }
+
+                tag_vec.extend(tags.clone().into_iter());
+                tag_vec.sort();
+                for (name, arguments) in &tag_vec {
+                    name.hash(hasher);
+
+                    for var in arguments {
+                        Self::from_var_help(*var, subs, hasher);
+                    }
+                }
+
+                if *ext != Variable::EMPTY_TAG_UNION {
+                    // unify ext with empty record
+                    let desc = subs.get(Variable::EMPTY_TAG_UNION);
+                    subs.union(Variable::EMPTY_TAG_UNION, *ext, desc);
+                }
+
+                if extracted_fields_from_ext {
+                    let fields_map = tag_vec.into_iter().collect();
+
+                    subs.set_content(
+                        flat_type_var,
+                        Content::Structure(FlatType::RecursiveTagUnion(
+                            *rec,
+                            fields_map,
+                            Variable::EMPTY_TAG_UNION,
+                        )),
+                    );
                 }
             }
 

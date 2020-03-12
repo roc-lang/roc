@@ -84,7 +84,7 @@ impl<'a> Procs<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
-    pub patterns: std::vec::Vec<Located<roc_can::pattern::Pattern>>,
+    pub patterns: Vec<'a, Symbol>,
     pub body: roc_can::expr::Expr,
     pub specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
 }
@@ -284,6 +284,79 @@ fn to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
     }
 }
 
+fn patterns_to_when<'a>(
+    env: &mut Env<'a, '_>,
+    patterns: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
+    body_var: Variable,
+    mut body: Located<roc_can::expr::Expr>,
+) -> (
+    Vec<'a, Variable>,
+    Vec<'a, Symbol>,
+    Located<roc_can::expr::Expr>,
+) {
+    let mut arg_vars = Vec::with_capacity_in(patterns.len(), env.arena);
+    let mut symbols = Vec::with_capacity_in(patterns.len(), env.arena);
+
+    for (pattern_var, pattern) in patterns.into_iter().rev() {
+        let (new_symbol, new_body) = pattern_to_when(env, pattern_var, pattern, body_var, body);
+        body = new_body;
+        symbols.push(new_symbol);
+        arg_vars.push(pattern_var);
+    }
+
+    (arg_vars, symbols, body)
+}
+
+/// turn irrefutable patterns into when. For example
+///
+/// foo = \{ x } -> body
+///
+/// Assuming the above program typechecks, the pattern match cannot fail
+/// (it is irrefutable). It becomes
+///
+/// foo = \r ->
+///      when r is
+///          { x } -> body
+///
+/// conversion of one-pattern when expressions will do the most optimal thing
+fn pattern_to_when<'a>(
+    env: &mut Env<'a, '_>,
+    pattern_var: Variable,
+    pattern: Located<roc_can::pattern::Pattern>,
+    body_var: Variable,
+    body: Located<roc_can::expr::Expr>,
+) -> (Symbol, Located<roc_can::expr::Expr>) {
+    use roc_can::expr::Expr::*;
+    use roc_can::pattern::Pattern::*;
+
+    match &pattern.value {
+        Identifier(symbol) => (*symbol, body),
+        Underscore => {
+            // for underscore we generate a dummy Symbol
+            (env.fresh_symbol(), body)
+        }
+
+        AppliedTag(_, _, _) | RecordDestructure(_, _) | Shadowed(_, _) | UnsupportedPattern(_) => {
+            let symbol = env.fresh_symbol();
+
+            let wrapped_body = When {
+                cond_var: pattern_var,
+                expr_var: body_var,
+                loc_cond: Box::new(Located::at_zero(Var(symbol))),
+                branches: vec![(pattern, body)],
+            };
+
+            (symbol, Located::at_zero(wrapped_body))
+        }
+
+        // These patters are refutable, and thus should never occur outside a `when` expression
+        IntLiteral(_) | NumLiteral(_,_) | FloatLiteral(_) | StrLiteral(_) => {
+            unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
+        }
+
+    }
+}
+
 fn from_can<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -352,8 +425,16 @@ fn from_can<'a>(
         Closure(annotation, _, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
 
-            let (arg_vars, patterns): (std::vec::Vec<_>, std::vec::Vec<_>) =
-                loc_args.into_iter().unzip();
+            // turn record/tag patterns into a when expression, e.g.
+            //
+            // foo = \{ x } -> body
+            //
+            // becomes
+            //
+            // foo = \r -> when r is { x } -> body
+            //
+            // conversion of one-pattern when expressions will do the most optimal thing
+            let (arg_vars, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
 
             let symbol = match name {
                 Some(symbol) => {
@@ -362,8 +443,8 @@ fn from_can<'a>(
                         symbol,
                         PartialProc {
                             annotation,
-                            patterns,
-                            body: loc_body.value,
+                            patterns: arg_symbols,
+                            body: body.value,
                             specializations: MutMap::default(),
                         },
                     );
@@ -373,6 +454,11 @@ fn from_can<'a>(
                     // an anonymous closure. These will always be specialized already
                     // by the surrounding context
                     let symbol = env.fresh_symbol();
+
+                    // Has the side-effect of monomorphizing record types
+                    // turning the ext_var into EmptyRecord or EmptyTagUnion
+                    let _ = ContentHash::from_var(annotation, env.subs);
+
                     let opt_proc = specialize_proc_body(
                         env,
                         procs,
@@ -380,9 +466,9 @@ fn from_can<'a>(
                         ret_var,
                         symbol,
                         &arg_vars,
-                        &patterns,
+                        &arg_symbols,
                         annotation,
-                        loc_body.value,
+                        body.value,
                     );
 
                     procs.insert_anonymous(symbol, opt_proc);
@@ -922,7 +1008,7 @@ fn call_by_name<'a>(
         ContentHash,
         Variable,
         roc_can::expr::Expr,
-        std::vec::Vec<Located<roc_can::pattern::Pattern>>,
+        Vec<'a, Symbol>,
     )>;
 
     let specialized_proc_name = if let Some(partial_proc) = procs.get_user_defined(proc_name) {
@@ -994,7 +1080,7 @@ fn specialize_proc_body<'a>(
     ret_var: Variable,
     proc_name: Symbol,
     loc_args: &[Variable],
-    loc_patterns: &[Located<roc_can::pattern::Pattern>],
+    pattern_symbols: &[Symbol],
     annotation: Variable,
     body: roc_can::expr::Expr,
 ) -> Option<Proc<'a>> {
@@ -1008,7 +1094,7 @@ fn specialize_proc_body<'a>(
 
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), &env.arena);
 
-    for (arg_var, loc_pattern) in loc_args.iter().zip(loc_patterns.iter()) {
+    for (arg_var, arg_name) in loc_args.iter().zip(pattern_symbols.iter()) {
         let layout = match Layout::from_var(&env.arena, *arg_var, env.subs, env.pointer_size) {
             Ok(layout) => layout,
             Err(()) => {
@@ -1017,19 +1103,7 @@ fn specialize_proc_body<'a>(
             }
         };
 
-        // TODO FIXME what is the idea here? arguments don't map to identifiers one-to-one
-        // e.g. underscore and record patterns
-        let arg_name: Symbol = match &loc_pattern.value {
-            Pattern::Identifier(symbol) => *symbol,
-            _ => {
-                panic!(
-                    "TODO determine arg_name for pattern {:?}",
-                    loc_pattern.value
-                );
-            }
-        };
-
-        proc_args.push((layout, arg_name));
+        proc_args.push((layout, *arg_name));
     }
 
     let ret_layout = Layout::from_var(&env.arena, ret_var, env.subs, env.pointer_size)
