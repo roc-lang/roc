@@ -12,12 +12,17 @@ use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
     user_defined: MutMap<Symbol, PartialProc<'a>>,
+    anonymous: MutMap<Symbol, Option<Proc<'a>>>,
     builtin: MutSet<Symbol>,
 }
 
 impl<'a> Procs<'a> {
     fn insert_user_defined(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) {
         self.user_defined.insert(symbol, partial_proc);
+    }
+
+    fn insert_anonymous(&mut self, symbol: Symbol, proc: Option<Proc<'a>>) {
+        self.anonymous.insert(symbol, proc);
     }
 
     fn insert_specialization(
@@ -37,10 +42,14 @@ impl<'a> Procs<'a> {
     }
 
     pub fn len(&self) -> usize {
-        self.user_defined
+        let anonymous: usize = self.anonymous.len();
+        let user_defined: usize = self
+            .user_defined
             .values()
             .map(|v| v.specializations.len())
-            .sum()
+            .sum();
+
+        anonymous + user_defined
     }
 
     pub fn is_empty(&self) -> bool {
@@ -60,6 +69,10 @@ impl<'a> Procs<'a> {
             }
         }
 
+        for (symbol, proc) in self.anonymous.clone().into_iter() {
+            result.insert(symbol, proc);
+        }
+
         for symbol in self.builtin.iter() {
             result.insert(*symbol, None);
         }
@@ -71,7 +84,7 @@ impl<'a> Procs<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
-    pub patterns: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
+    pub patterns: std::vec::Vec<Located<roc_can::pattern::Pattern>>,
     pub body: roc_can::expr::Expr,
     pub specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
 }
@@ -322,19 +335,46 @@ fn from_can<'a>(
         }
 
         Closure(annotation, _, _, loc_args, boxed_body) => {
-            let (loc_body, _ret_var) = *boxed_body;
-            let symbol =
-                name.unwrap_or_else(|| gen_closure_name(procs, &mut env.ident_ids, env.home));
+            let (loc_body, ret_var) = *boxed_body;
 
-            procs.insert_user_defined(
-                symbol,
-                PartialProc {
-                    annotation,
-                    patterns: loc_args,
-                    body: loc_body.value,
-                    specializations: MutMap::default(),
-                },
-            );
+            let (arg_vars, patterns): (std::vec::Vec<_>, std::vec::Vec<_>) =
+                loc_args.into_iter().unzip();
+
+            let symbol = match name {
+                Some(symbol) => {
+                    // a named closure
+                    procs.insert_user_defined(
+                        symbol,
+                        PartialProc {
+                            annotation,
+                            patterns,
+                            body: loc_body.value,
+                            specializations: MutMap::default(),
+                        },
+                    );
+                    symbol
+                }
+                None => {
+                    // an anonymous closure. These will always be specialized already
+                    // by the surrounding context
+                    let symbol = gen_closure_name(procs, &mut env.ident_ids, env.home);
+                    let opt_proc = specialize_proc_body(
+                        env,
+                        procs,
+                        annotation,
+                        ret_var,
+                        symbol,
+                        &arg_vars,
+                        &patterns,
+                        annotation,
+                        loc_body.value,
+                    );
+
+                    procs.insert_anonymous(symbol, opt_proc);
+
+                    symbol
+                }
+            };
 
             Expr::FunctionPointer(symbol)
         }
@@ -875,7 +915,7 @@ fn call_by_name<'a>(
         ContentHash,
         Variable,
         roc_can::expr::Expr,
-        std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
+        std::vec::Vec<Located<roc_can::pattern::Pattern>>,
     )>;
 
     let specialized_proc_name = if let Some(partial_proc) = procs.get_user_defined(proc_name) {
@@ -907,13 +947,9 @@ fn call_by_name<'a>(
 
     if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
         // register proc, so specialization doesn't loop infinitely
-        // for recursive definitions
-        //            let mut temp = partial_proc.clone();
-        //            temp.specializations
-        //                .insert(content_hash, (spec_proc_name, None));
-        //            procs.insert_user_defined(proc_name, temp);
-
         procs.insert_specialization(proc_name, content_hash, specialized_proc_name, None);
+
+        let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
 
         let proc = specialize_proc_body(
             env,
@@ -921,7 +957,7 @@ fn call_by_name<'a>(
             fn_var,
             ret_var,
             specialized_proc_name,
-            &loc_args,
+            &arg_vars,
             &loc_patterns,
             annotation,
             body,
@@ -950,21 +986,22 @@ fn specialize_proc_body<'a>(
     fn_var: Variable,
     ret_var: Variable,
     proc_name: Symbol,
-    loc_args: &[(Variable, Located<roc_can::expr::Expr>)],
-    loc_patterns: &[(Variable, Located<roc_can::pattern::Pattern>)],
+    loc_args: &[Variable],
+    loc_patterns: &[Located<roc_can::pattern::Pattern>],
     annotation: Variable,
     body: roc_can::expr::Expr,
 ) -> Option<Proc<'a>> {
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
-    roc_unify::unify::unify(env.subs, annotation, fn_var);
+    let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
+    debug_assert!(unified.mismatches.is_empty());
     let specialized_body = from_can(env, body, procs, None);
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
 
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), &env.arena);
 
-    for ((arg_var, _), (_, loc_pattern)) in loc_args.iter().zip(loc_patterns.iter()) {
+    for (arg_var, loc_pattern) in loc_args.iter().zip(loc_patterns.iter()) {
         let layout = match Layout::from_var(&env.arena, *arg_var, env.subs, env.pointer_size) {
             Ok(layout) => layout,
             Err(()) => {
