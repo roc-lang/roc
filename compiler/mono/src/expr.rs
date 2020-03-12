@@ -335,13 +335,15 @@ fn from_can<'a>(
         }
 
         Call(boxed, loc_args, _) => {
+            use IntOrFloat::*;
+
             let (fn_var, loc_expr, ret_var) = *boxed;
 
             let specialize_builtin_functions = {
                 |symbol, subs: &Subs| match symbol {
                     Symbol::NUM_ADD => match to_int_or_float(subs, ret_var) {
-                        IntOrFloat::FloatType => Symbol::FLOAT_ADD,
-                        IntOrFloat::IntType => Symbol::INT_ADD,
+                        FloatType => Symbol::FLOAT_ADD,
+                        IntType => Symbol::INT_ADD,
                     },
                     _ => symbol,
                 }
