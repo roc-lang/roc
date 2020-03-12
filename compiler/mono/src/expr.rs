@@ -330,7 +330,6 @@ fn from_can<'a>(
                 },
             );
 
-            // add_closure(env, symbol, loc_body.value, ret_var, &loc_args, procs)
             Expr::FunctionPointer(symbol)
         }
 
@@ -545,56 +544,6 @@ fn from_can<'a>(
         other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
     }
 }
-
-/*
-fn add_closure<'a>(
-    env: &mut Env<'a, '_>,
-    symbol: Symbol,
-    can_body: roc_can::expr::Expr,
-    ret_var: Variable,
-    loc_args: &[(Variable, Located<Pattern>)],
-    procs: &mut Procs<'a>,
-) -> Expr<'a> {
-    let subs = &env.subs;
-    let arena = env.arena;
-    let mut proc_args = Vec::with_capacity_in(loc_args.len(), arena);
-
-    for (arg_var, loc_arg) in loc_args.iter() {
-        let layout = match Layout::from_var(arena, *arg_var, subs, env.pointer_size) {
-            Ok(layout) => layout,
-            Err(()) => {
-                // Invalid closure!
-                procs.insert(symbol, None);
-
-                return Expr::FunctionPointer(symbol);
-            }
-        };
-
-        let arg_name: Symbol = match &loc_arg.value {
-            Pattern::Identifier(symbol) => *symbol,
-            _ => {
-                panic!("TODO determine arg_name for pattern {:?}", loc_arg.value);
-            }
-        };
-
-        proc_args.push((layout, arg_name));
-    }
-
-    let ret_layout = Layout::from_var(arena, ret_var, subs, env.pointer_size)
-        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
-
-    let proc = Proc {
-        args: proc_args.into_bump_slice(),
-        body: from_can(env, can_body, procs, None),
-        closes_over: Layout::Struct(&[]),
-        ret_layout,
-    };
-
-    procs.insert(symbol, Some(proc));
-
-    Expr::FunctionPointer(symbol)
-}
-*/
 
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
