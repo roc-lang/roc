@@ -71,6 +71,7 @@ impl<'a> Procs<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
+    pub patterns: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
     pub body: roc_can::expr::Expr,
     pub specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
 }
@@ -320,7 +321,7 @@ fn from_can<'a>(
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
 
-        Closure(annotation, _, _, _loc_args, boxed_body) => {
+        Closure(annotation, _, _, loc_args, boxed_body) => {
             let (loc_body, _ret_var) = *boxed_body;
             let symbol =
                 name.unwrap_or_else(|| gen_closure_name(procs, &mut env.ident_ids, env.home));
@@ -329,6 +330,7 @@ fn from_can<'a>(
                 symbol,
                 PartialProc {
                     annotation,
+                    patterns: loc_args,
                     body: loc_body.value,
                     specializations: MutMap::default(),
                 },
@@ -868,7 +870,13 @@ fn call_by_name<'a>(
     // because if we tried to specialize the body inside that match, we would
     // get a borrow checker error about trying to borrow `procs` as mutable
     // while there is still an active immutable borrow.
-    let opt_specialize_body: Option<(ContentHash, Variable, roc_can::expr::Expr)>;
+    #[allow(clippy::type_complexity)]
+    let opt_specialize_body: Option<(
+        ContentHash,
+        Variable,
+        roc_can::expr::Expr,
+        std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
+    )>;
 
     let specialized_proc_name = if let Some(partial_proc) = procs.get_user_defined(proc_name) {
         let content_hash = ContentHash::from_var(fn_var, env.subs);
@@ -883,6 +891,7 @@ fn call_by_name<'a>(
                 content_hash,
                 partial_proc.annotation,
                 partial_proc.body.clone(),
+                partial_proc.patterns.clone(),
             ));
 
             // generate a symbol for this specialization
@@ -896,7 +905,7 @@ fn call_by_name<'a>(
         proc_name
     };
 
-    if let Some((content_hash, annotation, body)) = opt_specialize_body {
+    if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
         // register proc, so specialization doesn't loop infinitely
         // for recursive definitions
         //            let mut temp = partial_proc.clone();
@@ -913,15 +922,13 @@ fn call_by_name<'a>(
             ret_var,
             specialized_proc_name,
             &loc_args,
+            &loc_patterns,
             annotation,
             body,
         );
 
         procs.insert_specialization(proc_name, content_hash, specialized_proc_name, proc);
     }
-
-    dbg!(proc_name);
-    dbg!(specialized_proc_name);
 
     // generate actual call
     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
@@ -936,6 +943,7 @@ fn call_by_name<'a>(
     Expr::CallByName(specialized_proc_name, args.into_bump_slice())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn specialize_proc_body<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -943,6 +951,7 @@ fn specialize_proc_body<'a>(
     ret_var: Variable,
     proc_name: Symbol,
     loc_args: &[(Variable, Located<roc_can::expr::Expr>)],
+    loc_patterns: &[(Variable, Located<roc_can::pattern::Pattern>)],
     annotation: Variable,
     body: roc_can::expr::Expr,
 ) -> Option<Proc<'a>> {
@@ -955,7 +964,7 @@ fn specialize_proc_body<'a>(
 
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), &env.arena);
 
-    for (arg_var, _loc_arg) in loc_args.iter() {
+    for ((arg_var, _), (_, loc_pattern)) in loc_args.iter().zip(loc_patterns.iter()) {
         let layout = match Layout::from_var(&env.arena, *arg_var, env.subs, env.pointer_size) {
             Ok(layout) => layout,
             Err(()) => {
@@ -966,14 +975,15 @@ fn specialize_proc_body<'a>(
 
         // TODO FIXME what is the idea here? arguments don't map to identifiers one-to-one
         // e.g. underscore and record patterns
-        let arg_name = proc_name;
-
-        //                let arg_name: Symbol = match &loc_arg.value {
-        //                    Pattern::Identifier(symbol) => *symbol,
-        //                    _ => {
-        //                        panic!("TODO determine arg_name for pattern {:?}", loc_arg.value);
-        //                    }
-        //                };
+        let arg_name: Symbol = match &loc_pattern.value {
+            Pattern::Identifier(symbol) => *symbol,
+            _ => {
+                panic!(
+                    "TODO determine arg_name for pattern {:?}",
+                    loc_pattern.value
+                );
+            }
+        };
 
         proc_args.push((layout, arg_name));
     }
