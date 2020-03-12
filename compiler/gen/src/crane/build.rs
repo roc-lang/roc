@@ -159,7 +159,10 @@ pub fn build_expr<'a, B: Backend>(
             Some(ScopeEntry::Func { .. }) => {
                 panic!("TODO I don't yet know how to return fn pointers")
             }
-            None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
+            None => panic!(
+                "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
+                name, name, scope
+            ),
         },
         Struct { layout, fields } => {
             let cfg = env.cfg;
