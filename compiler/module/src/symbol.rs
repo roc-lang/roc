@@ -547,11 +547,13 @@ macro_rules! define_builtins {
     };
 }
 
+// NOTE: Some of these builtins have a # at the beginning of their names.
+// This is because they are for compiler use only, and should not cause
+// namespace conflicts with userspace!
 define_builtins! {
-    0 ATTR: "Attr" => {
+    0 ATTR: "#Attr" => {
         0 UNDERSCORE: "_" // the _ used in pattern matches. This is Symbol 0.
-        1 ATTR_ATTR: "Attr" // the Attr.Attr type alias, used in uniqueness types
-        2 ATTR_AT_ATTR: "@Attr" // the Attr.@Attr private tag
+        1 ATTR_ATTR: "Attr" // the #Attr.Attr type alias, used in uniqueness types.
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
