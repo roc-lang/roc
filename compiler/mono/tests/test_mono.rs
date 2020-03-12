@@ -161,6 +161,92 @@ mod test_mono {
     }
 
     #[test]
+    fn polymorphic_identity() {
+        compiles_to(
+            r#"
+            id = \x -> x
+
+            id { x: id 0x4 }
+            "#,
+            {
+                use self::Builtin::*;
+                use Layout::Builtin;
+                let home = test_home();
+
+                let gen_symbol_3 = Interns::from_index(home, 3);
+                let gen_symbol_4 = Interns::from_index(home, 4);
+
+                CallByName(
+                    gen_symbol_3,
+                    &[(
+                        Struct {
+                            fields: &[(
+                                "x".into(),
+                                CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
+                            )],
+                            layout: Layout::Struct(&[("x".into(), Builtin(Int64))]),
+                        },
+                        Layout::Struct(&[("x".into(), Builtin(Int64))]),
+                    )],
+                )
+            },
+        )
+    }
+
+    // needs LetRec to be converted to mono
+    //    #[test]
+    //    fn polymorphic_recursive() {
+    //        compiles_to(
+    //            r#"
+    //            f = \x ->
+    //                when x < 10 is
+    //                    True -> f (x + 1)
+    //                    False -> x
+    //
+    //            { x: f 0x4, y: f 3.14 }
+    //            "#,
+    //            {
+    //                use self::Builtin::*;
+    //                use Layout::Builtin;
+    //                let home = test_home();
+    //
+    //                let gen_symbol_3 = Interns::from_index(home, 3);
+    //                let gen_symbol_4 = Interns::from_index(home, 4);
+    //
+    //                Float(3.4)
+    //
+    //            },
+    //        )
+    //    }
+
+    // needs layout for non-empty tag union
+    //    #[test]
+    //    fn is_nil() {
+    //        let arena = Bump::new();
+    //
+    //        compiles_to_with_interns(
+    //            r#"
+    //                LinkedList a : [ Cons a (LinkedList a), Nil ]
+    //
+    //                isNil : LinkedList a -> Bool
+    //                isNil = \list ->
+    //                    when list is
+    //                        Nil -> True
+    //                        Cons _ _ -> False
+    //
+    //                listInt : LinkedList Int
+    //                listInt = Nil
+    //
+    //                isNil listInt
+    //            "#,
+    //            |interns| {
+    //                let home = test_home();
+    //                let var_is_nil = interns.symbol(home, "isNil".into());
+    //            },
+    //        );
+    //    }
+
+    #[test]
     fn bool_literal() {
         let arena = Bump::new();
 

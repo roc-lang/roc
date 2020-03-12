@@ -104,6 +104,20 @@ struct Env<'a, 'i> {
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
+    symbol_counter: usize,
+}
+
+impl<'a, 'i> Env<'a, 'i> {
+    pub fn fresh_symbol(&mut self) -> Symbol {
+        let ident_id = self
+            .ident_ids
+            .add(format!("_{}", self.symbol_counter).into());
+        self.symbol_counter += 1;
+
+        self.home.register_debug_idents(&self.ident_ids);
+
+        Symbol::new(self.home, ident_id)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -206,6 +220,7 @@ impl<'a> Expr<'a> {
             home,
             ident_ids,
             pointer_size,
+            symbol_counter: 0,
         };
 
         from_can(&mut env, can_expr, procs, None)
@@ -357,7 +372,7 @@ fn from_can<'a>(
                 None => {
                     // an anonymous closure. These will always be specialized already
                     // by the surrounding context
-                    let symbol = gen_closure_name(procs, &mut env.ident_ids, env.home);
+                    let symbol = env.fresh_symbol();
                     let opt_proc = specialize_proc_body(
                         env,
                         procs,
@@ -635,14 +650,6 @@ fn store_pattern<'a>(
             panic!("TODO store_pattern for {:?}", can_pat);
         }
     }
-}
-
-fn gen_closure_name(procs: &Procs<'_>, ident_ids: &mut IdentIds, home: ModuleId) -> Symbol {
-    let ident_id = ident_ids.add(format!("_{}", procs.len()).into());
-
-    home.register_debug_idents(&ident_ids);
-
-    Symbol::new(home, ident_id)
 }
 
 fn from_can_when<'a>(
@@ -935,7 +942,7 @@ fn call_by_name<'a>(
             ));
 
             // generate a symbol for this specialization
-            gen_closure_name(procs, &mut env.ident_ids, env.home)
+            env.fresh_symbol()
         }
     } else {
         opt_specialize_body = None;
