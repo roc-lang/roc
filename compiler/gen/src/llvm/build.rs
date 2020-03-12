@@ -536,13 +536,13 @@ fn call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
 ) -> BasicValueEnum<'ctx> {
     match symbol {
-        Symbol::NUM_ADD => {
+        Symbol::INT_ADD | Symbol::NUM_ADD => {
             debug_assert!(args.len() == 2);
 
             let int_val = env.builder.build_int_add(
                 args[0].into_int_value(),
                 args[1].into_int_value(),
-                "ADD_I64",
+                "add_i64",
             );
 
             BasicValueEnum::IntValue(int_val)

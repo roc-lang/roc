@@ -545,7 +545,7 @@ fn call_by_name<'a, B: Backend>(
     procs: &Procs<'a>,
 ) -> Value {
     match symbol {
-        Symbol::NUM_ADD => {
+        Symbol::INT_ADD | Symbol::NUM_ADD => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
