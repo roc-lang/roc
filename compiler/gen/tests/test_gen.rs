@@ -827,6 +827,19 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_sub_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.5 - 2.4 - 3
+                "#
+            ),
+            -3.9,
+            f64
+        );
+    }
+
+    #[test]
     fn gen_sub_i64() {
         assert_evals_to!(
             indoc!(

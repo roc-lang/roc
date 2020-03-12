@@ -576,6 +576,7 @@ define_builtins! {
         5 INT_HIGHEST: "highest"
         6 INT_LOWEST: "lowest"
         7 INT_ADD: "#add"
+        8 INT_SUB: "#sub"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
@@ -587,6 +588,7 @@ define_builtins! {
         6 FLOAT_HIGHEST: "highest"
         7 FLOAT_LOWEST: "lowest"
         8 FLOAT_ADD: "#add"
+        9 FLOAT_SUB: "#sub"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

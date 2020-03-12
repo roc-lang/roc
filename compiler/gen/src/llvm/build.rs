@@ -558,7 +558,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::FloatValue(float_val)
         }
-        Symbol::NUM_SUB => {
+        Symbol::INT_SUB | Symbol::NUM_SUB => {
             debug_assert!(args.len() == 2);
 
             let int_val = env.builder.build_int_sub(
@@ -568,6 +568,17 @@ fn call_with_args<'a, 'ctx, 'env>(
             );
 
             BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::FLOAT_SUB => {
+            debug_assert!(args.len() == 2);
+
+            let float_val = env.builder.build_float_sub(
+                args[0].into_float_value(),
+                args[1].into_float_value(),
+                "sub_f64",
+            );
+
+            BasicValueEnum::FloatValue(float_val)
         }
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);

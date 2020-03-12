@@ -345,6 +345,10 @@ fn from_can<'a>(
                         FloatType => Symbol::FLOAT_ADD,
                         IntType => Symbol::INT_ADD,
                     },
+                    Symbol::NUM_SUB => match to_int_or_float(subs, ret_var) {
+                        FloatType => Symbol::FLOAT_SUB,
+                        IntType => Symbol::INT_SUB,
+                    },
                     _ => symbol,
                 }
             };

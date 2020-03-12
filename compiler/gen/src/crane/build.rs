@@ -559,12 +559,19 @@ fn call_by_name<'a, B: Backend>(
 
             builder.ins().fadd(a, b)
         }
-        Symbol::NUM_SUB => {
+        Symbol::INT_SUB | Symbol::NUM_SUB => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
             builder.ins().isub(a, b)
+        }
+        Symbol::FLOAT_SUB => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().fsub(a, b)
         }
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);
