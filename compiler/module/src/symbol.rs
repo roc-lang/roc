@@ -9,6 +9,14 @@ use std::{fmt, u32};
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Symbol(u64);
 
+// When this is `true` (which it normally should be), Symbol's Debug::fmt implementation
+// attempts to pretty print debug symbols using interns recorded using
+// register_debug_idents calls (which should be made in debug mode).
+// Set it to false if you want to see the raw ModuleId and IdentId ints,
+// but please set it back to true before checking in the result!
+#[cfg(debug_assertions)]
+const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
+
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
@@ -101,26 +109,30 @@ impl Symbol {
 impl fmt::Debug for Symbol {
     #[cfg(debug_assertions)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let module_id = self.module_id();
-        let ident_id = self.ident_id();
+        if PRETTY_PRINT_DEBUG_SYMBOLS {
+            let module_id = self.module_id();
+            let ident_id = self.ident_id();
 
-        match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
-            Ok(names) => match &names.get(&module_id.0) {
-                Some(ident_ids) => match ident_ids.get_name(ident_id) {
-                    Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
+            match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
+                Ok(names) => match &names.get(&module_id.0) {
+                    Some(ident_ids) => match ident_ids.get_name(ident_id) {
+                        Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
+                        None => fallback_debug_fmt(*self, f),
+                    },
                     None => fallback_debug_fmt(*self, f),
                 },
-                None => fallback_debug_fmt(*self, f),
-            },
-            Err(err) => {
-                // Print and return Err rather than panicking, because this
-                // might be used in a panic error message, and if we panick
-                // while we're already panicking it'll kill the process
-                // without printing any of the errors!
-                println!("DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
+                Err(err) => {
+                    // Print and return Err rather than panicking, because this
+                    // might be used in a panic error message, and if we panick
+                    // while we're already panicking it'll kill the process
+                    // without printing any of the errors!
+                    println!("DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
 
-                fallback_debug_fmt(*self, f)
+                    fallback_debug_fmt(*self, f)
+                }
             }
+        } else {
+            fallback_debug_fmt(*self, f)
         }
     }
 
