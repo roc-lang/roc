@@ -788,6 +788,21 @@ mod test_gen {
     }
 
     #[test]
+    fn apply_identity_() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    identity = \a -> a
+
+                    identity 5
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
     fn apply_unnamed_fn() {
         assert_evals_to!(
             indoc!(
