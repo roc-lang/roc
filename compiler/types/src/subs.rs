@@ -6,7 +6,7 @@ use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator};
 use std::sync::atomic::{AtomicU32, Ordering};
-use ven_ena::unify::{InPlace, UnificationTable, UnifyKey};
+use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -401,6 +401,14 @@ impl Subs {
 
     pub fn is_empty(&self) -> bool {
         self.utable.is_empty()
+    }
+
+    pub fn snapshot(&mut self) -> Snapshot<InPlace<Variable>> {
+        self.utable.snapshot()
+    }
+
+    pub fn rollback_to(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
+        self.utable.rollback_to(snapshot)
     }
 }
 
