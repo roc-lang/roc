@@ -328,16 +328,27 @@ pub fn constrain_expr(
         } => {
             let bool_type = Type::Variable(Variable::BOOL);
             let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);
-            let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
+            let mut branch_cons = Vec::with_capacity(2 * branches.len() + 3);
+
+            // TODO why does this cond var exist? is it for error messages?
+            let cond_var_is_bool_con = Eq(
+                Type::Variable(*cond_var),
+                expect_bool.clone(),
+                Region::zero(),
+            );
+
+            branch_cons.push(cond_var_is_bool_con);
 
             match expected {
                 FromAnnotation(name, arity, _, tipe) => {
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
-                        let cond_con = Eq(
-                            Type::Variable(*cond_var),
-                            expect_bool.clone(),
+                        let cond_con = constrain_expr(
+                            env,
                             loc_cond.region,
+                            &loc_cond.value,
+                            expect_bool.clone(),
                         );
+
                         let then_con = constrain_expr(
                             env,
                             loc_body.region,
@@ -374,11 +385,13 @@ pub fn constrain_expr(
                 }
                 _ => {
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
-                        let cond_con = Eq(
-                            Type::Variable(*cond_var),
-                            expect_bool.clone(),
+                        let cond_con = constrain_expr(
+                            env,
                             loc_cond.region,
+                            &loc_cond.value,
+                            expect_bool.clone(),
                         );
+
                         let then_con = constrain_expr(
                             env,
                             loc_body.region,
