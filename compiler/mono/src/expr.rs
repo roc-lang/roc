@@ -594,6 +594,8 @@ fn store_pattern<'a>(
 fn gen_closure_name(procs: &Procs<'_>, ident_ids: &mut IdentIds, home: ModuleId) -> Symbol {
     let ident_id = ident_ids.add(format!("_{}", procs.len()).into());
 
+    home.register_debug_idents(&ident_ids);
+
     Symbol::new(home, ident_id)
 }
 
