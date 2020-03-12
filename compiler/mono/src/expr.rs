@@ -82,7 +82,7 @@ pub struct Proc<'a> {
 
 struct Env<'a, 'i> {
     pub arena: &'a Bump,
-    pub subs: &'a Subs,
+    pub subs: &'a mut Subs,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
@@ -175,7 +175,7 @@ pub enum Expr<'a> {
 impl<'a> Expr<'a> {
     pub fn new(
         arena: &'a Bump,
-        subs: &'a Subs,
+        subs: &'a mut Subs,
         can_expr: roc_can::expr::Expr,
         procs: &mut Procs<'a>,
         home: ModuleId,
@@ -430,7 +430,6 @@ fn from_can<'a>(
         } => from_can_when(env, cond_var, expr_var, *loc_cond, branches, procs),
 
         Record(ext_var, fields) => {
-            let subs = env.subs;
             let arena = env.arena;
             let mut field_bodies = Vec::with_capacity_in(fields.len(), arena);
 
@@ -440,7 +439,7 @@ fn from_can<'a>(
                 field_bodies.push((label, expr));
             }
 
-            let struct_layout = match Layout::from_var(arena, ext_var, subs, env.pointer_size) {
+            let struct_layout = match Layout::from_var(arena, ext_var, env.subs, env.pointer_size) {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -494,10 +493,9 @@ fn from_can<'a>(
             field,
             ..
         } => {
-            let subs = env.subs;
             let arena = env.arena;
 
-            let struct_layout = match Layout::from_var(arena, ext_var, subs, env.pointer_size) {
+            let struct_layout = match Layout::from_var(arena, ext_var, env.subs, env.pointer_size) {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -505,7 +503,8 @@ fn from_can<'a>(
                 }
             };
 
-            let field_layout = match Layout::from_var(arena, field_var, subs, env.pointer_size) {
+            let field_layout = match Layout::from_var(arena, field_var, env.subs, env.pointer_size)
+            {
                 Ok(layout) => layout,
                 Err(()) => {
                     // Invalid field!
@@ -524,9 +523,8 @@ fn from_can<'a>(
             elem_var,
             loc_elems,
         } => {
-            let subs = env.subs;
             let arena = env.arena;
-            let elem_layout = match Layout::from_var(arena, elem_var, subs, env.pointer_size) {
+            let elem_layout = match Layout::from_var(arena, elem_var, env.subs, env.pointer_size) {
                 Ok(layout) => layout,
                 Err(()) => {
                     panic!("TODO gracefully handle List with invalid element layout");

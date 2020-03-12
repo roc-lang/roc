@@ -43,7 +43,7 @@ mod test_mono {
         } = can_expr(src);
         let subs = Subs::new(var_store.into());
         let mut unify_problems = Vec::new();
-        let (_content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
         // Compile and add all the Procs before adding main
         let mut procs = Procs::default();
@@ -55,7 +55,7 @@ mod test_mono {
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
         let mono_expr = Expr::new(
             &arena,
-            &subs,
+            &mut subs,
             loc_expr.value,
             &mut procs,
             home,
@@ -128,8 +128,8 @@ mod test_mono {
     fn specialize_closure() {
         compiles_to(
             r#"
-            f = \x -> x + 5 
-            
+            f = \x -> x + 5
+
             { x: f 0x4, y: f 3.14 }
             "#,
             {

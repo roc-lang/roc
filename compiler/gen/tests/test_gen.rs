@@ -46,7 +46,7 @@ mod test_gen {
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
             let mut module: Module<SimpleJITBackend> =
@@ -75,7 +75,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
+            let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -174,7 +174,7 @@ mod test_gen {
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
             let context = Context::create();
             let module = context.create_module("app");
@@ -224,7 +224,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
+            let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -309,7 +309,7 @@ mod test_gen {
             let (loc_expr, _output, _problems, subs, var, constraint, home, interns) = uniq_expr($src);
 
             let mut unify_problems = Vec::new();
-            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
             let context = Context::create();
             let module = context.create_module("app");
@@ -359,7 +359,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
+            let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
