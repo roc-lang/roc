@@ -43,6 +43,10 @@ impl<'a> Procs<'a> {
             .sum()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     fn insert_builtin(&mut self, symbol: Symbol) {
         self.builtin.insert(symbol);
     }
