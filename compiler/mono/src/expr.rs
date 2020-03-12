@@ -977,21 +977,12 @@ fn specialize_proc_body<'a>(
     loc_args: &[(Variable, Located<roc_can::expr::Expr>)],
     partial_proc: &PartialProc<'a>,
 ) -> Option<Proc<'a>> {
-    let mut subs: Subs = env.subs.clone();
-    roc_unify::unify::unify(&mut subs, partial_proc.annotation, fn_var);
-
-    // Swap in copied subs, specialize the body, put old subs back
-    let specialized_body = {
-        let mut env = Env {
-            subs: env.arena.alloc(subs),
-            arena: env.arena,
-            home: env.home,
-            ident_ids: &mut env.ident_ids,
-            pointer_size: env.pointer_size,
-        };
-
-        from_can(&mut env, partial_proc.body.clone(), procs, None)
-    };
+    // unify the called function with the specialized signature, then specialize the function body
+    let snapshot = env.subs.snapshot();
+    roc_unify::unify::unify(env.subs, partial_proc.annotation, fn_var);
+    let specialized_body = from_can(env, partial_proc.body.clone(), procs, None);
+    // reset subs, so we don't get type errors when specializing for a different signature
+    env.subs.rollback_to(snapshot);
 
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), &env.arena);
 
