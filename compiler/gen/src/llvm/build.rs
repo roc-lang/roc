@@ -564,7 +564,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let int_val = env.builder.build_int_sub(
                 args[0].into_int_value(),
                 args[1].into_int_value(),
-                "SUB_I64",
+                "sub_I64",
             );
 
             BasicValueEnum::IntValue(int_val)
@@ -575,7 +575,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let int_val = env.builder.build_int_mul(
                 args[0].into_int_value(),
                 args[1].into_int_value(),
-                "MUL_I64",
+                "mul_i64",
             );
 
             BasicValueEnum::IntValue(int_val)
@@ -585,7 +585,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let int_val = env
                 .builder
-                .build_int_neg(args[0].into_int_value(), "NEGATE_I64");
+                .build_int_neg(args[0].into_int_value(), "negate_i64");
 
             BasicValueEnum::IntValue(int_val)
         }
@@ -598,7 +598,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let builder = env.builder;
             let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
-            let offset = builder.build_int_mul(elem_index, elem_size, "MUL_OFFSET");
+            let offset = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
             let elem_ptr = unsafe { builder.build_gep(list_ptr, &[offset], "elem") };
 
