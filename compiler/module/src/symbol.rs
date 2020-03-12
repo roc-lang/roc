@@ -608,7 +608,7 @@ define_builtins! {
         2 LIST_ISEMPTY: "isEmpty"
         3 LIST_GET: "get"
         4 LIST_SET: "set"
-        5 LIST_SET_IN_PLACE: "set_in_place"
+        5 LIST_SET_IN_PLACE: "#setInPlace"
         6 LIST_PUSH: "push"
         7 LIST_MAP: "map"
         8 LIST_LENGTH: "length"
