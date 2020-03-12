@@ -86,13 +86,13 @@ mod test_gen {
             // Declare all the Procs, then insert them into scope so their bodies
             // can look up their Funcs in scope later when calling each other by value.
             for (name, opt_proc) in procs.as_map().into_iter() {
-                    if let Some(proc) = opt_proc {
-                        let (func_id, sig) = declare_proc(&env, &mut module, name, &proc);
+                if let Some(proc) = opt_proc {
+                    let (func_id, sig) = declare_proc(&env, &mut module, name, &proc);
 
-                        declared.push((proc.clone(), sig.clone(), func_id));
+                    declared.push((proc.clone(), sig.clone(), func_id));
 
-                        scope.insert(name.clone(), ScopeEntry::Func { func_id, sig });
-                    }
+                    scope.insert(name.clone(), ScopeEntry::Func { func_id, sig });
+                }
             }
 
             for (proc, sig, fn_id) in declared {
