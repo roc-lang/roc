@@ -120,9 +120,7 @@ pub fn build_expr<'a, B: Backend>(
             let fn_id = match scope.get(name) {
                 Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
                 other => panic!(
-                    "FunctionPointer could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
-                    name, other, scope
-                ),
+                    "FunctionPointer could not find function named {:?} declared in scope (and it was not special-cased in crane::build as a builtin); instead, found {:?} in scope {:?}", name, other, scope),
             };
 
             let func_ref = module.declare_func_in_func(fn_id, &mut builder.func);
@@ -161,7 +159,10 @@ pub fn build_expr<'a, B: Backend>(
             Some(ScopeEntry::Func { .. }) => {
                 panic!("TODO I don't yet know how to return fn pointers")
             }
-            None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
+            None => panic!(
+                "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
+                name, name, scope
+            ),
         },
         Struct { layout, fields } => {
             let cfg = env.cfg;
@@ -590,19 +591,33 @@ fn call_by_name<'a, B: Backend>(
     procs: &Procs<'a>,
 ) -> Value {
     match symbol {
-        Symbol::NUM_ADD => {
+        Symbol::INT_ADD | Symbol::NUM_ADD => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
             builder.ins().iadd(a, b)
         }
-        Symbol::NUM_SUB => {
+        Symbol::FLOAT_ADD => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().fadd(a, b)
+        }
+        Symbol::INT_SUB | Symbol::NUM_SUB => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
             builder.ins().isub(a, b)
+        }
+        Symbol::FLOAT_SUB => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().fsub(a, b)
         }
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);
@@ -708,12 +723,9 @@ fn call_by_name<'a, B: Backend>(
         }
         _ => {
             let fn_id = match scope.get(&symbol) {
-                    Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
-                    other => panic!(
-                        "CallByName could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
-                        symbol, other, scope
-                    ),
-                };
+                Some(ScopeEntry::Func { func_id, .. }) => *func_id,
+                other => panic!("CallByName could not find function named {:?} declared in scope (and it was not special-cased in crane::build as a builtin); instead, found {:?} in scope {:?}", symbol, other, scope),
+            };
             let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
             let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
 

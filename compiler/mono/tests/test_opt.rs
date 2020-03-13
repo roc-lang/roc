@@ -13,9 +13,9 @@ mod helpers;
 mod test_opt {
     use crate::helpers::{infer_expr, uniq_expr};
     use bumpalo::Bump;
-    use roc_collections::all::MutMap;
     use roc_module::symbol::Symbol;
     use roc_mono::expr::Expr::{self, *};
+    use roc_mono::expr::Procs;
     use roc_mono::layout::{Builtin, Layout};
 
     // HELPERS
@@ -25,10 +25,10 @@ mod test_opt {
         let (loc_expr, _, _problems, subs, var, constraint, home, mut interns) = uniq_expr(src);
 
         let mut unify_problems = Vec::new();
-        let (_content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
         // Compile and add all the Procs before adding main
-        let mut procs = MutMap::default();
+        let mut procs = Procs::default();
         let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
         // assume 64-bit pointers
@@ -37,7 +37,7 @@ mod test_opt {
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
         let mono_expr = Expr::new(
             &arena,
-            &subs,
+            &mut subs,
             loc_expr.value,
             &mut procs,
             home,

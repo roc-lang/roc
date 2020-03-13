@@ -1310,8 +1310,11 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                                                 region: loc_arg.region,
                                             });
                                         }
-                                        Err(_malformed) => {
-                                            panic!("TODO early return malformed pattern");
+                                        Err(malformed) => {
+                                            panic!(
+                                                "TODO early return malformed pattern {:?}",
+                                                malformed
+                                            );
                                         }
                                     }
                                 }

@@ -24,13 +24,13 @@ mod test_gen {
     use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc_collections::all::{ImMap, MutMap};
+    use roc_collections::all::ImMap;
     use roc_gen::crane::build::{declare_proc, define_proc_body, ScopeEntry};
     use roc_gen::crane::convert::type_from_layout;
     use roc_gen::crane::imports::define_malloc;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::expr::Expr;
+    use roc_mono::expr::{Expr, Procs};
     use roc_mono::layout::Layout;
     use roc_types::subs::Subs;
     use std::ffi::{CStr, CString};
@@ -46,7 +46,7 @@ mod test_gen {
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
             let shared_builder = settings::builder();
             let shared_flags = settings::Flags::new(shared_builder);
             let mut module: Module<SimpleJITBackend> =
@@ -65,7 +65,7 @@ mod test_gen {
             let main_ret_type = type_from_layout(cfg, &layout);
 
             // Compile and add all the Procs before adding main
-            let mut procs = MutMap::default();
+            let mut procs = Procs::default();
             let mut env = roc_gen::crane::build::Env {
                 arena: &arena,
                 interns,
@@ -75,7 +75,7 @@ mod test_gen {
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
+            let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -85,9 +85,9 @@ mod test_gen {
 
             // Declare all the Procs, then insert them into scope so their bodies
             // can look up their Funcs in scope later when calling each other by value.
-            for (name, opt_proc) in procs.iter() {
+            for (name, opt_proc) in procs.as_map().into_iter() {
                 if let Some(proc) = opt_proc {
-                    let (func_id, sig) = declare_proc(&env, &mut module, name.clone(), proc);
+                    let (func_id, sig) = declare_proc(&env, &mut module, name, &proc);
 
                     declared.push((proc.clone(), sig.clone(), func_id));
 
@@ -174,7 +174,7 @@ mod test_gen {
             let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
             let subs = Subs::new(var_store.into());
             let mut unify_problems = Vec::new();
-            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
             let context = Context::create();
             let module = context.create_module("app");
@@ -220,11 +220,11 @@ mod test_gen {
                 module: arena.alloc(module),
                 pointer_bytes
             };
-            let mut procs = MutMap::default();
+            let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
+            let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -234,7 +234,7 @@ mod test_gen {
             // Add all the Proc headers to the module.
             // We have to do this in a separate pass first,
             // because their bodies may reference each other.
-            for (symbol, opt_proc) in procs.clone().into_iter() {
+            for (symbol, opt_proc) in procs.as_map().into_iter() {
                 if let Some(proc) = opt_proc {
                     let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
 
@@ -271,7 +271,7 @@ mod test_gen {
                 &ImMap::default(),
                 main_fn,
                 &main_body,
-                &mut MutMap::default(),
+                &mut Procs::default(),
             );
 
             builder.build_return(Some(&ret));
@@ -309,7 +309,7 @@ mod test_gen {
             let (loc_expr, _output, _problems, subs, var, constraint, home, interns) = uniq_expr($src);
 
             let mut unify_problems = Vec::new();
-            let (content, subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+            let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
             let context = Context::create();
             let module = context.create_module("app");
@@ -355,11 +355,11 @@ mod test_gen {
                 module: arena.alloc(module),
                 pointer_bytes
             };
-            let mut procs = MutMap::default();
+            let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
-            let main_body = Expr::new(&arena, &subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
+            let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -369,12 +369,13 @@ mod test_gen {
             // Add all the Proc headers to the module.
             // We have to do this in a separate pass first,
             // because their bodies may reference each other.
-            for (symbol, opt_proc) in procs.clone().into_iter() {
+            for (symbol, opt_proc) in procs.as_map().into_iter() {
                 if let Some(proc) = opt_proc {
                     let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
 
                     headers.push((proc, fn_val, arg_basic_types));
                 }
+
             }
 
             // Build each proc using its header info.
@@ -406,7 +407,7 @@ mod test_gen {
                 &ImMap::default(),
                 main_fn,
                 &main_body,
-                &mut MutMap::default(),
+                &mut Procs::default(),
             );
 
             builder.build_return(Some(&ret));
@@ -787,6 +788,21 @@ mod test_gen {
     }
 
     #[test]
+    fn apply_identity_() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    identity = \a -> a
+
+                    identity 5
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
     fn apply_unnamed_fn() {
         assert_evals_to!(
             indoc!(
@@ -800,6 +816,19 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_add_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.1 + 2.4 + 3
+                "#
+            ),
+            6.5,
+            f64
+        );
+    }
+
+    #[test]
     fn gen_add_i64() {
         assert_evals_to!(
             indoc!(
@@ -809,6 +838,19 @@ mod test_gen {
             ),
             6,
             i64
+        );
+    }
+
+    #[test]
+    fn gen_sub_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.5 - 2.4 - 3
+                "#
+            ),
+            -3.9,
+            f64
         );
     }
 

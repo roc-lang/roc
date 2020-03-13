@@ -436,7 +436,7 @@ fn write_flat_type(
 
             buf.push_str(" ]");
 
-            if let Some(content) = ext_content {
+            if let Err(content) = ext_content {
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
@@ -483,7 +483,7 @@ fn write_flat_type(
 
             buf.push_str(" ]");
 
-            if let Some(content) = ext_content {
+            if let Err(content) = ext_content {
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
@@ -504,14 +504,14 @@ fn write_flat_type(
     }
 }
 
-fn chase_ext_tag_union(
-    subs: &mut Subs,
+pub fn chase_ext_tag_union(
+    subs: &Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Option<Content> {
+) -> Result<(), Content> {
     use FlatType::*;
-    match subs.get(var).content {
-        Content::Structure(EmptyTagUnion) => None,
+    match subs.get_without_compacting(var).content {
+        Content::Structure(EmptyTagUnion) => Ok(()),
         Content::Structure(TagUnion(tags, ext_var))
         | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             for (label, vars) in tags {
@@ -521,7 +521,30 @@ fn chase_ext_tag_union(
             chase_ext_tag_union(subs, ext_var, fields)
         }
 
-        content => Some(content),
+        content => Err(content),
+    }
+}
+
+pub fn chase_ext_record(
+    subs: &Subs,
+    var: Variable,
+    fields: &mut MutMap<Lowercase, Variable>,
+) -> Result<(), Content> {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match subs.get_without_compacting(var).content {
+        Structure(Record(sub_fields, sub_ext)) => {
+            fields.extend(sub_fields.into_iter());
+
+            chase_ext_record(subs, sub_ext, fields)
+        }
+
+        Structure(EmptyRecord) => Ok(()),
+
+        Alias(_, _, var) => chase_ext_record(subs, var, fields),
+
+        content => Err(content),
     }
 }
 
