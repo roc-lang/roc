@@ -662,13 +662,13 @@ fn pattern_to_vars_by_symbol(
             vars_by_symbol.insert(symbol.clone(), expr_var);
         }
 
-        AppliedTag(_, _, arguments) => {
+        AppliedTag { arguments, .. } => {
             for (var, nested) in arguments {
                 pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
             }
         }
 
-        RecordDestructure(_, destructs) => {
+        RecordDestructure { destructs, .. } => {
             for destruct in destructs {
                 vars_by_symbol.insert(destruct.value.symbol.clone(), destruct.value.var);
             }
