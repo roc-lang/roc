@@ -536,27 +536,49 @@ fn call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
 ) -> BasicValueEnum<'ctx> {
     match symbol {
-        Symbol::NUM_ADD => {
+        Symbol::INT_ADD | Symbol::NUM_ADD => {
             debug_assert!(args.len() == 2);
 
             let int_val = env.builder.build_int_add(
                 args[0].into_int_value(),
                 args[1].into_int_value(),
-                "ADD_I64",
+                "add_i64",
             );
 
             BasicValueEnum::IntValue(int_val)
         }
-        Symbol::NUM_SUB => {
+        Symbol::FLOAT_ADD => {
+            debug_assert!(args.len() == 2);
+
+            let float_val = env.builder.build_float_add(
+                args[0].into_float_value(),
+                args[1].into_float_value(),
+                "add_f64",
+            );
+
+            BasicValueEnum::FloatValue(float_val)
+        }
+        Symbol::INT_SUB | Symbol::NUM_SUB => {
             debug_assert!(args.len() == 2);
 
             let int_val = env.builder.build_int_sub(
                 args[0].into_int_value(),
                 args[1].into_int_value(),
-                "SUB_I64",
+                "sub_I64",
             );
 
             BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::FLOAT_SUB => {
+            debug_assert!(args.len() == 2);
+
+            let float_val = env.builder.build_float_sub(
+                args[0].into_float_value(),
+                args[1].into_float_value(),
+                "sub_f64",
+            );
+
+            BasicValueEnum::FloatValue(float_val)
         }
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);
@@ -564,7 +586,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let int_val = env.builder.build_int_mul(
                 args[0].into_int_value(),
                 args[1].into_int_value(),
-                "MUL_I64",
+                "mul_i64",
             );
 
             BasicValueEnum::IntValue(int_val)
@@ -574,7 +596,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let int_val = env
                 .builder
-                .build_int_neg(args[0].into_int_value(), "NEGATE_I64");
+                .build_int_neg(args[0].into_int_value(), "negate_i64");
 
             BasicValueEnum::IntValue(int_val)
         }
@@ -587,7 +609,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let builder = env.builder;
             let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
-            let offset = builder.build_int_mul(elem_index, elem_size, "MUL_OFFSET");
+            let offset = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
             let elem_ptr = unsafe { builder.build_gep(list_ptr, &[offset], "elem") };
 
