@@ -827,6 +827,11 @@ fn from_can_when<'a>(
             let (loc_when_pat1, loc_then) = iter.next().unwrap();
             let (loc_when_pat2, loc_else) = iter.next().unwrap();
 
+            let cond_layout = Layout::Builtin(Builtin::Bool(
+                TagName::Global("False".into()),
+                TagName::Global("True".into()),
+            ));
+
             match (&loc_when_pat1.value, &loc_when_pat2.value) {
                 (NumLiteral(var, num), Underscore) => {
                     let cond_lhs = from_can(env, loc_cond.value, procs, None);
@@ -858,10 +863,34 @@ fn from_can_when<'a>(
                         });
 
                     Expr::Cond {
-                        cond_layout: Layout::Builtin(Builtin::Bool(
-                            TagName::Global("False".into()),
-                            TagName::Global("True".into()),
-                        )),
+                        cond_layout,
+                        cond,
+                        pass,
+                        fail,
+                        ret_layout,
+                    }
+                }
+                (IntLiteral(int), Underscore) => {
+                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
+                    let cond_rhs = Expr::Int(*int);
+
+                    let cond = arena.alloc(Expr::CallByName(
+                        Symbol::INT_EQ_I64,
+                        arena.alloc([
+                            (cond_lhs, Layout::Builtin(Builtin::Int64)),
+                            (cond_rhs, Layout::Builtin(Builtin::Int64)),
+                        ]),
+                    ));
+
+                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
+                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
+                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn this into a RuntimeError {:?}", err)
+                        });
+
+                    Expr::Cond {
+                        cond_layout,
                         cond,
                         pass,
                         fail,
@@ -888,80 +917,13 @@ fn from_can_when<'a>(
                         });
 
                     Expr::Cond {
-                        cond_layout: Layout::Builtin(Builtin::Bool(
-                            TagName::Global("False".into()),
-                            TagName::Global("True".into()),
-                        )),
+                        cond_layout,
                         cond,
                         pass,
                         fail,
                         ret_layout,
                     }
                 }
-                /*
-                (NumLiteral(var, num), NumLiteral(_, _)) | (NumLiteral(var, num), Underscore) => {
-                    let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
-                    let (builtin, cond_rhs_expr) = match to_int_or_float(env.subs, *var) {
-                        IntOrFloat::IntType => (Builtin::Int64, Expr::Int(*num)),
-                        IntOrFloat::FloatType => (Builtin::Float64, Expr::Float(*num as f64)),
-                    };
-
-                    let cond_rhs = arena.alloc(cond_rhs_expr);
-                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
-                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn this into a RuntimeError {:?}", err)
-                        });
-
-                    Expr::Cond {
-                        cond_layout: Layout::Builtin(builtin),
-                        cond_lhs,
-                        cond_rhs,
-                        pass,
-                        fail,
-                        ret_layout,
-                    }
-                }
-                (IntLiteral(int), IntLiteral(_)) | (IntLiteral(int), Underscore) => {
-                    let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
-                    let cond_rhs = arena.alloc(Expr::Int(*int));
-                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
-                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn this into a RuntimeError {:?}", err)
-                        });
-
-                    Expr::Cond {
-                        cond_layout: Layout::Builtin(Builtin::Int64),
-                        cond_lhs,
-                        cond_rhs,
-                        pass,
-                        fail,
-                        ret_layout,
-                    }
-                }
-                (FloatLiteral(float), FloatLiteral(_)) | (FloatLiteral(float), Underscore) => {
-                    let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
-                    let cond_rhs = arena.alloc(Expr::Float(*float));
-                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
-                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn this into a RuntimeError {:?}", err)
-                        });
-
-                    Expr::Cond {
-                        cond_layout: Layout::Builtin(Builtin::Float64),
-                        cond_lhs,
-                        cond_rhs,
-                        pass,
-                        fail,
-                        ret_layout,
-                    }
-                }
-                */
                 _ => {
                     panic!("TODO handle more conds");
                 }
