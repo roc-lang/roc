@@ -788,6 +788,66 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_if_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    limitedNegate = \num ->
+                        if num == 1 then
+                            -1
+                        else if num == -1 then
+                            1
+                        else
+                            num
+
+                    limitedNegate 1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_float_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                1.0 == 1.0
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_literal_true() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                if True then -1 else 1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_if_float_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                if True then -1.0 else 1.0
+                "#
+            ),
+            -1.0,
+            f64
+        );
+    }
+
+    #[test]
     fn apply_identity_() {
         assert_evals_to!(
             indoc!(
