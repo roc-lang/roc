@@ -295,12 +295,15 @@ fn build_switch<'a, 'ctx, 'env>(
     switch_args: SwitchArgs<'a, 'ctx>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_mono::layout::Builtin;
+
     let arena = env.arena;
     let builder = env.builder;
     let context = env.context;
     let SwitchArgs {
         branches,
         cond_expr,
+        cond_layout,
         default_branch,
         ret_type,
         ..
@@ -316,7 +319,24 @@ fn build_switch<'a, 'ctx, 'env>(
     let mut cases = Vec::with_capacity_in(branches.len(), arena);
 
     for (int, _) in branches.iter() {
-        let int_val = context.i64_type().const_int(*int as u64, false);
+        // Switch constants must all be same type as switch value!
+        // e.g. this is incorrect, and will trigger a LLVM warning:
+        //
+        //   switch i8 %apple1, label %default [
+        //     i64 2, label %branch2
+        //     i64 0, label %branch0
+        //     i64 1, label %branch1
+        //   ]
+        //
+        // they either need to all be i8, or i64
+        let int_val = match cond_layout {
+            Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Bool(_, _)) => {
+                context.bool_type().const_int(*int as u64, false)
+            }
+            Layout::Builtin(Builtin::Byte(_)) => context.i8_type().const_int(*int as u64, false),
+            _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
+        };
         let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
 
         cases.push((int_val, block));
