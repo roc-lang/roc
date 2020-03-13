@@ -194,8 +194,15 @@ fn layout_from_flat_type<'a>(
                 arena.alloc(ret),
             ))
         }
-        Record(mut fields, ext_var) => {
-            flatten_record(&mut fields, ext_var, subs);
+        Record(fields, ext_var) => {
+            debug_assert!({
+                // the ext_var is empty
+                let mut ext_fields = MutMap::default();
+                match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut ext_fields) {
+                    Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
+                    Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
+                }
+            });
             let ext_content = subs.get_without_compacting(ext_var).content;
             let ext_layout = match Layout::from_content(arena, ext_content, subs, pointer_size) {
                 Ok(layout) => layout,
@@ -239,10 +246,18 @@ fn layout_from_flat_type<'a>(
 
             Ok(Layout::Struct(field_layouts.into_bump_slice()))
         }
-        TagUnion(mut tags, ext_var) => {
-            // Recursively inject the contents of ext_var into tags
-            // until we have all the tags in one map.
-            flatten_union(&mut tags, ext_var, subs);
+        TagUnion(tags, ext_var) => {
+            debug_assert!({
+                // the ext_var is empty
+                let mut ext_fields = std::vec::Vec::new();
+                match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
+                    Ok(()) | Err((_, Content::FlexVar(_))) => {
+                        println!("Tags: {:?}, ext_tags: {:?}", &tags, ext_fields);
+                        ext_fields.is_empty()
+                    }
+                    Err(content) => panic!("invalid content in ext_var: {:?}", content),
+                }
+            });
 
             match tags.len() {
                 0 => {
