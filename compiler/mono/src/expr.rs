@@ -150,8 +150,7 @@ pub enum Expr<'a> {
         // The left-hand side of the conditional comparison and the right-hand side.
         // These are stored separately because there are different machine instructions
         // for e.g. "compare float and jump" vs. "compare integer and jump"
-        cond_lhs: &'a Expr<'a>,
-        cond_rhs: &'a Expr<'a>,
+        cond: &'a Expr<'a>,
         cond_layout: Layout<'a>,
         // What to do if the condition either passes or fails
         pass: &'a Expr<'a>,
@@ -575,6 +574,34 @@ fn from_can<'a>(
             branches,
         } => from_can_when(env, cond_var, expr_var, *loc_cond, branches, procs),
 
+        If {
+            cond_var,
+            branch_var,
+            branches,
+            final_else,
+        } => {
+            let mut expr = from_can(env, final_else.value, procs, None);
+
+            let ret_layout = Layout::from_var(env.arena, branch_var, env.subs, env.pointer_size)
+                .expect("invalid ret_layout");
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .expect("invalid cond_layout");
+
+            for (loc_cond, loc_then) in branches.into_iter().rev() {
+                let cond = from_can(env, loc_cond.value, procs, None);
+                let then = from_can(env, loc_then.value, procs, None);
+                expr = Expr::Cond {
+                    cond: env.arena.alloc(cond),
+                    cond_layout: cond_layout.clone(),
+                    pass: env.arena.alloc(then),
+                    fail: env.arena.alloc(expr),
+                    ret_layout: ret_layout.clone(),
+                };
+            }
+
+            expr
+        }
+
         Record(ext_var, fields) => {
             let arena = env.arena;
             let mut field_bodies = Vec::with_capacity_in(fields.len(), arena);
@@ -785,6 +812,75 @@ fn from_can_when<'a>(
             let (loc_when_pat2, loc_else) = iter.next().unwrap();
 
             match (&loc_when_pat1.value, &loc_when_pat2.value) {
+                (NumLiteral(var, num), Underscore) => {
+                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
+
+                    let (fn_symbol, builtin, cond_rhs_expr) = match to_int_or_float(env.subs, *var)
+                    {
+                        IntOrFloat::IntType => (Symbol::INT_EQ, Builtin::Int64, Expr::Int(*num)),
+                        IntOrFloat::FloatType => {
+                            (Symbol::FLOAT_EQ, Builtin::Float64, Expr::Float(*num as f64))
+                        }
+                    };
+                    let cond_rhs = cond_rhs_expr;
+
+                    let cond = arena.alloc(Expr::CallByName(
+                        fn_symbol,
+                        arena.alloc([
+                            (cond_lhs, Layout::Builtin(builtin.clone())),
+                            (cond_rhs, Layout::Builtin(builtin)),
+                        ]),
+                    ));
+
+                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
+                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
+                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn this into a RuntimeError {:?}", err)
+                        });
+
+                    Expr::Cond {
+                        cond_layout: Layout::Builtin(Builtin::Bool(
+                            TagName::Global("False".into()),
+                            TagName::Global("True".into()),
+                        )),
+                        cond,
+                        pass,
+                        fail,
+                        ret_layout,
+                    }
+                }
+                (FloatLiteral(float), Underscore) => {
+                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
+                    let cond_rhs = Expr::Float(*float);
+
+                    let cond = arena.alloc(Expr::CallByName(
+                        Symbol::FLOAT_EQ,
+                        arena.alloc([
+                            (cond_lhs, Layout::Builtin(Builtin::Float64)),
+                            (cond_rhs, Layout::Builtin(Builtin::Float64)),
+                        ]),
+                    ));
+
+                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
+                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
+                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn this into a RuntimeError {:?}", err)
+                        });
+
+                    Expr::Cond {
+                        cond_layout: Layout::Builtin(Builtin::Bool(
+                            TagName::Global("False".into()),
+                            TagName::Global("True".into()),
+                        )),
+                        cond,
+                        pass,
+                        fail,
+                        ret_layout,
+                    }
+                }
+                /*
                 (NumLiteral(var, num), NumLiteral(_, _)) | (NumLiteral(var, num), Underscore) => {
                     let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
                     let (builtin, cond_rhs_expr) = match to_int_or_float(env.subs, *var) {
@@ -847,6 +943,7 @@ fn from_can_when<'a>(
                         ret_layout,
                     }
                 }
+                */
                 _ => {
                     panic!("TODO handle more conds");
                 }

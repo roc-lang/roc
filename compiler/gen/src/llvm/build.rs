@@ -46,22 +46,20 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
         Float(num) => env.context.f64_type().const_float(*num).into(),
         Cond {
-            cond_lhs,
-            cond_rhs,
+            cond,
             pass,
             fail,
             ret_layout,
             ..
         } => {
-            let cond = Branch2 {
-                cond_lhs,
-                cond_rhs,
+            let conditional = Branch2 {
+                cond,
                 pass,
                 fail,
                 ret_layout: ret_layout.clone(),
             };
 
-            build_branch2(env, scope, parent, cond, procs)
+            build_branch2(env, scope, parent, conditional, procs)
         }
         Branches { .. } => {
             panic!("TODO build_branches(env, scope, parent, cond_lhs, branches, procs)");
@@ -251,8 +249,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 }
 
 struct Branch2<'a> {
-    cond_lhs: &'a Expr<'a>,
-    cond_rhs: &'a Expr<'a>,
+    cond: &'a Expr<'a>,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
     ret_layout: Layout<'a>,
@@ -269,9 +266,9 @@ fn build_branch2<'a, 'ctx, 'env>(
     let ret_layout = cond.ret_layout;
     let ret_type = basic_type_from_layout(env.context, &ret_layout);
 
-    let lhs = build_expr(env, scope, parent, cond.cond_lhs, procs);
-    let rhs = build_expr(env, scope, parent, cond.cond_rhs, procs);
+    let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
 
+    /*
     match (lhs, rhs) {
         (FloatValue(lhs_float), FloatValue(rhs_float)) => {
             let comparison =
@@ -292,6 +289,17 @@ fn build_branch2<'a, 'ctx, 'env>(
         _ => panic!(
             "Tried to make a branch out of incompatible conditions: lhs = {:?} and rhs = {:?}",
             cond.cond_lhs, cond.cond_rhs
+        ),
+    }
+    */
+
+    match cond_expr {
+        IntValue(value) => build_phi2(
+            env, scope, parent, value, cond.pass, cond.fail, ret_type, procs,
+        ),
+        _ => panic!(
+            "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
+            cond_expr,
         ),
     }
 }
@@ -597,6 +605,30 @@ fn call_with_args<'a, 'ctx, 'env>(
             let int_val = env
                 .builder
                 .build_int_neg(args[0].into_int_value(), "negate_i64");
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::INT_EQ => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "cmp_i64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::FLOAT_EQ => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_float_compare(
+                FloatPredicate::OEQ,
+                args[0].into_float_value(),
+                args[1].into_float_value(),
+                "cmp_f64",
+            );
 
             BasicValueEnum::IntValue(int_val)
         }
