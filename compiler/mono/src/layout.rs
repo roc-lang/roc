@@ -121,6 +121,7 @@ impl<'a> Builtin<'a> {
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn layout_from_flat_type<'a>(
     arena: &'a Bump,
     flat_type: FlatType,
@@ -195,14 +196,7 @@ fn layout_from_flat_type<'a>(
             ))
         }
         Record(fields, ext_var) => {
-            debug_assert!({
-                // the ext_var is empty
-                let mut ext_fields = MutMap::default();
-                match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut ext_fields) {
-                    Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
-                    Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
-                }
-            });
+            debug_assert!(ext_var_is_empty_record(subs, ext_var));
             let ext_content = subs.get_without_compacting(ext_var).content;
             let ext_layout = match Layout::from_content(arena, ext_content, subs, pointer_size) {
                 Ok(layout) => layout,
@@ -247,17 +241,7 @@ fn layout_from_flat_type<'a>(
             Ok(Layout::Struct(field_layouts.into_bump_slice()))
         }
         TagUnion(tags, ext_var) => {
-            debug_assert!({
-                // the ext_var is empty
-                let mut ext_fields = std::vec::Vec::new();
-                match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
-                    Ok(()) | Err((_, Content::FlexVar(_))) => {
-                        println!("Tags: {:?}, ext_tags: {:?}", &tags, ext_fields);
-                        ext_fields.is_empty()
-                    }
-                    Err(content) => panic!("invalid content in ext_var: {:?}", content),
-                }
-            });
+            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             match tags.len() {
                 0 => {
@@ -342,6 +326,35 @@ fn layout_from_flat_type<'a>(
         }
         Erroneous(_) => Err(()),
         EmptyRecord => Ok(Layout::Struct(&[])),
+    }
+}
+
+fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
+    // the ext_var is empty
+    let mut ext_fields = std::vec::Vec::new();
+    match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            if !ext_fields.is_empty() {
+                println!("ext_tags: {:?}", ext_fields);
+            }
+            ext_fields.is_empty()
+        }
+        Err(content) => panic!("invalid content in ext_var: {:?}", content),
+    }
+}
+
+fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
+    // the ext_var is empty
+    let mut ext_fields = MutMap::default();
+    match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut ext_fields) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            if !ext_fields.is_empty() {
+                println!("ext_fields: {:?}", ext_fields);
+            }
+
+            ext_fields.is_empty()
+        }
+        Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
     }
 }
 

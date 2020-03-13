@@ -524,6 +524,7 @@ fn build_arg<'a, B: Backend>(
 }
 
 #[inline(always)]
+#[allow(clippy::cognitive_complexity)]
 fn call_by_name<'a, B: Backend>(
     env: &Env<'a>,
     symbol: Symbol,
