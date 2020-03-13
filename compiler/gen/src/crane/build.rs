@@ -576,7 +576,7 @@ fn call_by_name<'a, B: Backend>(
 
             builder.ins().ineg(num)
         }
-        Symbol::INT_EQ => {
+        Symbol::INT_EQ_I64 | Symbol::INT_EQ_I8 | Symbol::INT_EQ_I1 => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);

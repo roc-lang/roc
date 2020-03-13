@@ -46,6 +46,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
         Float(num) => env.context.f64_type().const_float(*num).into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
+        Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Cond {
             cond,
             pass,
@@ -513,6 +514,7 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 }
 
 #[inline(always)]
+#[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
     symbol: Symbol,
     args: &[BasicValueEnum<'ctx>],
@@ -583,7 +585,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
-        Symbol::INT_EQ => {
+        Symbol::INT_EQ_I64 => {
             debug_assert!(args.len() == 2);
 
             let int_val = env.builder.build_int_compare(
@@ -591,6 +593,30 @@ fn call_with_args<'a, 'ctx, 'env>(
                 args[0].into_int_value(),
                 args[1].into_int_value(),
                 "cmp_i64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::INT_EQ_I1 => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "cmp_i1",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::INT_EQ_I8 => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "cmp_i8",
             );
 
             BasicValueEnum::IntValue(int_val)

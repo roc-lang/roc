@@ -970,6 +970,27 @@ mod test_gen {
         );
     }
 
+    #[test]
+    fn basic_enum() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Fruit : [ Apple, Orange, Banana ] 
+
+                apple : Fruit
+                apple = Apple
+
+                orange : Fruit
+                orange = Orange
+
+                apple == orange
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
     // #[test]
     // fn basic_record() {
     //     assert_evals_to!(

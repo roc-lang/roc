@@ -497,9 +497,11 @@ fn from_can<'a>(
                         match Layout::from_var(env.arena, loc_args[0].0, env.subs, env.pointer_size)
                         {
                             Ok(Layout::Builtin(builtin)) => match builtin {
-                                Builtin::Int64 => Symbol::INT_EQ,
+                                Builtin::Int64 => Symbol::INT_EQ_I64,
                                 Builtin::Float64 => Symbol::FLOAT_EQ,
-                                _ => panic!("Equality not unimplemented for {:?}", builtin),
+                                Builtin::Bool(_, _) => Symbol::INT_EQ_I1,
+                                Builtin::Byte(_) => Symbol::INT_EQ_I8,
+                                _ => panic!("Equality not implemented for {:?}", builtin),
                             },
                             Ok(complex) => panic!(
                                 "TODO support equality on complex layouts like {:?}",
@@ -831,7 +833,9 @@ fn from_can_when<'a>(
 
                     let (fn_symbol, builtin, cond_rhs_expr) = match to_int_or_float(env.subs, *var)
                     {
-                        IntOrFloat::IntType => (Symbol::INT_EQ, Builtin::Int64, Expr::Int(*num)),
+                        IntOrFloat::IntType => {
+                            (Symbol::INT_EQ_I64, Builtin::Int64, Expr::Int(*num))
+                        }
                         IntOrFloat::FloatType => {
                             (Symbol::FLOAT_EQ, Builtin::Float64, Expr::Float(*num as f64))
                         }
