@@ -45,6 +45,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
     match expr {
         Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
         Float(num) => env.context.f64_type().const_float(*num).into(),
+        Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Cond {
             cond,
             pass,
@@ -262,36 +263,10 @@ fn build_branch2<'a, 'ctx, 'env>(
     cond: Branch2<'a>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
     let ret_layout = cond.ret_layout;
     let ret_type = basic_type_from_layout(env.context, &ret_layout);
 
     let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
-
-    /*
-    match (lhs, rhs) {
-        (FloatValue(lhs_float), FloatValue(rhs_float)) => {
-            let comparison =
-                builder.build_float_compare(FloatPredicate::OEQ, lhs_float, rhs_float, "cond");
-
-            build_phi2(
-                env, scope, parent, comparison, cond.pass, cond.fail, ret_type, procs,
-            )
-        }
-
-        (IntValue(lhs_int), IntValue(rhs_int)) => {
-            let comparison = builder.build_int_compare(IntPredicate::EQ, lhs_int, rhs_int, "cond");
-
-            build_phi2(
-                env, scope, parent, comparison, cond.pass, cond.fail, ret_type, procs,
-            )
-        }
-        _ => panic!(
-            "Tried to make a branch out of incompatible conditions: lhs = {:?} and rhs = {:?}",
-            cond.cond_lhs, cond.cond_rhs
-        ),
-    }
-    */
 
     match cond_expr {
         IntValue(value) => build_phi2(
