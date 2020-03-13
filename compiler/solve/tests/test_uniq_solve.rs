@@ -2358,7 +2358,7 @@ mod test_uniq_solve {
                 \a, b -> a == b
                 "#
             ),
-            "Attr * (*, * -> Attr * Bool)",
+            "Attr * (a, a -> Attr * Bool)",
         );
     }
 
