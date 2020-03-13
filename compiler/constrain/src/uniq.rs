@@ -143,6 +143,8 @@ fn constrain_pattern(
     use roc_can::pattern::Pattern::*;
     use roc_types::types::PatternCategory;
 
+    let region = pattern.region;
+
     match &pattern.value {
         Identifier(symbol) => {
             state.headers.insert(
@@ -190,10 +192,15 @@ fn constrain_pattern(
             ));
         }
 
-        RecordDestructure(ext_var, patterns) => {
+        RecordDestructure {
+            whole_var,
+            ext_var,
+            destructs,
+        } => {
             // TODO if a subpattern doesn't bind any identifiers, it doesn't count for uniqueness
-            let mut pattern_uniq_vars = Vec::with_capacity(patterns.len());
+            let mut pattern_uniq_vars = Vec::with_capacity(destructs.len());
 
+            state.vars.push(*whole_var);
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
@@ -207,7 +214,7 @@ fn constrain_pattern(
                         guard,
                     },
                 ..
-            } in patterns
+            } in destructs
             {
                 let pat_uniq_var = var_store.fresh();
                 pattern_uniq_vars.push(pat_uniq_var);
@@ -251,22 +258,35 @@ fn constrain_pattern(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(ext_type)),
             );
+
+            let whole_con = Constraint::Eq(
+                Type::Variable(*whole_var),
+                Expected::NoExpectation(record_type),
+                region,
+            );
+
             let record_con = Constraint::Pattern(
-                pattern.region,
+                region,
                 PatternCategory::Record,
-                record_type,
+                Type::Variable(*whole_var),
                 expected,
             );
 
+            state.constraints.push(whole_con);
             state.constraints.push(record_con);
         }
 
-        AppliedTag(ext_var, symbol, patterns) => {
+        AppliedTag {
+            whole_var,
+            ext_var,
+            tag_name,
+            arguments,
+        } => {
             // TODO if a subpattern doesn't bind any identifiers, it doesn't count for uniqueness
-            let mut argument_types = Vec::with_capacity(patterns.len());
-            let mut pattern_uniq_vars = Vec::with_capacity(patterns.len());
+            let mut argument_types = Vec::with_capacity(arguments.len());
+            let mut pattern_uniq_vars = Vec::with_capacity(arguments.len());
 
-            for (pattern_var, loc_pattern) in patterns {
+            for (pattern_var, loc_pattern) in arguments {
                 state.vars.push(*pattern_var);
 
                 let pat_uniq_var = var_store.fresh();
@@ -292,19 +312,28 @@ fn constrain_pattern(
             let union_type = attr_type(
                 tag_union_uniq_type,
                 Type::TagUnion(
-                    vec![(symbol.clone(), argument_types)],
+                    vec![(tag_name.clone(), argument_types)],
                     Box::new(Type::Variable(*ext_var)),
                 ),
             );
 
+            let whole_con = Constraint::Eq(
+                Type::Variable(*whole_var),
+                Expected::NoExpectation(union_type),
+                region,
+            );
+
             let tag_con = Constraint::Pattern(
-                pattern.region,
-                PatternCategory::Ctor(symbol.clone()),
-                union_type,
+                region,
+                PatternCategory::Ctor(tag_name.clone()),
+                Type::Variable(*whole_var),
                 expected,
             );
 
+            state.vars.push(*whole_var);
             state.vars.push(*ext_var);
+
+            state.constraints.push(whole_con);
             state.constraints.push(tag_con);
         }
 
