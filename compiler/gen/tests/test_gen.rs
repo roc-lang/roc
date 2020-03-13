@@ -991,6 +991,28 @@ mod test_gen {
         );
     }
 
+    #[test]
+    fn when_on_enum() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Fruit : [ Apple, Orange, Banana ]
+
+                apple : Fruit
+                apple = Apple
+
+                when apple is
+                    Apple -> 1
+                    Banana -> 2
+                    Orange -> 3
+                    _ -> 4
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
     // #[test]
     // fn basic_record() {
     //     assert_evals_to!(
