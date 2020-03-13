@@ -19,6 +19,45 @@ macro_rules! mismatch {
         }
         vec![Mismatch::TypeMismatch]
     }};
+    ($msg:expr) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
+    ($msg:expr,) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
+    ($msg:expr, $($arg:tt)*) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg, $($arg)*);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
 }
 
 type Pool = Vec<Variable>;
@@ -154,9 +193,9 @@ fn unify_structure(
                 }
             }
         }
-        RigidVar(_) => {
+        RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch!()
+            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
         }
 
         Structure(ref other_flat_type) => {
@@ -552,11 +591,11 @@ fn unify_flat_type(
                 problems
             }
         }
-        (_other1, _other2) => {
-            // Can't unify other1 and other2
-            // dbg!(&_other1, &_other2);
-            mismatch!()
-        }
+        (other1, other2) => mismatch!(
+            "Trying to two flat types that are incompatible: {:?} ~ {:?}",
+            other1,
+            other2
+        ),
     }
 }
 
