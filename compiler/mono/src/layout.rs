@@ -373,55 +373,6 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
     }
 }
 
-/// Recursively inline the contents ext_var into this union until we have
-/// a flat union containing all the tags.
-fn flatten_union(
-    tags: &mut MutMap<TagName, std::vec::Vec<Variable>>,
-    ext_var: Variable,
-    subs: &Subs,
-) {
-    use roc_types::subs::Content::*;
-    use roc_types::subs::FlatType::*;
-
-    match subs.get_without_compacting(ext_var).content {
-        Structure(EmptyTagUnion) => (),
-        Structure(TagUnion(new_tags, new_ext_var))
-        | Structure(RecursiveTagUnion(_, new_tags, new_ext_var)) => {
-            for (tag_name, vars) in new_tags {
-                tags.insert(tag_name, vars);
-            }
-
-            flatten_union(tags, new_ext_var, subs)
-        }
-        Alias(_, _, actual) => flatten_union(tags, actual, subs),
-        invalid => {
-            panic!("Compiler error: flatten_union got an ext_var in a tag union that wasn't itself a tag union; instead, it was: {:?}", invalid);
-        }
-    };
-}
-
-/// Recursively inline the contents ext_var into this record until we have
-/// a flat record containing all the fields.
-fn flatten_record(fields: &mut MutMap<Lowercase, Variable>, ext_var: Variable, subs: &Subs) {
-    use roc_types::subs::Content::*;
-    use roc_types::subs::FlatType::*;
-
-    match subs.get_without_compacting(ext_var).content {
-        Structure(EmptyRecord) => (),
-        Structure(Record(new_tags, new_ext_var)) => {
-            for (label, var) in new_tags {
-                fields.insert(label, var);
-            }
-
-            flatten_record(fields, new_ext_var, subs)
-        }
-        Alias(_, _, actual) => flatten_record(fields, actual, subs),
-        invalid => {
-            panic!("Compiler error: flatten_record encountered an ext_var in a record that wasn't itself a record; instead, it was: {:?}", invalid);
-        }
-    };
-}
-
 fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
     match subs.get_without_compacting(var).content {
         Content::Structure(flat_type) => match flat_type {
