@@ -244,6 +244,80 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::PointerValue(ptr)
             }
         }
+
+        Struct { fields, .. } => {
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Sort the fields
+            let mut sorted_fields = Vec::with_capacity_in(fields.len(), env.arena);
+            for field in fields.iter() {
+                sorted_fields.push(field);
+            }
+            sorted_fields.sort_by_key(|k| &k.0);
+
+            // Determine types
+            let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
+            let mut field_vals = Vec::with_capacity_in(fields.len(), env.arena);
+
+            for (_, ref inner_expr) in sorted_fields.iter() {
+                let val = build_expr(env, &scope, parent, inner_expr, procs);
+
+                let field_type = match inner_expr {
+                    Int(_) => BasicTypeEnum::IntType(ctx.i64_type()),
+                    _ => panic!("I don't yet know how to get Inkwell type for {:?}", val),
+                };
+
+                field_types.push(field_type);
+                field_vals.push(val);
+            }
+
+            // Create the struct_type
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let mut struct_val = struct_type.const_zero().into();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                struct_val = builder
+                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                    .unwrap();
+            }
+
+            BasicValueEnum::StructValue(struct_val.into_struct_value())
+        }
+        Access {
+            label,
+            field_layout,
+            struct_layout: Layout::Struct(fields),
+            record,
+        } => {
+            let builder = env.builder;
+
+            // Reconstruct struct layout
+            let mut reconstructed_struct_layout =
+                Vec::with_capacity_in(fields.len() + 1, env.arena);
+            for field in fields.iter() {
+                reconstructed_struct_layout.push(field.clone());
+            }
+            reconstructed_struct_layout.push((label.clone(), field_layout.clone()));
+            reconstructed_struct_layout.sort_by(|a, b| {
+                a.0.partial_cmp(&b.0)
+                    .expect("TODO: failed to sort struct fields in crane access")
+            });
+
+            // Get index
+            let index = reconstructed_struct_layout
+                .iter()
+                .position(|(local_label, _)| local_label == label)
+                .unwrap() as u32; // TODO
+
+            // Get Struct val
+            let struct_val = build_expr(env, &scope, parent, record, procs).into_struct_value();
+
+            builder
+                .build_extract_value(struct_val, index, "field_access")
+                .unwrap()
+        }
         _ => {
             panic!("I don't yet know how to LLVM build {:?}", expr);
         }
