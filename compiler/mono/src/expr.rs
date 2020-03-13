@@ -454,10 +454,6 @@ fn from_can<'a>(
                     // by the surrounding context
                     let symbol = env.fresh_symbol();
 
-                    // Has the side-effect of monomorphizing record types
-                    // turning the ext_var into EmptyRecord or EmptyTagUnion
-                    let _ = ContentHash::from_var(annotation, env.subs);
-
                     let opt_proc = specialize_proc_body(
                         env,
                         procs,
@@ -484,16 +480,34 @@ fn from_can<'a>(
 
             let (fn_var, loc_expr, ret_var) = *boxed;
 
+            // Optimization: have a cheap "is_builtin" check, that looks at the
+            // module ID to see if it's possibly a builting symbol
             let specialize_builtin_functions = {
-                |symbol, subs: &Subs| match symbol {
-                    Symbol::NUM_ADD => match to_int_or_float(subs, ret_var) {
+                |env: &mut Env<'a, '_>, symbol| match symbol {
+                    Symbol::NUM_ADD => match to_int_or_float(env.subs, ret_var) {
                         FloatType => Symbol::FLOAT_ADD,
                         IntType => Symbol::INT_ADD,
                     },
-                    Symbol::NUM_SUB => match to_int_or_float(subs, ret_var) {
+                    Symbol::NUM_SUB => match to_int_or_float(env.subs, ret_var) {
                         FloatType => Symbol::FLOAT_SUB,
                         IntType => Symbol::INT_SUB,
                     },
+                    // TODO make this work for more than just int/float
+                    Symbol::BOOL_EQ => {
+                        match Layout::from_var(env.arena, loc_args[0].0, env.subs, env.pointer_size)
+                        {
+                            Ok(Layout::Builtin(builtin)) => match builtin {
+                                Builtin::Int64 => Symbol::INT_EQ,
+                                Builtin::Float64 => Symbol::FLOAT_EQ,
+                                _ => panic!("Equality not unimplemented for {:?}", builtin),
+                            },
+                            Ok(complex) => panic!(
+                                "TODO support equality on complex layouts like {:?}",
+                                complex
+                            ),
+                            Err(()) => panic!("Invalid layout"),
+                        }
+                    }
                     _ => symbol,
                 }
             };
@@ -502,7 +516,7 @@ fn from_can<'a>(
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
-                    match specialize_builtin_functions(proc_name, &env.subs) {
+                    match specialize_builtin_functions(env, proc_name) {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
                             // The first arg is the one with the List in it.
