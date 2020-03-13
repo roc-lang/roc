@@ -397,13 +397,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // isEq or (==) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
     add_type(
         Symbol::BOOL_EQ,
-        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+        unique_function(vec![flex(TVAR1), flex(TVAR2)], bool_type(UVAR3)),
     );
 
     // isNeq or (!=) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
     add_type(
         Symbol::BOOL_NEQ,
-        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+        unique_function(vec![flex(TVAR1), flex(TVAR2)], bool_type(UVAR3)),
     );
 
     // and or (&&) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
