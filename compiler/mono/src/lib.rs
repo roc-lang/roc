@@ -12,3 +12,4 @@
 #![allow(clippy::large_enum_variant)]
 pub mod expr;
 pub mod layout;
+pub mod pattern;

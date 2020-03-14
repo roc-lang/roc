@@ -838,6 +838,13 @@ fn from_can_when<'a>(
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
         2 => {
+            let loc_branches: std::vec::Vec<_> = branches.iter().map(|v| v.0.clone()).collect();
+
+            match crate::pattern::check(Region::zero(), &loc_branches) {
+                Ok(_) => {}
+                Err(errors) => panic!("Errors in patterns: {:?}", errors),
+            }
+
             // A when-expression with exactly 2 branches compiles to a Cond.
             let arena = env.arena;
             let mut iter = branches.into_iter();
@@ -983,7 +990,7 @@ fn from_can_when<'a>(
                         UnsupportedPattern(_region) => {
                             panic!("TODO runtime error for unsupported pattern");
                         }
-                        AppliedTag(_, _, _)
+                        AppliedTag { .. }
                         | StrLiteral(_)
                         | RecordDestructure(_, _)
                         | FloatLiteral(_) => {
@@ -1176,7 +1183,11 @@ fn specialize_proc_body<'a>(
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern<'a> {
     Identifier(Symbol),
-    AppliedTag(TagName, Vec<'a, Pattern<'a>>, Layout<'a>),
+    AppliedTag {
+        tag_name: TagName,
+        arguments: Vec<'a, Pattern<'a>>,
+        layout: Layout<'a>,
+    },
     BitLiteral(bool),
     EnumLiteral(u8),
     IntLiteral(i64),
@@ -1236,7 +1247,11 @@ fn from_can_pattern<'a>(
                     mono_args.push(from_can_pattern(env, loc_pat.value));
                 }
 
-                Pattern::AppliedTag(tag_name, mono_args, layout)
+                Pattern::AppliedTag {
+                    tag_name,
+                    arguments: mono_args,
+                    layout,
+                }
             }
             Err(()) => panic!("Invalid layout"),
         },
