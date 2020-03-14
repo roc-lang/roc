@@ -504,8 +504,17 @@ fn type_to_variable(
                 );
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
-            let content = Content::Structure(FlatType::Record(field_vars, ext_var));
+            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let new_ext_var = match roc_types::pretty_print::chase_ext_record(
+                subs,
+                temp_ext_var,
+                &mut field_vars,
+            ) {
+                Ok(()) => Variable::EMPTY_RECORD,
+                Err((new, _)) => new,
+            };
+
+            let content = Content::Structure(FlatType::Record(field_vars, new_ext_var));
 
             register(subs, rank, pools, content)
         }
@@ -522,8 +531,19 @@ fn type_to_variable(
                 tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
-            let content = Content::Structure(FlatType::TagUnion(tag_vars, ext_var));
+            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let mut ext_tag_vec = Vec::new();
+            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
+                subs,
+                temp_ext_var,
+                &mut ext_tag_vec,
+            ) {
+                Ok(()) => Variable::EMPTY_TAG_UNION,
+                Err((new, _)) => new,
+            };
+            tag_vars.extend(ext_tag_vec.into_iter());
+
+            let content = Content::Structure(FlatType::TagUnion(tag_vars, new_ext_var));
 
             register(subs, rank, pools, content)
         }
@@ -540,9 +560,20 @@ fn type_to_variable(
                 tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let mut ext_tag_vec = Vec::new();
+            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
+                subs,
+                temp_ext_var,
+                &mut ext_tag_vec,
+            ) {
+                Ok(()) => Variable::EMPTY_TAG_UNION,
+                Err((new, _)) => new,
+            };
+            tag_vars.extend(ext_tag_vec.into_iter());
+
             let content =
-                Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, ext_var));
+                Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, new_ext_var));
 
             register(subs, rank, pools, content)
         }
