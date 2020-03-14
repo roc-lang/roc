@@ -1,6 +1,6 @@
+use crate::report::ReportText::{Batch, Region, Value};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::Problem;
-use roc_region::all::Region;
 use roc_types::pretty_print::content_to_string;
 use roc_types::subs::{Content, Subs};
 use std::path::PathBuf;
@@ -11,19 +11,32 @@ pub struct Report {
     pub text: ReportText,
 }
 
-impl Report {
-    pub fn can_problem(_filename: PathBuf, _problem: Problem) -> Self {
-        // let text = match problem {
-        //     Problem::UnusedDef(symbol, region) => {
-        //         panic!("TODO implelment me!");
-        //     }
-        //     _ => {
-        //         panic!("TODO implement others");
-        //     }
-        // };
+pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
+    let mut texts = Vec::new();
 
-        // Report { filename, text }
-        panic!("TODO implement me!");
+    match problem {
+        Problem::UnusedDef(symbol, region) => {
+            texts.push(Value(symbol));
+            texts.push(plain_text(" is not used anywhere in your code."));
+            texts.push(newline());
+            texts.push(newline());
+            texts.push(Region(region));
+            texts.push(newline());
+            texts.push(newline());
+            texts.push(plain_text("If you didn't intend on using "));
+            texts.push(Value(symbol));
+            texts.push(plain_text(
+                " then remove it so future readers of your code don't wonder why it is there.",
+            ));
+        }
+        _ => {
+            panic!("TODO implement others");
+        }
+    };
+
+    Report {
+        filename,
+        text: Batch(texts),
     }
 }
 
@@ -43,13 +56,25 @@ pub enum ReportText {
     EmText(Box<str>),
 
     /// A region in the original source
-    Region(Region),
+    Region(roc_region::all::Region),
 
     /// A URL, which should be rendered as a hyperlink.
     Url(Box<str>),
 
     /// The documentation for this symbol.
     Docs(Symbol),
+
+    Batch(Vec<ReportText>),
+}
+
+pub fn plain_text(str: &str) -> ReportText {
+    use ReportText::*;
+
+    Plain(Box::from(str))
+}
+
+fn newline() -> ReportText {
+    plain_text("\n")
 }
 
 impl ReportText {
@@ -89,7 +114,7 @@ impl ReportText {
             }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
             Region(region) => {
-                for i in region.start_line..region.end_line {
+                for i in region.start_line..=region.end_line {
                     buf.push_str(i.to_string().as_str());
                     buf.push_str(" |");
 
@@ -100,11 +125,18 @@ impl ReportText {
                         buf.push_str(src_lines[i as usize]);
                     }
 
-                    buf.push('\n');
+                    if i != region.end_line {
+                        buf.push('\n');
+                    }
                 }
             }
             Docs(_) => {
                 panic!("TODO implment docs");
+            }
+            Batch(report_texts) => {
+                for report_text in report_texts {
+                    report_text.render_ci(buf, subs, home, src_lines, interns);
+                }
             }
         }
     }
