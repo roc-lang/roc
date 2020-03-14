@@ -515,6 +515,7 @@ pub fn constrain_expr(
             exists(vec![cond_var, *expr_var], And(constraints))
         }
         Access {
+            record_var,
             ext_var,
             field_var,
             loc_expr,
@@ -533,6 +534,8 @@ pub fn constrain_expr(
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
 
+            let record_con = Eq(Type::Variable(*record_var), record_expected.clone(), region);
+
             let constraint = constrain_expr(
                 &Env {
                     home: env.home,
@@ -544,12 +547,17 @@ pub fn constrain_expr(
             );
 
             exists(
-                vec![field_var, ext_var],
-                And(vec![constraint, Eq(field_type, expected, region)]),
+                vec![*record_var, field_var, ext_var],
+                And(vec![
+                    constraint,
+                    Eq(field_type, expected, region),
+                    record_con,
+                ]),
             )
         }
         Accessor {
             field,
+            record_var,
             ext_var,
             field_var,
         } => {
@@ -563,13 +571,19 @@ pub fn constrain_expr(
             field_types.insert(label, field_type.clone());
             let record_type = Type::Record(field_types, Box::new(ext_type));
 
+            let record_expected = Expected::NoExpectation(record_type.clone());
+            let record_con = Eq(Type::Variable(*record_var), record_expected, region);
+
             exists(
-                vec![field_var, ext_var],
-                Eq(
-                    Type::Function(vec![record_type], Box::new(field_type)),
-                    expected,
-                    region,
-                ),
+                vec![*record_var, field_var, ext_var],
+                And(vec![
+                    Eq(
+                        Type::Function(vec![record_type], Box::new(field_type)),
+                        expected,
+                        region,
+                    ),
+                    record_con,
+                ]),
             )
         }
         LetRec(defs, loc_ret, var, aliases) => {

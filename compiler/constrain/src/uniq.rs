@@ -1141,6 +1141,7 @@ pub fn constrain_expr(
         }
 
         Access {
+            record_var,
             ext_var,
             field_var,
             loc_expr,
@@ -1163,6 +1164,8 @@ pub fn constrain_expr(
             );
 
             let record_expected = Expected::NoExpectation(record_type);
+            let record_con = Eq(Type::Variable(*record_var), record_expected.clone(), region);
+
             let inner_constraint = constrain_expr(
                 env,
                 var_store,
@@ -1174,13 +1177,24 @@ pub fn constrain_expr(
             );
 
             exists(
-                vec![*field_var, *ext_var, field_uniq_var, record_uniq_var],
-                And(vec![Eq(field_type, expected, region), inner_constraint]),
+                vec![
+                    *record_var,
+                    *field_var,
+                    *ext_var,
+                    field_uniq_var,
+                    record_uniq_var,
+                ],
+                And(vec![
+                    Eq(field_type, expected, region),
+                    inner_constraint,
+                    record_con,
+                ]),
             )
         }
 
         Accessor {
             field,
+            record_var,
             field_var,
             ext_var,
         } => {
@@ -1200,6 +1214,9 @@ pub fn constrain_expr(
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
             );
 
+            let record_expected = Expected::NoExpectation(record_type.clone());
+            let record_con = Eq(Type::Variable(*record_var), record_expected, region);
+
             let fn_uniq_var = var_store.fresh();
             let fn_type = attr_type(
                 Bool::variable(fn_uniq_var),
@@ -1208,13 +1225,14 @@ pub fn constrain_expr(
 
             exists(
                 vec![
+                    *record_var,
                     *field_var,
                     *ext_var,
                     fn_uniq_var,
                     field_uniq_var,
                     record_uniq_var,
                 ],
-                And(vec![Eq(fn_type, expected, region)]),
+                And(vec![Eq(fn_type, expected, region), record_con]),
             )
         }
         RuntimeError(_) => True,

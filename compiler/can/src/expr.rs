@@ -95,6 +95,7 @@ pub enum Expr {
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
+        record_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         loc_expr: Box<Located<Expr>>,
@@ -102,6 +103,7 @@ pub enum Expr {
     },
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
+        record_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         field: Lowercase,
@@ -488,6 +490,7 @@ pub fn canonicalize_expr<'a>(
 
             (
                 Access {
+                    record_var: var_store.fresh(),
                     field_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     loc_expr: Box::new(loc_expr),
@@ -496,20 +499,15 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::AccessorFunction(field) => {
-            let ext_var = var_store.fresh();
-            let field_var = var_store.fresh();
-            let field_name: Lowercase = (*field).into();
-
-            (
-                Accessor {
-                    field: field_name,
-                    ext_var,
-                    field_var,
-                },
-                Output::default(),
-            )
-        }
+        ast::Expr::AccessorFunction(field) => (
+            Accessor {
+                record_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                field_var: var_store.fresh(),
+                field: (*field).into(),
+            },
+            Output::default(),
+        ),
         ast::Expr::GlobalTag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();

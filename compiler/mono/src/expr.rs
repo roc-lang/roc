@@ -681,20 +681,22 @@ fn from_can<'a>(
         }
 
         Access {
-            ext_var,
+            record_var,
             field_var,
             field,
             loc_expr,
+            ..
         } => {
             let arena = env.arena;
 
-            let struct_layout = match Layout::from_var(arena, ext_var, env.subs, env.pointer_size) {
-                Ok(layout) => layout,
-                Err(()) => {
-                    // Invalid field!
-                    panic!("TODO gracefully handle Access with invalid struct_layout");
-                }
-            };
+            let struct_layout =
+                match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
+                    Ok(layout) => layout,
+                    Err(()) => {
+                        // Invalid field!
+                        panic!("TODO gracefully handle Access with invalid struct_layout");
+                    }
+                };
 
             let field_layout = match Layout::from_var(arena, field_var, env.subs, env.pointer_size)
             {
