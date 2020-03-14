@@ -486,10 +486,10 @@ mod test_gen {
         assert_evals_to!("1234.0", 1234.0, f64);
     }
 
-    //     #[test]
-    //     fn empty_list_len() {
-    //         assert_evals_to!("List.len []", 0, i64);
-    //     }
+    #[test]
+    fn empty_list_len() {
+        assert_evals_to!("List.len []", 0, i64);
+    }
 
     #[test]
     fn basic_int_list_len() {
