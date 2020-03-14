@@ -2,11 +2,10 @@ use crate::layout::{Builtin, Layout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can;
-use roc_can::pattern::Pattern;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_region::all::Located;
+use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -150,8 +149,7 @@ pub enum Expr<'a> {
         // The left-hand side of the conditional comparison and the right-hand side.
         // These are stored separately because there are different machine instructions
         // for e.g. "compare float and jump" vs. "compare integer and jump"
-        cond_lhs: &'a Expr<'a>,
-        cond_rhs: &'a Expr<'a>,
+        cond: &'a Expr<'a>,
         cond_layout: Layout<'a>,
         // What to do if the condition either passes or fails
         pass: &'a Expr<'a>,
@@ -337,7 +335,7 @@ fn pattern_to_when<'a>(
             (env.fresh_symbol(), body)
         }
 
-        AppliedTag(_, _, _) | RecordDestructure(_, _) | Shadowed(_, _) | UnsupportedPattern(_) => {
+        AppliedTag {..} | RecordDestructure {..} | Shadowed(_, _) | UnsupportedPattern(_) => {
             let symbol = env.fresh_symbol();
 
             let wrapped_body = When {
@@ -407,9 +405,10 @@ fn from_can<'a>(
             }
 
             // If it wasn't specifically an Identifier & Closure, proceed as normal.
+            let mono_pattern = from_can_pattern(env, loc_pattern.value);
             store_pattern(
                 env,
-                loc_pattern.value,
+                mono_pattern,
                 loc_expr.value,
                 def.expr_var,
                 procs,
@@ -456,10 +455,6 @@ fn from_can<'a>(
                     // by the surrounding context
                     let symbol = env.fresh_symbol();
 
-                    // Has the side-effect of monomorphizing record types
-                    // turning the ext_var into EmptyRecord or EmptyTagUnion
-                    let _ = ContentHash::from_var(annotation, env.subs);
-
                     let opt_proc = specialize_proc_body(
                         env,
                         procs,
@@ -486,16 +481,36 @@ fn from_can<'a>(
 
             let (fn_var, loc_expr, ret_var) = *boxed;
 
+            // Optimization: have a cheap "is_builtin" check, that looks at the
+            // module ID to see if it's possibly a builting symbol
             let specialize_builtin_functions = {
-                |symbol, subs: &Subs| match symbol {
-                    Symbol::NUM_ADD => match to_int_or_float(subs, ret_var) {
+                |env: &mut Env<'a, '_>, symbol| match symbol {
+                    Symbol::NUM_ADD => match to_int_or_float(env.subs, ret_var) {
                         FloatType => Symbol::FLOAT_ADD,
                         IntType => Symbol::INT_ADD,
                     },
-                    Symbol::NUM_SUB => match to_int_or_float(subs, ret_var) {
+                    Symbol::NUM_SUB => match to_int_or_float(env.subs, ret_var) {
                         FloatType => Symbol::FLOAT_SUB,
                         IntType => Symbol::INT_SUB,
                     },
+                    // TODO make this work for more than just int/float
+                    Symbol::BOOL_EQ => {
+                        match Layout::from_var(env.arena, loc_args[0].0, env.subs, env.pointer_size)
+                        {
+                            Ok(Layout::Builtin(builtin)) => match builtin {
+                                Builtin::Int64 => Symbol::INT_EQ_I64,
+                                Builtin::Float64 => Symbol::FLOAT_EQ,
+                                Builtin::Bool(_, _) => Symbol::INT_EQ_I1,
+                                Builtin::Byte(_) => Symbol::INT_EQ_I8,
+                                _ => panic!("Equality not implemented for {:?}", builtin),
+                            },
+                            Ok(complex) => panic!(
+                                "TODO support equality on complex layouts like {:?}",
+                                complex
+                            ),
+                            Err(()) => panic!("Invalid layout"),
+                        }
+                    }
                     _ => symbol,
                 }
             };
@@ -504,7 +519,7 @@ fn from_can<'a>(
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
-                    match specialize_builtin_functions(proc_name, &env.subs) {
+                    match specialize_builtin_functions(env, proc_name) {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
                             // The first arg is the one with the List in it.
@@ -576,7 +591,37 @@ fn from_can<'a>(
             branches,
         } => from_can_when(env, cond_var, expr_var, *loc_cond, branches, procs),
 
-        Record(ext_var, fields) => {
+        If {
+            cond_var,
+            branch_var,
+            branches,
+            final_else,
+        } => {
+            let mut expr = from_can(env, final_else.value, procs, None);
+
+            let ret_layout = Layout::from_var(env.arena, branch_var, env.subs, env.pointer_size)
+                .expect("invalid ret_layout");
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .expect("invalid cond_layout");
+
+            for (loc_cond, loc_then) in branches.into_iter().rev() {
+                let cond = from_can(env, loc_cond.value, procs, None);
+                let then = from_can(env, loc_then.value, procs, None);
+                expr = Expr::Cond {
+                    cond: env.arena.alloc(cond),
+                    cond_layout: cond_layout.clone(),
+                    pass: env.arena.alloc(then),
+                    fail: env.arena.alloc(expr),
+                    ret_layout: ret_layout.clone(),
+                };
+            }
+
+            expr
+        }
+
+        Record {
+            record_var, fields, ..
+        } => {
             let arena = env.arena;
             let mut field_bodies = Vec::with_capacity_in(fields.len(), arena);
 
@@ -586,13 +631,14 @@ fn from_can<'a>(
                 field_bodies.push((label, expr));
             }
 
-            let struct_layout = match Layout::from_var(arena, ext_var, env.subs, env.pointer_size) {
-                Ok(layout) => layout,
-                Err(()) => {
-                    // Invalid field!
-                    panic!("TODO gracefully handle Record with invalid struct_layout");
-                }
-            };
+            let struct_layout =
+                match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
+                    Ok(layout) => layout,
+                    Err(()) => {
+                        // Invalid field!
+                        panic!("TODO gracefully handle Record with invalid struct_layout");
+                    }
+                };
 
             Expr::Struct {
                 fields: field_bodies.into_bump_slice(),
@@ -635,20 +681,22 @@ fn from_can<'a>(
         }
 
         Access {
-            ext_var,
+            record_var,
             field_var,
             field,
             loc_expr,
+            ..
         } => {
             let arena = env.arena;
 
-            let struct_layout = match Layout::from_var(arena, ext_var, env.subs, env.pointer_size) {
-                Ok(layout) => layout,
-                Err(()) => {
-                    // Invalid field!
-                    panic!("TODO gracefully handle Access with invalid struct_layout");
-                }
-            };
+            let struct_layout =
+                match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
+                    Ok(layout) => layout,
+                    Err(()) => {
+                        // Invalid field!
+                        panic!("TODO gracefully handle Access with invalid struct_layout");
+                    }
+                };
 
             let field_layout = match Layout::from_var(arena, field_var, env.subs, env.pointer_size)
             {
@@ -704,7 +752,7 @@ fn store_pattern<'a>(
     procs: &mut Procs<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) {
-    use roc_can::pattern::Pattern::*;
+    use Pattern::*;
 
     let layout = match Layout::from_var(env.arena, var, env.subs, env.pointer_size) {
         Ok(layout) => layout,
@@ -753,7 +801,7 @@ fn from_can_when<'a>(
     )>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
-    use roc_can::pattern::Pattern::*;
+    use Pattern::*;
 
     match branches.len() {
         0 => {
@@ -768,9 +816,10 @@ fn from_can_when<'a>(
             let mut stored = Vec::with_capacity_in(1, arena);
             let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
 
+            let mono_pattern = from_can_pattern(env, loc_when_pattern.value);
             store_pattern(
                 env,
-                loc_when_pattern.value,
+                mono_pattern,
                 loc_cond.value,
                 cond_var,
                 procs,
@@ -785,18 +834,30 @@ fn from_can_when<'a>(
             // A when-expression with exactly 2 branches compiles to a Cond.
             let arena = env.arena;
             let mut iter = branches.into_iter();
-            let (loc_when_pat1, loc_then) = iter.next().unwrap();
-            let (loc_when_pat2, loc_else) = iter.next().unwrap();
+            let (can_loc_when_pat1, loc_then) = iter.next().unwrap();
+            let (can_loc_when_pat2, loc_else) = iter.next().unwrap();
 
-            match (&loc_when_pat1.value, &loc_when_pat2.value) {
-                (NumLiteral(var, num), NumLiteral(_, _)) | (NumLiteral(var, num), Underscore) => {
-                    let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
-                    let (builtin, cond_rhs_expr) = match to_int_or_float(env.subs, *var) {
-                        IntOrFloat::IntType => (Builtin::Int64, Expr::Int(*num)),
-                        IntOrFloat::FloatType => (Builtin::Float64, Expr::Float(*num as f64)),
-                    };
+            let when_pat1 = from_can_pattern(env, can_loc_when_pat1.value);
+            let when_pat2 = from_can_pattern(env, can_loc_when_pat2.value);
 
-                    let cond_rhs = arena.alloc(cond_rhs_expr);
+            let cond_layout = Layout::Builtin(Builtin::Bool(
+                TagName::Global("False".into()),
+                TagName::Global("True".into()),
+            ));
+
+            match (&when_pat1, &when_pat2) {
+                (IntLiteral(int), Underscore) => {
+                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
+                    let cond_rhs = Expr::Int(*int);
+
+                    let cond = arena.alloc(Expr::CallByName(
+                        Symbol::INT_EQ_I64,
+                        arena.alloc([
+                            (cond_lhs, Layout::Builtin(Builtin::Int64)),
+                            (cond_rhs, Layout::Builtin(Builtin::Int64)),
+                        ]),
+                    ));
+
                     let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
                     let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
                     let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
@@ -805,17 +866,25 @@ fn from_can_when<'a>(
                         });
 
                     Expr::Cond {
-                        cond_layout: Layout::Builtin(builtin),
-                        cond_lhs,
-                        cond_rhs,
+                        cond_layout,
+                        cond,
                         pass,
                         fail,
                         ret_layout,
                     }
                 }
-                (IntLiteral(int), IntLiteral(_)) | (IntLiteral(int), Underscore) => {
-                    let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
-                    let cond_rhs = arena.alloc(Expr::Int(*int));
+                (FloatLiteral(float), Underscore) => {
+                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
+                    let cond_rhs = Expr::Float(*float);
+
+                    let cond = arena.alloc(Expr::CallByName(
+                        Symbol::FLOAT_EQ,
+                        arena.alloc([
+                            (cond_lhs, Layout::Builtin(Builtin::Float64)),
+                            (cond_rhs, Layout::Builtin(Builtin::Float64)),
+                        ]),
+                    ));
+
                     let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
                     let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
                     let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
@@ -824,28 +893,8 @@ fn from_can_when<'a>(
                         });
 
                     Expr::Cond {
-                        cond_layout: Layout::Builtin(Builtin::Int64),
-                        cond_lhs,
-                        cond_rhs,
-                        pass,
-                        fail,
-                        ret_layout,
-                    }
-                }
-                (FloatLiteral(float), FloatLiteral(_)) | (FloatLiteral(float), Underscore) => {
-                    let cond_lhs = arena.alloc(from_can(env, loc_cond.value, procs, None));
-                    let cond_rhs = arena.alloc(Expr::Float(*float));
-                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
-                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn this into a RuntimeError {:?}", err)
-                        });
-
-                    Expr::Cond {
-                        cond_layout: Layout::Builtin(Builtin::Float64),
-                        cond_lhs,
-                        cond_rhs,
+                        cond_layout,
+                        cond,
                         pass,
                         fail,
                         ret_layout,
@@ -873,6 +922,8 @@ fn from_can_when<'a>(
             // TODO we can also convert floats to integer representations.
             let is_switchable = match layout {
                 Layout::Builtin(Builtin::Int64) => true,
+                Layout::Builtin(Builtin::Bool(_, _)) => true,
+                Layout::Builtin(Builtin::Byte(_)) => true,
                 _ => false,
             };
 
@@ -886,43 +937,31 @@ fn from_can_when<'a>(
 
                 for (loc_when_pat, loc_expr) in branches {
                     let mono_expr = from_can(env, loc_expr.value, procs, None);
+                    let when_pat = from_can_pattern(env, loc_when_pat.value);
 
-                    match &loc_when_pat.value {
-                        NumLiteral(var, num) => {
-                            // This is jumpable iff it's an int
-                            match to_int_or_float(env.subs, *var) {
-                                IntOrFloat::IntType => {
-                                    jumpable_branches.push((*num as u64, mono_expr));
-                                }
-                                IntOrFloat::FloatType => {
-                                    // The type checker should have converted these mismatches into RuntimeErrors already!
-                                    if cfg!(debug_assertions) {
-                                        panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", loc_when_pat);
-                                    } else {
-                                        unreachable!();
-                                    }
-                                }
-                            };
-                        }
+                    match &when_pat {
                         IntLiteral(int) => {
                             // Switch only compares the condition to the
                             // alternatives based on their bit patterns,
                             // so casting from i64 to u64 makes no difference here.
                             jumpable_branches.push((*int as u64, mono_expr));
                         }
-                        Identifier(_symbol) => {
+                        BitLiteral(v) => jumpable_branches.push((*v as u64, mono_expr)),
+                        EnumLiteral(v) => jumpable_branches.push((*v as u64, mono_expr)),
+                        Identifier(symbol) => {
                             // Since this is an ident, it must be
                             // the last pattern in the `when`.
                             // We can safely treat this like an `_`
                             // except that we need to wrap this branch
                             // in a `Store` so the identifier is in scope!
 
-                            opt_default_branch = Some(arena.alloc(if true {
-                                // Using `if true` for this TODO panic to avoid a warning
-                                panic!("TODO wrap this expr in an Expr::Store: {:?}", mono_expr)
-                            } else {
-                                mono_expr
-                            }));
+                            // TODO does this evaluate `cond` twice?
+                            let mono_with_store = Expr::Store(
+                                arena.alloc([(*symbol, layout.clone(), cond.clone())]),
+                                arena.alloc(mono_expr),
+                            );
+
+                            opt_default_branch = Some(arena.alloc(mono_with_store));
                         }
                         Underscore => {
                             // We should always have exactly one default branch!
@@ -943,7 +982,7 @@ fn from_can_when<'a>(
                         | FloatLiteral(_) => {
                             // The type checker should have converted these mismatches into RuntimeErrors already!
                             if cfg!(debug_assertions) {
-                                panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", loc_when_pat);
+                                panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", when_pat);
                             } else {
                                 unreachable!();
                             }
@@ -962,6 +1001,7 @@ fn from_can_when<'a>(
                     .unwrap_or_else(|err| {
                         panic!("TODO turn cond_layout into a RuntimeError {:?}", err)
                     });
+
                 let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
                     .unwrap_or_else(|err| {
                         panic!("TODO turn ret_layout into a RuntimeError {:?}", err)
@@ -1122,4 +1162,106 @@ fn specialize_proc_body<'a>(
     };
 
     Some(proc)
+}
+
+/// A pattern, including possible problems (e.g. shadowing) so that
+/// codegen can generate a runtime error if this pattern is reached.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pattern<'a> {
+    Identifier(Symbol),
+    AppliedTag(TagName, Vec<'a, Pattern<'a>>, Layout<'a>),
+    BitLiteral(bool),
+    EnumLiteral(u8),
+    IntLiteral(i64),
+    FloatLiteral(f64),
+    StrLiteral(Box<str>),
+    RecordDestructure(Vec<'a, RecordDestruct<'a>>, Layout<'a>),
+    Underscore,
+
+    // Runtime Exceptions
+    Shadowed(Region, Located<Ident>),
+    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
+    UnsupportedPattern(Region),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordDestruct<'a> {
+    pub label: Lowercase,
+    pub symbol: Symbol,
+    pub guard: Option<Pattern<'a>>,
+}
+
+fn from_can_pattern<'a>(
+    env: &mut Env<'a, '_>,
+    can_pattern: roc_can::pattern::Pattern,
+) -> Pattern<'a> {
+    use roc_can::pattern::Pattern::*;
+    match can_pattern {
+        Underscore => Pattern::Underscore,
+        Identifier(symbol) => Pattern::Identifier(symbol),
+        IntLiteral(v) => Pattern::IntLiteral(v),
+        FloatLiteral(v) => Pattern::FloatLiteral(v),
+        StrLiteral(v) => Pattern::StrLiteral(v),
+        Shadowed(region, ident) => Pattern::Shadowed(region, ident),
+        UnsupportedPattern(region) => Pattern::UnsupportedPattern(region),
+
+        NumLiteral(var, num) => match to_int_or_float(env.subs, var) {
+            IntOrFloat::IntType => Pattern::IntLiteral(num),
+            IntOrFloat::FloatType => Pattern::FloatLiteral(num as f64),
+        },
+
+        AppliedTag {
+            whole_var,
+            tag_name,
+            arguments,
+            ..
+        } => match Layout::from_var(env.arena, whole_var, env.subs, env.pointer_size) {
+            Ok(Layout::Builtin(Builtin::Bool(_bottom, top))) => {
+                Pattern::BitLiteral(tag_name == top)
+            }
+            Ok(Layout::Builtin(Builtin::Byte(conversion))) => match conversion.get(&tag_name) {
+                Some(index) => Pattern::EnumLiteral(*index),
+                None => unreachable!("Tag must be in its own type"),
+            },
+            Ok(layout) => {
+                let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+                for (_, loc_pat) in arguments {
+                    mono_args.push(from_can_pattern(env, loc_pat.value));
+                }
+
+                Pattern::AppliedTag(tag_name, mono_args, layout)
+            }
+            Err(()) => panic!("Invalid layout"),
+        },
+
+        RecordDestructure {
+            whole_var,
+            destructs,
+            ..
+        } => match Layout::from_var(env.arena, whole_var, env.subs, env.pointer_size) {
+            Ok(layout) => {
+                let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
+                for loc_rec_des in destructs {
+                    mono_destructs.push(from_can_record_destruct(env, loc_rec_des.value));
+                }
+
+                Pattern::RecordDestructure(mono_destructs, layout)
+            }
+            Err(()) => panic!("Invalid layout"),
+        },
+    }
+}
+
+fn from_can_record_destruct<'a>(
+    env: &mut Env<'a, '_>,
+    can_rd: roc_can::pattern::RecordDestruct,
+) -> RecordDestruct<'a> {
+    RecordDestruct {
+        label: can_rd.label,
+        symbol: can_rd.symbol,
+        guard: match can_rd.guard {
+            None => None,
+            Some((_, loc_pattern)) => Some(from_can_pattern(env, loc_pattern.value)),
+        },
+    }
 }

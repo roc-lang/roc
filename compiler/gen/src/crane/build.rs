@@ -52,16 +52,14 @@ pub fn build_expr<'a, B: Backend>(
         Bool(val) => builder.ins().bconst(types::B1, *val),
         Byte(val) => builder.ins().iconst(types::I8, *val as i64),
         Cond {
-            cond_lhs,
-            cond_rhs,
+            cond,
             pass,
             fail,
             cond_layout,
             ret_layout,
         } => {
             let branch = Branch2 {
-                cond_lhs,
-                cond_rhs,
+                cond,
                 pass,
                 fail,
                 cond_layout,
@@ -312,8 +310,7 @@ pub fn build_expr<'a, B: Backend>(
 }
 
 struct Branch2<'a> {
-    cond_lhs: &'a Expr<'a>,
-    cond_rhs: &'a Expr<'a>,
+    cond: &'a Expr<'a>,
     cond_layout: &'a Layout<'a>,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
@@ -339,24 +336,13 @@ fn build_branch2<'a, B: Backend>(
 
     builder.declare_var(ret, ret_type);
 
-    let lhs = build_expr(env, scope, module, builder, branch.cond_lhs, procs);
-    let rhs = build_expr(env, scope, module, builder, branch.cond_rhs, procs);
+    let cond = build_expr(env, scope, module, builder, branch.cond, procs);
     let pass_block = builder.create_block();
     let fail_block = builder.create_block();
 
     match branch.cond_layout {
-        Layout::Builtin(Builtin::Float64) => {
-            // For floats, first do a `fcmp` comparison to get a bool answer about equality,
-            // then use `brnz` to branch if that bool equality answer was nonzero (aka true).
-            let is_eq = builder.ins().fcmp(FloatCC::Equal, lhs, rhs);
-
-            builder.ins().brnz(is_eq, pass_block, &[]);
-        }
-        Layout::Builtin(Builtin::Int64) => {
-            // For ints, we can compare and branch in the same instruction: `icmp`
-            builder
-                .ins()
-                .br_icmp(IntCC::Equal, lhs, rhs, pass_block, &[]);
+        Layout::Builtin(Builtin::Bool(_, _)) => {
+            builder.ins().brnz(cond, pass_block, &[]);
         }
         other => panic!("I don't know how to build a conditional for {:?}", other),
     }
@@ -581,6 +567,7 @@ fn build_arg<'a, B: Backend>(
 }
 
 #[inline(always)]
+#[allow(clippy::cognitive_complexity)]
 fn call_by_name<'a, B: Backend>(
     env: &Env<'a>,
     symbol: Symbol,
@@ -631,6 +618,20 @@ fn call_by_name<'a, B: Backend>(
             let num = build_arg(&args[0], env, scope, module, builder, procs);
 
             builder.ins().ineg(num)
+        }
+        Symbol::INT_EQ_I64 | Symbol::INT_EQ_I8 | Symbol::INT_EQ_I1 => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().icmp(IntCC::Equal, a, b)
+        }
+        Symbol::FLOAT_EQ => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().fcmp(FloatCC::Equal, a, b)
         }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);

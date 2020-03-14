@@ -58,7 +58,7 @@ fn headers_from_annotation_help(
         | FloatLiteral(_)
         | StrLiteral(_) => true,
 
-        RecordDestructure(_, destructs) => match annotation.value.shallow_dealias() {
+        RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
             Type::Record(fields, _) => {
                 for destruct in destructs {
                     // NOTE ignores the .guard field.
@@ -77,7 +77,11 @@ fn headers_from_annotation_help(
             _ => false,
         },
 
-        AppliedTag(_, tag_name, arguments) => match annotation.value.shallow_dealias() {
+        AppliedTag {
+            tag_name,
+            arguments,
+            ..
+        } => match annotation.value.shallow_dealias() {
             Type::TagUnion(tags, _) => {
                 if let Some((_, arg_types)) = tags.iter().find(|(name, _)| name == tag_name) {
                     if !arguments.len() == arg_types.len() {
@@ -164,7 +168,12 @@ pub fn constrain_pattern(
             ));
         }
 
-        RecordDestructure(ext_var, patterns) => {
+        RecordDestructure {
+            whole_var,
+            ext_var,
+            destructs,
+        } => {
+            state.vars.push(*whole_var);
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
@@ -179,7 +188,7 @@ pub fn constrain_pattern(
                         guard,
                     },
                 ..
-            } in patterns
+            } in destructs
             {
                 let pat_type = Type::Variable(*var);
                 let expected = PExpected::NoExpectation(pat_type.clone());
@@ -207,14 +216,31 @@ pub fn constrain_pattern(
             }
 
             let record_type = Type::Record(field_types, Box::new(ext_type));
-            let record_con =
-                Constraint::Pattern(region, PatternCategory::Record, record_type, expected);
 
+            let whole_con = Constraint::Eq(
+                Type::Variable(*whole_var),
+                Expected::NoExpectation(record_type),
+                region,
+            );
+
+            let record_con = Constraint::Pattern(
+                region,
+                PatternCategory::Record,
+                Type::Variable(*whole_var),
+                expected,
+            );
+
+            state.constraints.push(whole_con);
             state.constraints.push(record_con);
         }
-        AppliedTag(ext_var, tag_name, patterns) => {
-            let mut argument_types = Vec::with_capacity(patterns.len());
-            for (pattern_var, loc_pattern) in patterns {
+        AppliedTag {
+            whole_var,
+            ext_var,
+            tag_name,
+            arguments,
+        } => {
+            let mut argument_types = Vec::with_capacity(arguments.len());
+            for (pattern_var, loc_pattern) in arguments {
                 state.vars.push(*pattern_var);
 
                 let pattern_type = Type::Variable(*pattern_var);
@@ -224,17 +250,25 @@ pub fn constrain_pattern(
                 constrain_pattern(&loc_pattern.value, loc_pattern.region, expected, state);
             }
 
+            let whole_con = Constraint::Eq(
+                Type::Variable(*whole_var),
+                Expected::NoExpectation(Type::TagUnion(
+                    vec![(tag_name.clone(), argument_types)],
+                    Box::new(Type::Variable(*ext_var)),
+                )),
+                region,
+            );
+
             let tag_con = Constraint::Pattern(
                 region,
                 PatternCategory::Ctor(tag_name.clone()),
-                Type::TagUnion(
-                    vec![(tag_name.clone(), argument_types)],
-                    Box::new(Type::Variable(*ext_var)),
-                ),
+                Type::Variable(*whole_var),
                 expected,
             );
 
+            state.vars.push(*whole_var);
             state.vars.push(*ext_var);
+            state.constraints.push(whole_con);
             state.constraints.push(tag_con);
         }
         Shadowed(_, _) => {

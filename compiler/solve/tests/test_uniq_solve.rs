@@ -1408,7 +1408,8 @@ mod test_uniq_solve {
 
     #[test]
     fn quicksort() {
-        infer_eq(
+        with_larger_debug_stack(|| {
+            infer_eq(
             indoc!(
                 r#"
                 quicksort : List (Num a), Int, Int -> List (Num a)
@@ -1462,6 +1463,7 @@ mod test_uniq_solve {
             ),
             "Attr Shared (Attr b (List (Attr Shared (Num (Attr c a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr c a)))))"
         );
+        })
     }
 
     #[test]
@@ -2083,7 +2085,8 @@ mod test_uniq_solve {
                     reverse
                 "#
             ),
-            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
+            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
+            //"Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
         );
     }
 
@@ -2113,8 +2116,8 @@ mod test_uniq_solve {
                 f
                 "#
             ),
-            "Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))",
-            //"Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * (Num (Attr * *)))"
+            //"Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))",
+            "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * (Num (Attr * *)))"
         );
     }
 
@@ -2327,18 +2330,17 @@ mod test_uniq_solve {
                                     Ok (reconstructPath model.cameFrom goal)
 
                                 else
+                                    modelPopped = { model & openSet : Set.remove model.openSet current, evaluated : Set.insert model.evaluated current }
 
-                                modelPopped = { model & openSet : Set.remove model.openSet current, evaluated : Set.insert model.evaluated current }
+                                    neighbours = moveFn current
 
-                                neighbours = moveFn current
+                                    newNeighbours = Set.diff neighbours modelPopped.evaluated
 
-                                newNeighbours = Set.diff neighbours modelPopped.evaluated
+                                    modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
 
-                                modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
+                                    modelWithCosts = Set.foldl newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
 
-                                modelWithCosts = Set.foldl newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
-
-                                astar costFn moveFn goal modelWithCosts
+                                    astar costFn moveFn goal modelWithCosts
 
                     findPath
                 "#
@@ -2346,6 +2348,18 @@ mod test_uniq_solve {
             "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr Shared position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))"
         )
         });
+    }
+
+    #[test]
+    fn equals() {
+        infer_eq(
+            indoc!(
+                r#"
+                \a, b -> a == b
+                "#
+            ),
+            "Attr * (a, a -> Attr * Bool)",
+        );
     }
 
     #[test]

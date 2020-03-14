@@ -85,13 +85,17 @@ pub enum Expr {
     ),
 
     // Product Types
-    Record(Variable, SendMap<Lowercase, Field>),
+    Record {
+        record_var: Variable,
+        fields: SendMap<Lowercase, Field>,
+    },
 
     /// Empty record constant
     EmptyRecord,
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
+        record_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         loc_expr: Box<Located<Expr>>,
@@ -99,6 +103,7 @@ pub enum Expr {
     },
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
+        record_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         field: Lowercase,
@@ -195,7 +200,13 @@ pub fn canonicalize_expr<'a>(
             } else {
                 let (can_fields, output) = canonicalize_fields(env, var_store, scope, fields);
 
-                (Record(var_store.fresh(), can_fields), output)
+                (
+                    Record {
+                        record_var: var_store.fresh(),
+                        fields: can_fields,
+                    },
+                    output,
+                )
             }
         }
         ast::Expr::Str(string) => (Str((*string).into()), Output::default()),
@@ -479,6 +490,7 @@ pub fn canonicalize_expr<'a>(
 
             (
                 Access {
+                    record_var: var_store.fresh(),
                     field_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     loc_expr: Box::new(loc_expr),
@@ -487,20 +499,15 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::AccessorFunction(field) => {
-            let ext_var = var_store.fresh();
-            let field_var = var_store.fresh();
-            let field_name: Lowercase = (*field).into();
-
-            (
-                Accessor {
-                    field: field_name,
-                    ext_var,
-                    field_var,
-                },
-                Output::default(),
-            )
-        }
+        ast::Expr::AccessorFunction(field) => (
+            Accessor {
+                record_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                field_var: var_store.fresh(),
+                field: (*field).into(),
+            },
+            Output::default(),
+        ),
         ast::Expr::GlobalTag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();

@@ -121,6 +121,7 @@ impl<'a> Builtin<'a> {
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn layout_from_flat_type<'a>(
     arena: &'a Bump,
     flat_type: FlatType,
@@ -194,8 +195,8 @@ fn layout_from_flat_type<'a>(
                 arena.alloc(ret),
             ))
         }
-        Record(mut fields, ext_var) => {
-            flatten_record(&mut fields, ext_var, subs);
+        Record(fields, ext_var) => {
+            debug_assert!(ext_var_is_empty_record(subs, ext_var));
             let ext_content = subs.get_without_compacting(ext_var).content;
             let ext_layout = match Layout::from_content(arena, ext_content, subs, pointer_size) {
                 Ok(layout) => layout,
@@ -239,10 +240,8 @@ fn layout_from_flat_type<'a>(
 
             Ok(Layout::Struct(field_layouts.into_bump_slice()))
         }
-        TagUnion(mut tags, ext_var) => {
-            // Recursively inject the contents of ext_var into tags
-            // until we have all the tags in one map.
-            flatten_union(&mut tags, ext_var, subs);
+        TagUnion(tags, ext_var) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             match tags.len() {
                 0 => {
@@ -330,6 +329,35 @@ fn layout_from_flat_type<'a>(
     }
 }
 
+fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
+    // the ext_var is empty
+    let mut ext_fields = std::vec::Vec::new();
+    match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            if !ext_fields.is_empty() {
+                println!("ext_tags: {:?}", ext_fields);
+            }
+            ext_fields.is_empty()
+        }
+        Err(content) => panic!("invalid content in ext_var: {:?}", content),
+    }
+}
+
+fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
+    // the ext_var is empty
+    let mut ext_fields = MutMap::default();
+    match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut ext_fields) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            if !ext_fields.is_empty() {
+                println!("ext_fields: {:?}", ext_fields);
+            }
+
+            ext_fields.is_empty()
+        }
+        Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
+    }
+}
+
 fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
@@ -356,55 +384,6 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
         }
         Error => Err(()),
     }
-}
-
-/// Recursively inline the contents ext_var into this union until we have
-/// a flat union containing all the tags.
-fn flatten_union(
-    tags: &mut MutMap<TagName, std::vec::Vec<Variable>>,
-    ext_var: Variable,
-    subs: &Subs,
-) {
-    use roc_types::subs::Content::*;
-    use roc_types::subs::FlatType::*;
-
-    match subs.get_without_compacting(ext_var).content {
-        Structure(EmptyTagUnion) => (),
-        Structure(TagUnion(new_tags, new_ext_var))
-        | Structure(RecursiveTagUnion(_, new_tags, new_ext_var)) => {
-            for (tag_name, vars) in new_tags {
-                tags.insert(tag_name, vars);
-            }
-
-            flatten_union(tags, new_ext_var, subs)
-        }
-        Alias(_, _, actual) => flatten_union(tags, actual, subs),
-        invalid => {
-            panic!("Compiler error: flatten_union got an ext_var in a tag union that wasn't itself a tag union; instead, it was: {:?}", invalid);
-        }
-    };
-}
-
-/// Recursively inline the contents ext_var into this record until we have
-/// a flat record containing all the fields.
-fn flatten_record(fields: &mut MutMap<Lowercase, Variable>, ext_var: Variable, subs: &Subs) {
-    use roc_types::subs::Content::*;
-    use roc_types::subs::FlatType::*;
-
-    match subs.get_without_compacting(ext_var).content {
-        Structure(EmptyRecord) => (),
-        Structure(Record(new_tags, new_ext_var)) => {
-            for (label, var) in new_tags {
-                fields.insert(label, var);
-            }
-
-            flatten_record(fields, new_ext_var, subs)
-        }
-        Alias(_, _, actual) => flatten_record(fields, actual, subs),
-        invalid => {
-            panic!("Compiler error: flatten_record encountered an ext_var in a record that wasn't itself a record; instead, it was: {:?}", invalid);
-        }
-    };
 }
 
 fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
