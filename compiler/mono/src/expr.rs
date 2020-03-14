@@ -619,7 +619,9 @@ fn from_can<'a>(
             expr
         }
 
-        Record(ext_var, fields) => {
+        Record {
+            record_var, fields, ..
+        } => {
             let arena = env.arena;
             let mut field_bodies = Vec::with_capacity_in(fields.len(), arena);
 
@@ -629,13 +631,14 @@ fn from_can<'a>(
                 field_bodies.push((label, expr));
             }
 
-            let struct_layout = match Layout::from_var(arena, ext_var, env.subs, env.pointer_size) {
-                Ok(layout) => layout,
-                Err(()) => {
-                    // Invalid field!
-                    panic!("TODO gracefully handle Record with invalid struct_layout");
-                }
-            };
+            let struct_layout =
+                match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
+                    Ok(layout) => layout,
+                    Err(()) => {
+                        // Invalid field!
+                        panic!("TODO gracefully handle Record with invalid struct_layout");
+                    }
+                };
 
             Expr::Struct {
                 fields: field_bodies.into_bump_slice(),

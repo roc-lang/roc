@@ -85,7 +85,10 @@ pub enum Expr {
     ),
 
     // Product Types
-    Record(Variable, SendMap<Lowercase, Field>),
+    Record {
+        record_var: Variable,
+        fields: SendMap<Lowercase, Field>,
+    },
 
     /// Empty record constant
     EmptyRecord,
@@ -195,7 +198,13 @@ pub fn canonicalize_expr<'a>(
             } else {
                 let (can_fields, output) = canonicalize_fields(env, var_store, scope, fields);
 
-                (Record(var_store.fresh(), can_fields), output)
+                (
+                    Record {
+                        record_var: var_store.fresh(),
+                        fields: can_fields,
+                    },
+                    output,
+                )
             }
         }
         ast::Expr::Str(string) => (Str((*string).into()), Output::default()),

@@ -90,7 +90,7 @@ pub fn constrain_expr(
         ),
         Float(var, _) => float_literal(*var, expected, region),
         EmptyRecord => constrain_empty_record(region, expected),
-        Expr::Record(stored_var, fields) => {
+        Expr::Record { record_var, fields } => {
             if fields.is_empty() {
                 constrain_empty_record(region, expected)
             } else {
@@ -125,9 +125,9 @@ pub fn constrain_expr(
                 constraints.push(record_con);
 
                 // variable to store in the AST
-                let stored_con = Eq(Type::Variable(*stored_var), expected, region);
+                let stored_con = Eq(Type::Variable(*record_var), expected, region);
 
-                field_vars.push(*stored_var);
+                field_vars.push(*record_var);
                 constraints.push(stored_con);
 
                 exists(field_vars, And(constraints))

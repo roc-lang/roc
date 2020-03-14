@@ -457,12 +457,12 @@ pub fn constrain_expr(
                 ),
             )
         }
-        Record(variable, fields) => {
+        Record { record_var, fields } => {
             // NOTE: canonicalization guarantees at least one field
             // zero fields generates an EmptyRecord
             let mut field_types = SendMap::default();
             let mut field_vars = Vec::with_capacity(fields.len());
-            field_vars.push(*variable);
+            field_vars.push(*record_var);
 
             // Constraints need capacity for each field + 1 for the record itself + 1 for ext
             let mut constraints = Vec::with_capacity(2 + fields.len());
@@ -501,7 +501,7 @@ pub fn constrain_expr(
                 ),
             );
             let record_con = Eq(record_type, expected.clone(), region);
-            let ext_con = Eq(Type::Variable(*variable), expected, region);
+            let ext_con = Eq(Type::Variable(*record_var), expected, region);
 
             constraints.push(record_con);
             constraints.push(ext_con);
