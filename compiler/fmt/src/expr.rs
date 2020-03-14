@@ -89,7 +89,7 @@ pub fn fmt_expr<'a>(
             }
             buf.push_str("\"\"\"");
         }
-        Int(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
+        Num(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
             buf.push_str(string)
         }
         NonBase10Int {
@@ -432,7 +432,7 @@ pub fn is_multiline_pattern<'a>(pattern: &'a Pattern<'a>) -> bool {
         | Pattern::Apply(_, _)
         | Pattern::RecordDestructure(_)
         | Pattern::RecordField(_, _)
-        | Pattern::IntLiteral(_)
+        | Pattern::NumLiteral(_)
         | Pattern::NonBase10Literal { .. }
         | Pattern::FloatLiteral(_)
         | Pattern::StrLiteral(_)
@@ -456,7 +456,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
 
         // These expressions never have newlines
         Float(_)
-        | Int(_)
+        | Num(_)
         | NonBase10Int { .. }
         | Str(_)
         | Access(_, _)

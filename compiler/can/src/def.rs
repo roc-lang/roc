@@ -674,7 +674,12 @@ fn pattern_to_vars_by_symbol(
             }
         }
 
-        IntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | Underscore | UnsupportedPattern(_) => {}
+        NumLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | UnsupportedPattern(_) => {}
 
         Shadowed(_, _) => {}
     }
@@ -1321,7 +1326,7 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err(_err) => panic!("TODO gracefully handle shadowing of type alias"),
+                Err(err) => panic!("TODO gracefully handle shadowing of type alias {:?}", err),
             }
         }
 

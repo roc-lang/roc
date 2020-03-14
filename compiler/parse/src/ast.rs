@@ -93,7 +93,7 @@ pub struct WhenPattern<'a> {
 pub enum Expr<'a> {
     // Number Literals
     Float(&'a str),
-    Int(&'a str),
+    Num(&'a str),
     NonBase10Int {
         string: &'a str,
         base: Base,
@@ -324,7 +324,7 @@ pub enum Pattern<'a> {
     Nested(&'a Pattern<'a>),
 
     // Literal
-    IntLiteral(&'a str),
+    NumLiteral(&'a str),
     NonBase10Literal {
         string: &'a str,
         base: Base,
@@ -425,7 +425,7 @@ impl<'a> Pattern<'a> {
             (Nested(x), Nested(y)) => x.equivalent(y),
 
             // Literal
-            (IntLiteral(x), IntLiteral(y)) => x == y,
+            (NumLiteral(x), NumLiteral(y)) => x == y,
             (
                 NonBase10Literal {
                     string: string_x,

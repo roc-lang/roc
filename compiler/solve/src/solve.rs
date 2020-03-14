@@ -546,6 +546,7 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
+        Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
         Alias(symbol, args, alias_type) => {
             // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
             // different variables (once for each occurence). The recursion restriction is required
@@ -560,6 +561,7 @@ fn type_to_variable(
             //
             // This `u` variable can be different between lists, so giving just one variable to
             // this type is incorrect.
+            // TODO does caching work at all with uniqueness types? even Int then hides a uniqueness variable
             let is_recursive = alias_type.is_recursive();
             let no_args = args.is_empty();
             if no_args && !is_recursive {

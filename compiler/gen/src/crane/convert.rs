@@ -10,23 +10,12 @@ pub fn type_from_layout(cfg: TargetFrontendConfig, layout: &Layout<'_>) -> Type 
     use roc_mono::layout::Layout::*;
 
     match layout {
-        Pointer(_) | FunctionPointer(_, _) => cfg.pointer_type(),
-        Struct(fields) => {
-            // This will change as we add more fields and field types to the tests
-            let naive_all_ints = fields.iter().all(|ref field| match field.1 {
-                Builtin(Int64) => true,
-                _ => false,
-            });
-
-            if naive_all_ints && fields.len() == 3 {
-                types::I64.by(4).unwrap()
-            } else {
-                panic!("TODO layout_to_crane_type for Struct");
-            }
-        }
+        Pointer(_) | FunctionPointer(_, _) | Struct(_) => cfg.pointer_type(),
         Builtin(builtin) => match builtin {
             Int64 => types::I64,
             Float64 => types::F64,
+            Bool(_, _) => types::B1,
+            Byte(_) => types::I8,
             Str | EmptyStr | Map(_, _) | EmptyMap | Set(_) | EmptySet | List(_) | EmptyList => {
                 cfg.pointer_type()
             }
