@@ -1048,8 +1048,11 @@ fn parse_and_constrain(
 
             (module, ident_ids, constraint, problems)
         }
-        Err(_runtime_error) => {
-            panic!("TODO gracefully handle module canonicalization error");
+        Err(runtime_error) => {
+            panic!(
+                "TODO gracefully handle module canonicalization error {:?}",
+                runtime_error
+            );
         }
     };
 

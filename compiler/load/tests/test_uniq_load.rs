@@ -208,7 +208,7 @@ mod test_uniq_load {
                     "divisionTest" => "Attr * Float",
                     "intTest" => "Attr * Int",
                     "x" => "Attr * Float",
-                    "constantInt" => "Attr * Int",
+                    "constantNum" => "Attr * (Num (Attr * *))",
                     "divDep1ByDep2" => "Attr * Float",
                     "fromDep2" => "Attr * Float",
                 },

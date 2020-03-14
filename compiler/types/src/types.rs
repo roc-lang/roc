@@ -621,6 +621,7 @@ pub enum Reason {
     BinOpRet(BinOp),
     FloatLiteral,
     IntLiteral,
+    NumLiteral,
     InterpolatedStringVar,
     WhenBranch { index: usize },
     IfCondition,
@@ -638,8 +639,9 @@ pub enum PatternCategory {
     Set,
     Map,
     Ctor(TagName),
-    Int,
     Str,
+    Num,
+    Int,
     Float,
 }
 
@@ -726,14 +728,14 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
 }
 
 pub fn gather_fields(
-    subs: &mut Subs,
+    subs: &Subs,
     fields: MutMap<Lowercase, Variable>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    match subs.get(var).content {
+    match subs.get_without_compacting(var).content {
         Structure(Record(sub_fields, sub_ext)) => {
             gather_fields(subs, union(fields, &sub_fields), sub_ext)
         }

@@ -337,7 +337,7 @@ dependencies = [
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/TheDan64/inkwell?branch=llvm8-0#647a7cbfc2a6be3b41b8de3b1c63ec1fe4e79267"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm8-0.release1#647a7cbfc2a6be3b41b8de3b1c63ec1fe4e79267"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -351,7 +351,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.1.0"
-source = "git+https://github.com/TheDan64/inkwell?branch=llvm8-0#647a7cbfc2a6be3b41b8de3b1c63ec1fe4e79267"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm8-0.release1#647a7cbfc2a6be3b41b8de3b1c63ec1fe4e79267"
 dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
@@ -955,15 +955,22 @@ version = "0.1.0"
 name = "roc_reporting"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "indoc",
  "maplit",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+ "roc_builtins",
+ "roc_can",
  "roc_collections",
+ "roc_constrain",
+ "roc_load",
  "roc_module",
+ "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_solve",
  "roc_types",
 ]
 
