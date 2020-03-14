@@ -11,24 +11,30 @@ mod helpers;
 mod test_report {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
-    use roc_reporting::report::{Report, ReportText};
+    use roc_reporting::report::{can_problem, plain_text, Report, ReportText};
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use roc_types::types;
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{assert_correct_variable_usage, can_expr, infer_expr, CanExprOut};
-    use roc_reporting::report::ReportText::{EmText, Plain, Region, Type, Url, Value};
+    use roc_problem::can::Problem;
+    use roc_reporting::report::ReportText::{Batch, EmText, Plain, Region, Type, Url, Value};
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
     use roc_types::subs::FlatType::EmptyRecord;
 
+    fn filename_from_string(str: &str) -> PathBuf {
+        let mut filename = PathBuf::new();
+        filename.push(str);
+
+        return filename;
+    }
+
     // use roc_problem::can;
     fn to_simple_report(text: ReportText) -> Report {
-        let mut filename = PathBuf::new();
-        filename.push(r"\code\proj\Main.roc");
         Report {
             text: text,
-            filename: filename,
+            filename: filename_from_string(r"\code\proj\Main.roc"),
         }
     }
 
@@ -69,7 +75,7 @@ mod test_report {
 
     fn report_renders_as_from_src(src: &str, report: Report, expected_rendering: &str) {
         let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
-        let mut buf = String::new();
+        let mut buf: String = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
 
         report
@@ -96,7 +102,7 @@ mod test_report {
 
     #[test]
     fn report_plain() {
-        report_renders_as(to_simple_report(Plain(Box::from("y"))), "y");
+        report_renders_as(to_simple_report(plain_text("y")), "y");
     }
 
     #[test]
@@ -153,6 +159,62 @@ mod test_report {
     }
 
     #[test]
+    fn report_batch_of_plain_text() {
+        let mut report_texts = Vec::new();
+
+        report_texts.push(plain_text("Wait a second. "));
+        report_texts.push(plain_text("There is a problem here. -> "));
+        report_texts.push(EmText(Box::from("y")));
+
+        report_renders_as(
+            to_simple_report(Batch(report_texts)),
+            "Wait a second. There is a problem here. -> *y*",
+        );
+    }
+
+    #[test]
+    fn report_unused_def() {
+        let src: &str = indoc!(
+            r#"
+                x = 1
+                y = 2
+
+                x
+            "#
+        );
+
+        let (_type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+
+        let mut buf: String = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        match can_problems.first() {
+            None => {}
+            Some(problem) => {
+                let report = can_problem(
+                    filename_from_string(r"\code\proj\Main.roc"),
+                    problem.clone(),
+                );
+                report
+                    .text
+                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+            }
+        }
+
+        assert_eq!(
+            buf,
+            indoc!(
+                r#"
+            y is not used anywhere in your code.
+
+            1 | y = 2
+
+            If you didn't intend on using y then remove it so future readers of your code don't wonder why it is there."#
+            )
+        );
+    }
+
+    #[test]
     fn report_region() {
         report_renders_as_from_src(
             indoc!(
@@ -166,7 +228,7 @@ mod test_report {
             ),
             to_simple_report(Region(roc_region::all::Region {
                 start_line: 1,
-                end_line: 4,
+                end_line: 3,
                 start_col: 0,
                 end_col: 0,
             })),
