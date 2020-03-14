@@ -1013,41 +1013,36 @@ mod test_gen {
         );
     }
 
-    // #[test]
-    // fn basic_record() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 point = { x: 15, y: 17, z: 19 }
+    #[test]
+    fn basic_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { y: 17, x: 15, z: 19 }.x
+                "#
+            ),
+            15,
+            i64
+        );
 
-    //                 point.x
-    //             "#
-    //         ),
-    //         15,
-    //         i64
-    //     );
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 15, y: 17, z: 19 }.y
+                "#
+            ),
+            17,
+            i64
+        );
 
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 point = { x: 15, y: 17, z: 19 }
-
-    //                 point.y
-    //             "#
-    //         ),
-    //         17,
-    //         i64
-    //     );
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 point = { x: 15, y: 17, z: 19 }
-
-    //                 point.z
-    //             "#
-    //         ),
-    //         19,
-    //         i64
-    //     );
-    // }
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 15, y: 17, z: 19 }.z
+                "#
+            ),
+            19,
+            i64
+        );
+    }
 }
