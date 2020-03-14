@@ -89,6 +89,11 @@ impl<T> Located<T> {
     pub fn at(region: Region, value: T) -> Located<T> {
         Located { value, region }
     }
+
+    pub fn at_zero(value: T) -> Located<T> {
+        let region = Region::zero();
+        Located { value, region }
+    }
 }
 
 impl<T> Located<T> {

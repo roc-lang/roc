@@ -69,7 +69,7 @@ mod test_solve {
 
     #[test]
     fn int_literal() {
-        infer_eq("5", "Int");
+        infer_eq("5", "Num *");
     }
 
     #[test]
@@ -188,7 +188,7 @@ mod test_solve {
                     [42]
                 "#
             ),
-            "List Int",
+            "List (Num *)",
         );
     }
 
@@ -200,7 +200,7 @@ mod test_solve {
                     [[[ 5 ]]]
                 "#
             ),
-            "List (List (List Int))",
+            "List (List (List (Num *)))",
         );
     }
 
@@ -212,7 +212,7 @@ mod test_solve {
                     [ 1, 2, 3 ]
                 "#
             ),
-            "List Int",
+            "List (Num *)",
         );
     }
 
@@ -224,7 +224,7 @@ mod test_solve {
                     [ [ 1 ], [ 2, 3 ] ]
                 "#
             ),
-            "List (List Int)",
+            "List (List (Num *))",
         );
     }
 
@@ -340,7 +340,7 @@ mod test_solve {
                     \_, _ -> 42
                 "#
             ),
-            "*, * -> Int",
+            "*, * -> Num *",
         );
     }
 
@@ -410,7 +410,7 @@ mod test_solve {
                     func
                 "#
             ),
-            "*, * -> Int",
+            "*, * -> Num *",
         );
     }
 
@@ -474,7 +474,7 @@ mod test_solve {
                     c
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -509,7 +509,7 @@ mod test_solve {
                     alwaysFive "stuff"
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -556,7 +556,7 @@ mod test_solve {
                     x
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -570,7 +570,7 @@ mod test_solve {
                     enlist 5
                 "#
             ),
-            "List Int",
+            "List (Num *)",
         );
     }
 
@@ -597,7 +597,7 @@ mod test_solve {
                     1 |> (\a -> a)
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -611,7 +611,7 @@ mod test_solve {
                 1 |> always "foo"
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -676,7 +676,7 @@ mod test_solve {
                     apply identity 5
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -705,7 +705,7 @@ mod test_solve {
     //                 flip neverendingInt
     //             "#
     //         ),
-    //         "(Int, (a -> a)) -> Int",
+    //         "(Num *, (a -> a)) -> Num *",
     //     );
     // }
 
@@ -779,7 +779,7 @@ mod test_solve {
     //                 1 // 2
     //             "#
     //             ),
-    //             "Int",
+    //             "Num *",
     //         );
     //     }
 
@@ -791,7 +791,7 @@ mod test_solve {
     //                 1 + 2
     //             "#
     //             ),
-    //             "Int",
+    //             "Num *",
     //         );
     //     }
 
@@ -835,12 +835,12 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-               alwaysFive = \_ -> 5
+                    alwaysFive = \_ -> 5
 
-               [ alwaysFive "foo", alwaysFive [] ]
-           "#
+                    [ alwaysFive "foo", alwaysFive [] ]
+                "#
             ),
-            "List Int",
+            "List (Num *)",
         );
     }
 
@@ -855,7 +855,7 @@ mod test_solve {
                         24
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -869,7 +869,7 @@ mod test_solve {
                     3 -> 4
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -882,17 +882,17 @@ mod test_solve {
 
     #[test]
     fn one_field_record() {
-        infer_eq("{ x: 5 }", "{ x : Int }");
+        infer_eq("{ x: 5 }", "{ x : Num * }");
     }
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Int, y : Float }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float }");
     }
 
     #[test]
     fn record_literal_accessor() {
-        infer_eq("{ x: 5, y : 3.14 }.x", "Int");
+        infer_eq("{ x: 5, y : 3.14 }.x", "Num *");
     }
 
     #[test]
@@ -951,7 +951,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                    foo : Int -> custom
+                    foo : Num * -> custom
 
                     foo 2
                 "#
@@ -1017,9 +1017,9 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                user = { year: "foo", name: "Sam" }
+                    user = { year: "foo", name: "Sam" }
 
-                { user & year: "foo" }
+                    { user & year: "foo" }
                 "#
             ),
             "{ name : Str, year : Str }",
@@ -1030,7 +1030,8 @@ mod test_solve {
     fn bare_tag() {
         infer_eq(
             indoc!(
-                r#"Foo
+                r#"
+                    Foo
                 "#
             ),
             "[ Foo ]*",
@@ -1041,10 +1042,11 @@ mod test_solve {
     fn single_tag_pattern() {
         infer_eq(
             indoc!(
-                r#"\Foo -> 42
+                r#"
+                    \Foo -> 42
                 "#
             ),
-            "[ Foo ]* -> Int",
+            "[ Foo ]* -> Num *",
         );
     }
 
@@ -1052,10 +1054,11 @@ mod test_solve {
     fn single_private_tag_pattern() {
         infer_eq(
             indoc!(
-                r#"\@Foo -> 42
+                r#"
+                    \@Foo -> 42
                 "#
             ),
-            "[ @Foo ]* -> Int",
+            "[ @Foo ]* -> Num *",
         );
     }
 
@@ -1063,13 +1066,14 @@ mod test_solve {
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
-                r#"\x ->
-                    when x is
-                        True -> 1
-                        False -> 0
+                r#"
+                    \x ->
+                        when x is
+                            True -> 1
+                            False -> 0
                 "#
             ),
-            "[ False, True ]* -> Int",
+            "[ False, True ]* -> Num *",
         );
     }
 
@@ -1077,10 +1081,11 @@ mod test_solve {
     fn tag_application() {
         infer_eq(
             indoc!(
-                r#"Foo "happy" 2020
+                r#"
+                    Foo "happy" 2020
                 "#
             ),
-            "[ Foo Str Int ]*",
+            "[ Foo Str (Num *) ]*",
         );
     }
 
@@ -1088,10 +1093,11 @@ mod test_solve {
     fn private_tag_application() {
         infer_eq(
             indoc!(
-                r#"@Foo "happy" 2020
+                r#"
+                    @Foo "happy" 2020
                 "#
             ),
-            "[ @Foo Str Int ]*",
+            "[ @Foo Str (Num *) ]*",
         );
     }
 
@@ -1120,7 +1126,7 @@ mod test_solve {
                         { x: 4 } -> x
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -1129,7 +1135,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                \Foo x -> Foo x
+                    \Foo x -> Foo x
                 "#
             ),
             "[ Foo a ]* -> [ Foo a ]*",
@@ -1141,7 +1147,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                \Foo x _ -> Foo x "y"
+                    \Foo x _ -> Foo x "y"
                 "#
             ),
             "[ Foo a * ]* -> [ Foo a Str ]*",
@@ -1464,9 +1470,9 @@ mod test_solve {
                     y = numIdentity 3.14
 
                     { numIdentity, x : numIdentity 42, y }
-                    "#
+                "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Int, y : Float }",
+            "{ numIdentity : Num a -> Num a, x : Num a, y : Float }",
         );
     }
 
@@ -1482,7 +1488,7 @@ mod test_solve {
                             _ -> 5
 
                     x
-                   "#
+                "#
             ),
             "Int",
         );
@@ -1494,15 +1500,15 @@ mod test_solve {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                f = \n ->
-                    when n is
-                        0 -> 0
-                        _ -> f n
+                    f = \n ->
+                        when n is
+                            0 -> 0
+                            _ -> f n
 
-                f
-                   "#
+                    f
+                "#
             ),
-            "Int -> Int",
+            "Num * -> Num *",
         );
     }
 
@@ -1511,12 +1517,12 @@ mod test_solve {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                map : (a -> b), [ Identity a ] -> [ Identity b ]
-                map = \f, identity ->
-                    when identity is
-                        Identity v -> Identity (f v)
-                map
-                   "#
+                    map : (a -> b), [ Identity a ] -> [ Identity b ]
+                    map = \f, identity ->
+                        when identity is
+                            Identity v -> Identity (f v)
+                    map
+                "#
             ),
             "(a -> b), [ Identity a ] -> [ Identity b ]",
         );
@@ -1527,16 +1533,15 @@ mod test_solve {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                   # toBit : [ False, True ] -> Num.Num Int.Integer
                    toBit = \bool ->
                        when bool is
                            True -> 1
                            False -> 0
 
                    toBit
-                      "#
+                "#
             ),
-            "[ False, True ]* -> Int",
+            "[ False, True ]* -> Num *",
         );
     }
 
@@ -1571,9 +1576,9 @@ mod test_solve {
                            _ -> True
 
                    fromBit
-                      "#
+                "#
             ),
-            "Int -> [ False, True ]*",
+            "Num * -> [ False, True ]*",
         );
     }
 
@@ -1589,7 +1594,7 @@ mod test_solve {
                             Err e -> Err e
 
                     map
-                       "#
+                "#
             ),
             "(a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]",
         );
@@ -1620,12 +1625,12 @@ mod test_solve {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo = \{ x } -> x
+                    foo = \{ x } -> x
 
-                foo { x: 5 }
+                    foo { x: 5 }
                 "#
             ),
-            "Int",
+            "Num *",
         );
     }
 
@@ -2288,7 +2293,7 @@ mod test_solve {
                     List.get [ 10, 9, 8, 7 ] 1
                 "#
             ),
-            "Result Int [ IndexOutOfBounds ]*",
+            "Result (Num *) [ IndexOutOfBounds ]*",
         );
     }
 
@@ -2370,7 +2375,7 @@ mod test_solve {
                 f
                 "#
             ),
-            "{ p : *, q : * }* -> Int",
+            "{ p : *, q : * }* -> Num *",
         );
     }
 

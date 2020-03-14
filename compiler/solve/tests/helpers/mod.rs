@@ -400,9 +400,10 @@ pub fn variable_usage(con: &Constraint) -> (SeenVariables, Vec<Variable>) {
     let mut used = ImSet::default();
     variable_usage_help(con, &mut declared, &mut used);
 
-    used.remove(unsafe { &Variable::unsafe_test_debug_variable(1) });
-    used.remove(unsafe { &Variable::unsafe_test_debug_variable(2) });
-    used.remove(unsafe { &Variable::unsafe_test_debug_variable(3) });
+    // ..= because there is an extra undeclared variable that contains the type of the full expression
+    for i in 0..=Variable::RESERVED {
+        used.remove(unsafe { &Variable::unsafe_test_debug_variable(i as u32) });
+    }
 
     let mut used_vec: Vec<Variable> = used.into_iter().collect();
     used_vec.sort();

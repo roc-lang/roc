@@ -16,6 +16,7 @@ pub enum Pattern {
     Identifier(Symbol),
     AppliedTag(Variable, TagName, Vec<(Variable, Located<Pattern>)>),
     IntLiteral(i64),
+    NumLiteral(Variable, i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
     RecordDestructure(Variable, Vec<Located<RecordDestruct>>),
@@ -61,7 +62,12 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
             }
         }
 
-        IntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | Underscore | UnsupportedPattern(_) => {}
+        NumLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | UnsupportedPattern(_) => {}
 
         Shadowed(_, _) => {}
     }
@@ -155,12 +161,12 @@ pub fn canonicalize_pattern<'a>(
             ptype @ DefExpr | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
         },
 
-        IntLiteral(string) => match pattern_type {
+        NumLiteral(string) => match pattern_type {
             WhenBranch => {
                 let int = finish_parsing_int(string)
                     .unwrap_or_else(|_| panic!("TODO handle malformed int pattern"));
 
-                Pattern::IntLiteral(int)
+                Pattern::NumLiteral(var_store.fresh(), int)
             }
             ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
@@ -353,7 +359,8 @@ fn add_bindings_from_patterns(
                 answer.push((*symbol, *region));
             }
         }
-        IntLiteral(_)
+        NumLiteral(_, _)
+        | IntLiteral(_)
         | FloatLiteral(_)
         | StrLiteral(_)
         | Underscore

@@ -120,9 +120,7 @@ pub fn build_expr<'a, B: Backend>(
             let fn_id = match scope.get(name) {
                 Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
                 other => panic!(
-                    "FunctionPointer could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
-                    name, other, scope
-                ),
+                    "FunctionPointer could not find function named {:?} declared in scope (and it was not special-cased in crane::build as a builtin); instead, found {:?} in scope {:?}", name, other, scope),
             };
 
             let func_ref = module.declare_func_in_func(fn_id, &mut builder.func);
@@ -161,7 +159,10 @@ pub fn build_expr<'a, B: Backend>(
             Some(ScopeEntry::Func { .. }) => {
                 panic!("TODO I don't yet know how to return fn pointers")
             }
-            None => panic!("Could not find a var for {:?} in scope {:?}", name, scope),
+            None => panic!(
+                "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
+                name, name, scope
+            ),
         },
         Struct { layout, fields } => {
             let cfg = env.cfg;
@@ -194,16 +195,59 @@ pub fn build_expr<'a, B: Backend>(
                 builder.ins().stack_store(val, slot, Offset32::new(offset));
             }
 
-            let ir_type = type_from_layout(cfg, layout);
-            builder.ins().stack_addr(ir_type, slot, Offset32::new(0))
+            builder
+                .ins()
+                .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
-        // Access {
-        //     label,
-        //     field_layout,
-        //     struct_layout,
-        // } => {
-        //     panic!("I don't yet know how to crane build {:?}", expr);
-        // }
+        Access {
+            label,
+            field_layout,
+            struct_layout: Layout::Struct(fields),
+            record,
+        } => {
+            let cfg = env.cfg;
+
+            // Reconstruct the struct to determine the combined layout
+            // TODO get rid of clones
+            let mut reconstructed_struct_layout =
+                Vec::with_capacity_in(fields.len() + 1, env.arena);
+            for field in fields.iter() {
+                reconstructed_struct_layout.push(field.clone());
+            }
+            reconstructed_struct_layout.push((label.clone(), field_layout.clone()));
+            reconstructed_struct_layout.sort_by(|a, b| {
+                a.0.partial_cmp(&b.0)
+                    .expect("TODO: failed to sort struct fields in crane access")
+            });
+
+            // Find the offset we are trying to access
+            let mut offset = 0;
+            for (local_label, layout) in reconstructed_struct_layout.iter() {
+                if local_label == label {
+                    break;
+                }
+
+                let field_size = match layout {
+                    Layout::Builtin(Builtin::Int64) => std::mem::size_of::<i64>(),
+                    _ => panic!(
+                        "Missing struct field size in offset calculation for struct access for {:?}",
+                        layout
+                    ),
+                };
+
+                offset += field_size;
+            }
+
+            let offset = i32::try_from(offset)
+                .expect("TODO gracefully handle usize -> i32 conversion in struct access");
+
+            let mem_flags = MemFlags::new();
+            let record = build_expr(env, scope, module, builder, record, procs);
+
+            builder
+                .ins()
+                .load(cfg.pointer_type(), mem_flags, record, Offset32::new(offset))
+        }
         Str(str_literal) => {
             if str_literal.is_empty() {
                 panic!("TODO build an empty string in Crane");
@@ -547,19 +591,33 @@ fn call_by_name<'a, B: Backend>(
     procs: &Procs<'a>,
 ) -> Value {
     match symbol {
-        Symbol::NUM_ADD => {
+        Symbol::INT_ADD | Symbol::NUM_ADD => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
             builder.ins().iadd(a, b)
         }
-        Symbol::NUM_SUB => {
+        Symbol::FLOAT_ADD => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().fadd(a, b)
+        }
+        Symbol::INT_SUB | Symbol::NUM_SUB => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
             builder.ins().isub(a, b)
+        }
+        Symbol::FLOAT_SUB => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            builder.ins().fsub(a, b)
         }
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);
@@ -665,12 +723,9 @@ fn call_by_name<'a, B: Backend>(
         }
         _ => {
             let fn_id = match scope.get(&symbol) {
-                    Some(ScopeEntry::Func{ func_id, .. }) => *func_id,
-                    other => panic!(
-                        "CallByName could not find function named {:?} in scope; instead, found {:?} in scope {:?}",
-                        symbol, other, scope
-                    ),
-                };
+                Some(ScopeEntry::Func { func_id, .. }) => *func_id,
+                other => panic!("CallByName could not find function named {:?} declared in scope (and it was not special-cased in crane::build as a builtin); instead, found {:?} in scope {:?}", symbol, other, scope),
+            };
             let local_func = module.declare_func_in_func(fn_id, &mut builder.func);
             let mut arg_vals = Vec::with_capacity_in(args.len(), env.arena);
 

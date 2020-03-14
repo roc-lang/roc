@@ -7,7 +7,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::{Expr, Field};
 use roc_can::pattern::{Pattern, RecordDestruct};
 use roc_collections::all::{ImMap, ImSet, SendMap};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::{Atom, Bool};
@@ -152,6 +152,14 @@ fn constrain_pattern(
                     value: expected.get_type(),
                 },
             );
+        }
+
+        NumLiteral(inner_var, _) => {
+            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(*inner_var, var_store);
+            state.constraints.push(exists(
+                vec![val_uvar, num_uvar, num_var, *inner_var],
+                Constraint::Pattern(pattern.region, PatternCategory::Num, num_type, expected),
+            ));
         }
 
         IntLiteral(_) => {
@@ -306,6 +314,23 @@ fn constrain_pattern(
     }
 }
 
+fn unique_unbound_num(
+    inner_var: Variable,
+    var_store: &VarStore,
+) -> (Variable, Variable, Type, Variable) {
+    let num_var = var_store.fresh();
+    let num_uvar = var_store.fresh();
+    let val_uvar = var_store.fresh();
+
+    let val_type = Type::Variable(inner_var);
+    let val_utype = attr_type(Bool::variable(val_uvar), val_type);
+
+    let num_utype = Type::Apply(Symbol::NUM_NUM, vec![val_utype]);
+    let num_type = attr_type(Bool::variable(num_uvar), num_utype);
+
+    (num_uvar, val_uvar, num_type, num_var)
+}
+
 fn unique_num(var_store: &VarStore, symbol: Symbol) -> (Variable, Variable, Type) {
     let num_uvar = var_store.fresh();
     let val_uvar = var_store.fresh();
@@ -339,6 +364,22 @@ pub fn constrain_expr(
     pub use roc_can::expr::Expr::*;
 
     match expr {
+        Num(inner_var, _) => {
+            let var = var_store.fresh();
+            let (num_uvar, val_uvar, num_type, num_var) = unique_unbound_num(*inner_var, var_store);
+
+            exists(
+                vec![var, *inner_var, val_uvar, num_uvar, num_var],
+                And(vec![
+                    Eq(
+                        Type::Variable(var),
+                        Expected::ForReason(Reason::NumLiteral, num_type, region),
+                        region,
+                    ),
+                    Eq(Type::Variable(var), expected, region),
+                ]),
+            )
+        }
         Int(var, _) => {
             let (num_uvar, int_uvar, num_type) = unique_int(var_store);
 
@@ -761,14 +802,7 @@ pub fn constrain_expr(
             final_else,
         } => {
             // TODO use Bool alias here, so we don't allocate this type every time
-            let bool_type = Type::TagUnion(
-                vec![
-                    (TagName::Global("True".into()), vec![]),
-                    (TagName::Global("False".into()), vec![]),
-                ],
-                Box::new(Type::EmptyTagUnion),
-            );
-
+            let bool_type = Type::Variable(Variable::BOOL);
             let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
             let mut cond_uniq_vars = Vec::with_capacity(branches.len() + 2);
 

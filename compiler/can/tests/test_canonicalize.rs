@@ -40,6 +40,7 @@ mod test_canonicalize {
             }
         }
     }
+
     fn assert_can_int(input: &str, expected: i64) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
@@ -50,6 +51,20 @@ mod test_canonicalize {
             }
             actual => {
                 panic!("Expected an Int, but got: {:?}", actual);
+            }
+        }
+    }
+
+    fn assert_can_num(input: &str, expected: i64) {
+        let arena = Bump::new();
+        let actual_out = can_expr_with(&arena, test_home(), input);
+
+        match actual_out.loc_expr.value {
+            Expr::Num(_, actual) => {
+                assert_eq!(expected, actual);
+            }
+            actual => {
+                panic!("Expected a Num, but got: {:?}", actual);
             }
         }
     }
@@ -98,12 +113,12 @@ mod test_canonicalize {
 
     #[test]
     fn zero() {
-        assert_can_int("0", 0);
+        assert_can_num("0", 0);
     }
 
     #[test]
     fn minus_zero() {
-        assert_can_int("-0", 0);
+        assert_can_num("-0", 0);
     }
 
     #[test]

@@ -213,7 +213,7 @@ mod test_load {
                     "divisionTest" => "Float",
                     "intTest" => "Int",
                     "x" => "Float",
-                    "constantInt" => "Int",
+                    "constantNum" => "Num *",
                     "divDep1ByDep2" => "Float",
                     "fromDep2" => "Float",
                 },

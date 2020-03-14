@@ -57,7 +57,7 @@ mod test_uniq_solve {
 
     #[test]
     fn int_literal() {
-        infer_eq("5", "Attr * Int");
+        infer_eq("5", "Attr * (Num (Attr * *))");
     }
 
     #[test]
@@ -176,7 +176,7 @@ mod test_uniq_solve {
                     [42]
                 "#
             ),
-            "Attr * (List (Attr * Int))",
+            "Attr * (List (Attr * (Num (Attr * *))))",
         );
     }
 
@@ -188,7 +188,7 @@ mod test_uniq_solve {
                     [[[ 5 ]]]
                 "#
             ),
-            "Attr * (List (Attr * (List (Attr * (List (Attr * Int))))))",
+            "Attr * (List (Attr * (List (Attr * (List (Attr * (Num (Attr * *))))))))",
         );
     }
 
@@ -200,7 +200,7 @@ mod test_uniq_solve {
                     [ 1, 2, 3 ]
                 "#
             ),
-            "Attr * (List (Attr * Int))",
+            "Attr * (List (Attr * (Num (Attr * *))))",
         );
     }
 
@@ -212,7 +212,7 @@ mod test_uniq_solve {
                     [ [ 1 ], [ 2, 3 ] ]
                 "#
             ),
-            "Attr * (List (Attr * (List (Attr * Int))))",
+            "Attr * (List (Attr * (List (Attr * (Num (Attr * *))))))",
         );
     }
 
@@ -328,7 +328,7 @@ mod test_uniq_solve {
                     \_, _ -> 42
                 "#
             ),
-            "Attr * (*, * -> Attr * Int)",
+            "Attr * (*, * -> Attr * (Num (Attr * *)))",
         );
     }
 
@@ -398,7 +398,7 @@ mod test_uniq_solve {
                     func
                 "#
             ),
-            "Attr * (*, * -> Attr * Int)",
+            "Attr * (*, * -> Attr * (Num (Attr * *)))",
         );
     }
 
@@ -462,7 +462,7 @@ mod test_uniq_solve {
                     c
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -498,7 +498,7 @@ mod test_uniq_solve {
                     alwaysFive "stuff"
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -546,7 +546,7 @@ mod test_uniq_solve {
             ),
             // TODO investigate why is this not shared?
             // maybe because y is not used it is dropped?
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -560,7 +560,7 @@ mod test_uniq_solve {
                     enlist 5
                 "#
             ),
-            "Attr * (List (Attr * Int))",
+            "Attr * (List (Attr * (Num (Attr * *))))",
         );
     }
 
@@ -587,7 +587,7 @@ mod test_uniq_solve {
                     1 |> (\a -> a)
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -599,7 +599,7 @@ mod test_uniq_solve {
                     (\a -> a) 1
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -613,7 +613,7 @@ mod test_uniq_solve {
                     1 |> always "foo"
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -679,7 +679,7 @@ mod test_uniq_solve {
                     apply identity 5
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -702,13 +702,13 @@ mod test_uniq_solve {
     //         indoc!(
     //             r#"
     //                 flip = \f -> (\a b -> f b a)
-    //                 neverendingInt = \f int -> f int
-    //                 x = neverendingInt (\a -> a) 5
+    //                 neverendingNum = \f int -> f int
+    //                 x = neverendingNum (\a -> a) 5
 
-    //                 flip neverendingInt
+    //                 flip neverendingNum
     //             "#
     //         ),
-    //         "(Int, (a -> a)) -> Int",
+    //         "((Num (Attr * *)), (a -> a)) -> (Num (Attr * *))",
     //     );
     // }
 
@@ -782,7 +782,7 @@ mod test_uniq_solve {
     //                 1 // 2
     //             "#
     //             ),
-    //             "Int",
+    //             "(Num (Attr * *))",
     //         );
     //     }
 
@@ -794,7 +794,7 @@ mod test_uniq_solve {
     //                 1 + 2
     //             "#
     //             ),
-    //             "Int",
+    //             "(Num (Attr * *))",
     //         );
     //     }
 
@@ -843,7 +843,7 @@ mod test_uniq_solve {
                     [ alwaysFive "foo", alwaysFive [] ]
                 "#
             ),
-            "Attr * (List (Attr * Int))",
+            "Attr * (List (Attr * (Num (Attr * *))))",
         );
     }
 
@@ -858,7 +858,7 @@ mod test_uniq_solve {
                         24
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -872,18 +872,18 @@ mod test_uniq_solve {
                      3 -> 4
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
     #[test]
     fn record() {
-        infer_eq("{ foo: 42 }", "Attr * { foo : (Attr * Int) }");
+        infer_eq("{ foo: 42 }", "Attr * { foo : (Attr * (Num (Attr * *))) }");
     }
 
     #[test]
     fn record_access() {
-        infer_eq("{ foo: 42 }.foo", "Attr * Int");
+        infer_eq("{ foo: 42 }.foo", "Attr * (Num (Attr * *))");
     }
 
     #[test]
@@ -937,7 +937,7 @@ mod test_uniq_solve {
                     \Foo -> 42
                 "#
             ),
-            "Attr * (Attr * [ Foo ]* -> Attr * Int)",
+            "Attr * (Attr * [ Foo ]* -> Attr * (Num (Attr * *)))",
         );
     }
 
@@ -949,7 +949,7 @@ mod test_uniq_solve {
                     \@Foo -> 42
                 "#
             ),
-            "Attr * (Attr * [ @Foo ]* -> Attr * Int)",
+            "Attr * (Attr * [ @Foo ]* -> Attr * (Num (Attr * *)))",
         );
     }
 
@@ -964,7 +964,7 @@ mod test_uniq_solve {
                             False -> 0
                 "#
             ),
-            "Attr * (Attr * [ False, True ]* -> Attr * Int)",
+            "Attr * (Attr * [ False, True ]* -> Attr * (Num (Attr * *)))",
         );
     }
 
@@ -976,7 +976,7 @@ mod test_uniq_solve {
                     Foo "happy" 2020
                 "#
             ),
-            "Attr * [ Foo (Attr * Str) (Attr * Int) ]*",
+            "Attr * [ Foo (Attr * Str) (Attr * (Num (Attr * *))) ]*",
         );
     }
 
@@ -988,7 +988,7 @@ mod test_uniq_solve {
                     @Foo "happy" 2020
                 "#
             ),
-            "Attr * [ @Foo (Attr * Str) (Attr * Int) ]*",
+            "Attr * [ @Foo (Attr * Str) (Attr * (Num (Attr * *))) ]*",
         );
     }
 
@@ -1037,7 +1037,7 @@ mod test_uniq_solve {
                         { x: 4 } -> x
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -1079,7 +1079,7 @@ mod test_uniq_solve {
                         Foo x -> x
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -1092,7 +1092,7 @@ mod test_uniq_solve {
                         @Foo x -> x
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -1194,7 +1194,7 @@ mod test_uniq_solve {
                    { numIdentity, p, q }
                 "#
             ),
-        "Attr * { numIdentity : (Attr Shared (Attr a (Num (Attr b p)) -> Attr a (Num (Attr b p)))), p : (Attr * Int), q : (Attr * Float) }"
+        "Attr * { numIdentity : (Attr Shared (Attr a (Num (Attr b p)) -> Attr a (Num (Attr b p)))), p : (Attr * (Num (Attr * p))), q : (Attr * Float) }"
         );
     }
 
@@ -1380,7 +1380,7 @@ mod test_uniq_solve {
                     factorial
                 "#
             ),
-            "Attr Shared (Attr * Int -> Attr * Int)",
+            "Attr Shared (Attr * (Num (Attr * *)) -> Attr * (Num (Attr * *)))",
         );
     }
 
@@ -1479,7 +1479,7 @@ mod test_uniq_solve {
                         s.left
                 "#
             ),
-            "Attr Shared Int",
+            "Attr Shared (Num (Attr * *))",
         );
     }
 
@@ -1498,7 +1498,7 @@ mod test_uniq_solve {
                         { y: s.left }
                 "#
             ),
-            "Attr * { y : (Attr Shared Int) }",
+            "Attr * { y : (Attr Shared (Num (Attr * *))) }",
         );
     }
 
@@ -1549,7 +1549,7 @@ mod test_uniq_solve {
                 "#
             ),
             // it's fine that the inner fields are not shared: only shared extraction is possible
-            "Attr * { left : (Attr Shared { left : (Attr * Int), right : (Attr * Int) }), right : (Attr Shared { left : (Attr * Int), right : (Attr * Int) }) }",
+            "Attr * { left : (Attr Shared { left : (Attr * (Num (Attr * *))), right : (Attr * (Num (Attr * *))) }), right : (Attr Shared { left : (Attr * (Num (Attr * *))), right : (Attr * (Num (Attr * *))) }) }",
         );
     }
 
@@ -1869,7 +1869,7 @@ mod test_uniq_solve {
                     4 + 4
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -1882,7 +1882,7 @@ mod test_uniq_solve {
                         |> List.get 2
                "#
             ),
-            "Attr * (Result (Attr * Int) (Attr * [ IndexOutOfBounds ]*))",
+            "Attr * (Result (Attr * (Num (Attr * *))) (Attr * [ IndexOutOfBounds ]*))",
         );
     }
 
@@ -1988,7 +1988,7 @@ mod test_uniq_solve {
                                 list
                "#
             ),
-            "Attr * (Attr a (List (Attr Shared Int)) -> Attr a (List (Attr Shared Int)))",
+            "Attr * (Attr a (List (Attr Shared (Num (Attr b c)))) -> Attr a (List (Attr Shared (Num (Attr b c)))))",
         );
     }
 
@@ -2004,7 +2004,7 @@ mod test_uniq_solve {
                             List.set list 0 42
                "#
             ),
-            "Attr * (Attr (a | b) (List (Attr b Int)) -> Attr (a | b) (List (Attr b Int)))",
+            "Attr * (Attr (a | b) (List (Attr b (Num (Attr c d)))) -> Attr (a | b) (List (Attr b (Num (Attr c d)))))",
         );
     }
 
@@ -2047,7 +2047,7 @@ mod test_uniq_solve {
                     sum
                 "#
             ),
-            "Attr * (Attr * (List (Attr * Int)) -> Attr * Int)",
+            "Attr * (Attr * (List (Attr * (Num (Attr a b)))) -> Attr * (Num (Attr a b)))",
         );
     }
 
@@ -2095,7 +2095,7 @@ mod test_uniq_solve {
                     List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1
                 "#
             ),
-            "Attr * Int",
+            "Attr * (Num (Attr * *))",
         );
     }
 
@@ -2113,7 +2113,8 @@ mod test_uniq_solve {
                 f
                 "#
             ),
-            "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * Int)",
+            "Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))",
+            //"Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * (Num (Attr * *)))"
         );
     }
 
@@ -2234,26 +2235,26 @@ mod test_uniq_solve {
             infer_eq(
             indoc!(
                 r#"
-                Model position : { evaluated : Set position
-                    , openSet : Set  position
-                    , costs : Map.Map position Float
-                    , cameFrom : Map.Map position position
-                    }
+                    Model position : { evaluated : Set position
+                        , openSet : Set  position
+                        , costs : Map.Map position Float
+                        , cameFrom : Map.Map position position
+                        }
 
 
-                initialModel : position -> Model position
-                initialModel = \start ->
-                    { evaluated : Set.empty
-                    , openSet : Set.singleton start
-                    , costs : Map.singleton start 0.0
-                    , cameFrom : Map.empty
-                    }
+                    initialModel : position -> Model position
+                    initialModel = \start ->
+                        { evaluated : Set.empty
+                        , openSet : Set.singleton start
+                        , costs : Map.singleton start 0.0
+                        , cameFrom : Map.empty
+                        }
 
 
-                cheapestOpen : (position -> Float), Model position -> Result position [ KeyNotFound ]*
-                cheapestOpen = \costFunction, model ->
+                    cheapestOpen : (position -> Float), Model position -> Result position [ KeyNotFound ]*
+                    cheapestOpen = \costFunction, model ->
 
-                    folder = \position, resSmallestSoFar ->
+                        folder = \position, resSmallestSoFar ->
                             when Map.get model.costs position is
                                 Err e ->
                                     Err e
@@ -2270,74 +2271,76 @@ mod test_uniq_solve {
                                             else
                                                 Ok smallestSoFar
 
-                    Set.foldl model.openSet folder (Err KeyNotFound)
-                        |> Result.map (\x -> x.position)
+
+                        Set.foldl model.openSet folder (Err KeyNotFound)
+                            |> Result.map (\x -> x.position)
 
 
+                    reconstructPath : Map position position, position -> List position
+                    reconstructPath = \cameFrom, goal ->
+                        when Map.get cameFrom goal is
+                            Err KeyNotFound ->
+                                []
 
-                reconstructPath : Map position position, position -> List position
-                reconstructPath = \cameFrom, goal ->
-                    when Map.get cameFrom goal is
-                        Err KeyNotFound ->
-                            []
+                            Ok next ->
+                                List.push (reconstructPath cameFrom next) goal
 
-                        Ok next ->
-                            List.push (reconstructPath cameFrom next) goal
 
-                updateCost : position, position, Model position -> Model position
-                updateCost = \current, neighbour, model ->
-                    newCameFrom = Map.insert model.cameFrom neighbour current
+                    updateCost : position, position, Model position -> Model position
+                    updateCost = \current, neighbour, model ->
+                        newCameFrom = Map.insert model.cameFrom neighbour current
 
-                    newCosts = Map.insert model.costs neighbour distanceTo
+                        newCosts = Map.insert model.costs neighbour distanceTo
 
-                    distanceTo = reconstructPath newCameFrom neighbour
-                            |> List.length
-                            |> Num.toFloat
+                        distanceTo =
+                            reconstructPath newCameFrom neighbour
+                                |> List.length
+                                |> Num.toFloat
 
-                    newModel = { model & costs : newCosts , cameFrom : newCameFrom }
+                        newModel = { model & costs : newCosts , cameFrom : newCameFrom }
 
-                    when Map.get model.costs neighbour is
-                        Err KeyNotFound ->
-                            newModel
-
-                        Ok previousDistance ->
-                            if distanceTo < previousDistance then
+                        when Map.get model.costs neighbour is
+                            Err KeyNotFound ->
                                 newModel
 
-                            else
-                                model
+                            Ok previousDistance ->
+                                if distanceTo < previousDistance then
+                                    newModel
+
+                                else
+                                    model
 
 
-                findPath : { costFunction: (position, position -> Float), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [ KeyNotFound ]*
-                findPath = \{ costFunction, moveFunction, start, end } ->
-                    astar costFunction moveFunction end (initialModel start)
+                    findPath : { costFunction: (position, position -> Float), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [ KeyNotFound ]*
+                    findPath = \{ costFunction, moveFunction, start, end } ->
+                        astar costFunction moveFunction end (initialModel start)
 
 
-                astar : (position, position -> Float), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*
-                astar = \costFn, moveFn, goal, model ->
-                    when cheapestOpen (\position -> costFn goal position) model is
-                        Err _ ->
-                            Err KeyNotFound
+                    astar : (position, position -> Float), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*
+                    astar = \costFn, moveFn, goal, model ->
+                        when cheapestOpen (\position -> costFn goal position) model is
+                            Err _ ->
+                                Err KeyNotFound
 
-                        Ok current ->
-                            if current == goal then
-                                Ok (reconstructPath model.cameFrom goal)
+                            Ok current ->
+                                if current == goal then
+                                    Ok (reconstructPath model.cameFrom goal)
 
-                            else
+                                else
 
-                               modelPopped = { model & openSet : Set.remove model.openSet current, evaluated : Set.insert model.evaluated current }
+                                modelPopped = { model & openSet : Set.remove model.openSet current, evaluated : Set.insert model.evaluated current }
 
-                               neighbours = moveFn current
+                                neighbours = moveFn current
 
-                               newNeighbours = Set.diff neighbours modelPopped.evaluated
+                                newNeighbours = Set.diff neighbours modelPopped.evaluated
 
-                               modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
+                                modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
 
-                               modelWithCosts = Set.foldl newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
+                                modelWithCosts = Set.foldl newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
 
-                               astar costFn moveFn goal modelWithCosts
+                                astar costFn moveFn goal modelWithCosts
 
-                findPath
+                    findPath
                 "#
             ),
             "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr Shared position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))"
