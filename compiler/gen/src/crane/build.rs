@@ -283,26 +283,30 @@ pub fn build_expr<'a, B: Backend>(
             if elems.is_empty() {
                 let slot = builder.create_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
-                    ptr_bytes + 64,
+                    // 1 pointer-sized slot for the array pointer, and
+                    // 1 pointer-sized slot for the length
+                    ptr_bytes * 2,
                 ));
-                let ptr_type = cfg.pointer_type();
-                let null_ptr = builder.ins().null(ptr_type);
-                let zero = builder.ins().iconst(Type::int(32).unwrap(), 0);
 
-                // Initialize a null pointer for the pointer
-                builder.ins().stack_store(null_ptr, slot, Offset32::new(0));
+                // Set list pointer to null
+                {
+                    // let null_ptr = builder.ins().null(ptr_type);
+                    let zero = builder.ins().iconst(cfg.pointer_type(), 0);
 
-                // Set both length and capacity to 0
-                let ptr_bytes = ptr_bytes as i32;
+                    builder.ins().stack_store(zero, slot, Offset32::new(0));
+                }
 
-                builder
-                    .ins()
-                    .stack_store(zero, slot, Offset32::new(ptr_bytes));
-                builder
-                    .ins()
-                    .stack_store(zero, slot, Offset32::new(ptr_bytes + 32));
+                // Set length to 0
+                {
+                    let zero = builder.ins().iconst(cfg.pointer_type(), 0);
 
-                builder.ins().stack_addr(ptr_type, slot, Offset32::new(0))
+                    builder
+                        .ins()
+                        .stack_store(zero, slot, Offset32::new(ptr_bytes as i32));
+                }
+
+                // Return the pointer
+                builder.ins().stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
             } else {
                 panic!("TODO make this work like the empty List, then verify that they both actually work");
                 let elem_bytes = elem_layout.stack_size(env.cfg.pointer_bytes() as u32) as usize;
@@ -660,18 +664,18 @@ fn call_by_name<'a, B: Backend>(
         Symbol::LIST_LEN => {
             debug_assert!(args.len() == 1);
 
-            let list = build_arg(&args[0], env, scope, module, builder, procs);
+            let list_ptr = build_arg(&args[0], env, scope, module, builder, procs);
 
-            // Get the 32-bit int length
-            let i32_val = builder.ins().load_complex(
-                Type::int(32).unwrap(),
+            // Get the usize int length
+            let len_usize = builder.ins().load_complex(
+                env.cfg.pointer_type(),
                 MemFlags::new(),
-                &[list],
+                &[list_ptr],
                 Offset32::new(0),
             );
 
-            // Cast the 32-bit int length to a 64-bit integer
-            builder.ins().bitcast(Type::int(64).unwrap(), i32_val)
+            // Cast the usize length to 64-bit integer
+            builder.ins().bitcast(Type::int(64).unwrap(), len_usize)
         }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);

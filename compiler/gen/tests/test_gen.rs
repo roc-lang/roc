@@ -488,12 +488,12 @@ mod test_gen {
 
     #[test]
     fn empty_list_len() {
-        assert_evals_to!("List.len []", 0, i64);
+        assert_evals_to!("List.len []", 0, usize);
     }
 
     #[test]
     fn basic_int_list_len() {
-        assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, i64);
+        assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
     }
 
     #[test]
