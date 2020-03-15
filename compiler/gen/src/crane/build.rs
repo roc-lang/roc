@@ -194,7 +194,7 @@ pub fn build_expr<'a, B: Backend>(
                 // Is there an existing function for this?
                 let field_size = match inner_expr {
                     Int(_) => std::mem::size_of::<i64>(),
-                    _ => panic!("I don't yet know how to calculate the offset for {:?} when building a cranelift struct", val),
+                    other => panic!("I don't yet know how to calculate the offset for {:?} when building a cranelift struct", other),
                 };
                 let offset = i32::try_from(index * field_size)
                     .expect("TODO handle field size conversion to i32");
