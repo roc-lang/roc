@@ -410,6 +410,7 @@ mod test_mono {
             },
         );
     }
+
     #[test]
     fn three_element_enum() {
         let arena = Bump::new();
@@ -471,4 +472,35 @@ mod test_mono {
             )
         });
     }
+
+    //    #[test]
+    //    fn when_on_result() {
+    //        let arena = Bump::new();
+    //
+    //        compiles_to_with_interns(
+    //            r#"
+    //            x = Ok 0x3
+    //
+    //            when x is
+    //                Err _ -> 0
+    //                Ok n -> n + 1
+    //            "#,
+    //            |interns| {
+    //                let home = test_home();
+    //                let var_x = interns.symbol(home, "x".into());
+    //
+    //                let mut fruits = MutMap::default();
+    //
+    //                fruits.insert(Global("Banana".into()), 0);
+    //                fruits.insert(Global("Orange".into()), 1);
+    //                fruits.insert(Global("Apple".into()), 2);
+    //
+    //                let stores = [(var_x, Layout::Builtin(Builtin::Byte(fruits)), Byte(1))];
+    //
+    //                let load = Load(var_x);
+    //
+    //                Store(arena.alloc(stores), arena.alloc(load))
+    //            },
+    //        );
+    //    }
 }
