@@ -277,7 +277,7 @@ fn layout_from_flat_type<'a>(
                 }
                 // We can only unwrap a wrapper if it never becomes part of a bigger union
                 // therefore, the ext_var must be the literal empty tag union
-                1 if ext_var == Variable::EMPTY_TAG_UNION => {
+                1 => {
                     // This is a wrapper. Unwrap it!
                     let (tag, args) = tags.into_iter().next().unwrap();
 
