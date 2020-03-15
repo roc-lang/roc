@@ -32,12 +32,6 @@ pub enum Literal {
 }
 
 fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
-    let mut errors = Vec::new();
-
-    simplify_help(pattern, &mut errors)
-}
-
-fn simplify_help<'a>(pattern: &crate::expr::Pattern<'a>, errors: &mut Vec<Error>) -> Pattern {
     use crate::expr::Pattern::*;
 
     match pattern {
@@ -73,10 +67,8 @@ fn simplify_help<'a>(pattern: &crate::expr::Pattern<'a>, errors: &mut Vec<Error>
             union,
             ..
         } => {
-            let simplified_args: std::vec::Vec<_> = arguments
-                .iter()
-                .map(|v| simplify_help(&v, errors))
-                .collect();
+            let simplified_args: std::vec::Vec<_> =
+                arguments.iter().map(|v| simplify(&v)).collect();
             Ctor(union.clone(), tag_name.clone(), simplified_args)
         }
     }
