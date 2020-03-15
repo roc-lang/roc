@@ -59,7 +59,8 @@ fromResult : Result elem * -> List elem
 
 reverse : List elem -> List elem
 
-sort : List elem, Sorter elem -> List elem
+sort : List elem, (elem, elem -> [ Eq, Lt, Gt ]) -> List elem
+sortBy : List elem, (elem -> field), (field, field -> [ Eq, Lt, Gt ]) -> List elem
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
