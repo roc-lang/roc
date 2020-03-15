@@ -1136,4 +1136,43 @@ mod test_gen {
             i64
         );
     }
+
+    #[test]
+    fn fn_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    getRec = \x -> { y: 17, x, z: 19 }
+
+                    (getRec 15).x
+                "#
+            ),
+            15,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { x: 15, y: 17, z: 19 }
+
+                    rec.y
+                "#
+            ),
+            17,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { x: 15, y: 17, z: 19 }
+
+                    rec.z
+                "#
+            ),
+            19,
+            i64
+        );
+    }
 }

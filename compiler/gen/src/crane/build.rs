@@ -171,32 +171,29 @@ pub fn build_expr<'a, B: Backend>(
                 name, name, scope
             ),
         },
-        Struct { layout, fields } => {
+        Struct(sorted_fields) => {
             let cfg = env.cfg;
+            let ptr_bytes = cfg.pointer_bytes() as u32;
 
-            // Sort the fields
-            let mut sorted_fields = Vec::with_capacity_in(fields.len(), env.arena);
-            for field in fields.iter() {
-                sorted_fields.push(field);
+            // The slot size will be the sum of all the fields' sizes
+            let mut slot_size = 0;
+
+            for (_, field_layout) in sorted_fields.iter() {
+                slot_size += field_layout.stack_size(ptr_bytes);
             }
-            sorted_fields.sort_by_key(|k| &k.0);
 
             // Create a slot
             let slot = builder.create_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
-                layout.stack_size(cfg.pointer_bytes() as u32),
+                slot_size
             ));
 
             // Create instructions for storing each field's expression
-            for (index, (_, ref inner_expr)) in sorted_fields.iter().enumerate() {
-                let val = build_expr(env, &scope, module, builder, inner_expr, procs);
+            for (index, ( field_expr, field_layout)) in sorted_fields.iter().enumerate() {
+                let val = build_expr(env, &scope, module, builder, field_expr, procs);
 
-                // Is there an existing function for this?
-                let field_size = match inner_expr {
-                    Int(_) => std::mem::size_of::<i64>(),
-                    other => panic!("I don't yet know how to calculate the offset for {:?} when building a cranelift struct", other),
-                };
-                let offset = i32::try_from(index * field_size)
+                let field_size = field_layout.stack_size(ptr_bytes);
+                let offset = i32::try_from(index * field_size as usize)
                     .expect("TODO handle field size conversion to i32");
 
                 builder.ins().stack_store(val, slot, Offset32::new(offset));

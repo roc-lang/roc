@@ -184,10 +184,7 @@ pub enum Expr<'a> {
         name: TagName,
         arguments: &'a [Expr<'a>],
     },
-    Struct {
-        fields: &'a [(Lowercase, Expr<'a>)],
-        layout: Layout<'a>,
-    },
+    Struct(&'a [(Expr<'a>, Layout<'a>)]),
     Access {
         label: Lowercase,
         field_layout: Layout<'a>,
@@ -626,30 +623,33 @@ fn from_can<'a>(
         }
 
         Record {
-            record_var, fields, ..
+            record_var,
+            mut fields,
+            ..
         } => {
             let arena = env.arena;
-            let mut field_bodies = Vec::with_capacity_in(fields.len(), arena);
+            let mut field_tuples = Vec::with_capacity_in(fields.len(), arena);
 
-            for (label, field) in fields {
-                let expr = from_can(env, field.loc_expr.value, procs, None);
+            match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
+                Ok(Layout::Struct(field_layouts)) => {
+                    for (label, field_layout) in field_layouts.into_iter() {
+                        let loc_expr = fields.remove(label).unwrap().loc_expr;
+                        let expr = from_can(env, loc_expr.value, procs, None);
 
-                field_bodies.push((label, expr));
-            }
-
-            let struct_layout =
-                match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
-                    Ok(layout) => layout,
-                    Err(()) => {
-                        // Invalid field!
-                        panic!("TODO gracefully handle Record with invalid struct_layout");
+                        // TODO try to remove this clone
+                        field_tuples.push((expr, field_layout.clone()));
                     }
-                };
+                }
+                Ok(_) => {
+                    unreachable!("Somehow a Record did not end up with a Struct layout");
+                }
+                Err(()) => {
+                    // Invalid field!
+                    panic!("TODO gracefully handle Record with invalid struct_layout");
+                }
+            };
 
-            Expr::Struct {
-                fields: field_bodies.into_bump_slice(),
-                layout: struct_layout,
-            }
+            Expr::Struct(field_tuples.into_bump_slice())
         }
 
         Tag {

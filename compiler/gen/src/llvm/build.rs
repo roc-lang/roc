@@ -285,28 +285,18 @@ pub fn build_expr<'a, 'ctx, 'env>(
             }
         }
 
-        Struct { fields, .. } => {
+        Struct(sorted_fields) => {
             let ctx = env.context;
             let builder = env.builder;
 
-            // Sort the fields
-            let mut sorted_fields = Vec::with_capacity_in(fields.len(), env.arena);
-            for field in fields.iter() {
-                sorted_fields.push(field);
-            }
-            sorted_fields.sort_by_key(|k| &k.0);
-
             // Determine types
-            let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
-            let mut field_vals = Vec::with_capacity_in(fields.len(), env.arena);
+            let num_fields = sorted_fields.len();
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (_, ref inner_expr) in sorted_fields.iter() {
-                let val = build_expr(env, &scope, parent, inner_expr, procs);
-
-                let field_type = match inner_expr {
-                    Int(_) => BasicTypeEnum::IntType(ctx.i64_type()),
-                    _ => panic!("I don't yet know how to get Inkwell type for {:?}", val),
-                };
+            for (field_expr, field_layout) in sorted_fields.iter() {
+                let val = build_expr(env, &scope, parent, field_expr, procs);
+                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
 
                 field_types.push(field_type);
                 field_vals.push(val);
