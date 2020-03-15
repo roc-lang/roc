@@ -48,7 +48,7 @@ interface Float
 ## See #Float.highest and #Float.lowest for the highest and
 ## lowest values that can be held in a #Float.
 ##
-## Like #Int, it's possible for #Float operations to overflow and underflow
+## Like #Int, it's possible for #Float operations to overflow.
 ## if they exceed the bounds of #Float.highest and #Float.lowest. When this happens:
 ##
 ## * In a development build, you'll get an assertion failure.
@@ -151,12 +151,19 @@ div = \numerator, denominator ->
 ##
 ## >>> Float.pi
 ## >>>     |> Float.mod 2.0
-#mod : Float, Float -> Result Float DivByZero
+mod : Float a, Float a -> Result Float DivByZero
 
-## Return the reciprocal of the #Float.
-#recip : Float -> Result Float [ DivByZero ]*
-#recip = \float ->
-#    1.0 / float
+tryMod : Float a, Float a -> Result (Float a) [ DivByZero ]*
+
+## Return the reciprocal of a #Float - that is, divides `1.0` by the given number.
+##
+## Crashes if given `0.0`, because division by zero is undefined in mathematics.
+##
+## For a version that does not crash, use #tryRecip
+recip : Float a -> Result (Float a) [ DivByZero ]*
+
+
+tryRecip : Float a -> Result (Float a) [ DivByZero ]*
 
 ## Return an approximation of the absolute value of the square root of the #Float.
 ##
@@ -169,32 +176,39 @@ div = \numerator, denominator ->
 ## >>> Float.sqrt 0.0
 ##
 ## >>> Float.sqrt -4.0
-#sqrt : Float -> Result Float InvalidSqrt
+sqrt : Float a -> Result (Float a) [ InvalidSqrt ]
 
 ## Constants
 
 ## An approximation of e, specifically 2.718281828459045.
-#e : Float
-e = 2.718281828459045
+e : Float *
 
 ## An approximation of pi, specifically 3.141592653589793.
-#pi : Float
-pi = 3.141592653589793
+pi : Float *
+
+## Sort ascending - that is, with the lowest first, and the highest last.
+##
+##     List.sort Float.asc [ 3.0, 6.0, 0.0 ]
+##
+asc : Float a, Float a -> [ Eq, Lt, Gt ]
+
+## Sort descending - that is, with the highest first, and the lowest last.
+##
+##     List.sort Float.desc [ 3.0, 6.0, 0.0 ]
+##
+desc : Float a, Float a -> [ Eq, Lt, Gt ]
 
 ## Limits
 
 ## The highest supported #Float value you can have, which is approximately 1.8 × 10^308.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
-#highest : Float
-highest : Num.Num Float.FloatingPoint
-highest = 1.0
+highest : Float *
 
 ## The lowest supported #Float value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
-#lowest : Float
-lowest = 1.0
+lowest : Float *
 
 ## The highest integer that can be represented as a #Float without # losing precision.
 ## It is equal to 2^53, which is approximately 9 × 10^15.
@@ -206,8 +220,7 @@ lowest = 1.0
 ## >>> Float.highestInt + 100 # Increasing may lose precision
 ##
 ## >>> Float.highestInt - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
-#highestInt : Float
-highestInt = 1.0
+highestInt : Float *
 
 ## The lowest integer that can be represented as a #Float without losing precision.
 ## It is equal to -2^53, which is approximately -9 × 10^15.
@@ -219,5 +232,4 @@ highestInt = 1.0
 ## >>> Float.lowestIntVal - 100 # Decreasing may lose precision
 ##
 ## >>> Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestInt!
-#lowestInt : Float
-lowestInt = 1.0
+lowestInt : Float *
