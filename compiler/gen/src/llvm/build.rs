@@ -75,7 +75,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             ret_layout,
             cond_layout,
         } => {
-            let ret_type = basic_type_from_layout(env.context, &ret_layout);
+            let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout);
             let switch_args = SwitchArgs {
                 cond_layout: cond_layout.clone(),
                 cond_expr: cond,
@@ -92,7 +92,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             for (symbol, layout, expr) in stores.iter() {
                 let val = build_expr(env, &scope, parent, &expr, procs);
-                let expr_bt = basic_type_from_layout(context, &layout);
+                let expr_bt = basic_type_from_layout(env.arena, context, &layout);
                 let alloca = create_entry_block_alloca(
                     env,
                     parent,
@@ -209,7 +209,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
         Array { elem_layout, elems } => {
             let ctx = env.context;
-            let elem_type = basic_type_from_layout(ctx, elem_layout);
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout);
             let builder = env.builder;
 
             if elems.is_empty() {
@@ -379,7 +379,7 @@ fn build_branch2<'a, 'ctx, 'env>(
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     let ret_layout = cond.ret_layout;
-    let ret_type = basic_type_from_layout(env.context, &ret_layout);
+    let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout);
 
     let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
 
@@ -576,12 +576,12 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     let args = proc.args;
     let arena = env.arena;
     let context = &env.context;
-    let ret_type = basic_type_from_layout(context, &proc.ret_layout);
+    let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
     let mut arg_symbols = Vec::new_in(arena);
 
     for (layout, arg_symbol) in args.iter() {
-        let arg_type = basic_type_from_layout(env.context, &layout);
+        let arg_type = basic_type_from_layout(arena, env.context, &layout);
 
         arg_basic_types.push(arg_type);
         arg_symbols.push(arg_symbol);

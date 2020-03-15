@@ -200,7 +200,7 @@ mod test_gen {
             // Compute main_fn_type before moving subs to Env
             let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_fn_type = basic_type_from_layout(&context, &layout)
+            let main_fn_type = basic_type_from_layout(&arena, &context, &layout)
                 .fn_type(&[], false);
             let main_fn_name = "$Test.main";
 
@@ -335,7 +335,7 @@ mod test_gen {
             // Compute main_fn_type before moving subs to Env
             let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_fn_type = basic_type_from_layout(&context, &layout)
+            let main_fn_type = basic_type_from_layout(&arena, &context, &layout)
                 .fn_type(&[], false);
             let main_fn_name = "$Test.main";
 
@@ -1091,6 +1091,45 @@ mod test_gen {
             indoc!(
                 r#"
                     { x: 15, y: 17, z: 19 }.z
+                "#
+            ),
+            19,
+            i64
+        );
+    }
+
+    #[test]
+    fn def_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { y: 17, x: 15, z: 19 }
+
+                    rec.x
+                "#
+            ),
+            15,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { x: 15, y: 17, z: 19 }
+
+                    rec.y
+                "#
+            ),
+            17,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { x: 15, y: 17, z: 19 }
+
+                    rec.z
                 "#
             ),
             19,
