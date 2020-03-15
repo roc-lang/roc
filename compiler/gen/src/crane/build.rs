@@ -189,7 +189,7 @@ pub fn build_expr<'a, B: Backend>(
             ));
 
             // Create instructions for storing each field's expression
-            for (index, ( field_expr, field_layout)) in sorted_fields.iter().enumerate() {
+            for (index, (field_expr, field_layout)) in sorted_fields.iter().enumerate() {
                 let val = build_expr(env, &scope, module, builder, field_expr, procs);
 
                 let field_size = field_layout.stack_size(ptr_bytes);
