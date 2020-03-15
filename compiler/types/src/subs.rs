@@ -639,7 +639,7 @@ impl ContentHash {
                 if *ext != Variable::EMPTY_RECORD {
                     let mut fields_map = MutMap::default();
                     match crate::pretty_print::chase_ext_record(subs, *ext, &mut fields_map) {
-                        Err(Content::FlexVar(_)) | Ok(()) => {
+                        Err((_, Content::FlexVar(_))) | Ok(()) => {
                             if !fields_map.is_empty() {
                                 extracted_fields_from_ext = true;
                                 fields.extend(fields_map.into_iter());
@@ -688,7 +688,7 @@ impl ContentHash {
                 let mut extracted_fields_from_ext = false;
                 if *ext != Variable::EMPTY_TAG_UNION {
                     match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
-                        Err(Content::FlexVar(_)) | Ok(()) => {
+                        Err((_, Content::FlexVar(_))) | Ok(()) => {
                             extracted_fields_from_ext = !tag_vec.is_empty();
                         }
                         Err(content) => panic!("TagUnion with unexpected ext_var: {:?}", content),
@@ -737,7 +737,7 @@ impl ContentHash {
                 let mut extracted_fields_from_ext = false;
                 if *ext != Variable::EMPTY_TAG_UNION {
                     match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
-                        Err(Content::FlexVar(_)) | Ok(()) => {
+                        Err((_, Content::FlexVar(_))) | Ok(()) => {
                             extracted_fields_from_ext = !tag_vec.is_empty();
                         }
                         Err(content) => {

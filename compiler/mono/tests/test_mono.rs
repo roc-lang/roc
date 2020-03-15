@@ -158,6 +158,97 @@ mod test_mono {
         )
     }
 
+    #[test]
+    fn if_expression() {
+        compiles_to(
+            r#"
+            if True then "bar" else "foo"
+            "#,
+            {
+                use self::Builtin::*;
+                use Layout::Builtin;
+
+                Cond {
+                    cond: &Expr::Bool(true),
+                    cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                    pass: &Expr::Str("bar"),
+                    fail: &Expr::Str("foo"),
+                    ret_layout: Builtin(Str),
+                }
+            },
+        )
+    }
+
+    #[test]
+    fn multiway_if_expression() {
+        compiles_to(
+            r#"
+            if True then 
+                "bar" 
+            else if False then
+                "foo"
+            else
+                "baz"
+            "#,
+            {
+                use self::Builtin::*;
+                use Layout::Builtin;
+
+                Cond {
+                    cond: &Expr::Bool(true),
+                    cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                    pass: &Expr::Str("bar"),
+                    fail: &Cond {
+                        cond: &Expr::Bool(false),
+                        cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                        pass: &Expr::Str("foo"),
+                        fail: &Expr::Str("baz"),
+                        ret_layout: Builtin(Str),
+                    },
+                    ret_layout: Builtin(Str),
+                }
+            },
+        )
+    }
+
+    #[test]
+    fn annotated_if_expression() {
+        // an if with an annotation gets constrained differently. Make sure the result is still correct.
+        compiles_to(
+            r#"
+            x : Str
+            x = if True then "bar" else "foo"
+
+            x
+            "#,
+            {
+                use self::Builtin::*;
+                use Layout::Builtin;
+
+                let home = test_home();
+                let symbol_x = Interns::from_index(home, 0);
+
+                Store(
+                    &[(
+                        symbol_x,
+                        Builtin(Str),
+                        Cond {
+                            cond: &Expr::Bool(true),
+                            cond_layout: Builtin(Bool(
+                                Global("False".into()),
+                                Global("True".into()),
+                            )),
+                            pass: &Expr::Str("bar"),
+                            fail: &Expr::Str("foo"),
+                            ret_layout: Builtin(Str),
+                        },
+                    )],
+                    &Load(symbol_x),
+                )
+            },
+        )
+    }
+
     //    #[test]
     //    fn record_pattern() {
     //        compiles_to(

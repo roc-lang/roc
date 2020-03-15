@@ -90,7 +90,7 @@ pub fn constrain_expr(
         ),
         Float(var, _) => float_literal(*var, expected, region),
         EmptyRecord => constrain_empty_record(region, expected),
-        Expr::Record(stored_var, fields) => {
+        Expr::Record { record_var, fields } => {
             if fields.is_empty() {
                 constrain_empty_record(region, expected)
             } else {
@@ -125,9 +125,9 @@ pub fn constrain_expr(
                 constraints.push(record_con);
 
                 // variable to store in the AST
-                let stored_con = Eq(Type::Variable(*stored_var), expected, region);
+                let stored_con = Eq(Type::Variable(*record_var), expected, region);
 
-                field_vars.push(*stored_var);
+                field_vars.push(*record_var);
                 constraints.push(stored_con);
 
                 exists(field_vars, And(constraints))
@@ -328,16 +328,27 @@ pub fn constrain_expr(
         } => {
             let bool_type = Type::Variable(Variable::BOOL);
             let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);
-            let mut branch_cons = Vec::with_capacity(2 * branches.len() + 2);
+            let mut branch_cons = Vec::with_capacity(2 * branches.len() + 3);
+
+            // TODO why does this cond var exist? is it for error messages?
+            let cond_var_is_bool_con = Eq(
+                Type::Variable(*cond_var),
+                expect_bool.clone(),
+                Region::zero(),
+            );
+
+            branch_cons.push(cond_var_is_bool_con);
 
             match expected {
                 FromAnnotation(name, arity, _, tipe) => {
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
-                        let cond_con = Eq(
-                            Type::Variable(*cond_var),
-                            expect_bool.clone(),
+                        let cond_con = constrain_expr(
+                            env,
                             loc_cond.region,
+                            &loc_cond.value,
+                            expect_bool.clone(),
                         );
+
                         let then_con = constrain_expr(
                             env,
                             loc_body.region,
@@ -374,11 +385,13 @@ pub fn constrain_expr(
                 }
                 _ => {
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
-                        let cond_con = Eq(
-                            Type::Variable(*cond_var),
-                            expect_bool.clone(),
+                        let cond_con = constrain_expr(
+                            env,
                             loc_cond.region,
+                            &loc_cond.value,
+                            expect_bool.clone(),
                         );
+
                         let then_con = constrain_expr(
                             env,
                             loc_body.region,
@@ -502,6 +515,7 @@ pub fn constrain_expr(
             exists(vec![cond_var, *expr_var], And(constraints))
         }
         Access {
+            record_var,
             ext_var,
             field_var,
             loc_expr,
@@ -520,6 +534,8 @@ pub fn constrain_expr(
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
 
+            let record_con = Eq(Type::Variable(*record_var), record_expected.clone(), region);
+
             let constraint = constrain_expr(
                 &Env {
                     home: env.home,
@@ -531,12 +547,17 @@ pub fn constrain_expr(
             );
 
             exists(
-                vec![field_var, ext_var],
-                And(vec![constraint, Eq(field_type, expected, region)]),
+                vec![*record_var, field_var, ext_var],
+                And(vec![
+                    constraint,
+                    Eq(field_type, expected, region),
+                    record_con,
+                ]),
             )
         }
         Accessor {
             field,
+            record_var,
             ext_var,
             field_var,
         } => {
@@ -550,13 +571,19 @@ pub fn constrain_expr(
             field_types.insert(label, field_type.clone());
             let record_type = Type::Record(field_types, Box::new(ext_type));
 
+            let record_expected = Expected::NoExpectation(record_type.clone());
+            let record_con = Eq(Type::Variable(*record_var), record_expected, region);
+
             exists(
-                vec![field_var, ext_var],
-                Eq(
-                    Type::Function(vec![record_type], Box::new(field_type)),
-                    expected,
-                    region,
-                ),
+                vec![*record_var, field_var, ext_var],
+                And(vec![
+                    Eq(
+                        Type::Function(vec![record_type], Box::new(field_type)),
+                        expected,
+                        region,
+                    ),
+                    record_con,
+                ]),
             )
         }
         LetRec(defs, loc_ret, var, aliases) => {

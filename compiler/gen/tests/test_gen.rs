@@ -836,6 +836,66 @@ mod test_gen {
     }
 
     #[test]
+    fn gen_if_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    limitedNegate = \num ->
+                        if num == 1 then
+                            -1
+                        else if num == -1 then
+                            1
+                        else
+                            num
+
+                    limitedNegate 1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_float_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                1.0 == 1.0
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_literal_true() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                if True then -1 else 1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_if_float_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                if True then -1.0 else 1.0
+                "#
+            ),
+            -1.0,
+            f64
+        );
+    }
+
+    #[test]
     fn apply_identity_() {
         assert_evals_to!(
             indoc!(
@@ -955,6 +1015,49 @@ mod test_gen {
             ),
             3.14,
             f64
+        );
+    }
+
+    #[test]
+    fn basic_enum() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Fruit : [ Apple, Orange, Banana ] 
+
+                apple : Fruit
+                apple = Apple
+
+                orange : Fruit
+                orange = Orange
+
+                apple == orange
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
+    fn when_on_enum() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Fruit : [ Apple, Orange, Banana ]
+
+                apple : Fruit
+                apple = Apple
+
+                when apple is
+                    Apple -> 1
+                    Banana -> 2
+                    Orange -> 3
+                    _ -> 4
+                "#
+            ),
+            1,
+            i64
         );
     }
 

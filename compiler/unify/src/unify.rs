@@ -19,6 +19,45 @@ macro_rules! mismatch {
         }
         vec![Mismatch::TypeMismatch]
     }};
+    ($msg:expr) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
+    ($msg:expr,) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
+    ($msg:expr, $($arg:tt)*) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg, $($arg)*);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
 }
 
 type Pool = Vec<Variable>;
@@ -154,9 +193,9 @@ fn unify_structure(
                 }
             }
         }
-        RigidVar(_) => {
+        RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch!()
+            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
         }
 
         Structure(ref other_flat_type) => {
@@ -281,7 +320,15 @@ fn unify_shared_fields(
     }
 
     if num_shared_fields == matching_fields.len() {
-        let flat_type = FlatType::Record(union(matching_fields, &other_fields), ext);
+        // pull fields in from the ext_var
+        let mut fields = union(matching_fields, &other_fields);
+
+        let new_ext_var = match roc_types::pretty_print::chase_ext_record(subs, ext, &mut fields) {
+            Ok(()) => Variable::EMPTY_RECORD,
+            Err((new, _)) => new,
+        };
+
+        let flat_type = FlatType::Record(fields, new_ext_var);
 
         merge(subs, ctx, Structure(flat_type))
     } else {
@@ -421,10 +468,21 @@ fn unify_shared_tags(
     }
 
     if num_shared_tags == matching_tags.len() {
+        // merge fields from the ext_var into this tag union
+        let mut fields = Vec::new();
+        let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(subs, ext, &mut fields)
+        {
+            Ok(()) => Variable::EMPTY_TAG_UNION,
+            Err((new, _)) => new,
+        };
+
+        let mut new_tags = union(matching_tags, &other_tags);
+        new_tags.extend(fields.into_iter());
+
         let flat_type = if let Some(rec) = recursion_var {
-            FlatType::RecursiveTagUnion(rec, union(matching_tags, &other_tags), ext)
+            FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
         } else {
-            FlatType::TagUnion(union(matching_tags, &other_tags), ext)
+            FlatType::TagUnion(new_tags, new_ext_var)
         };
 
         merge(subs, ctx, Structure(flat_type))
@@ -552,11 +610,11 @@ fn unify_flat_type(
                 problems
             }
         }
-        (_other1, _other2) => {
-            // Can't unify other1 and other2
-            // dbg!(&_other1, &_other2);
-            mismatch!()
-        }
+        (other1, other2) => mismatch!(
+            "Trying to two flat types that are incompatible: {:?} ~ {:?}",
+            other1,
+            other2
+        ),
     }
 }
 

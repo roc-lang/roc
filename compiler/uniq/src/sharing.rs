@@ -632,7 +632,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 annotate_usage(&loc_expr.value, usage);
             }
         }
-        Record(_, fields) => {
+        Record { fields, .. } => {
             for (_, field) in fields {
                 annotate_usage(&field.loc_expr.value, usage);
             }

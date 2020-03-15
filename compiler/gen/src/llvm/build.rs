@@ -47,23 +47,23 @@ pub fn build_expr<'a, 'ctx, 'env>(
     match expr {
         Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
         Float(num) => env.context.f64_type().const_float(*num).into(),
+        Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
+        Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Cond {
-            cond_lhs,
-            cond_rhs,
+            cond,
             pass,
             fail,
             ret_layout,
             ..
         } => {
-            let cond = Branch2 {
-                cond_lhs,
-                cond_rhs,
+            let conditional = Branch2 {
+                cond,
                 pass,
                 fail,
                 ret_layout: ret_layout.clone(),
             };
 
-            build_branch2(env, scope, parent, cond, procs)
+            build_branch2(env, scope, parent, conditional, procs)
         }
         Branches { .. } => {
             panic!("TODO build_branches(env, scope, parent, cond_lhs, branches, procs)");
@@ -365,8 +365,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 }
 
 struct Branch2<'a> {
-    cond_lhs: &'a Expr<'a>,
-    cond_rhs: &'a Expr<'a>,
+    cond: &'a Expr<'a>,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
     ret_layout: Layout<'a>,
@@ -379,33 +378,18 @@ fn build_branch2<'a, 'ctx, 'env>(
     cond: Branch2<'a>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
     let ret_layout = cond.ret_layout;
     let ret_type = basic_type_from_layout(env.context, &ret_layout);
 
-    let lhs = build_expr(env, scope, parent, cond.cond_lhs, procs);
-    let rhs = build_expr(env, scope, parent, cond.cond_rhs, procs);
+    let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
 
-    match (lhs, rhs) {
-        (FloatValue(lhs_float), FloatValue(rhs_float)) => {
-            let comparison =
-                builder.build_float_compare(FloatPredicate::OEQ, lhs_float, rhs_float, "cond");
-
-            build_phi2(
-                env, scope, parent, comparison, cond.pass, cond.fail, ret_type, procs,
-            )
-        }
-
-        (IntValue(lhs_int), IntValue(rhs_int)) => {
-            let comparison = builder.build_int_compare(IntPredicate::EQ, lhs_int, rhs_int, "cond");
-
-            build_phi2(
-                env, scope, parent, comparison, cond.pass, cond.fail, ret_type, procs,
-            )
-        }
+    match cond_expr {
+        IntValue(value) => build_phi2(
+            env, scope, parent, value, cond.pass, cond.fail, ret_type, procs,
+        ),
         _ => panic!(
-            "Tried to make a branch out of incompatible conditions: lhs = {:?} and rhs = {:?}",
-            cond.cond_lhs, cond.cond_rhs
+            "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
+            cond_expr,
         ),
     }
 }
@@ -431,6 +415,7 @@ fn build_switch<'a, 'ctx, 'env>(
     let SwitchArgs {
         branches,
         cond_expr,
+        cond_layout,
         default_branch,
         ret_type,
         ..
@@ -446,7 +431,24 @@ fn build_switch<'a, 'ctx, 'env>(
     let mut cases = Vec::with_capacity_in(branches.len(), arena);
 
     for (int, _) in branches.iter() {
-        let int_val = context.i64_type().const_int(*int as u64, false);
+        // Switch constants must all be same type as switch value!
+        // e.g. this is incorrect, and will trigger a LLVM warning:
+        //
+        //   switch i8 %apple1, label %default [
+        //     i64 2, label %branch2
+        //     i64 0, label %branch0
+        //     i64 1, label %branch1
+        //   ]
+        //
+        // they either need to all be i8, or i64
+        let int_val = match cond_layout {
+            Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Bool(_, _)) => {
+                context.bool_type().const_int(*int as u64, false)
+            }
+            Layout::Builtin(Builtin::Byte(_)) => context.i8_type().const_int(*int as u64, false),
+            _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
+        };
         let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
 
         cases.push((int_val, block));
@@ -644,6 +646,7 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 }
 
 #[inline(always)]
+#[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
     symbol: Symbol,
     args: &[BasicValueEnum<'ctx>],
@@ -736,6 +739,54 @@ fn call_with_args<'a, 'ctx, 'env>(
             let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
 
             BasicValueEnum::IntValue(answer)
+        }
+        Symbol::INT_EQ_I64 => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "cmp_i64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::INT_EQ_I1 => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "cmp_i1",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::INT_EQ_I8 => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "cmp_i8",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::FLOAT_EQ => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_float_compare(
+                FloatPredicate::OEQ,
+                args[0].into_float_value(),
+                args[1].into_float_value(),
+                "cmp_f64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
         }
         Symbol::LIST_GET_UNSAFE => {
             let builder = env.builder;
