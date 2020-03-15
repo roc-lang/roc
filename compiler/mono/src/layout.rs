@@ -10,6 +10,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [(Lowercase, Layout<'a>)]),
+    Tag(&'a [Layout<'a>]),
     Pointer(&'a Layout<'a>),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
@@ -87,6 +88,16 @@ impl<'a> Layout<'a> {
                 let mut sum = 0;
 
                 for (_, field_layout) in *fields {
+                    sum += field_layout.stack_size(pointer_size);
+                }
+
+                sum
+            }
+            Tag(fields) => {
+                // the symbol is a 64-bit value, so 8 bytes
+                let mut sum = 8;
+
+                for field_layout in *fields {
                     sum += field_layout.stack_size(pointer_size);
                 }
 
@@ -264,6 +275,8 @@ fn layout_from_flat_type<'a>(
                 0 => {
                     panic!("TODO gracefully handle trying to instantiate Never");
                 }
+                // We can only unwrap a wrapper if it never becomes part of a bigger union
+                // therefore, the ext_var must be the literal empty tag union
                 1 => {
                     // This is a wrapper. Unwrap it!
                     let (tag, args) = tags.into_iter().next().unwrap();
@@ -294,6 +307,7 @@ fn layout_from_flat_type<'a>(
                     //  But when one-tag tag unions are optimized away, we can also use an enum for
                     //
                     //  [ Foo [ Unit ], Bar [ Unit ] ]
+
                     let arguments_have_size_0 = || {
                         tags.iter().all(|(_, args)| {
                             args.iter().all(|var| {
@@ -327,7 +341,8 @@ fn layout_from_flat_type<'a>(
                             Ok(Layout::Builtin(Builtin::Byte(tag_to_u8)))
                         }
                     } else {
-                        panic!("TODO handle a tag union with mutliple tags: {:?}", tags);
+                        // panic!("TODO handle a tag union with mutliple tags: {:?}", tags);
+                        Ok(Layout::Tag(&[]))
                     }
                 }
             }
@@ -350,12 +365,7 @@ fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => {
-            if !ext_fields.is_empty() {
-                println!("ext_tags: {:?}", ext_fields);
-            }
-            ext_fields.is_empty()
-        }
+        Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
         Err(content) => panic!("invalid content in ext_var: {:?}", content),
     }
 }
@@ -364,13 +374,7 @@ fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = MutMap::default();
     match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => {
-            if !ext_fields.is_empty() {
-                println!("ext_fields: {:?}", ext_fields);
-            }
-
-            ext_fields.is_empty()
-        }
+        Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
         Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
     }
 }

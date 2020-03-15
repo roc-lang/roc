@@ -1058,7 +1058,6 @@ mod test_gen {
                     Apple -> 1
                     Banana -> 2
                     Orange -> 3
-                    _ -> 4
                 "#
             ),
             1,

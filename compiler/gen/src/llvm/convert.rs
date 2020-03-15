@@ -56,6 +56,9 @@ pub fn basic_type_from_layout<'ctx>(
         Struct(_fields) => {
             panic!("TODO layout_to_basic_type for Struct");
         }
+        Tag(_fields) => {
+            panic!("TODO layout_to_basic_type for Tag");
+        }
         Pointer(_layout) => {
             panic!("TODO layout_to_basic_type for Pointer");
         }
