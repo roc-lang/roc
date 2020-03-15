@@ -674,20 +674,29 @@ fn call_by_name<'a, B: Backend>(
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
 
-            let list_ptr = build_arg(&args[0], env, scope, module, builder, procs);
+            let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
             let elem_index = build_arg(&args[1], env, scope, module, builder, procs);
 
             let elem_type = Type::int(64).unwrap(); // TODO Look this up instead of hardcoding it!
             let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
             let elem_size = builder.ins().iconst(types::I64, elem_bytes);
 
+            // Load the pointer we got to the wrapper struct
+            let elems_ptr = builder.ins().load(
+                env.cfg.pointer_type(),
+                MemFlags::new(),
+                wrapper_ptr,
+                Offset32::new(0),
+            );
+
             // Multiply the requested index by the size of each element.
             let offset = builder.ins().imul(elem_index, elem_size);
 
+            // Follow the pointer in the wrapper struct to the actual elements
             builder.ins().load_complex(
                 elem_type,
                 MemFlags::new(),
-                &[list_ptr, offset],
+                &[elems_ptr, offset],
                 Offset32::new(0),
             )
         }
@@ -703,7 +712,7 @@ fn call_by_name<'a, B: Backend>(
                     let elem_bytes =
                         elem_layout.stack_size(env.cfg.pointer_bytes() as u32) as usize;
                     let bytes_len = (elem_bytes * num_elems) + 1/* TODO drop the +1 when we have structs and this is no longer NUL-terminated. */;
-                    let ptr = call_malloc(env, module, builder, bytes_len);
+                    let wrapper_ptr = call_malloc(env, module, builder, bytes_len);
                     // let mem_flags = MemFlags::new();
 
                     // Copy the elements from the literal into the array
@@ -722,17 +731,24 @@ fn call_by_name<'a, B: Backend>(
                     // let offset = Offset32::new(index);
 
                     // builder.ins().store(mem_flags, nul_terminator, ptr, offset);
+                    // Load the pointer we got to the wrapper struct
+                    let _elems_ptr = builder.ins().load(
+                        env.cfg.pointer_type(),
+                        MemFlags::new(),
+                        wrapper_ptr,
+                        Offset32::new(0),
+                    );
 
                     list_set_in_place(
                         env,
-                        ptr,
+                        wrapper_ptr,
                         build_arg(&args[1], env, scope, module, builder, procs),
                         build_arg(&args[2], env, scope, module, builder, procs),
                         elem_layout,
                         builder,
                     );
 
-                    ptr
+                    wrapper_ptr
                 }
                 _ => {
                     unreachable!("Invalid List layout for List.set: {:?}", list_layout);
@@ -809,21 +825,31 @@ fn call_malloc<B: Backend>(
 
 fn list_set_in_place<'a>(
     env: &Env<'a>,
-    list_ptr: Value,
+    wrapper_ptr: Value,
     elem_index: Value,
     elem: Value,
     elem_layout: &Layout<'a>,
     builder: &mut FunctionBuilder,
 ) -> Value {
+    let elems_ptr = builder.ins().load(
+        env.cfg.pointer_type(),
+        MemFlags::new(),
+        wrapper_ptr,
+        Offset32::new(0),
+    );
+
     let elem_bytes = elem_layout.stack_size(env.cfg.pointer_bytes() as u32);
     let elem_size = builder.ins().iconst(types::I64, elem_bytes as i64);
 
     // Multiply the requested index by the size of each element.
     let offset = builder.ins().imul(elem_index, elem_size);
 
-    builder
-        .ins()
-        .store_complex(MemFlags::new(), elem, &[list_ptr, offset], Offset32::new(0));
+    builder.ins().store_complex(
+        MemFlags::new(),
+        elem,
+        &[elems_ptr, offset],
+        Offset32::new(0),
+    );
 
-    list_ptr
+    wrapper_ptr
 }
