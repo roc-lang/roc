@@ -507,7 +507,7 @@ mod test_gen {
                 "#
             ),
             3,
-            i64
+            usize
         );
     }
 
@@ -517,7 +517,6 @@ mod test_gen {
             indoc!(
                 r#"
                     # TODO remove this annotation once monomorphization works!
-                    getLen : List Int -> Int
                     getLen = \list -> List.len list
 
                     nums = [ 2, 4, 6 ]
@@ -526,13 +525,13 @@ mod test_gen {
                 "#
             ),
             3,
-            i64
+            usize
         );
     }
 
     //     #[test]
     //     fn int_list_is_empty() {
-    //         assert_evals_to!("List.is_empty [ 12, 9, 6, 3 ]", 0, u8, |x| x);
+    //         assert_evals_to!("List.isEmpty [ 12, 9, 6, 3 ]", 0, u8, |x| x);
     //     }
 
     #[test]

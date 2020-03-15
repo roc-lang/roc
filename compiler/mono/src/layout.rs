@@ -104,10 +104,10 @@ impl<'a> Builtin<'a> {
     const BYTE_SIZE: u32 = std::mem::size_of::<u8>() as u32;
 
     /// Number of machine words in an empty one of these
-    const STR_WORDS: u32 = 3;
-    const MAP_WORDS: u32 = 6;
-    const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
-    const LIST_WORDS: u32 = 3;
+    pub const STR_WORDS: u32 = 2;
+    pub const MAP_WORDS: u32 = 6;
+    pub const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
+    pub const LIST_WORDS: u32 = 2;
 
     /// Layout of collection wrapper - a struct of (pointer, length, capacity)
     pub const WRAPPER_PTR: u32 = 0;

@@ -288,39 +288,18 @@ pub fn build_expr<'a, B: Backend>(
         Array { elem_layout, elems } => {
             let cfg = env.cfg;
             let ptr_bytes = cfg.pointer_bytes() as u32;
+            let slot = builder.create_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                ptr_bytes * Builtin::LIST_WORDS,
+            ));
 
-            if elems.is_empty() {
-                let slot = builder.create_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    // 1 pointer-sized slot for the array pointer, and
-                    // 1 pointer-sized slot for the length
-                    ptr_bytes * 2,
-                ));
-
-                // Set list pointer to null
-                {
-                    // let null_ptr = builder.ins().null(ptr_type);
-                    let zero = builder.ins().iconst(cfg.pointer_type(), 0);
-
-                    builder.ins().stack_store(zero, slot, Offset32::new(0));
-                }
-
-                // Set length to 0
-                {
-                    let zero = builder.ins().iconst(cfg.pointer_type(), 0);
-
-                    builder
-                        .ins()
-                        .stack_store(zero, slot, Offset32::new(ptr_bytes as i32));
-                }
-
-                // Return the pointer
-                builder.ins().stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
+            let elems_ptr = if elems.is_empty() {
+                // Empty lists get a null pointer so they don't allocate on the heap
+                builder.ins().iconst(cfg.pointer_type(), 0)
             } else {
-                panic!("TODO make this work like the empty List, then verify that they both actually work");
-                let elem_bytes = elem_layout.stack_size(env.cfg.pointer_bytes() as u32) as usize;
-                let bytes_len = (elem_bytes * elems.len()) + 1/* TODO drop the +1 when we have structs and this is no longer NUL-terminated. */;
-                let ptr = call_malloc(env, module, builder, bytes_len);
+                let elem_bytes = elem_layout.stack_size(ptr_bytes as u32);
+                let bytes_len = elem_bytes as usize * elems.len();
+                let elems_ptr = call_malloc(env, module, builder, bytes_len);
                 let mem_flags = MemFlags::new();
 
                 // Copy the elements from the literal into the array
@@ -328,20 +307,28 @@ pub fn build_expr<'a, B: Backend>(
                     let offset = Offset32::new(elem_bytes as i32 * index as i32);
                     let val = build_expr(env, scope, module, builder, elem, procs);
 
-                    builder.ins().store(mem_flags, val, ptr, offset);
+                    builder.ins().store(mem_flags, val, elems_ptr, offset);
                 }
 
-                // Add a NUL terminator at the end.
-                // TODO: Instead of NUL-terminating, return a struct
-                // with the pointer and also the length and capacity.
-                let nul_terminator = builder.ins().iconst(types::I8, 0);
-                let index = bytes_len as i32 - 1;
-                let offset = Offset32::new(index);
+                elems_ptr
+            };
 
-                builder.ins().store(mem_flags, nul_terminator, ptr, offset);
+            // Store the pointer in slot 0
+            builder
+                .ins()
+                .stack_store(elems_ptr, slot, Offset32::new(0));
 
-                ptr
+            // Store the length in slot 1
+            {
+                let length = builder.ins().iconst(env.ptr_sized_int(), elems.len() as i64);
+
+                builder
+                    .ins()
+                    .stack_store(length, slot, Offset32::new(ptr_bytes as i32));
             }
+
+            // Return the pointer to the wrapper
+            builder.ins().stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
@@ -680,7 +667,7 @@ fn call_by_name<'a, B: Backend>(
                 env.ptr_sized_int(),
                 MemFlags::new(),
                 list_ptr,
-                Offset32::new(0),
+                Offset32::new(env.cfg.pointer_bytes() as i32),
             )
         }
         Symbol::LIST_GET_UNSAFE => {
