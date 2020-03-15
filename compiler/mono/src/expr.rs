@@ -632,7 +632,7 @@ fn from_can<'a>(
 
             match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
                 Ok(Layout::Struct(field_layouts)) => {
-                    for (label, field_layout) in field_layouts.into_iter() {
+                    for (label, field_layout) in field_layouts.iter() {
                         let loc_expr = fields.remove(label).unwrap().loc_expr;
                         let expr = from_can(env, loc_expr.value, procs, None);
 
