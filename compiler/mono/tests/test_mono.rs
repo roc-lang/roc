@@ -128,7 +128,7 @@ mod test_mono {
             r#"
             f = \x -> x + 5
 
-            { x: f 0x4, y: f 3.14 }
+            { y: f 3.14, x: f 0x4 }
             "#,
             {
                 use self::Builtin::*;
@@ -138,22 +138,16 @@ mod test_mono {
                 let gen_symbol_3 = Interns::from_index(home, 3);
                 let gen_symbol_4 = Interns::from_index(home, 4);
 
-                Struct {
-                    fields: &[
-                        (
-                            "x".into(),
-                            CallByName(gen_symbol_3, &[(Int(4), Builtin(Int64))]),
-                        ),
-                        (
-                            "y".into(),
-                            CallByName(gen_symbol_4, &[(Float(3.14), Builtin(Float64))]),
-                        ),
-                    ],
-                    layout: Layout::Struct(&[
-                        ("x".into(), Builtin(Int64)),
-                        ("y".into(), Builtin(Float64)),
-                    ]),
-                }
+                Struct(&[
+                    (
+                        CallByName(gen_symbol_3, &[(Int(4), Builtin(Int64))]),
+                        Builtin(Int64),
+                    ),
+                    (
+                        CallByName(gen_symbol_4, &[(Float(3.14), Builtin(Float64))]),
+                        Builtin(Float64),
+                    ),
+                ])
             },
         )
     }
@@ -183,8 +177,8 @@ mod test_mono {
     fn multiway_if_expression() {
         compiles_to(
             r#"
-            if True then 
-                "bar" 
+            if True then
+                "bar"
             else if False then
                 "foo"
             else
@@ -288,13 +282,10 @@ mod test_mono {
                 CallByName(
                     gen_symbol_3,
                     &[(
-                        Struct {
-                            fields: &[(
-                                "x".into(),
-                                CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
-                            )],
-                            layout: Layout::Struct(&[("x".into(), Builtin(Int64))]),
-                        },
+                        Struct(&[(
+                            CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
+                            Builtin(Int64),
+                        )]),
                         Layout::Struct(&[("x".into(), Builtin(Int64))]),
                     )],
                 )
