@@ -117,6 +117,10 @@ pub fn check_patterns<'a>(
             let bad_patterns = is_exhaustive(&matrix, 1);
             if !bad_patterns.is_empty() {
                 // TODO i suspect this is like a concat in in practice? code below can panic
+                // if this debug_assert! ever fails, the theory is disproven
+                debug_assert!(
+                    bad_patterns.iter().map(|v| v.len()).sum::<usize>() == bad_patterns.len()
+                );
                 let heads = bad_patterns.into_iter().map(|mut v| v.remove(0)).collect();
                 errors.push(Error::Incomplete(region, context, heads));
             }
