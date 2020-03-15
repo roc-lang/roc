@@ -36,6 +36,15 @@ pub struct Env<'a> {
     pub malloc: FuncId,
 }
 
+impl<'a> Env<'a> {
+    /// This is necessary when you want usize or isize,
+    /// because cfg.pointer_type() returns a pointer type,
+    /// not an integer type, which casues verification to fail.
+    pub fn ptr_sized_int(&self) -> Type {
+        Type::int(self.cfg.pointer_bits() as u16).unwrap()
+    }
+}
+
 pub fn build_expr<'a, B: Backend>(
     env: &Env<'a>,
     scope: &Scope,
@@ -667,15 +676,12 @@ fn call_by_name<'a, B: Backend>(
             let list_ptr = build_arg(&args[0], env, scope, module, builder, procs);
 
             // Get the usize int length
-            let len_usize = builder.ins().load_complex(
-                env.cfg.pointer_type(),
+            builder.ins().load(
+                env.ptr_sized_int(),
                 MemFlags::new(),
-                &[list_ptr],
+                list_ptr,
                 Offset32::new(0),
-            );
-
-            // Cast the usize length to 64-bit integer
-            builder.ins().bitcast(Type::int(64).unwrap(), len_usize)
+            )
         }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
