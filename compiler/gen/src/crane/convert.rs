@@ -16,7 +16,9 @@ pub fn type_from_layout(cfg: TargetFrontendConfig, layout: &Layout<'_>) -> Type 
             Float64 => types::F64,
             Bool(_, _) => types::B1,
             Byte(_) => types::I8,
-            Str | Map(_, _) | Set(_) | List(_) => cfg.pointer_type(),
+            Str | EmptyStr | Map(_, _) | EmptyMap | Set(_) | EmptySet | List(_) | EmptyList => {
+                cfg.pointer_type()
+            }
         },
     }
 }

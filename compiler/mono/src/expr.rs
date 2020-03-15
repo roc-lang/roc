@@ -722,11 +722,18 @@ fn from_can<'a>(
             loc_elems,
         } => {
             let arena = env.arena;
-            let elem_layout = match Layout::from_var(arena, elem_var, env.subs, env.pointer_size) {
-                Ok(layout) => layout,
-                Err(()) => {
-                    panic!("TODO gracefully handle List with invalid element layout");
-                }
+            let subs = &env.subs;
+            let elem_content = subs.get_without_compacting(elem_var).content;
+            let elem_layout = match elem_content {
+                // We have to special-case the empty list, because trying to
+                // compute a layout for an unbound var won't work.
+                Content::FlexVar(_) => Layout::Builtin(Builtin::EmptyList),
+                content => match Layout::from_content(arena, content, env.subs, env.pointer_size) {
+                    Ok(layout) => layout,
+                    Err(()) => {
+                        panic!("TODO gracefully handle List with invalid element layout");
+                    }
+                },
             };
 
             let mut elems = Vec::with_capacity_in(loc_elems.len(), arena);

@@ -6,13 +6,15 @@ use inkwell::module::{Linkage, Module};
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
-use inkwell::{FloatPredicate, IntPredicate};
+use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
-use crate::llvm::convert::{basic_type_from_layout, get_fn_type};
+use crate::llvm::convert::{
+    basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
+};
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Builtin, Layout};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -206,24 +208,40 @@ pub fn build_expr<'a, 'ctx, 'env>(
             }
         }
         Array { elem_layout, elems } => {
+            let ctx = env.context;
+            let elem_type = basic_type_from_layout(ctx, elem_layout);
+            let builder = env.builder;
+
             if elems.is_empty() {
-                panic!("TODO build an empty string in LLVM");
-            } else {
-                let elem_bytes = elem_layout.stack_size(env.pointer_bytes) as u64;
-                let bytes_len = elem_bytes * (elems.len() + 1) as u64/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+                let array_type = get_array_type(&elem_type, 0);
+                let ptr_type = array_type.ptr_type(AddressSpace::Generic);
+                let struct_type = collection_wrapper(ctx, ptr_type);
 
-                let ctx = env.context;
-                let builder = env.builder;
-
-                let elem_type = basic_type_from_layout(ctx, elem_layout);
-                let nul_terminator = elem_type.into_int_type().const_zero();
-                let len = ctx.i32_type().const_int(bytes_len, false);
-                let ptr = env
-                    .builder
-                    .build_array_malloc(elem_type, len, "str_ptr")
+                // The first field in the struct should be the pointer.
+                let struct_val = builder
+                    .build_insert_value(
+                        struct_type.const_zero(),
+                        BasicValueEnum::PointerValue(ptr_type.const_null()),
+                        Builtin::WRAPPER_PTR,
+                        "insert_ptr",
+                    )
                     .unwrap();
 
-                // Copy the bytes from the string literal into the array
+                BasicValueEnum::StructValue(struct_val.into_struct_value())
+            } else {
+                let len_u64 = elems.len() as u64;
+                let elem_bytes = elem_layout.stack_size(env.pointer_bytes) as u64;
+
+                let ptr = {
+                    let bytes_len = elem_bytes * len_u64;
+                    let len = ctx.i32_type().const_int(bytes_len, false);
+
+                    env.builder
+                        .build_array_malloc(elem_type, len, "create_list_ptr")
+                        .unwrap()
+                };
+
+                // Copy the elements from the list literal into the array
                 for (index, elem) in elems.iter().enumerate() {
                     let offset = ctx.i32_type().const_int(elem_bytes * index as u64, false);
                     let elem_ptr = unsafe { builder.build_gep(ptr, &[offset], "elem") };
@@ -233,15 +251,37 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     builder.build_store(elem_ptr, val);
                 }
 
-                // Add a NUL terminator at the end.
-                // TODO: Instead of NUL-terminating, return a struct
-                // with the pointer and also the length and capacity.
-                let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false);
-                let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
+                let ptr_val = BasicValueEnum::PointerValue(ptr);
+                let struct_type = collection_wrapper(ctx, ptr.get_type());
+                let len = BasicValueEnum::IntValue(ctx.i32_type().const_int(len_u64, false));
+                let mut struct_val;
 
-                builder.build_store(elem_ptr, nul_terminator);
+                // Field 0: pointer
+                struct_val = builder
+                    .build_insert_value(
+                        struct_type.const_zero(),
+                        ptr_val,
+                        Builtin::WRAPPER_PTR,
+                        "insert_ptr",
+                    )
+                    .unwrap();
 
-                BasicValueEnum::PointerValue(ptr)
+                // Field 1: length
+                struct_val = builder
+                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+                    .unwrap();
+
+                // Field 2: capacity (initially set to length)
+                struct_val = builder
+                    .build_insert_value(
+                        struct_val,
+                        len,
+                        Builtin::WRAPPER_CAPACITY,
+                        "insert_capacity",
+                    )
+                    .unwrap();
+
+                BasicValueEnum::StructValue(struct_val.into_struct_value())
             }
         }
 
@@ -369,8 +409,6 @@ fn build_switch<'a, 'ctx, 'env>(
     switch_args: SwitchArgs<'a, 'ctx>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use roc_mono::layout::Builtin;
-
     let arena = env.arena;
     let builder = env.builder;
     let context = env.context;
@@ -679,6 +717,29 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
+        Symbol::LIST_LEN => {
+            debug_assert!(args.len() == 1);
+
+            let wrapper_struct = args[0].into_struct_value();
+            let builder = env.builder;
+
+            // Get the 32-bit int length
+            let i32_val = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
+
+            // cast the 32-bit length to a 64-bit int
+            BasicValueEnum::IntValue(builder.build_int_cast(i32_val, env.context.i64_type(), "i32_to_i64"))
+        }
+        Symbol::LIST_IS_EMPTY => {
+            debug_assert!(args.len() == 1);
+
+            let list_struct = args[0].into_struct_value();
+            let builder = env.builder;
+            let list_len = builder.build_extract_value(list_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
+            let zero = env.context.i32_type().const_zero();
+            let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
+
+            BasicValueEnum::IntValue(answer)
+        }
         Symbol::INT_EQ_I64 => {
             debug_assert!(args.len() == 2);
 
@@ -728,37 +789,65 @@ fn call_with_args<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(int_val)
         }
         Symbol::LIST_GET_UNSAFE => {
+            let builder = env.builder;
+
+            // List.get : List elem, Int -> Result elem [ OutOfBounds ]*
             debug_assert!(args.len() == 2);
 
-            let list_ptr = args[0].into_pointer_value();
+            let wrapper_struct = args[0].into_struct_value();
             let elem_index = args[1].into_int_value();
 
-            let builder = env.builder;
-            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
-            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
-            let offset = builder.build_int_mul(elem_index, elem_size, "mul_offset");
+            // Slot 1 in the wrapper struct is the length
+            let _list_len = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
 
-            let elem_ptr = unsafe { builder.build_gep(list_ptr, &[offset], "elem") };
+            // TODO here, check to see if the requested index exceeds the length of the array.
+
+            // Slot 0 in the wrapper struct is the pointer to the array data
+            let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
+
+            let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
+            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
+
+            // Calculate the offset at runtime by multiplying the index by the size of an element.
+            let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
+
+            // We already checked the bounds earlier.
+            let elem_ptr = unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
 
             builder.build_load(elem_ptr, "List.get")
         }
         Symbol::LIST_SET /* TODO clone first for LIST_SET! */ | Symbol::LIST_SET_IN_PLACE => {
+            let builder = env.builder;
+
             debug_assert!(args.len() == 3);
 
-            let list_ptr = args[0].into_pointer_value();
+            let wrapper_struct = args[0].into_struct_value();
             let elem_index = args[1].into_int_value();
             let elem = args[2];
 
-            let builder = env.builder;
-            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
+            // Slot 1 in the wrapper struct is the length
+            let _list_len = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
+
+            // TODO here, check to see if the requested index exceeds the length of the array.
+            // If so, bail out and return the list unaltered.
+
+            // Slot 0 in the wrapper struct is the pointer to the array data
+            let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
+
+            let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
-            let offset = builder.build_int_mul(elem_index, elem_size, "MUL_OFFSET");
 
-            let elem_ptr = unsafe { builder.build_gep(list_ptr, &[offset], "elem") };
+            // Calculate the offset at runtime by multiplying the index by the size of an element.
+            let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
+            // We already checked the bounds earlier.
+            let elem_ptr = unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
+
+            // Mutate the array in-place.
             builder.build_store(elem_ptr, elem);
 
-            list_ptr.into()
+            // Return the wrapper unchanged, since pointer, length and capacity are all unchanged
+            wrapper_struct.into()
         }
         _ => {
             let fn_val = env

@@ -1,6 +1,6 @@
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
-use inkwell::types::{BasicType, FunctionType};
+use inkwell::types::{ArrayType, BasicType, FunctionType, PointerType, StructType};
 use inkwell::AddressSpace;
 
 use roc_mono::layout::Layout;
@@ -17,6 +17,18 @@ pub fn get_fn_type<'ctx>(
         PointerType(typ) => typ.fn_type(arg_types, false),
         StructType(typ) => typ.fn_type(arg_types, false),
         VectorType(typ) => typ.fn_type(arg_types, false),
+    }
+}
+
+/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
+pub fn get_array_type<'ctx>(bt_enum: &BasicTypeEnum<'ctx>, size: u32) -> ArrayType<'ctx> {
+    match bt_enum {
+        ArrayType(typ) => typ.array_type(size),
+        IntType(typ) => typ.array_type(size),
+        FloatType(typ) => typ.array_type(size),
+        PointerType(typ) => typ.array_type(size),
+        StructType(typ) => typ.array_type(size),
+        VectorType(typ) => typ.array_type(size),
     }
 }
 
@@ -52,15 +64,36 @@ pub fn basic_type_from_layout<'ctx>(
             Float64 => context.f64_type().as_basic_type_enum(),
             Bool(_, _) => context.bool_type().as_basic_type_enum(),
             Byte(_) => context.i8_type().as_basic_type_enum(),
-            Str => context
+            Str | EmptyStr => context
                 .i8_type()
                 .ptr_type(AddressSpace::Generic)
                 .as_basic_type_enum(),
-            Map(_, _) => panic!("TODO layout_to_basic_type for Builtin::Map"),
-            Set(_) => panic!("TODO layout_to_basic_type for Builtin::Set"),
-            List(elem_layout) => basic_type_from_layout(context, elem_layout)
-                .ptr_type(AddressSpace::Generic)
-                .as_basic_type_enum(),
+            Map(_, _) | EmptyMap => panic!("TODO layout_to_basic_type for Builtin::Map"),
+            Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
+            List(elem_layout) => {
+                let ptr_type =
+                    basic_type_from_layout(context, elem_layout).ptr_type(AddressSpace::Generic);
+
+                collection_wrapper(context, ptr_type).into()
+            }
+            EmptyList => {
+                let array_type =
+                    get_array_type(&context.opaque_struct_type("empty_list_elem").into(), 0);
+                let ptr_type = array_type.ptr_type(AddressSpace::Generic);
+
+                collection_wrapper(context, ptr_type).into()
+            }
         },
     }
+}
+
+/// (pointer: usize, length: u32, capacity: u32)
+pub fn collection_wrapper<'ctx>(
+    ctx: &'ctx Context,
+    ptr_type: PointerType<'ctx>,
+) -> StructType<'ctx> {
+    let ptr_type_enum = BasicTypeEnum::PointerType(ptr_type);
+    let u32_type = BasicTypeEnum::IntType(ctx.i32_type());
+
+    ctx.struct_type(&[ptr_type_enum, u32_type, u32_type], false)
 }

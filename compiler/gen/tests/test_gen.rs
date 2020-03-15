@@ -487,6 +487,59 @@ mod test_gen {
     }
 
     #[test]
+    fn empty_list_len() {
+        assert_evals_to!("List.len []", 0, usize);
+    }
+
+    #[test]
+    fn basic_int_list_len() {
+        assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
+    }
+
+    // #[test]
+    // fn loaded_int_list_len() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 nums = [ 2, 4, 6 ]
+
+    //                 List.len nums
+    //             "#
+    //         ),
+    //         3,
+    //         usize
+    //     );
+    // }
+
+    // #[test]
+    // fn fn_int_list_len() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 # TODO remove this annotation once monomorphization works!
+    //                 getLen = \list -> List.len list
+
+    //                 nums = [ 2, 4, 6 ]
+
+    //                 getLen nums
+    //             "#
+    //         ),
+    //         3,
+    //         usize
+    //     );
+    // }
+
+    //     #[test]
+    //     fn int_list_is_empty() {
+    //         assert_evals_to!("List.isEmpty [ 12, 9, 6, 3 ]", 0, u8, |x| x);
+    //     }
+
+    #[test]
+    fn head_int_list() {
+        assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 0", 12, i64);
+    }
+
+    #[test]
     fn get_int_list() {
         assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64);
     }
@@ -497,7 +550,7 @@ mod test_gen {
     }
 
     #[test]
-    fn set_shared_int_list() {
+    fn get_shared_int_list() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -975,7 +1028,7 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-                Fruit : [ Apple, Orange, Banana ] 
+                Fruit : [ Apple, Orange, Banana ]
 
                 apple : Fruit
                 apple = Apple

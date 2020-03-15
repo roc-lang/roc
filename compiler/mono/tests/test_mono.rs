@@ -63,8 +63,6 @@ mod test_mono {
             pointer_size,
         );
 
-        dbg!(&procs);
-
         // Put this module's ident_ids back in the interns
         interns.all_ident_ids.insert(home, ident_ids);
 

@@ -735,7 +735,7 @@ fn special_case_builtins(
             annotate_usage(&loc_value.value, usage);
         }
 
-        Symbol::LIST_ISEMPTY => {
+        Symbol::LIST_IS_EMPTY | Symbol::LIST_LEN => {
             debug_assert!(loc_args.len() == 1);
 
             let loc_list = &loc_args[0].1;
