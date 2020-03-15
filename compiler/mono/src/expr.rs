@@ -335,7 +335,13 @@ fn pattern_to_when<'a>(
             (env.fresh_symbol(), body)
         }
 
-        AppliedTag {..} | RecordDestructure {..} | Shadowed(_, _) | UnsupportedPattern(_) => {
+        Shadowed(_, _) | UnsupportedPattern(_) => { 
+            // create the runtime error here, instead of delegating to When.
+            // UnsupportedPattern should then never occcur in When
+            panic!("TODO generate runtime error here");
+        }
+
+        AppliedTag {..} | RecordDestructure {..} => {
             let symbol = env.fresh_symbol();
 
             let wrapped_body = When {
@@ -920,6 +926,13 @@ fn from_can_when<'a>(
             }
         }
         _ => {
+            let loc_branches: std::vec::Vec<_> = branches.iter().map(|v| v.0.clone()).collect();
+
+            match crate::pattern::check(Region::zero(), &loc_branches) {
+                Ok(_) => {}
+                Err(errors) => panic!("Errors in patterns: {:?}", errors),
+            }
+
             // This is a when-expression with 3+ branches.
             let arena = env.arena;
             let cond = from_can(env, loc_cond.value, procs, None);
@@ -949,9 +962,27 @@ fn from_can_when<'a>(
                 let mut jumpable_branches = Vec::with_capacity_in(branches.len(), arena);
                 let mut opt_default_branch = None;
 
-                for (loc_when_pat, loc_expr) in branches {
+                let mut is_last = true;
+                for (loc_when_pat, loc_expr) in branches.into_iter().rev() {
                     let mono_expr = from_can(env, loc_expr.value, procs, None);
                     let when_pat = from_can_pattern(env, loc_when_pat.value);
+
+                    if is_last {
+                        opt_default_branch = match &when_pat {
+                            Identifier(symbol) => {
+                                // TODO does this evaluate `cond` twice?
+                                Some(arena.alloc(Expr::Store(
+                                    arena.alloc([(*symbol, layout.clone(), cond.clone())]),
+                                    arena.alloc(mono_expr.clone()),
+                                )))
+                            }
+                            Shadowed(_region, _ident) => { 
+                                panic!("TODO make runtime exception out of the branch");
+                            }
+                            _ => Some(arena.alloc(mono_expr.clone())),
+                        };
+                        is_last = false;
+                    }
 
                     match &when_pat {
                         IntLiteral(int) => {
@@ -961,35 +992,15 @@ fn from_can_when<'a>(
                             jumpable_branches.push((*int as u64, mono_expr));
                         }
                         BitLiteral(v) => jumpable_branches.push((*v as u64, mono_expr)),
-                        EnumLiteral(v) => jumpable_branches.push((*v as u64, mono_expr)),
-                        Identifier(symbol) => {
-                            // Since this is an ident, it must be
-                            // the last pattern in the `when`.
-                            // We can safely treat this like an `_`
-                            // except that we need to wrap this branch
-                            // in a `Store` so the identifier is in scope!
-
-                            // TODO does this evaluate `cond` twice?
-                            let mono_with_store = Expr::Store(
-                                arena.alloc([(*symbol, layout.clone(), cond.clone())]),
-                                arena.alloc(mono_expr),
-                            );
-
-                            opt_default_branch = Some(arena.alloc(mono_with_store));
+                        EnumLiteral { tag_id , .. } => jumpable_branches.push((*tag_id as u64, mono_expr)),
+                        Identifier(_) => {
+                            // store is handled above
                         }
-                        Underscore => {
-                            // We should always have exactly one default branch!
-                            debug_assert!(opt_default_branch.is_none());
-
-                            opt_default_branch = Some(arena.alloc(mono_expr));
-                        }
+                        Underscore => {}
                         Shadowed(_, _) => {
                             panic!("TODO runtime error for shadowing in a pattern");
                         }
-                        // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-                        UnsupportedPattern(_region) => {
-                            panic!("TODO runtime error for unsupported pattern");
-                        }
+                        UnsupportedPattern(_region) => unreachable!("When accepts all patterns"),
                         AppliedTag { .. }
                         | StrLiteral(_)
                         | RecordDestructure(_, _)
@@ -1189,7 +1200,7 @@ pub enum Pattern<'a> {
         layout: Layout<'a>,
     },
     BitLiteral(bool),
-    EnumLiteral(u8),
+    EnumLiteral {tag_id: u8, enum_size: u8 },
     IntLiteral(i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
@@ -1238,7 +1249,7 @@ fn from_can_pattern<'a>(
                 Pattern::BitLiteral(tag_name == top)
             }
             Ok(Layout::Builtin(Builtin::Byte(conversion))) => match conversion.get(&tag_name) {
-                Some(index) => Pattern::EnumLiteral(*index),
+                Some(index) => Pattern::EnumLiteral{ tag_id : *index, enum_size: conversion.len() as u8 },
                 None => unreachable!("Tag must be in its own type"),
             },
             Ok(layout) => {
