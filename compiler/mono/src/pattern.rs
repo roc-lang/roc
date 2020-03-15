@@ -6,14 +6,13 @@ use self::Pattern::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Union {
-    alternatives: Vec<Ctor>,
-    num_alts: usize,
+    pub alternatives: Vec<Ctor>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ctor {
-    name: TagName,
-    arity: usize,
+    pub name: TagName,
+    pub arity: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,26 +24,30 @@ pub enum Pattern {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
-    Num(i64),
     Int(i64),
+    Bit(bool),
+    Byte(u8),
     Float(f64),
     Str(Box<str>),
 }
 
-fn simplify(pattern: &roc_can::pattern::Pattern) -> Pattern {
+fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
     let mut errors = Vec::new();
 
     simplify_help(pattern, &mut errors)
 }
 
-fn simplify_help(pattern: &roc_can::pattern::Pattern, errors: &mut Vec<Error>) -> Pattern {
-    use roc_can::pattern::Pattern::*;
+fn simplify_help<'a>(pattern: &crate::expr::Pattern<'a>, errors: &mut Vec<Error>) -> Pattern {
+    use crate::expr::Pattern::*;
 
     match pattern {
         IntLiteral(v) => Literal(Literal::Int(*v)),
-        NumLiteral(_, v) => Literal(Literal::Int(*v)),
         FloatLiteral(v) => Literal(Literal::Float(*v)),
         StrLiteral(v) => Literal(Literal::Str(v.clone())),
+
+        // TODO make sure these are exhaustive
+        BitLiteral(b) => Literal(Literal::Bit(*b)),
+        EnumLiteral { tag_id, .. } => Literal(Literal::Byte(*tag_id)),
 
         Underscore => Anything,
         Identifier(_) => Anything,
@@ -67,17 +70,14 @@ fn simplify_help(pattern: &roc_can::pattern::Pattern, errors: &mut Vec<Error>) -
         AppliedTag {
             tag_name,
             arguments,
+            union,
             ..
         } => {
-            let union = Union {
-                alternatives: Vec::new(),
-                num_alts: 0,
-            };
             let simplified_args: std::vec::Vec<_> = arguments
                 .iter()
-                .map(|v| simplify_help(&v.1.value, errors))
+                .map(|v| simplify_help(&v, errors))
                 .collect();
-            Ctor(union, tag_name.clone(), simplified_args)
+            Ctor(union.clone(), tag_name.clone(), simplified_args)
         }
     }
 }
@@ -99,9 +99,9 @@ pub enum Context {
 
 /// Check
 
-pub fn check(
+pub fn check<'a>(
     region: Region,
-    patterns: &[Located<roc_can::pattern::Pattern>],
+    patterns: &[Located<crate::expr::Pattern<'a>>],
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
     check_patterns(region, Context::BadArg, patterns, &mut errors);
@@ -113,43 +113,10 @@ pub fn check(
     }
 }
 
-// pub fn check(module: roc_can::module::ModuleOutput) -> Result<(), Vec<Error>> {
-//     let mut errors = Vec::new();
-//     check_declarations(&module.declarations, &mut errors);
-//
-//     if errors.is_empty() {
-//         Ok(())
-//     } else {
-//         Err(errors)
-//     }
-// }
-//
-// /// CHECK DECLS
-//
-// fn check_declarations(decls: &[roc_can::def::Declaration], errors: &mut Vec<Error>) {
-//     use roc_can::def::Declaration;
-//
-//     for decl in decls {
-//         Declaration::Declare(def) => check_def(def, errors),
-//         Declaration::DeclareRef(defs) => {
-//             for def in defs {
-//                 check_def(def, errors);
-//             }
-//         }
-//         Declaration::InvalidCycle(_) => {}
-//     }
-// }
-//
-// fn check_def(def: &roc_can::def::Def, errors: &mut Vec<Error>) {
-//     check_patttern
-//
-//
-// }
-
-pub fn check_patterns(
+pub fn check_patterns<'a>(
     region: Region,
     context: Context,
-    patterns: &[Located<roc_can::pattern::Pattern>],
+    patterns: &[Located<crate::expr::Pattern<'a>>],
     errors: &mut Vec<Error>,
 ) {
     match to_nonredundant_rows(region, patterns) {
@@ -197,7 +164,7 @@ fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
             let alts = ctors.iter().next().unwrap().1;
 
             let alt_list = &alts.alternatives;
-            let num_alts = alts.num_alts;
+            let num_alts = alt_list.len();
 
             if num_seen < num_alts {
                 let new_matrix = matrix
@@ -277,9 +244,9 @@ fn recover_ctor(
 /// REDUNDANT PATTERNS
 
 /// INVARIANT: Produces a list of rows where (forall row. length row == 1)
-fn to_nonredundant_rows(
+fn to_nonredundant_rows<'a>(
     overall_region: Region,
-    patterns: &[Located<roc_can::pattern::Pattern>],
+    patterns: &[Located<crate::expr::Pattern<'a>>],
 ) -> Result<Vec<Vec<Pattern>>, Error> {
     let mut checked_rows = Vec::with_capacity(patterns.len());
 
@@ -449,12 +416,8 @@ fn is_complete(matrix: &PatternMatrix) -> Complete {
 
     match it.next() {
         None => Complete::No,
-        Some(Union {
-            alternatives,
-            num_alts,
-            ..
-        }) => {
-            if ctors.len() == *num_alts {
+        Some(Union { alternatives, .. }) => {
+            if ctors.len() == alternatives.len() {
                 Complete::Yes(alternatives.to_vec())
             } else {
                 Complete::No
@@ -473,7 +436,7 @@ fn collect_ctors(matrix: &RefPatternMatrix) -> MutMap<TagName, Union> {
     let mut ctors = MutMap::default();
 
     for row in matrix {
-        if let Some(Ctor(union, name, _)) = row.get(0) {
+        if let Some(Ctor(union, name, _)) = row.get(row.len() - 1) {
             ctors.insert(name.clone(), union.clone());
         }
     }
