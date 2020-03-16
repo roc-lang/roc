@@ -816,257 +816,74 @@ fn from_can_when<'a>(
     )>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
-    use Pattern::*;
-
     match branches.len() {
         0 => {
             // A when-expression with no branches is a runtime error.
             // We can't know what to return!
             panic!("TODO compile a 0-branch when-expression to a RuntimeError");
         }
-        1 => {
-            // A when-expression with exactly 1 branch is essentially a LetNonRec.
-            // As such, we can compile it direcly to a Store.
-            let arena = env.arena;
-            let mut stored = Vec::with_capacity_in(1, arena);
-            let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
+        // don't do this for now, see if the decision_tree method can do it
+        //        1 => {
+        //            // A when-expression with exactly 1 branch is essentially a LetNonRec.
+        //            // As such, we can compile it direcly to a Store.
+        //            let arena = env.arena;
+        //            let mut stored = Vec::with_capacity_in(1, arena);
+        //            let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
+        //
+        //            let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+        //            store_pattern(
+        //                env,
+        //                mono_pattern,
+        //                loc_cond.value,
+        //                cond_var,
+        //                procs,
+        //                &mut stored,
+        //            );
+        //
+        //            let ret = from_can(env, loc_branch.value, procs, None);
+        //
+        //            Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
+        //        }
+        _ => {
+            let mut loc_branches = std::vec::Vec::new();
+            let mut opt_branches = std::vec::Vec::new();
 
-            let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
-            store_pattern(
+            for (loc_pattern, loc_expr) in branches {
+                let mono_pattern = from_can_pattern(env, &loc_pattern.value);
+
+                loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
+
+                let mono_expr = from_can(env, loc_expr.value, procs, None);
+
+                opt_branches.push((mono_pattern, mono_expr));
+            }
+
+            match crate::pattern::check(Region::zero(), &loc_branches) {
+                Ok(_) => {}
+                Err(errors) => panic!("Errors in patterns: {:?}", errors),
+            }
+
+            let cond = from_can(env, loc_cond.value, procs, None);
+            let cond_symbol = env.fresh_symbol();
+
+            // TODO store cond in the symbol
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+            let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+            let branching = crate::decision_tree::optimize_when(
                 env,
-                mono_pattern,
-                loc_cond.value,
-                cond_var,
-                procs,
-                &mut stored,
+                cond_symbol,
+                cond_layout.clone(),
+                ret_layout,
+                opt_branches,
             );
 
-            let ret = from_can(env, loc_branch.value, procs, None);
+            let stores = env.arena.alloc([(cond_symbol, cond_layout, cond)]);
 
-            Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
-        }
-        2 => {
-            let loc_branches: std::vec::Vec<_> = branches
-                .iter()
-                .map(|(loc_branch, _)| {
-                    Located::at(loc_branch.region, from_can_pattern(env, &loc_branch.value))
-                })
-                .collect();
-
-            match crate::pattern::check(Region::zero(), &loc_branches) {
-                Ok(_) => {}
-                Err(errors) => panic!("Errors in patterns: {:?}", errors),
-            }
-
-            // A when-expression with exactly 2 branches compiles to a Cond.
-            let arena = env.arena;
-            let mut iter = branches.into_iter();
-            let (can_loc_when_pat1, loc_then) = iter.next().unwrap();
-            let (can_loc_when_pat2, loc_else) = iter.next().unwrap();
-
-            let when_pat1 = from_can_pattern(env, &can_loc_when_pat1.value);
-            let when_pat2 = from_can_pattern(env, &can_loc_when_pat2.value);
-
-            let cond_layout = Layout::Builtin(Builtin::Bool(
-                TagName::Global("False".into()),
-                TagName::Global("True".into()),
-            ));
-
-            match (&when_pat1, &when_pat2) {
-                (IntLiteral(int), Underscore) => {
-                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
-                    let cond_rhs = Expr::Int(*int);
-
-                    let cond = arena.alloc(Expr::CallByName(
-                        Symbol::INT_EQ_I64,
-                        arena.alloc([
-                            (cond_lhs, Layout::Builtin(Builtin::Int64)),
-                            (cond_rhs, Layout::Builtin(Builtin::Int64)),
-                        ]),
-                    ));
-
-                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
-                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn this into a RuntimeError {:?}", err)
-                        });
-
-                    Expr::Cond {
-                        cond_layout,
-                        cond,
-                        pass,
-                        fail,
-                        ret_layout,
-                    }
-                }
-                (FloatLiteral(float), Underscore) => {
-                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
-                    let cond_rhs = Expr::Float(*float);
-
-                    let cond = arena.alloc(Expr::CallByName(
-                        Symbol::FLOAT_EQ,
-                        arena.alloc([
-                            (cond_lhs, Layout::Builtin(Builtin::Float64)),
-                            (cond_rhs, Layout::Builtin(Builtin::Float64)),
-                        ]),
-                    ));
-
-                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
-                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn this into a RuntimeError {:?}", err)
-                        });
-
-                    Expr::Cond {
-                        cond_layout,
-                        cond,
-                        pass,
-                        fail,
-                        ret_layout,
-                    }
-                }
-                _ => {
-                    panic!("TODO handle more conds");
-                }
-            }
-        }
-        _ => {
-            let loc_branches: std::vec::Vec<_> = branches
-                .iter()
-                .map(|(loc_branch, _)| {
-                    Located::at(loc_branch.region, from_can_pattern(env, &loc_branch.value))
-                })
-                .collect();
-
-            match crate::pattern::check(Region::zero(), &loc_branches) {
-                Ok(_) => {}
-                Err(errors) => panic!("Errors in patterns: {:?}", errors),
-            }
-
-            // This is a when-expression with 3+ branches.
-            let arena = env.arena;
-            let cond = from_can(env, loc_cond.value, procs, None);
-            let subs = &env.subs;
-            let layout = Layout::from_var(arena, cond_var, subs, env.pointer_size)
-                .unwrap_or_else(|_| panic!("TODO generate a runtime error in from_can_when here!"));
-
-            // We can Switch on integers and tags, because they both have
-            // representations that work as integer values.
-            //
-            // TODO we can also Switch on record fields if we're pattern matching
-            // on a record field that's also Switchable.
-            //
-            // TODO we can also convert floats to integer representations.
-            let is_switchable = match layout {
-                Layout::Builtin(Builtin::Int64) => true,
-                Layout::Builtin(Builtin::Bool(_, _)) => true,
-                Layout::Builtin(Builtin::Byte(_)) => true,
-                _ => false,
-            };
-
-            // If the condition is an Int or Float, we can potentially use
-            // a Switch for more efficiency.
-            if is_switchable {
-                // These are integer literals or underscore patterns,
-                // so they're eligible for user in a jump table.
-                let mut jumpable_branches = Vec::with_capacity_in(branches.len(), arena);
-                let mut opt_default_branch = None;
-
-                let mut is_last = true;
-                for (loc_when_pat, loc_expr) in branches.into_iter().rev() {
-                    let mono_expr = from_can(env, loc_expr.value, procs, None);
-                    let when_pat = from_can_pattern(env, &loc_when_pat.value);
-
-                    if is_last {
-                        opt_default_branch = match &when_pat {
-                            Identifier(symbol) => {
-                                // TODO does this evaluate `cond` twice?
-                                Some(arena.alloc(Expr::Store(
-                                    arena.alloc([(*symbol, layout.clone(), cond.clone())]),
-                                    arena.alloc(mono_expr.clone()),
-                                )))
-                            }
-                            Shadowed(_region, _ident) => {
-                                panic!("TODO make runtime exception out of the branch");
-                            }
-                            _ => Some(arena.alloc(mono_expr.clone())),
-                        };
-                        is_last = false;
-                    }
-
-                    match &when_pat {
-                        IntLiteral(int) => {
-                            // Switch only compares the condition to the
-                            // alternatives based on their bit patterns,
-                            // so casting from i64 to u64 makes no difference here.
-                            jumpable_branches.push((*int as u64, mono_expr));
-                        }
-                        BitLiteral(v) => jumpable_branches.push((*v as u64, mono_expr)),
-                        EnumLiteral { tag_id, .. } => {
-                            jumpable_branches.push((*tag_id as u64, mono_expr))
-                        }
-                        Identifier(_) => {
-                            // store is handled above
-                        }
-                        Underscore => {}
-                        Shadowed(_, _) => {
-                            panic!("TODO runtime error for shadowing in a pattern");
-                        }
-                        UnsupportedPattern(_region) => unreachable!("When accepts all patterns"),
-                        AppliedTag { .. }
-                        | StrLiteral(_)
-                        | RecordDestructure(_, _)
-                        | FloatLiteral(_) => {
-                            // The type checker should have converted these mismatches into RuntimeErrors already!
-                            if cfg!(debug_assertions) {
-                                panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", when_pat);
-                            } else {
-                                unreachable!();
-                            }
-                        }
-                    }
-                }
-
-                // If the default branch was never set, that means
-                // our canonical Expr didn't have one. An earlier
-                // step in the compilation process should have
-                // ruled this out!
-                debug_assert!(opt_default_branch.is_some());
-                let default_branch = opt_default_branch.unwrap();
-
-                let cond_layout = Layout::from_var(arena, cond_var, env.subs, env.pointer_size)
-                    .unwrap_or_else(|err| {
-                        panic!("TODO turn cond_layout into a RuntimeError {:?}", err)
-                    });
-
-                let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                    .unwrap_or_else(|err| {
-                        panic!("TODO turn ret_layout into a RuntimeError {:?}", err)
-                    });
-
-                Expr::Switch {
-                    cond: arena.alloc(cond),
-                    branches: jumpable_branches.into_bump_slice(),
-                    default_branch,
-                    ret_layout,
-                    cond_layout,
-                }
-            } else {
-                // /// More than two conditional branches, e.g. a 3-way when-expression
-                // Expr::Branches {
-                //     /// The left-hand side of the conditional. We compile this to LLVM once,
-                //     /// then reuse it to test against each different compiled cond_rhs value.
-                //     cond_lhs: &'a Expr<'a>,
-                //     /// ( cond_rhs, pass, fail )
-                //     branches: &'a [(Expr<'a>, Expr<'a>, Expr<'a>)],
-                //     ret_var: Variable,
-                // },
-                panic!(
-                    "TODO support when-expressions of 3+ branches whose conditions aren't integers."
-                );
-            }
+            Expr::Store(stores, env.arena.alloc(branching))
         }
     }
 }

@@ -594,6 +594,23 @@ mod test_gen {
         );
     }
 
+    // doesn't work yet. The condition must be cast to an integer to use a jump table
+    //    #[test]
+    //    fn branch_third_float() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                when 10.0 is
+    //                    1.0 -> 63
+    //                    2 -> 48
+    //                    _ -> 112
+    //                "#
+    //            ),
+    //            112.0,
+    //            f64
+    //        );
+    //    }
+
     #[test]
     fn branch_first_int() {
         assert_evals_to!(
@@ -623,6 +640,37 @@ mod test_gen {
             i64
         );
     }
+
+    #[test]
+    fn branch_third_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 10 is
+                    1 -> 63
+                    2 -> 48
+                    _ -> 112
+                "#
+            ),
+            112,
+            i64
+        );
+    }
+
+    //    #[test]
+    //    fn branch_store_variable() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                        when 0 is
+    //                            1 -> 12
+    //                            a -> a
+    //                    "#
+    //            ),
+    //            0,
+    //            i64
+    //        );
+    //    }
 
     #[test]
     fn gen_when_one_branch() {

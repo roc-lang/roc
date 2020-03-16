@@ -98,7 +98,7 @@ impl<'a> Layout<'a> {
                 // But for one-tag unions, we don't store the tag, so 0 bytes
                 let mut sum = (fields.len() > 1) as u32;
 
-                for (_, tag_layout) in *fields {
+                for tag_layout in fields.values() {
                     for field_layout in *tag_layout {
                         sum += field_layout.stack_size(pointer_size);
                     }
