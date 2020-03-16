@@ -14,7 +14,7 @@ use cranelift_codegen::Context;
 use cranelift_module::{Backend, FuncId, Linkage, Module};
 
 use crate::crane::convert::{sig_from_layout, type_from_layout};
-use roc_collections::all::ImMap;
+use roc_collections::all::{ImMap, MutMap};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
@@ -54,6 +54,8 @@ pub fn build_expr<'a, B: Backend>(
     procs: &Procs<'a>,
 ) -> Value {
     use roc_mono::expr::Expr::*;
+
+    let ptr_bytes = env.cfg.pointer_bytes() as u32;
 
     match expr {
         Int(num) => builder.ins().iconst(types::I64, *num),
@@ -173,7 +175,6 @@ pub fn build_expr<'a, B: Backend>(
         },
         Struct(sorted_fields) => {
             let cfg = env.cfg;
-            let ptr_bytes = cfg.pointer_bytes() as u32;
 
             // The slot size will be the sum of all the fields' sizes
             let mut slot_size = 0;
@@ -189,6 +190,7 @@ pub fn build_expr<'a, B: Backend>(
             ));
 
             // Create instructions for storing each field's expression
+            // NOTE assumes that all fields have the same width!
             for (index, (field_expr, field_layout)) in sorted_fields.iter().enumerate() {
                 let val = build_expr(env, &scope, module, builder, field_expr, procs);
 
@@ -203,6 +205,42 @@ pub fn build_expr<'a, B: Backend>(
                 .ins()
                 .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
+        Tag { tag_id, tag_layout, arguments , ..} => {
+            let cfg = env.cfg;
+            let ptr_bytes = cfg.pointer_bytes() as u32;
+
+            // NOTE: all variants of a tag union must have the same size, so (among other things)
+            // it's easy to quickly index them in arrays. Therefore the size of this tag doens't
+            // depend on the tag arguments, but solely on the layout of the whole tag union
+            let slot_size = tag_layout.stack_size(ptr_bytes);
+
+            // Create a slot
+            let slot = builder.create_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                slot_size
+            ));
+
+            // put the discriminant in the first slot
+            let discriminant = (Expr::Byte(*tag_id), Layout::Builtin(Builtin::Byte(MutMap::default())));
+            let it = std::iter::once(&discriminant).chain(arguments.iter());
+
+            // Create instructions for storing each field's expression
+            let mut offset = 0;
+            for (field_expr, field_layout) in it {
+                let val = build_expr(env, &scope, module, builder, field_expr, procs);
+
+                let field_size = field_layout.stack_size(ptr_bytes);
+                let field_offset = i32::try_from(offset)
+                    .expect("TODO handle field size conversion to i32");
+
+                builder.ins().stack_store(val, slot, Offset32::new(field_offset));
+            }
+
+            builder
+                .ins()
+                .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
+        }
+
         Access {
             label,
             field_layout,
@@ -252,6 +290,37 @@ pub fn build_expr<'a, B: Backend>(
                 .ins()
                 .load(cfg.pointer_type(), mem_flags, record, Offset32::new(offset))
         }
+        AccessAtIndex {
+            index,
+            field_layouts,
+            expr,
+        } => {
+            let cfg = env.cfg;
+            let mut offset = 0;
+
+            for (field_index, field_layout) in field_layouts.iter().enumerate() {
+                if *index == field_index as u64 {
+                    let offset = i32::try_from(offset)
+                        .expect("TODO gracefully handle usize -> i32 conversion in struct access");
+
+                    dbg!(offset);
+                    let mem_flags = MemFlags::new();
+                    let expr = build_expr(env, scope, module, builder, expr, procs);
+
+                    let ret_type = layout_to_type(&field_layout, cfg.pointer_type());
+
+                    return builder
+                        .ins()
+                        .load(ret_type, mem_flags, expr, Offset32::new(offset));
+                }
+
+                offset += field_layout.stack_size(ptr_bytes);
+            }
+
+            panic!("field access out of bounds: index {:?} in layouts {:?}", index, field_layouts)
+
+        }
+
         Str(str_literal) => {
             if str_literal.is_empty() {
                 panic!("TODO build an empty string in Crane");
@@ -328,6 +397,21 @@ pub fn build_expr<'a, B: Backend>(
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
         }
+    }
+}
+
+fn layout_to_type<'a>(layout: &Layout<'a>, _pointer_type: Type) -> Type {
+    use roc_mono::layout::Builtin::*;
+
+    match layout {
+        Layout::Builtin(builtin) => match builtin {
+            Int64 => cranelift::prelude::types::I64,
+            Byte(_) => cranelift::prelude::types::I8,
+            Bool(_, _) => cranelift::prelude::types::B1,
+            Float64 => cranelift::prelude::types::F64,
+            other => panic!("I don't yet know how to make a type from {:?}", other),
+        },
+        other => panic!("I don't yet know how to make a type from {:?}", other),
     }
 }
 

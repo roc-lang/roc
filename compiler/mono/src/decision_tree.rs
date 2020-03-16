@@ -678,17 +678,32 @@ pub fn optimize_when<'a>(
     result
 }
 
-fn path_to_expr<'a>(_env: &mut Env<'a, '_>, symbol: Symbol, path: &Path) -> Expr<'a> {
-    match dbg!(path) {
+fn path_to_expr<'a>(
+    env: &mut Env<'a, '_>,
+    symbol: Symbol,
+    path: &Path,
+    field_layouts: Layout<'a>,
+) -> Expr<'a> {
+    match path {
+        Path::Unbox(ref path) => path_to_expr(env, symbol, path, field_layouts),
+
+        // TODO make this work with AccessAtIndex.
+        // that already works for structs, but not for basic types for some reason
+        //            Expr::AccessAtIndex {
+        //                index: 0,
+        //                field_layouts: env.arena.alloc([field_layouts]),
+        //                expr: env.arena.alloc(Expr::Load(symbol)),
+        //            },
         Path::Empty => Expr::Load(symbol),
-        Path::Index {
-            index,
-            path: nested,
-        } => {
-            //
-            Expr::Load(symbol)
-        }
-        _ => todo!(),
+
+        // TODO path contains a nested path. Traverse all the way
+        Path::Index { index, .. } => Expr::AccessAtIndex {
+            index: *index,
+            field_layouts: env
+                .arena
+                .alloc([Layout::Builtin(Builtin::Byte(MutMap::default()))]),
+            expr: env.arena.alloc(Expr::Load(symbol)),
+        },
     }
 }
 
@@ -721,8 +736,12 @@ fn decide_to_branching<'a>(
                 match test {
                     Test::IsCtor { tag_id, .. } => {
                         let lhs = Expr::Byte(tag_id);
-                        let rhs = path_to_expr(env, cond_symbol, &path);
-
+                        let rhs = path_to_expr(
+                            env,
+                            cond_symbol,
+                            &path,
+                            Layout::Builtin(Builtin::Byte(MutMap::default())),
+                        );
                         let fake = MutMap::default();
 
                         let cond = env.arena.alloc(Expr::CallByName(
@@ -737,7 +756,8 @@ fn decide_to_branching<'a>(
                     }
                     Test::IsInt(test_int) => {
                         let lhs = Expr::Int(test_int);
-                        let rhs = path_to_expr(env, cond_symbol, &path);
+                        let rhs =
+                            path_to_expr(env, cond_symbol, &path, Layout::Builtin(Builtin::Int64));
 
                         let cond = env.arena.alloc(Expr::CallByName(
                             Symbol::INT_EQ_I64,
@@ -754,7 +774,12 @@ fn decide_to_branching<'a>(
                         // TODO maybe we can actually use i64 comparison here?
                         let test_float = f64::from_bits(test_int as u64);
                         let lhs = Expr::Float(test_float);
-                        let rhs = path_to_expr(env, cond_symbol, &path);
+                        let rhs = path_to_expr(
+                            env,
+                            cond_symbol,
+                            &path,
+                            Layout::Builtin(Builtin::Float64),
+                        );
 
                         let cond = env.arena.alloc(Expr::CallByName(
                             Symbol::FLOAT_EQ,
@@ -773,7 +798,12 @@ fn decide_to_branching<'a>(
                         ..
                     } => {
                         let lhs = Expr::Byte(test_byte);
-                        let rhs = path_to_expr(env, cond_symbol, &path);
+                        let rhs = path_to_expr(
+                            env,
+                            cond_symbol,
+                            &path,
+                            Layout::Builtin(Builtin::Byte(MutMap::default())),
+                        );
 
                         let fake = MutMap::default();
 
@@ -829,7 +859,9 @@ fn decide_to_branching<'a>(
             tests,
             fallback,
         } => {
-            let cond = env.arena.alloc(path_to_expr(env, cond_symbol, &path));
+            let cond = env
+                .arena
+                .alloc(path_to_expr(env, cond_symbol, &path, cond_layout.clone()));
 
             let default_branch = env.arena.alloc(decide_to_branching(
                 env,

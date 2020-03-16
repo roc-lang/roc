@@ -1,4 +1,5 @@
 use crate::layout::{Builtin, Layout};
+use crate::pattern::Ctor;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can;
@@ -8,6 +9,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
 use std::hash::{Hash, Hasher};
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
     user_defined: MutMap<Symbol, PartialProc<'a>>,
@@ -182,8 +184,9 @@ pub enum Expr<'a> {
     },
     Tag {
         tag_layout: Layout<'a>,
-        name: TagName,
-        arguments: &'a [Expr<'a>],
+        tag_name: TagName,
+        tag_id: u8,
+        arguments: &'a [(Expr<'a>, Layout<'a>)],
     },
     Struct(&'a [(Expr<'a>, Layout<'a>)]),
     Access {
@@ -191,6 +194,11 @@ pub enum Expr<'a> {
         field_layout: Layout<'a>,
         struct_layout: Layout<'a>,
         record: &'a Expr<'a>,
+    },
+    AccessAtIndex {
+        index: u64,
+        field_layouts: &'a [Layout<'a>],
+        expr: &'a Expr<'a>,
     },
 
     Array {
@@ -659,28 +667,57 @@ fn from_can<'a>(
 
         Tag {
             variant_var,
-            name,
+            name: tag_name,
             arguments: args,
             ..
         } => {
             let arena = env.arena;
 
             match Layout::from_var(arena, variant_var, &env.subs, env.pointer_size) {
-                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => Expr::Bool(name == larger),
-                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&name) {
+                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => {
+                    Expr::Bool(tag_name == larger)
+                }
+                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&tag_name) {
                     Some(v) => Expr::Byte(*v),
                     None => panic!("Tag name is not part of the type"),
                 },
                 Ok(layout) => {
                     let mut arguments = Vec::with_capacity_in(args.len(), arena);
 
-                    for (_, arg) in args {
-                        arguments.push(from_can(env, arg.value, procs, None));
+                    for (arg_var, arg) in args {
+                        let arg_layout =
+                            Layout::from_var(env.arena, arg_var, env.subs, env.pointer_size)
+                                .expect("invalid ret_layout");
+
+                        arguments.push((from_can(env, arg.value, procs, None), arg_layout));
                     }
+
+                    let mut tags = std::vec::Vec::new();
+                    match roc_types::pretty_print::chase_ext_tag_union(
+                        env.subs,
+                        variant_var,
+                        &mut tags,
+                    ) {
+                        Ok(()) => {
+                            tags.sort();
+                        }
+                        other => panic!("invalid value in ext_var {:?}", other),
+                    }
+
+                    let mut opt_tag_id = None;
+                    for (index, (name, _)) in tags.iter().enumerate() {
+                        if name == &tag_name {
+                            opt_tag_id = Some(index as u8);
+                            break;
+                        }
+                    }
+
+                    let tag_id = opt_tag_id.expect("Tag must be in its own type");
 
                     Expr::Tag {
                         tag_layout: layout,
-                        name,
+                        tag_name,
+                        tag_id,
                         arguments: arguments.into_bump_slice(),
                     }
                 }
@@ -1191,10 +1228,16 @@ fn from_can_pattern<'a>(
                     Err(content) => panic!("invalid content in ext_var: {:?}", content),
                 };
 
-                use crate::pattern::Ctor;
+                let mut names: std::vec::Vec<_> = union
+                    .alternatives
+                    .iter()
+                    .map(|Ctor { name, .. }| name)
+                    .collect();
+                names.sort();
+
                 let mut opt_tag_id = None;
-                for (index, Ctor { name, .. }) in union.alternatives.iter().enumerate() {
-                    if name == tag_name {
+                for (index, name) in names.iter().enumerate() {
+                    if name == &tag_name {
                         opt_tag_id = Some(index as u8);
                         break;
                     }
