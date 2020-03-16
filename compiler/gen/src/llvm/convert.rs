@@ -68,8 +68,15 @@ pub fn basic_type_from_layout<'ctx>(
                 .struct_type(field_types.into_bump_slice(), false)
                 .as_basic_type_enum()
         }
-        Union(_fields) => {
-            panic!("TODO layout_to_basic_type for Tag");
+        Union(fields) => {
+            // TODO make this dynamic
+            let ptr_size = std::mem::size_of::<i64>();
+            let union_size = layout.stack_size(ptr_size as u32);
+
+            context
+                .i8_type()
+                .array_type(union_size)
+                .as_basic_type_enum()
         }
         Pointer(_layout) => {
             panic!("TODO layout_to_basic_type for Pointer");
