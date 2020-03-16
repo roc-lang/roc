@@ -21,24 +21,18 @@ pub enum Color {
     Red,
 }
 
-
-pub const default_palette: Palette = Palette {
+pub const DEFAULT_PALETTE: Palette = Palette {
     primary: Color::White,
     error: Color::Red,
 };
-
 
 impl Color {
     pub fn render(self, str: &str) -> String {
         use Color::*;
 
         match self {
-            Red => {
-                red(str)
-            }
-            White => {
-                white(str)
-            }
+            Red => red(str),
+            White => white(str),
         }
     }
 }
@@ -110,8 +104,6 @@ fn newline() -> ReportText {
 }
 
 fn red(str: &str) -> String {
-    use ReportText::*;
-
     let mut buf = String::new();
 
     buf.push_str("\u{001b}[31m");
@@ -122,19 +114,16 @@ fn red(str: &str) -> String {
 }
 
 fn white(str: &str) -> String {
-    use ReportText::*;
-
     let mut buf = String::new();
 
     buf.push_str("\u{001b}[31m");
     buf.push_str(str);
-    buf.push_str(reset);
+    buf.push_str(RESET);
 
     buf
 }
 
-
-const reset: &str = "\u{001b}[0m";
+const RESET: &str = "\u{001b}[0m";
 
 impl ReportText {
     /// Render to CI console output, where no colors are available.
@@ -203,13 +192,21 @@ impl ReportText {
     /// Render to a color terminal using ANSI escape sequences
     pub fn render_color_terminal(
         &self,
-        _buf: &mut String,
+        buf: &mut String,
         _subs: &mut Subs,
         _home: ModuleId,
         _src_lines: &[&str],
         _interns: &Interns,
+        palette: Palette,
     ) {
-        // TODO do the same stuff as render_ci, but with colors via ANSI terminal escape codes!
-        // Examples of how to do this are in the source code of https://github.com/rtfeldman/console-print
+        use ReportText::*;
+
+        match self {
+            Plain(string) => {
+                buf.push_str(&palette.primary.render(string));
+            }
+
+            _ => panic!("TODO implement more ReportTexts in render color terminal"),
+        }
     }
 }
