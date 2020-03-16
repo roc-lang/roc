@@ -43,25 +43,16 @@ api Str provides Str, isEmpty, join
 ##
 ## ### Encoding
 ##
-## Whenever any Roc string is created, its [encoding](https://en.wikipedia.org/wiki/Character_encoding)
-## comes from a configuration option chosen by [the host](guide|hosts).
-## Because of this, None of the functions in this module
-## make assumptions about the underlying encoding. After all, different hosts
-## may choose different encodings! Here are some factors hosts may consider
-## when deciding which encoding to choose:
+## Roc strings are not coupled to any particular
+## [encoding](https://en.wikipedia.org/wiki/Character_encoding). As it happens,
+## they are currently encoded in UTF-8, but this module is intentionally designed
+## not to rely on that implementation detail so that a future release of Roc can
+## potentially change it without breaking existing Roc applications.
 ##
-## * Linux APIs typically use [UTF-8](https://en.wikipedia.org/wiki/UTF-8) encoding
-## * Windows APIs and Apple [Objective-C](https://en.wikipedia.org/wiki/Objective-C) APIs typically use [UTF-16](https://en.wikipedia.org/wiki/UTF-16) encoding
-## * Hosts which call [C](https://en.wikipedia.org/wiki/C_%28programming_language%29) functions may choose [MUTF-8](https://en.wikipedia.org/wiki/UTF-8#Modified_UTF-8) to disallow a valid UTF-8 character which can prematurely terminate C strings
-##
-## > Roc strings only support Unicode, so they do not support non-Unicode character
-## > encodings like [ASCII](https://en.wikipedia.org/wiki/ASCII).
-##
-## To write code which behaves differently depending on which encoding the host chose,
-## the #Str.codeUnits function will do that. However, if you are doing encoding-specific work,
-## you should take a look at the [roc/unicode](roc/unicode) pacakge;
-## it has many more tools than this module does.
-##
+## This module has functions to can convert a #Str to a #List of raw code unit integers
+## in a particular encoding, but if you are doing encoding-specific work,
+## you should take a look at the [roc/unicode](roc/unicode) pacakge.
+## It has many more tools than this module does!
 Str : [ @Str ]
 
 ## Convert
@@ -137,25 +128,29 @@ foldClusters : Str, { start: state, step: (state, Str -> state) } -> state
 ## see the [roc/locale](roc/locale) package for functions which do that.
 isCapitalized : Str -> Bool
 
-
-## Deconstruct the string into raw code unit integers. (Note that code units
-## are not the same as code points; to work with code points, see [roc/unicode](roc/unicode)).
+## ## Code Units
 ##
-## This returns a different tag depending on the string encoding chosen by the host.
+## Besides grapheme clusters, another way to break down strings is into
+## raw code unit integers.
 ##
-## The size of an individual code unit depends on the encoding. For example,
-## in UTF-8 and MUTF-8, a code unit is 8 bits, so those encodings
-## are returned as `List U8`. In contrast, UTF-16 encoding uses 16-bit code units,
-## so the `Utf16` tag holds a `List U16` instead.
+## The size of a code unit depends on the string's encoding. For example, in a
+## string encoded in UTF-8, a code unit is 8 bits. This is why #Str.toUtf8
+## returns a `List U8`. In contrast, UTF-16 encoding uses 16-bit code units,
+## so #Str.toUtf16 returns a `List U16` instead.
 ##
 ## > Code units are no substitute for grapheme clusters!
 ## >
 ## > For example, `Str.countGraphemes "👍"` always returns `1` no matter what,
-## > whereas `Str.codeUnits "👍"` could give you back a `List U8` with a length
-## > of 4, or a `List U16` with a length of 2, neither of which is equal to
-## > the correct number of grapheme clusters in that string.
+## > whereas `Str.toUtf8 "👍"` returns a list with a length of 4,
+## > and `Str.toUtf16 "👍"` returns a list with a length of 2.
 ## >
-## > This function exists for more advanced use cases like those found in
-## > [roc/unicode](roc/unicode), and using code points when grapheme clusters would
+## > These functions exists for more advanced use cases like those found in
+## > [roc/unicode](roc/unicode), and using code units when grapheme clusters would
 ## > be more appropriate can very easily lead to bugs.
-codeUnits : Str -> [ Utf8 (List U8), Mutf8 (List U8), Ucs2 (List U16), Utf16 (List U16), Utf32 (List U32) ]
+
+toUtf8 : Str -> List U8
+
+toUtf16 : Str -> List U16
+
+toUtf32 : Str -> List U16
+
