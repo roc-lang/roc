@@ -71,6 +71,18 @@ decimal : Float *, Int * -> Str
 ## Convert an #Int to a string.
 int : Int * -> Str
 
+## Split a string around a separator.
+##
+## >>> Str.splitClusters "1,2,3" ","
+##
+## Passing `""` for the separator is not useful; it returns the original string
+## wrapped in a list.
+##
+## >>> Str.splitClusters "1,2,3" ""
+##
+## To split a string into its grapheme clusters, use #Str.clusters
+splitClusters : Str, Str -> List Str
+
 ## Check
 
 isEmpty : Str -> Bool
@@ -102,6 +114,16 @@ joinWith : List Str, Str -> Str
 padStart : Str, Int, Str -> Str
 
 padEnd : Str, Int, Str -> Str
+
+## Grapheme Clusters
+
+## Split a string into its grapheme clusters.
+##
+## >>> Str.clusters "1,2,3"
+##
+## >>> Str.clusters  "👍👍👍"
+##
+clusters : Str -> List Str
 
 reverseClusters : Str -> Str
 
