@@ -104,6 +104,7 @@ pub struct Env<'a, 'i> {
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
     symbol_counter: usize,
+    pub jump_counter: &'a mut u64,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -217,6 +218,7 @@ impl<'a> Expr<'a> {
             ident_ids,
             pointer_size,
             symbol_counter: 0,
+            jump_counter: arena.alloc(0),
         };
 
         from_can(&mut env, can_expr, procs, None)

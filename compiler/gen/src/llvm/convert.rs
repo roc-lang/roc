@@ -68,7 +68,7 @@ pub fn basic_type_from_layout<'ctx>(
                 .struct_type(field_types.into_bump_slice(), false)
                 .as_basic_type_enum()
         }
-        Tag(_fields) => {
+        Union(_fields) => {
             panic!("TODO layout_to_basic_type for Tag");
         }
         Pointer(_layout) => {

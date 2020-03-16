@@ -124,7 +124,9 @@ fn flatten_patterns<'a>(branch: Branch<'a>) -> Branch<'a> {
 
 fn flatten<'a>(path_pattern: (Path, Pattern<'a>), path_patterns: &mut Vec<(Path, Pattern<'a>)>) {
     match &path_pattern.1 {
-        Pattern::AppliedTag { union, .. } => {
+        Pattern::AppliedTag {
+            union, arguments, ..
+        } => {
             if union.alternatives.len() == 1 {
                 //        case map dearg ctorArgs of
                 //          [arg] ->
