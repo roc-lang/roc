@@ -11,6 +11,38 @@ pub struct Report {
     pub text: ReportText,
 }
 
+pub struct Palette {
+    pub primary: Color,
+    pub error: Color,
+}
+
+pub enum Color {
+    White,
+    Red,
+}
+
+
+pub const default_palette: Palette = Palette {
+    primary: Color::White,
+    error: Color::Red,
+};
+
+
+impl Color {
+    pub fn render(self, str: &str) -> String {
+        use Color::*;
+
+        match self {
+            Red => {
+                red(str)
+            }
+            White => {
+                white(str)
+            }
+        }
+    }
+}
+
 pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     let mut texts = Vec::new();
 
@@ -76,6 +108,33 @@ pub fn plain_text(str: &str) -> ReportText {
 fn newline() -> ReportText {
     plain_text("\n")
 }
+
+fn red(str: &str) -> String {
+    use ReportText::*;
+
+    let mut buf = String::new();
+
+    buf.push_str("\u{001b}[31m");
+    buf.push_str(str);
+    buf.push_str("\u{001b}[0m");
+
+    buf
+}
+
+fn white(str: &str) -> String {
+    use ReportText::*;
+
+    let mut buf = String::new();
+
+    buf.push_str("\u{001b}[31m");
+    buf.push_str(str);
+    buf.push_str(reset);
+
+    buf
+}
+
+
+const reset: &str = "\u{001b}[0m";
 
 impl ReportText {
     /// Render to CI console output, where no colors are available.
