@@ -5,7 +5,7 @@ api Str provides Str, isEmpty, join
 ## A [Unicode](https://unicode.org) text value.
 ##
 ## Dealing with text is deep topic, so by design, Roc's `Str` module sticks
-## to the basics. For more advanced uses such as working with raw [code points](https://en.wikipedia.org/wiki/Code_point),
+## to the basics. For more advanced use cases like working with raw [code points](https://en.wikipedia.org/wiki/Code_point),
 ## see the [roc/unicode](roc/unicode) package, and for locale-specific text
 ## functions (including capitalization, as capitalization rules vary by locale)
 ## see the [roc/locale](roc/locale) package.
@@ -133,24 +133,18 @@ isCapitalized : Str -> Bool
 ## Besides grapheme clusters, another way to break down strings is into
 ## raw code unit integers.
 ##
-## The size of a code unit depends on the string's encoding. For example, in a
-## string encoded in UTF-8, a code unit is 8 bits. This is why #Str.toUtf8
-## returns a `List U8`. In contrast, UTF-16 encoding uses 16-bit code units,
-## so #Str.toUtf16 returns a `List U16` instead.
+## Code units are no substitute for grapheme clusters!
+## These functions exist to support advanced use cases like those found in
+## [roc/unicode](roc/unicode), and using code units when grapheme clusters would
+## be more appropriate can very easily lead to bugs.
 ##
-## > Code units are no substitute for grapheme clusters!
-## >
-## > For example, `Str.countGraphemes "👍"` always returns `1` no matter what,
-## > whereas `Str.toUtf8 "👍"` returns a list with a length of 4,
-## > and `Str.toUtf16 "👍"` returns a list with a length of 2.
-## >
-## > These functions exists for more advanced use cases like those found in
-## > [roc/unicode](roc/unicode), and using code units when grapheme clusters would
-## > be more appropriate can very easily lead to bugs.
+## For example, `Str.countGraphemes "👍"` returns `1`,
+## whereas `Str.toUtf8 "👍"` returns a list with a length of 4,
+## and `Str.toUtf16 "👍"` returns a list with a length of 2.
 
 toUtf8 : Str -> List U8
 
 toUtf16 : Str -> List U16
 
-toUtf32 : Str -> List U16
+toUtf32 : Str -> List U32
 
