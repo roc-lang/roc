@@ -68,7 +68,7 @@ pub fn basic_type_from_layout<'ctx>(
                 .struct_type(field_types.into_bump_slice(), false)
                 .as_basic_type_enum()
         }
-        Union(fields) => {
+        Union(_) => {
             // TODO make this dynamic
             let ptr_size = std::mem::size_of::<i64>();
             let union_size = layout.stack_size(ptr_size as u32);

@@ -234,6 +234,8 @@ pub fn build_expr<'a, B: Backend>(
                     .expect("TODO handle field size conversion to i32");
 
                 builder.ins().stack_store(val, slot, Offset32::new(field_offset));
+
+                offset += field_size;
             }
 
             builder
@@ -303,7 +305,6 @@ pub fn build_expr<'a, B: Backend>(
                     let offset = i32::try_from(offset)
                         .expect("TODO gracefully handle usize -> i32 conversion in struct access");
 
-                    dbg!(offset);
                     let mem_flags = MemFlags::new();
                     let expr = build_expr(env, scope, module, builder, expr, procs);
 

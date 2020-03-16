@@ -646,8 +646,6 @@ pub fn optimize_when<'a>(
     let decider = tree_to_decider(decision_tree);
     let target_counts = count_targets(&decider);
 
-    dbg!(&target_counts);
-
     let mut choices = MutMap::default();
     let mut jumps = Vec::new();
 

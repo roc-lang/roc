@@ -316,10 +316,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
         Tag {
-            tag_id,
-            tag_layout,
-            arguments,
-            ..
+            tag_id, arguments, ..
         } => {
             // put the discriminant in the first slot
             let discriminant = (

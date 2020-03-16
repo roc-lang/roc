@@ -372,6 +372,7 @@ fn pattern_to_when<'a>(
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn from_can<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
