@@ -136,6 +136,7 @@ mod test_gen {
                 // TODO try deleting this line and seeing if everything still works.
                 builder.append_block_params_for_function_params(block);
 
+                dbg!(&mono_expr);
                 let main_body =
                     roc_gen::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
@@ -1114,22 +1115,58 @@ mod test_gen {
     }
 
     #[test]
-    fn when_on_result() {
+    fn applied_tag_nothing() {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : Result Int Int
-                x = Ok 42
+                Maybe a : [ Just a, Nothing ]
 
-                when x is
-                    Ok _ -> 0
-                    Err _ -> 4
+                x : Maybe Int
+                x = Nothing 
+
+                0x1
                 "#
             ),
             1,
             i64
         );
     }
+
+    #[test]
+    fn applied_tag_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                y : Maybe Int
+                y = Just 0x4 
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    //    #[test]
+    //    fn when_on_result() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                x : Result Int Int
+    //                x = Ok 42
+    //
+    //                when x is
+    //                    Err _ -> 4
+    //                    Ok _ -> 0
+    //                "#
+    //            ),
+    //            0,
+    //            i64
+    //        );
+    //    }
 
     #[test]
     fn basic_record() {
