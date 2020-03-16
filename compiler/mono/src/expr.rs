@@ -97,7 +97,7 @@ pub struct Proc<'a> {
     pub ret_layout: Layout<'a>,
 }
 
-struct Env<'a, 'i> {
+pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'a mut Subs,
     pub home: ModuleId,
