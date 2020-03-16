@@ -4,12 +4,12 @@ use roc_region::all::{Located, Region};
 
 use self::Pattern::*;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Union {
     pub alternatives: Vec<Ctor>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Ctor {
     pub name: TagName,
     pub arity: usize,
@@ -27,7 +27,7 @@ pub enum Literal {
     Int(i64),
     Bit(bool),
     Byte(u8),
-    Float(f64),
+    Float(u64),
     Str(Box<str>),
 }
 

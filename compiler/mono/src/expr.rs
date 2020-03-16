@@ -7,7 +7,7 @@ use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
-
+use std::hash::{Hash, Hasher};
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
     user_defined: MutMap<Symbol, PartialProc<'a>>,
@@ -197,6 +197,9 @@ pub enum Expr<'a> {
         elem_layout: Layout<'a>,
         elems: &'a [Expr<'a>],
     },
+
+    Label(u64, &'a Expr<'a>),
+    Jump(u64),
 
     RuntimeError(&'a str),
 }
@@ -822,28 +825,27 @@ fn from_can_when<'a>(
             // We can't know what to return!
             panic!("TODO compile a 0-branch when-expression to a RuntimeError");
         }
-        // don't do this for now, see if the decision_tree method can do it
-        //        1 => {
-        //            // A when-expression with exactly 1 branch is essentially a LetNonRec.
-        //            // As such, we can compile it direcly to a Store.
-        //            let arena = env.arena;
-        //            let mut stored = Vec::with_capacity_in(1, arena);
-        //            let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
-        //
-        //            let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
-        //            store_pattern(
-        //                env,
-        //                mono_pattern,
-        //                loc_cond.value,
-        //                cond_var,
-        //                procs,
-        //                &mut stored,
-        //            );
-        //
-        //            let ret = from_can(env, loc_branch.value, procs, None);
-        //
-        //            Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
-        //        }
+        1 => {
+            // A when-expression with exactly 1 branch is essentially a LetNonRec.
+            // As such, we can compile it direcly to a Store.
+            let arena = env.arena;
+            let mut stored = Vec::with_capacity_in(1, arena);
+            let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
+
+            let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+            store_pattern(
+                env,
+                mono_pattern,
+                loc_cond.value,
+                cond_var,
+                procs,
+                &mut stored,
+            );
+
+            let ret = from_can(env, loc_branch.value, procs, None);
+
+            Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
+        }
         _ => {
             let mut loc_branches = std::vec::Vec::new();
             let mut opt_branches = std::vec::Vec::new();
@@ -1022,25 +1024,28 @@ fn specialize_proc_body<'a>(
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern<'a> {
     Identifier(Symbol),
-    AppliedTag {
-        tag_name: TagName,
-        arguments: Vec<'a, Pattern<'a>>,
-        layout: Layout<'a>,
-        union: crate::pattern::Union,
-    },
+    Underscore,
+
+    IntLiteral(i64),
+    FloatLiteral(u64),
     BitLiteral(bool),
     EnumLiteral {
         tag_id: u8,
         enum_size: u8,
     },
-    IntLiteral(i64),
-    FloatLiteral(f64),
     StrLiteral(Box<str>),
+
     RecordDestructure(Vec<'a, RecordDestruct<'a>>, Layout<'a>),
-    Underscore,
+    AppliedTag {
+        tag_name: TagName,
+        tag_id: u8,
+        arguments: Vec<'a, Pattern<'a>>,
+        layout: Layout<'a>,
+        union: crate::pattern::Union,
+    },
 
     // Runtime Exceptions
     Shadowed(Region, Located<Ident>),
@@ -1048,11 +1053,79 @@ pub enum Pattern<'a> {
     UnsupportedPattern(Region),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RecordDestruct<'a> {
     pub label: Lowercase,
     pub symbol: Symbol,
     pub guard: Option<Pattern<'a>>,
+}
+
+impl<'a> Hash for Pattern<'a> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        use Pattern::*;
+
+        match self {
+            Identifier(symbol) => {
+                state.write_u8(0);
+                symbol.hash(state);
+            }
+            Underscore => {
+                state.write_u8(1);
+            }
+
+            IntLiteral(v) => {
+                state.write_u8(2);
+                v.hash(state);
+            }
+            FloatLiteral(v) => {
+                state.write_u8(3);
+                v.hash(state);
+            }
+            BitLiteral(v) => {
+                state.write_u8(4);
+                v.hash(state);
+            }
+            EnumLiteral { tag_id, enum_size } => {
+                state.write_u8(5);
+                tag_id.hash(state);
+                enum_size.hash(state);
+            }
+            StrLiteral(v) => {
+                state.write_u8(6);
+                v.hash(state);
+            }
+
+            RecordDestructure(fields, _layout) => {
+                state.write_u8(7);
+                fields.hash(state);
+                // layout is ignored!
+            }
+
+            AppliedTag {
+                tag_name,
+                arguments,
+                union,
+                ..
+            } => {
+                state.write_u8(8);
+                tag_name.hash(state);
+                arguments.hash(state);
+                union.hash(state);
+                // layout is ignored!
+            }
+
+            Shadowed(region, ident) => {
+                state.write_u8(9);
+                region.hash(state);
+                ident.hash(state);
+            }
+
+            UnsupportedPattern(region) => {
+                state.write_u8(10);
+                region.hash(state);
+            }
+        }
+    }
 }
 
 fn from_can_pattern<'a>(
@@ -1064,14 +1137,14 @@ fn from_can_pattern<'a>(
         Underscore => Pattern::Underscore,
         Identifier(symbol) => Pattern::Identifier(*symbol),
         IntLiteral(v) => Pattern::IntLiteral(*v),
-        FloatLiteral(v) => Pattern::FloatLiteral(*v),
+        FloatLiteral(v) => Pattern::FloatLiteral(f64::to_bits(*v)),
         StrLiteral(v) => Pattern::StrLiteral(v.clone()),
         Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
         UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),
 
         NumLiteral(var, num) => match to_int_or_float(env.subs, *var) {
             IntOrFloat::IntType => Pattern::IntLiteral(*num),
-            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as f64),
+            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
         },
 
         AppliedTag {
@@ -1118,8 +1191,20 @@ fn from_can_pattern<'a>(
                     Err(content) => panic!("invalid content in ext_var: {:?}", content),
                 };
 
+                use crate::pattern::Ctor;
+                let mut opt_tag_id = None;
+                for (index, Ctor { name, .. }) in union.alternatives.iter().enumerate() {
+                    if name == tag_name {
+                        opt_tag_id = Some(index as u8);
+                        break;
+                    }
+                }
+
+                let tag_id = opt_tag_id.expect("Tag must be in its own type");
+
                 Pattern::AppliedTag {
                     tag_name: tag_name.clone(),
+                    tag_id,
                     arguments: mono_args,
                     union,
                     layout,

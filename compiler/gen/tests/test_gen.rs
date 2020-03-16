@@ -1114,6 +1114,24 @@ mod test_gen {
     }
 
     #[test]
+    fn when_on_result() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : Result Int Int
+                x = Ok 42
+
+                when x is
+                    Ok _ -> 0
+                    Err _ -> 4
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
     fn basic_record() {
         assert_evals_to!(
             indoc!(
