@@ -218,7 +218,7 @@ mod test_report {
                 r#"
                     x = 1
                     y = 2
-                    f = \a ->  a + 4
+                    f = \a -> a + 4
 
                     f x
                 "#
@@ -231,9 +231,9 @@ mod test_report {
             })),
             indoc!(
                 r#"
-                    1 | y = 2
-                    2 | f = \a ->  a + 4
-                    3 |"#
+                    1 ┆  y = 2
+                    2 ┆  f = \a -> a + 4
+                    3 ┆"#
             ),
         );
     }

@@ -116,12 +116,12 @@ impl ReportText {
             Region(region) => {
                 for i in region.start_line..=region.end_line {
                     buf.push_str(i.to_string().as_str());
-                    buf.push_str(" |");
+                    buf.push_str(" ┆");
 
                     let line = src_lines[i as usize];
 
                     if !line.is_empty() {
-                        buf.push(' ');
+                        buf.push_str("  ");
                         buf.push_str(src_lines[i as usize]);
                     }
 
