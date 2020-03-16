@@ -96,15 +96,20 @@ impl<'a> Layout<'a> {
             Union(fields) => {
                 // the tag gets converted to a u8, so 1 byte.
                 // But for one-tag unions, we don't store the tag, so 0 bytes
-                let mut sum = (fields.len() > 1) as u32;
+                let discriminant_size: u32 = (fields.len() > 1) as u32;
 
-                for tag_layout in fields.values() {
-                    for field_layout in *tag_layout {
-                        sum += field_layout.stack_size(pointer_size);
-                    }
-                }
+                let max_tag_size: u32 = fields
+                    .values()
+                    .map(|tag_layout| {
+                        tag_layout
+                            .iter()
+                            .map(|field| field.stack_size(pointer_size))
+                            .sum()
+                    })
+                    .max()
+                    .unwrap_or_default();
 
-                sum
+                discriminant_size + max_tag_size
             }
             Pointer(_) | FunctionPointer(_, _) => pointer_size,
         }
