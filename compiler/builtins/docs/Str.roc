@@ -103,6 +103,7 @@ padStart : Str, Int, Str -> Str
 
 padEnd : Str, Int, Str -> Str
 
+reverseClusters : Str -> Str
 
 foldClusters : Str, { start: state, step: (state, Str -> state) } -> state
 
