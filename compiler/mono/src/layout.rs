@@ -234,7 +234,7 @@ fn layout_from_flat_type<'a>(
                 }
             };
 
-            let mut field_layouts;
+            let mut field_layouts: Vec<'a, (Lowercase, Layout<'a>)>;
 
             match ext_layout {
                 Layout::Struct(more_fields) => {
@@ -265,6 +265,9 @@ fn layout_from_flat_type<'a>(
 
                 field_layouts.push((label.clone(), field_layout));
             }
+
+            // Sort fields by label
+            field_layouts.sort_by(|(a, _), (b, _)| a.cmp(b));
 
             Ok(Layout::Struct(field_layouts.into_bump_slice()))
         }
