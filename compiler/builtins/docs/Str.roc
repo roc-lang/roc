@@ -67,7 +67,7 @@ Str : [ @Str ]
 ## but it's recommended to pass much smaller numbers instead.
 ##
 ## Passing a negative number for decimal places is equivalent to passing 0.
-decimal : Float *, Int * -> Str
+decimal : Float *, ULen -> Str
 
 ## Convert an #Int to a string.
 int : Int * -> Str
