@@ -71,9 +71,6 @@ pub fn basic_type_from_layout<'ctx>(
         Tag(_fields) => {
             panic!("TODO layout_to_basic_type for Tag");
         }
-        Pointer(_layout) => {
-            panic!("TODO layout_to_basic_type for Pointer");
-        }
         Builtin(builtin) => match builtin {
             Int64 => context.i64_type().as_basic_type_enum(),
             Float64 => context.f64_type().as_basic_type_enum(),

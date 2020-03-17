@@ -11,7 +11,6 @@ pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [(Lowercase, Layout<'a>)]),
     Tag(&'a [Layout<'a>]),
-    Pointer(&'a Layout<'a>),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
 }
@@ -103,7 +102,7 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Pointer(_) | FunctionPointer(_, _) => pointer_size,
+            FunctionPointer(_, _) => pointer_size,
         }
     }
 }
