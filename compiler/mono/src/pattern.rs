@@ -94,7 +94,7 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
             ..
         } => {
             let simplified_args: std::vec::Vec<_> =
-                arguments.iter().map(|v| simplify(&v)).collect();
+                arguments.iter().map(|v| simplify(&v.0)).collect();
             Ctor(union.clone(), tag_name.clone(), simplified_args)
         }
     }

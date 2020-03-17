@@ -261,7 +261,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>) -> Option<Test<'a>
                 tag_id: *tag_id,
                 tag_name: tag_name.clone(),
                 union: union.clone(),
-                arguments: arguments.clone().into_iter().collect(),
+                arguments: arguments.clone().into_iter().map(|v| v.0).collect(),
             }),
             BitLiteral(v) => Some(IsBit(*v)),
             EnumLiteral { tag_id, enum_size } => Some(IsByte {
@@ -310,9 +310,10 @@ fn to_relevant_branch<'a>(test: &Test<'a>, path: &Path, branch: Branch<'a>) -> O
             AppliedTag {
                 union,
                 tag_name,
-                mut arguments,
+                arguments,
                 ..
             } => {
+                let mut arguments: Vec<_> = arguments.into_iter().map(|v| v.0).collect();
                 match test {
                     IsCtor {
                         tag_name: test_name,

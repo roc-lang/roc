@@ -858,28 +858,74 @@ fn store_pattern<'a>(
 
 fn store_pattern2<'a>(
     env: &mut Env<'a, '_>,
-    can_pat: &Pattern,
+    can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
-    _index: u64,
-    var: Variable,
+    _index: usize,
+    layout: Layout<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) -> Result<(), String> {
     use Pattern::*;
 
-    let layout = match Layout::from_var(env.arena, var, env.subs, env.pointer_size) {
-        Ok(layout) => layout,
-        Err(()) => {
-            panic!("TODO gen a runtime error here");
-        }
-    };
-
     match can_pat {
-        Identifier(symbol) => stored.push((*symbol, layout, Expr::Load(outer_symbol))),
+        Identifier(symbol) => {
+            if true {
+                // stored.push((*symbol, layout, Expr::Load(outer_symbol)))
+                //                let load = Expr::AccessAtIndex {
+                //                    index: index as u64,
+                //                    field_layouts: env.arena.alloc([
+                //                        Layout::Builtin(Builtin::Int64),
+                //                        Layout::Builtin(Builtin::Int64),
+                //                    ]),
+                //                    expr: env.arena.alloc(Expr::Load(outer_symbol)),
+                //                };
+
+                let load = Expr::Load(outer_symbol);
+                stored.push((*symbol, layout, load))
+            } else {
+                todo!()
+            }
+        }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
             stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
         }
         IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+        AppliedTag {
+            union, arguments, ..
+        } => {
+            let is_unwrapped = (union.alternatives.len() > 1) as usize;
+
+            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for (_, layout) in arguments {
+                arg_layouts.push(layout.clone());
+            }
+
+            for (index, (argument, arg_layout)) in arguments.iter().enumerate() {
+                let load = Expr::AccessAtIndex {
+                    index: (is_unwrapped + index) as u64,
+                    field_layouts: arg_layouts.clone().into_bump_slice(),
+                    expr: env.arena.alloc(Expr::Load(outer_symbol)),
+                };
+                match argument {
+                    Identifier(symbol) => {
+                        // store immediately in the given symbol
+                        stored.push((*symbol, layout.clone(), load));
+                    }
+                    Underscore => {
+                        // ignore
+                    }
+                    _ => {
+                        // store the field in a symbol, and continue matching on it
+                        let symbol = env.fresh_symbol();
+                        stored.push((symbol, layout.clone(), load));
+
+                        store_pattern2(env, argument, symbol, 0, arg_layout.clone(), stored)?;
+                    }
+                }
+            }
+        }
+
         Shadowed(region, ident) => {
             return Err(format!(
                 "The pattern at {:?} shadows variable {:?}",
@@ -924,19 +970,21 @@ fn from_can_when<'a>(
                 .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
             let cond_symbol = env.fresh_symbol();
             let cond = from_can(env, loc_cond.value, procs, None);
-            stored.push((cond_symbol, cond_layout, cond));
-            /*
-            store_pattern(
-                env,
-                mono_pattern,
-                &loc_cond.value,
-                cond_var,
-                procs,
-                &mut stored,
-            );
-            */
+            stored.push((cond_symbol, cond_layout.clone(), cond));
 
-            let ret = from_can(env, loc_branch.value, procs, None);
+            // NOTE this will still store shadowed names. I think that is fine because the branch
+            // will throw an error anyway.
+            let ret = match store_pattern2(
+                env,
+                &mono_pattern,
+                cond_symbol,
+                0,
+                cond_layout,
+                &mut stored,
+            ) {
+                Ok(_) => from_can(env, loc_branch.value, procs, None),
+                Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+            };
 
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
@@ -957,15 +1005,20 @@ fn from_can_when<'a>(
 
                 let mut stores = Vec::with_capacity_in(1, env.arena);
 
-                let mono_expr =
-                    match store_pattern2(env, &mono_pattern, cond_symbol, 0, cond_var, &mut stores)
-                    {
-                        Ok(_) => Expr::Store(
-                            stores.into_bump_slice(),
-                            env.arena.alloc(from_can(env, loc_expr.value, procs, None)),
-                        ),
-                        Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
-                    };
+                let mono_expr = match store_pattern2(
+                    env,
+                    &mono_pattern,
+                    cond_symbol,
+                    0,
+                    cond_layout.clone(),
+                    &mut stores,
+                ) {
+                    Ok(_) => Expr::Store(
+                        stores.into_bump_slice(),
+                        env.arena.alloc(from_can(env, loc_expr.value, procs, None)),
+                    ),
+                    Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+                };
 
                 opt_branches.push((mono_pattern, mono_expr));
             }
@@ -1145,7 +1198,7 @@ pub enum Pattern<'a> {
     AppliedTag {
         tag_name: TagName,
         tag_id: u8,
-        arguments: Vec<'a, Pattern<'a>>,
+        arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
         layout: Layout<'a>,
         union: crate::pattern::Union,
     },
@@ -1212,7 +1265,9 @@ impl<'a> Hash for Pattern<'a> {
             } => {
                 state.write_u8(8);
                 tag_name.hash(state);
-                arguments.hash(state);
+                for (pat, _) in arguments {
+                    pat.hash(state);
+                }
                 union.hash(state);
                 // layout is ignored!
             }
@@ -1268,8 +1323,13 @@ fn from_can_pattern<'a>(
             },
             Ok(layout) => {
                 let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                for (_, loc_pat) in arguments {
-                    mono_args.push(from_can_pattern(env, &loc_pat.value));
+                for (pat_var, loc_pat) in arguments {
+                    let layout = Layout::from_var(env.arena, *pat_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn pat_var into a RuntimeError {:?}", err)
+                        });
+
+                    mono_args.push((from_can_pattern(env, &loc_pat.value), layout));
                 }
 
                 let mut fields = std::vec::Vec::new();
