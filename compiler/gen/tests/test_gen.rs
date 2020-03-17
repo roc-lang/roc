@@ -1181,41 +1181,41 @@ mod test_gen {
         );
     }
 
-    //    #[test]
-    //    fn applied_tag_nothing() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                Maybe a : [ Just a, Nothing ]
-    //
-    //                x : Maybe Int
-    //                x = Nothing
-    //
-    //                0x1
-    //                "#
-    //            ),
-    //            1,
-    //            i64
-    //        );
-    //    }
-    //
-    //    #[test]
-    //    fn applied_tag_just() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                Maybe a : [ Just a, Nothing ]
-    //
-    //                y : Maybe Int
-    //                y = Just 0x4
-    //
-    //                0x1
-    //                "#
-    //            ),
-    //            1,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn applied_tag_nothing() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                x : Maybe Int
+                x = Nothing
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn applied_tag_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                y : Maybe Int
+                y = Just 0x4
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 
     //    #[test]
     //    fn when_on_result() {

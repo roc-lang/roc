@@ -11,7 +11,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
 };
-use roc_collections::all::ImMap;
+use roc_collections::all::{ImMap, MutMap};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
@@ -358,6 +358,100 @@ pub fn build_expr<'a, 'ctx, 'env>(
             }
 
             BasicValueEnum::StructValue(struct_val.into_struct_value())
+        }
+        Tag {
+            tag_id,
+            arguments,
+            tag_layout,
+            ..
+        } => {
+            // TODO make dynamic
+            let ptr_size = 8;
+
+            let whole_size = tag_layout.stack_size(ptr_size);
+            let mut filler = tag_layout.stack_size(ptr_size);
+            // put the discriminant in the first slot
+            let discriminant = (
+                Expr::Byte(*tag_id),
+                Layout::Builtin(Builtin::Byte(MutMap::default())),
+            );
+            let it = std::iter::once(&discriminant).chain(arguments.iter());
+            // let it = arguments.iter();
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            for (field_expr, field_layout) in it {
+                let val = build_expr(env, &scope, parent, field_expr, procs);
+                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+
+                field_types.push(field_type);
+                field_vals.push(val);
+
+                let field_size = field_layout.stack_size(ptr_size);
+                filler -= field_size;
+            }
+
+            if filler > 0 {
+                field_types.push(env.context.i8_type().array_type(filler).into());
+            }
+
+            // Create the struct_type
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let mut struct_val = struct_type.const_zero().into();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                struct_val = builder
+                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                    .unwrap();
+            }
+
+            // How we create tag values
+            //
+            // The memory layout of tags can be different. e.g. in
+            //
+            // [ Ok Int, Err Str ]
+            //
+            // the `Ok` tag stores a 64-bit integer, the `Err` tag stores a struct.
+            // All tags of a union must have the same length, for easy addressing (e.g. array lookups).
+            // So we need to ask for the maximum of all tag's sizes, but for most tags won't use
+            // all that memory, and certainly won't use it in the same way (the tags have fields of
+            // different types/sizes)
+            //
+            // In llvm, we must be explicit about the type of value we're creating: we can't just
+            // make a unspecified block of memory. So what we do is create a byte array of the
+            // desired size. Then when we know which tag we have (which is here, in this function),
+            // we need to cast that down to the array of bytes that llvm expects
+            //
+            // There is the bitcast instruction, but it doesn't work for arrays. So we need to jump
+            // through some hoops using store and load to get this to work.
+            //
+            // This tricks comes from
+            // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
+
+            let struct_pointer = builder.build_alloca(ctx.i8_type().array_type(whole_size), "");
+
+            builder.build_store(
+                builder
+                    .build_bitcast(
+                        struct_pointer,
+                        struct_val
+                            .into_struct_value()
+                            .get_type()
+                            .ptr_type(inkwell::AddressSpace::Generic),
+                        "",
+                    )
+                    .into_pointer_value(),
+                struct_val,
+            );
+
+            builder.build_load(struct_pointer, "")
         }
         Access {
             label,
