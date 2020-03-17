@@ -318,21 +318,27 @@ fn layout_from_flat_type<'a>(
                 // therefore, the ext_var must be the literal empty tag union
                 1 => {
                     // This is a wrapper. Unwrap it!
-                    let (tag, args) = tags.into_iter().next().unwrap();
+                    let (tag_name, arguments) = tags.into_iter().next().unwrap();
 
-                    match tag {
+                    match &tag_name {
                         TagName::Private(Symbol::NUM_AT_NUM) => {
-                            debug_assert!(args.len() == 1);
+                            debug_assert!(arguments.len() == 1);
 
-                            let var = args.into_iter().next().unwrap();
+                            let var = arguments.into_iter().next().unwrap();
 
                             unwrap_num_tag(subs, var)
                         }
-                        TagName::Private(symbol) => {
-                            panic!("TODO emit wrapped private tag for {:?} {:?}", symbol, args);
-                        }
-                        TagName::Global(ident) => {
-                            panic!("TODO emit wrapped global tag for {:?} {:?}", ident, args);
+                        TagName::Private(_) | TagName::Global(_) => {
+                            let mut layouts = MutMap::default();
+                            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
+
+                            for arg in arguments {
+                                arg_layouts.push(Layout::from_var(arena, arg, subs, pointer_size)?);
+                            }
+
+                            layouts.insert(tag_name.clone(), arg_layouts.into_bump_slice());
+
+                            Ok(Layout::Union(arena.alloc(layouts)))
                         }
                     }
                 }

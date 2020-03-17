@@ -205,7 +205,42 @@ pub fn build_expr<'a, B: Backend>(
                 .ins()
                 .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
-        Tag { tag_id, tag_layout, arguments , ..} => {
+        Tag { union_size, tag_layout, arguments , ..} if *union_size == 1 => {
+            let cfg = env.cfg;
+            let ptr_bytes = cfg.pointer_bytes() as u32;
+
+            // NOTE: all variants of a tag union must have the same size, so (among other things)
+            // it's easy to quickly index them in arrays. Therefore the size of this tag doens't
+            // depend on the tag arguments, but solely on the layout of the whole tag union
+            let slot_size = tag_layout.stack_size(ptr_bytes);
+
+            // Create a slot
+            let slot = builder.create_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                slot_size
+            ));
+
+            let it = std::iter::empty().chain(arguments.iter());
+
+            // Create instructions for storing each field's expression
+            let mut offset = 0;
+            for (field_expr, field_layout) in it {
+                let val = build_expr(env, &scope, module, builder, field_expr, procs);
+
+                let field_size = field_layout.stack_size(ptr_bytes);
+                let field_offset = i32::try_from(offset)
+                    .expect("TODO handle field size conversion to i32");
+
+                builder.ins().stack_store(val, slot, Offset32::new(field_offset));
+
+                offset += field_size;
+            }
+
+            builder
+                .ins()
+                .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
+        }
+        Tag { tag_id,  tag_layout, arguments , ..} => {
             let cfg = env.cfg;
             let ptr_bytes = cfg.pointer_bytes() as u32;
 

@@ -186,6 +186,7 @@ pub enum Expr<'a> {
         tag_layout: Layout<'a>,
         tag_name: TagName,
         tag_id: u8,
+        union_size: u8,
         arguments: &'a [(Expr<'a>, Layout<'a>)],
     },
     Struct(&'a [(Expr<'a>, Layout<'a>)]),
@@ -717,12 +718,15 @@ fn from_can<'a>(
                         }
                     }
 
+                    let union_size = tags.len() as u8;
+
                     let tag_id = opt_tag_id.expect("Tag must be in its own type");
 
                     Expr::Tag {
                         tag_layout: layout,
                         tag_name,
                         tag_id,
+                        union_size,
                         arguments: arguments.into_bump_slice(),
                     }
                 }
@@ -915,6 +919,13 @@ fn from_can_when<'a>(
             let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
 
             let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+            let cond_symbol = env.fresh_symbol();
+            let cond = from_can(env, loc_cond.value, procs, None);
+            stored.push((cond_symbol, cond_layout, cond));
+            /*
             store_pattern(
                 env,
                 mono_pattern,
@@ -923,6 +934,7 @@ fn from_can_when<'a>(
                 procs,
                 &mut stored,
             );
+            */
 
             let ret = from_can(env, loc_branch.value, procs, None);
 
