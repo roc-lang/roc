@@ -215,7 +215,7 @@ asc : Int a, Int a -> [ Eq, Lt, Gt ]
 ##
 desc : Int a, Int a -> [ Eq, Lt, Gt ]
 
-## TODO should we offer hash32 etc even if it has to do a hash64 and truncate?
+## TODO should we offer hash32 etc even if someday it has to do a hash64 and truncate?
 ##
 ## CAUTION: This function may give different answers in future releases of Roc,
 ## so be aware that if you rely on the exact answer this gives today, your
@@ -224,16 +224,16 @@ hash64 : a -> U64
 
 ## Limits
 
-## The highest number that can be stored in an #Int without overflowing its
+## The highest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.lowest,
-## which means if you call #Num.abs on #Int.lowest, it will overflow and crash!
-highest : Int *
+## Note that this is smaller than the positive version of #Int.lowestI32
+## which means if you call #Num.abs on #Int.lowestI32, it will overflow and crash!
+highestI32 : I32
 
-## The lowest number that can be stored in an #Int without overflowing its
+## The lowest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
 ## Note that the positive version of this number is this is larger than
-## #Int.highest, which means if you call #Num.abs on #Int.lowest, it will overflow and crash!
-lowest : Int *
+## #Int.highestI32, which means if you call #Num.abs on #Int.lowestI32, it will overflow and crash!
+lowest : I32

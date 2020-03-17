@@ -257,10 +257,11 @@ pub fn build_expr<'a, B: Backend>(
                 panic!("TODO build an empty string in Crane");
             } else {
                 let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
-                let ptr = call_malloc(env, module, builder, bytes_len);
+                let size = builder.ins().iconst(types::I64, bytes_len as i64);
+                let ptr = call_malloc(env, module, builder, size);
                 let mem_flags = MemFlags::new();
 
-                // Copy the bytes from the string literal into the array
+                // Store the bytes from the string literal in the array
                 for (index, byte) in str_literal.bytes().enumerate() {
                     let val = builder.ins().iconst(types::I8, byte as i64);
                     let offset = Offset32::new(index as i32);
@@ -294,7 +295,8 @@ pub fn build_expr<'a, B: Backend>(
             } else {
                 let elem_bytes = elem_layout.stack_size(ptr_bytes as u32);
                 let bytes_len = elem_bytes as usize * elems.len();
-                let elems_ptr = call_malloc(env, module, builder, bytes_len);
+                let size = builder.ins().iconst(types::I64, bytes_len as i64);
+                let elems_ptr = call_malloc(env, module, builder, size);
                 let mem_flags = MemFlags::new();
 
                 // Copy the elements from the literal into the array
@@ -646,7 +648,7 @@ fn call_by_name<'a, B: Backend>(
 
             let list_ptr = build_arg(&args[0], env, scope, module, builder, procs);
 
-            // Get the usize int length
+            // Get the usize list length
             builder.ins().load(
                 env.ptr_sized_int(),
                 MemFlags::new(),
@@ -674,67 +676,57 @@ fn call_by_name<'a, B: Backend>(
             let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
             let elem_index = build_arg(&args[1], env, scope, module, builder, procs);
 
-            let elem_type = Type::int(64).unwrap(); // TODO Look this up instead of hardcoding it!
-            let elem_bytes = 8; // TODO Look this up instead of hardcoding it!
-            let elem_size = builder.ins().iconst(types::I64, elem_bytes);
+            let (_list_expr, list_layout) = &args[0];
 
-            // Load the pointer we got to the wrapper struct
-            let elems_ptr = builder.ins().load(
-                env.cfg.pointer_type(),
+            // Get the usize list length
+            let _list_len = builder.ins().load(
+                env.ptr_sized_int(),
                 MemFlags::new(),
                 wrapper_ptr,
-                Offset32::new(0),
+                Offset32::new(env.cfg.pointer_bytes() as i32),
             );
 
-            // Multiply the requested index by the size of each element.
-            let offset = builder.ins().imul(elem_index, elem_size);
-
-            // Follow the pointer in the wrapper struct to the actual elements
-            builder.ins().load_complex(
-                elem_type,
-                MemFlags::new(),
-                &[elems_ptr, offset],
-                Offset32::new(0),
-            )
-        }
-        Symbol::LIST_SET => {
-            let (_list_expr, list_layout) = &args[0];
+            // TODO compare elem_index to _list_len to do array bounds checking.
 
             match list_layout {
                 Layout::Builtin(Builtin::List(elem_layout)) => {
-                    // TODO try memcpy for shallow clones; it's probably faster
-                    // let list_val = build_expr(env, scope, module, builder, list_expr, procs);
+                    let cfg = env.cfg;
+                    let elem_type = type_from_layout(cfg, elem_layout);
+                    let elem_bytes = elem_layout.stack_size(cfg.pointer_bytes() as u32);
+                    let elem_size = builder.ins().iconst(types::I64, elem_bytes as i64);
 
-                    let num_elems = 10; // TODO FIXME read from List.len
-                    let elem_bytes =
-                        elem_layout.stack_size(env.cfg.pointer_bytes() as u32) as usize;
-                    let bytes_len = (elem_bytes * num_elems) + 1/* TODO drop the +1 when we have structs and this is no longer NUL-terminated. */;
-                    let wrapper_ptr = call_malloc(env, module, builder, bytes_len);
-                    // let mem_flags = MemFlags::new();
-
-                    // Copy the elements from the literal into the array
-                    // for (index, elem) in elems.iter().enumerate() {
-                    //     let offset = Offset32::new(elem_bytes as i32 * index as i32);
-                    //     let val = build_expr(env, scope, module, builder, elem, procs);
-
-                    //     builder.ins().store(mem_flags, val, ptr, offset);
-                    // }
-
-                    // Add a NUL terminator at the end.
-                    // TODO: Instead of NUL-terminating, return a struct
-                    // with the pointer and also the length and capacity.
-                    // let nul_terminator = builder.ins().iconst(types::I8, 0);
-                    // let index = bytes_len as i32 - 1;
-                    // let offset = Offset32::new(index);
-
-                    // builder.ins().store(mem_flags, nul_terminator, ptr, offset);
                     // Load the pointer we got to the wrapper struct
-                    let _elems_ptr = builder.ins().load(
+                    let elems_ptr = builder.ins().load(
                         env.cfg.pointer_type(),
                         MemFlags::new(),
                         wrapper_ptr,
                         Offset32::new(0),
                     );
+
+                    // Multiply the requested index by the size of each element.
+                    let offset = builder.ins().imul(elem_index, elem_size);
+
+                    // Follow the pointer in the wrapper struct to the actual elements
+                    builder.ins().load_complex(
+                        elem_type,
+                        MemFlags::new(),
+                        &[elems_ptr, offset],
+                        Offset32::new(0),
+                    )
+                }
+                _ => {
+                    unreachable!("Invalid List layout for List.get: {:?}", list_layout);
+                }
+            }
+        }
+        Symbol::LIST_SET => {
+            // set : List elem, Int, elem -> List elem
+            let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
+            let (_list_expr, list_layout) = &args[0];
+
+            match list_layout {
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    let wrapper_ptr = clone_list(env, builder, module, wrapper_ptr, elem_layout);
 
                     list_set_in_place(
                         env,
@@ -802,17 +794,13 @@ fn call_malloc<B: Backend>(
     env: &Env<'_>,
     module: &mut Module<B>,
     builder: &mut FunctionBuilder,
-    size: usize,
+    size: Value,
 ) -> Value {
     // Declare malloc inside this function
     let local_func = module.declare_func_in_func(env.malloc, &mut builder.func);
 
-    // Convert the size argument to a Value
-    let ptr_size_type = module.target_config().pointer_type();
-    let size_arg = builder.ins().iconst(ptr_size_type, size as i64);
-
     // Call malloc and return the resulting pointer
-    let call = builder.ins().call(local_func, &[size_arg]);
+    let call = builder.ins().call(local_func, &[size]);
     let results = builder.inst_results(call);
 
     debug_assert!(results.len() == 1);
@@ -849,4 +837,72 @@ fn list_set_in_place<'a>(
     );
 
     wrapper_ptr
+}
+
+fn clone_list<B: Backend>(
+    env: &Env<'_>,
+    builder: &mut FunctionBuilder,
+    module: &mut Module<B>,
+    src_wrapper_ptr: Value,
+    elem_layout: &Layout<'_>,
+) -> Value {
+    let cfg = env.cfg;
+
+    // Load the pointer we got to the wrapper struct
+    let elems_ptr = builder.ins().load(
+        cfg.pointer_type(),
+        MemFlags::new(),
+        src_wrapper_ptr,
+        Offset32::new(0),
+    );
+
+    // Get the usize list length
+    let list_len = builder.ins().load(
+        env.ptr_sized_int(),
+        MemFlags::new(),
+        src_wrapper_ptr,
+        Offset32::new(env.cfg.pointer_bytes() as i32),
+    );
+
+    // Calculate the number of bytes we'll need to allocate.
+    let elem_bytes = builder.ins().iconst(
+        env.ptr_sized_int(),
+        elem_layout.stack_size(cfg.pointer_bytes() as u32) as i64,
+    );
+    let size = builder.ins().imul(elem_bytes, list_len);
+
+    // Allocate space for the new array that we'll copy into.
+    let new_elems_ptr = call_malloc(env, module, builder, size);
+
+    // Either memcpy or deep clone the array elements
+    if elem_layout.safe_to_memcpy() {
+        // Copy the bytes from the original array into the new
+        // one we just malloc'd.
+        //
+        // TODO how do we decide when to do the small memcpy vs the normal one?
+        builder.call_memcpy(env.cfg, new_elems_ptr, elems_ptr, size);
+    } else {
+        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
+    }
+
+    // Create a fresh wrapper struct for the newly populated array
+    let ptr_bytes = cfg.pointer_bytes() as u32;
+    let slot = builder.create_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        ptr_bytes * Builtin::LIST_WORDS,
+    ));
+
+    // Store the new pointer in slot 0 of the wrapper
+    builder
+        .ins()
+        .stack_store(new_elems_ptr, slot, Offset32::new(0));
+
+    // Store the length in slot 1 of the wrapper
+    builder
+        .ins()
+        .stack_store(list_len, slot, Offset32::new(ptr_bytes as i32));
+
+    builder
+        .ins()
+        .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
 }

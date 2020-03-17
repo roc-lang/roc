@@ -11,7 +11,6 @@ pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [(Lowercase, Layout<'a>)]),
     Tag(&'a [Layout<'a>]),
-    Pointer(&'a Layout<'a>),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
 }
@@ -79,6 +78,22 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn safe_to_memcpy(&self) -> bool {
+        use Layout::*;
+
+        match self {
+            Builtin(builtin) => builtin.safe_to_memcpy(),
+            Struct(fields) => fields
+                .iter()
+                .all(|(_, field_layout)| field_layout.safe_to_memcpy()),
+            Tag(tags) => tags.iter().all(|tag_layout| tag_layout.safe_to_memcpy()),
+            FunctionPointer(_, _) => {
+                // Function pointers are immutable and can always be safely copied
+                true
+            }
+        }
+    }
+
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         use Layout::*;
 
@@ -103,7 +118,7 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Pointer(_) | FunctionPointer(_, _) => pointer_size,
+            FunctionPointer(_, _) => pointer_size,
         }
     }
 }
@@ -137,6 +152,17 @@ impl<'a> Builtin<'a> {
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
             List(_) | EmptyList => Builtin::LIST_WORDS * pointer_size,
+        }
+    }
+
+    pub fn safe_to_memcpy(&self) -> bool {
+        use Builtin::*;
+
+        match self {
+            Int64 | Float64 | Bool(_, _) | Byte(_) | EmptyStr | EmptyMap | EmptyList | EmptySet => {
+                true
+            }
+            Str | Map(_, _) | Set(_) | List(_) => false,
         }
     }
 }

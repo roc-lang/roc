@@ -572,6 +572,10 @@ fn from_can<'a>(
                     // It might even be the anonymous result of a conditional:
                     //
                     // ((if x > 0 then \a -> a else \_ -> 0) 5)
+                    //
+                    // It could be named too:
+                    //
+                    // ((if x > 0 then foo else bar) 5)
                     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
                     for (_, loc_arg) in loc_args {

@@ -550,7 +550,26 @@ mod test_gen {
     }
 
     #[test]
-    fn get_shared_int_list() {
+    fn set_shared_int_list() {
+        assert_crane_evals_to!(
+            indoc!(
+                r#"
+                    shared = [ 2, 4 ]
+
+                    # This should not mutate the original
+                    x = List.set shared 1 77
+
+                    List.getUnsafe shared 1
+                "#
+            ),
+            4,
+            i64,
+            |x| x
+        );
+    }
+
+    #[test]
+    fn get_unique_int_list() {
         assert_evals_to!(
             indoc!(
                 r#"
