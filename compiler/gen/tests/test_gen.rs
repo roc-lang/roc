@@ -136,7 +136,6 @@ mod test_gen {
                 // TODO try deleting this line and seeing if everything still works.
                 builder.append_block_params_for_function_params(block);
 
-                dbg!(&mono_expr);
                 let main_body =
                     roc_gen::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
@@ -677,20 +676,20 @@ mod test_gen {
         );
     }
 
-    //    #[test]
-    //    fn branch_store_variable() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                        when 0 is
-    //                            1 -> 12
-    //                            a -> a
-    //                    "#
-    //            ),
-    //            0,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn branch_store_variable() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        when 0 is
+                            1 -> 12
+                            a -> a
+                    "#
+            ),
+            0,
+            i64
+        );
+    }
 
     #[test]
     fn gen_when_one_branch() {

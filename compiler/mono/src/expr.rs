@@ -426,7 +426,7 @@ fn from_can<'a>(
             store_pattern(
                 env,
                 mono_pattern,
-                loc_expr.value,
+                &loc_expr.value,
                 def.expr_var,
                 procs,
                 &mut stored,
@@ -807,7 +807,7 @@ fn from_can<'a>(
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     can_pat: Pattern,
-    can_expr: roc_can::expr::Expr,
+    can_expr: &roc_can::expr::Expr,
     var: Variable,
     procs: &mut Procs<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
@@ -835,19 +835,59 @@ fn store_pattern<'a>(
     //     identity 5
     //
     match can_pat {
-        Identifier(symbol) => stored.push((symbol, layout, from_can(env, can_expr, procs, None))),
+        Identifier(symbol) => {
+            stored.push((symbol, layout, from_can(env, can_expr.clone(), procs, None)))
+        }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
             stored.push((
                 Symbol::UNDERSCORE,
                 layout,
-                from_can(env, can_expr, procs, None),
+                from_can(env, can_expr.clone(), procs, None),
             ))
         }
         _ => {
             panic!("TODO store_pattern for {:?}", can_pat);
         }
     }
+}
+
+fn store_pattern2<'a>(
+    env: &mut Env<'a, '_>,
+    can_pat: &Pattern,
+    outer_symbol: Symbol,
+    _index: u64,
+    var: Variable,
+    stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+) -> Result<(), String> {
+    use Pattern::*;
+
+    let layout = match Layout::from_var(env.arena, var, env.subs, env.pointer_size) {
+        Ok(layout) => layout,
+        Err(()) => {
+            panic!("TODO gen a runtime error here");
+        }
+    };
+
+    match can_pat {
+        Identifier(symbol) => stored.push((*symbol, layout, Expr::Load(outer_symbol))),
+        Underscore => {
+            // Since _ is never read, it's safe to reassign it.
+            stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
+        }
+        IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+        Shadowed(region, ident) => {
+            return Err(format!(
+                "The pattern at {:?} shadows variable {:?}",
+                region, ident
+            ));
+        }
+        _ => {
+            panic!("TODO store_pattern for {:?}", can_pat);
+        }
+    }
+
+    Ok(())
 }
 
 fn from_can_when<'a>(
@@ -878,7 +918,7 @@ fn from_can_when<'a>(
             store_pattern(
                 env,
                 mono_pattern,
-                loc_cond.value,
+                &loc_cond.value,
                 cond_var,
                 procs,
                 &mut stored,
@@ -889,6 +929,12 @@ fn from_can_when<'a>(
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
         _ => {
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+            let cond = from_can(env, loc_cond.value, procs, None);
+            let cond_symbol = env.fresh_symbol();
+
             let mut loc_branches = std::vec::Vec::new();
             let mut opt_branches = std::vec::Vec::new();
 
@@ -897,7 +943,17 @@ fn from_can_when<'a>(
 
                 loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
 
-                let mono_expr = from_can(env, loc_expr.value, procs, None);
+                let mut stores = Vec::with_capacity_in(1, env.arena);
+
+                let mono_expr =
+                    match store_pattern2(env, &mono_pattern, cond_symbol, 0, cond_var, &mut stores)
+                    {
+                        Ok(_) => Expr::Store(
+                            stores.into_bump_slice(),
+                            env.arena.alloc(from_can(env, loc_expr.value, procs, None)),
+                        ),
+                        Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+                    };
 
                 opt_branches.push((mono_pattern, mono_expr));
             }
@@ -906,13 +962,6 @@ fn from_can_when<'a>(
                 Ok(_) => {}
                 Err(errors) => panic!("Errors in patterns: {:?}", errors),
             }
-
-            let cond = from_can(env, loc_cond.value, procs, None);
-            let cond_symbol = env.fresh_symbol();
-
-            // TODO store cond in the symbol
-            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
-                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
             let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
                 .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
