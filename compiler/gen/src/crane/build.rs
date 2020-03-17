@@ -257,10 +257,11 @@ pub fn build_expr<'a, B: Backend>(
                 panic!("TODO build an empty string in Crane");
             } else {
                 let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
-                let ptr = call_malloc(env, module, builder, bytes_len);
+                let size = builder.ins().iconst(types::I64, bytes_len as i64);
+                let ptr = call_malloc(env, module, builder, size);
                 let mem_flags = MemFlags::new();
 
-                // Copy the bytes from the string literal into the array
+                // Store the bytes from the string literal in the array
                 for (index, byte) in str_literal.bytes().enumerate() {
                     let val = builder.ins().iconst(types::I8, byte as i64);
                     let offset = Offset32::new(index as i32);
@@ -294,7 +295,8 @@ pub fn build_expr<'a, B: Backend>(
             } else {
                 let elem_bytes = elem_layout.stack_size(ptr_bytes as u32);
                 let bytes_len = elem_bytes as usize * elems.len();
-                let elems_ptr = call_malloc(env, module, builder, bytes_len);
+                let size = builder.ins().iconst(types::I64, bytes_len as i64);
+                let elems_ptr = call_malloc(env, module, builder, size);
                 let mem_flags = MemFlags::new();
 
                 // Copy the elements from the literal into the array
@@ -646,7 +648,7 @@ fn call_by_name<'a, B: Backend>(
 
             let list_ptr = build_arg(&args[0], env, scope, module, builder, procs);
 
-            // Get the usize int length
+            // Get the usize list length
             builder.ins().load(
                 env.ptr_sized_int(),
                 MemFlags::new(),
