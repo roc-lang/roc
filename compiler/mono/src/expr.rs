@@ -910,7 +910,7 @@ fn store_pattern2<'a>(
                 match argument {
                     Identifier(symbol) => {
                         // store immediately in the given symbol
-                        stored.push((*symbol, layout.clone(), load));
+                        stored.push((*symbol, arg_layout.clone(), load));
                     }
                     Underscore => {
                         // ignore

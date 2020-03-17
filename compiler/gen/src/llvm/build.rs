@@ -11,7 +11,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
 };
-use roc_collections::all::{ImMap, MutMap};
+use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
@@ -316,11 +316,10 @@ pub fn build_expr<'a, 'ctx, 'env>(
             BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
         Tag {
-            tag_id,
+            union_size,
             arguments,
-            tag_layout,
             ..
-        } => {
+        } if *union_size == 1 => {
             /*
             // put the discriminant in the first slot
             let discriminant = (
@@ -391,6 +390,16 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             builder
                 .build_extract_value(struct_val, index, "field_access")
+                .unwrap()
+        }
+        AccessAtIndex { index, expr, .. } => {
+            let builder = env.builder;
+
+            // Get Struct val
+            let struct_val = build_expr(env, &scope, parent, expr, procs).into_struct_value();
+
+            builder
+                .build_extract_value(struct_val, *index as u32, "tag_field_access")
                 .unwrap()
         }
         _ => {

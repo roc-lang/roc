@@ -709,6 +709,38 @@ mod test_gen {
     }
 
     #[test]
+    fn when_one_element_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Pair Int Int ]
+                x = Pair 0x2 0x3
+
+                when x is
+                    Pair l r -> l + r
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
+    fn twice_record_access() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x =  {a: 0x2, b: 0x3 }
+
+                x.a + x.b
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
     fn gen_when_one_branch() {
         assert_evals_to!(
             indoc!(
@@ -1310,6 +1342,18 @@ mod test_gen {
                 "#
             ),
             19,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { x: 15, y: 17, z: 19 }
+
+                    rec.z + rec.x
+                "#
+            ),
+            34,
             i64
         );
     }
