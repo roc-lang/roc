@@ -254,7 +254,6 @@ fn recover_ctor(
     arity: usize,
     mut patterns: Vec<Pattern>,
 ) -> Vec<Pattern> {
-    // TODO ensure that this behaves the same as haskell's splitAt
     let mut rest = patterns.split_off(arity);
     let args = patterns;
 
