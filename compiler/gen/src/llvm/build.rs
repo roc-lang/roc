@@ -316,14 +316,20 @@ pub fn build_expr<'a, 'ctx, 'env>(
             BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
         Tag {
-            tag_id, arguments, ..
+            tag_id,
+            arguments,
+            tag_layout,
+            ..
         } => {
+            /*
             // put the discriminant in the first slot
             let discriminant = (
                 Expr::Byte(*tag_id),
                 Layout::Builtin(Builtin::Byte(MutMap::default())),
             );
             let it = std::iter::once(&discriminant).chain(arguments.iter());
+            */
+            let it = arguments.iter();
 
             let ctx = env.context;
             let builder = env.builder;

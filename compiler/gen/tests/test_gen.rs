@@ -77,6 +77,7 @@ mod test_gen {
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
+
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
 
@@ -687,6 +688,22 @@ mod test_gen {
                     "#
             ),
             0,
+            i64
+        );
+    }
+
+    #[test]
+    fn one_element_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Pair Int ]
+                x = Pair 2
+
+                0x3
+                "#
+            ),
+            3,
             i64
         );
     }

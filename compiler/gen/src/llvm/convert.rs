@@ -68,7 +68,21 @@ pub fn basic_type_from_layout<'ctx>(
                 .struct_type(field_types.into_bump_slice(), false)
                 .as_basic_type_enum()
         }
-        Union(_) => {
+        Union(tags) if tags.len() == 1 => {
+            let (_, layouts) = tags.into_iter().next().unwrap();
+
+            // Determine types
+            let mut field_types = Vec::with_capacity_in(layouts.len(), arena);
+
+            for layout in layouts.iter() {
+                field_types.push(basic_type_from_layout(arena, context, layout));
+            }
+
+            context
+                .struct_type(field_types.into_bump_slice(), false)
+                .as_basic_type_enum()
+        }
+        Union(tags) => {
             // TODO make this dynamic
             let ptr_size = std::mem::size_of::<i64>();
             let union_size = layout.stack_size(ptr_size as u32);
