@@ -1357,7 +1357,7 @@ fn from_can_pattern<'a>(
 
             match crate::layout::layout_from_tag_union(
                 env.arena,
-                fields_map,
+                &fields_map,
                 env.subs,
                 env.pointer_size,
             ) {

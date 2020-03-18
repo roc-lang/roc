@@ -6,16 +6,16 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 
 /// Types for code gen must be monomorphic. No type variables allowed!
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [(Lowercase, Layout<'a>)]),
-    Union(&'a MutMap<TagName, &'a [Layout<'a>]>),
+    Union(&'a [&'a [Layout<'a>]]),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
     Int64,
     Float64,
@@ -88,7 +88,7 @@ impl<'a> Layout<'a> {
                 .all(|(_, field_layout)| field_layout.safe_to_memcpy()),
             Union(tags) => tags
                 .iter()
-                .all(|(_, tag_layout)| tag_layout.iter().all(|field| field.safe_to_memcpy())),
+                .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
             FunctionPointer(_, _) => {
                 // Function pointers are immutable and can always be safely copied
                 true
@@ -116,7 +116,7 @@ impl<'a> Layout<'a> {
                 let discriminant_size: u32 = if fields.len() > 1 { pointer_size } else { 0 };
 
                 let max_tag_size: u32 = fields
-                    .values()
+                    .iter()
                     .map(|tag_layout| {
                         tag_layout
                             .iter()
@@ -307,7 +307,7 @@ fn layout_from_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            layout_from_tag_union(arena, tags, subs, pointer_size)
+            layout_from_tag_union(arena, &tags, subs, pointer_size)
         }
         RecursiveTagUnion(_, _, _) => {
             panic!("TODO make Layout for non-empty Tag Union");
@@ -325,7 +325,7 @@ fn layout_from_flat_type<'a>(
 
 pub fn layout_from_tag_union<'a>(
     arena: &'a Bump,
-    tags: MutMap<TagName, std::vec::Vec<Variable>>,
+    tags: &MutMap<TagName, std::vec::Vec<Variable>>,
     subs: &Subs,
     pointer_size: u32,
 ) -> Result<Layout<'a>, ()> {
@@ -337,25 +337,24 @@ pub fn layout_from_tag_union<'a>(
         // therefore, the ext_var must be the literal empty tag union
         1 => {
             // This is a wrapper. Unwrap it!
-            let (tag_name, arguments) = tags.into_iter().next().unwrap();
+            let (tag_name, arguments) = tags.iter().next().unwrap();
 
             match &tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
                     debug_assert!(arguments.len() == 1);
 
-                    let var = arguments.into_iter().next().unwrap();
+                    let var = arguments.iter().next().unwrap();
 
-                    unwrap_num_tag(subs, var)
+                    unwrap_num_tag(subs, *var)
                 }
                 TagName::Private(_) | TagName::Global(_) => {
-                    let mut layouts = MutMap::default();
                     let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
 
                     for arg in arguments {
-                        arg_layouts.push(Layout::from_var(arena, arg, subs, pointer_size)?);
+                        arg_layouts.push(Layout::from_var(arena, *arg, subs, pointer_size)?);
                     }
 
-                    layouts.insert(tag_name.clone(), arg_layouts.into_bump_slice());
+                    let layouts = [arg_layouts.into_bump_slice()];
 
                     Ok(Layout::Union(arena.alloc(layouts)))
                 }
@@ -391,15 +390,15 @@ pub fn layout_from_tag_union<'a>(
                     Ok(Layout::Builtin(Builtin::Byte))
                 }
             } else {
-                let mut layouts = MutMap::default();
-                for (tag_name, arguments) in tags {
+                let mut layouts = Vec::with_capacity_in(tags.len(), arena);
+                for arguments in tags.values() {
                     let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
 
                     for arg in arguments {
-                        arg_layouts.push(Layout::from_var(arena, arg, subs, pointer_size)?);
+                        arg_layouts.push(Layout::from_var(arena, *arg, subs, pointer_size)?);
                     }
 
-                    layouts.insert(tag_name, arg_layouts.into_bump_slice());
+                    layouts.push(arg_layouts.into_bump_slice());
                 }
 
                 Ok(Layout::Union(arena.alloc(layouts)))

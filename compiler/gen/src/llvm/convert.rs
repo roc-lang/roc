@@ -69,7 +69,7 @@ pub fn basic_type_from_layout<'ctx>(
                 .as_basic_type_enum()
         }
         Union(tags) if tags.len() == 1 => {
-            let (_, layouts) = tags.iter().next().unwrap();
+            let layouts = tags.iter().next().unwrap();
 
             // Determine types
             let mut field_types = Vec::with_capacity_in(layouts.len(), arena);
