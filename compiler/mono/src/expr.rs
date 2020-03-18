@@ -519,7 +519,7 @@ fn from_can<'a>(
                             Ok(Layout::Builtin(builtin)) => match builtin {
                                 Builtin::Int64 => Symbol::INT_EQ_I64,
                                 Builtin::Float64 => Symbol::FLOAT_EQ,
-                                Builtin::Bool(_, _) => Symbol::INT_EQ_I1,
+                                Builtin::Bool => Symbol::INT_EQ_I1,
                                 Builtin::Byte(_) => Symbol::INT_EQ_I8,
                                 _ => panic!("Equality not implemented for {:?}", builtin),
                             },
@@ -680,10 +680,21 @@ fn from_can<'a>(
         } => {
             let arena = env.arena;
 
+            let mut fields = std::vec::Vec::new();
+
+            match roc_types::pretty_print::chase_ext_tag_union(env.subs, variant_var, &mut fields) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(content) => panic!("invalid content in ext_var: {:?}", content),
+            }
+
+            fields.sort();
+            let tag_id = fields
+                .iter()
+                .position(|(key, _)| key == &tag_name)
+                .expect("tag must be in its own type");
+
             match Layout::from_var(arena, variant_var, &env.subs, env.pointer_size) {
-                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => {
-                    Expr::Bool(tag_name == larger)
-                }
+                Ok(Layout::Builtin(Builtin::Bool)) => Expr::Bool(tag_id != 0),
                 Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&tag_name) {
                     Some(v) => Expr::Byte(*v),
                     None => panic!("Tag name is not part of the type"),
@@ -1317,77 +1328,91 @@ fn from_can_pattern<'a>(
             tag_name,
             arguments,
             ..
-        } => match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
-            Ok(Layout::Builtin(Builtin::Bool(_bottom, top))) => {
-                Pattern::BitLiteral(tag_name == &top)
+        } => {
+            let mut fields = std::vec::Vec::new();
+
+            match roc_types::pretty_print::chase_ext_tag_union(env.subs, *whole_var, &mut fields) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(content) => panic!("invalid content in ext_var: {:?}", content),
             }
-            Ok(Layout::Builtin(Builtin::Byte(conversion))) => match conversion.get(&tag_name) {
-                Some(index) => Pattern::EnumLiteral {
-                    tag_id: *index,
-                    enum_size: conversion.len() as u8,
+
+            fields.sort();
+            let tag_id = fields
+                .iter()
+                .position(|(key, _)| key == tag_name)
+                .expect("tag must be in its own type");
+
+            match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
+                Ok(Layout::Builtin(Builtin::Bool)) => Pattern::BitLiteral(tag_id != 0),
+                Ok(Layout::Builtin(Builtin::Byte(conversion))) => match conversion.get(&tag_name) {
+                    Some(index) => Pattern::EnumLiteral {
+                        tag_id: *index,
+                        enum_size: conversion.len() as u8,
+                    },
+                    None => unreachable!("Tag must be in its own type"),
                 },
-                None => unreachable!("Tag must be in its own type"),
-            },
-            Ok(layout) => {
-                let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                for (pat_var, loc_pat) in arguments {
-                    let layout = Layout::from_var(env.arena, *pat_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn pat_var into a RuntimeError {:?}", err)
-                        });
+                Ok(layout) => {
+                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+                    for (pat_var, loc_pat) in arguments {
+                        let layout =
+                            Layout::from_var(env.arena, *pat_var, env.subs, env.pointer_size)
+                                .unwrap_or_else(|err| {
+                                    panic!("TODO turn pat_var into a RuntimeError {:?}", err)
+                                });
 
-                    mono_args.push((from_can_pattern(env, &loc_pat.value), layout));
-                }
+                        mono_args.push((from_can_pattern(env, &loc_pat.value), layout));
+                    }
 
-                let mut fields = std::vec::Vec::new();
-                let union = match roc_types::pretty_print::chase_ext_tag_union(
-                    env.subs,
-                    *whole_var,
-                    &mut fields,
-                ) {
-                    Ok(()) | Err((_, Content::FlexVar(_))) => {
-                        let mut ctors = std::vec::Vec::with_capacity(fields.len());
-                        for (tag_name, args) in fields {
-                            ctors.push(crate::pattern::Ctor {
-                                name: tag_name.clone(),
-                                arity: args.len(),
-                            })
+                    let mut fields = std::vec::Vec::new();
+                    let union = match roc_types::pretty_print::chase_ext_tag_union(
+                        env.subs,
+                        *whole_var,
+                        &mut fields,
+                    ) {
+                        Ok(()) | Err((_, Content::FlexVar(_))) => {
+                            let mut ctors = std::vec::Vec::with_capacity(fields.len());
+                            for (tag_name, args) in fields {
+                                ctors.push(crate::pattern::Ctor {
+                                    name: tag_name.clone(),
+                                    arity: args.len(),
+                                })
+                            }
+
+                            crate::pattern::Union {
+                                alternatives: ctors,
+                            }
                         }
+                        Err(content) => panic!("invalid content in ext_var: {:?}", content),
+                    };
 
-                        crate::pattern::Union {
-                            alternatives: ctors,
+                    let mut names: std::vec::Vec<_> = union
+                        .alternatives
+                        .iter()
+                        .map(|Ctor { name, .. }| name)
+                        .collect();
+                    names.sort();
+
+                    let mut opt_tag_id = None;
+                    for (index, name) in names.iter().enumerate() {
+                        if name == &tag_name {
+                            opt_tag_id = Some(index as u8);
+                            break;
                         }
                     }
-                    Err(content) => panic!("invalid content in ext_var: {:?}", content),
-                };
 
-                let mut names: std::vec::Vec<_> = union
-                    .alternatives
-                    .iter()
-                    .map(|Ctor { name, .. }| name)
-                    .collect();
-                names.sort();
+                    let tag_id = opt_tag_id.expect("Tag must be in its own type");
 
-                let mut opt_tag_id = None;
-                for (index, name) in names.iter().enumerate() {
-                    if name == &tag_name {
-                        opt_tag_id = Some(index as u8);
-                        break;
+                    Pattern::AppliedTag {
+                        tag_name: tag_name.clone(),
+                        tag_id,
+                        arguments: mono_args,
+                        union,
+                        layout,
                     }
                 }
-
-                let tag_id = opt_tag_id.expect("Tag must be in its own type");
-
-                Pattern::AppliedTag {
-                    tag_name: tag_name.clone(),
-                    tag_id,
-                    arguments: mono_args,
-                    union,
-                    layout,
-                }
+                Err(()) => panic!("Invalid layout"),
             }
-            Err(()) => panic!("Invalid layout"),
-        },
+        }
 
         RecordDestructure {
             whole_var,

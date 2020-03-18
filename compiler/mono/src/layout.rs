@@ -19,7 +19,7 @@ pub enum Layout<'a> {
 pub enum Builtin<'a> {
     Int64,
     Float64,
-    Bool(TagName, TagName),
+    Bool,
     Byte(MutMap<TagName, u8>),
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
@@ -156,7 +156,7 @@ impl<'a> Builtin<'a> {
         match self {
             Int64 => Builtin::I64_SIZE,
             Float64 => Builtin::F64_SIZE,
-            Bool(_, _) => Builtin::BOOL_SIZE,
+            Bool => Builtin::BOOL_SIZE,
             Byte(_) => Builtin::BYTE_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
@@ -169,9 +169,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int64 | Float64 | Bool(_, _) | Byte(_) | EmptyStr | EmptyMap | EmptyList | EmptySet => {
-                true
-            }
+            Int64 | Float64 | Bool | Byte(_) | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
             Str | Map(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -366,16 +364,7 @@ fn layout_from_flat_type<'a>(
                     // up to 256 enum keys can be stored in a byte
                     if tags.len() <= std::u8::MAX as usize + 1 && arguments_have_size_0() {
                         if tags.len() <= 2 {
-                            // Up to 2 enum tags can be stored (in theory) in one bit
-                            let mut it = tags.keys();
-                            let a: TagName = it.next().unwrap().clone();
-                            let b: TagName = it.next().unwrap().clone();
-
-                            if a < b {
-                                Ok(Layout::Builtin(Builtin::Bool(a, b)))
-                            } else {
-                                Ok(Layout::Builtin(Builtin::Bool(b, a)))
-                            }
+                            Ok(Layout::Builtin(Builtin::Bool))
                         } else {
                             // up to 256 enum tags can be stored in a byte
                             let mut tag_to_u8 = MutMap::default();

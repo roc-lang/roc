@@ -447,7 +447,7 @@ fn layout_to_type<'a>(layout: &Layout<'a>, _pointer_type: Type) -> Type {
         Layout::Builtin(builtin) => match builtin {
             Int64 => cranelift::prelude::types::I64,
             Byte(_) => cranelift::prelude::types::I8,
-            Bool(_, _) => cranelift::prelude::types::B1,
+            Bool => cranelift::prelude::types::B1,
             Float64 => cranelift::prelude::types::F64,
             other => panic!("I don't yet know how to make a type from {:?}", other),
         },
@@ -487,7 +487,7 @@ fn build_branch2<'a, B: Backend>(
     let fail_block = builder.create_block();
 
     match branch.cond_layout {
-        Layout::Builtin(Builtin::Bool(_, _)) => {
+        Layout::Builtin(Builtin::Bool) => {
             builder.ins().brnz(cond, pass_block, &[]);
         }
         other => panic!("I don't know how to build a conditional for {:?}", other),

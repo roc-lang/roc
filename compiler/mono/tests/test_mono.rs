@@ -164,7 +164,7 @@ mod test_mono {
 
                 Cond {
                     cond: &Expr::Bool(true),
-                    cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                    cond_layout: Builtin(Bool),
                     pass: &Expr::Str("bar"),
                     fail: &Expr::Str("foo"),
                     ret_layout: Builtin(Str),
@@ -190,11 +190,11 @@ mod test_mono {
 
                 Cond {
                     cond: &Expr::Bool(true),
-                    cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                    cond_layout: Builtin(Bool),
                     pass: &Expr::Str("bar"),
                     fail: &Cond {
                         cond: &Expr::Bool(false),
-                        cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                        cond_layout: Builtin(Bool),
                         pass: &Expr::Str("foo"),
                         fail: &Expr::Str("baz"),
                         ret_layout: Builtin(Str),
@@ -228,10 +228,7 @@ mod test_mono {
                         Builtin(Str),
                         Cond {
                             cond: &Expr::Bool(true),
-                            cond_layout: Builtin(Bool(
-                                Global("False".into()),
-                                Global("True".into()),
-                            )),
+                            cond_layout: Builtin(Bool),
                             pass: &Expr::Str("bar"),
                             fail: &Expr::Str("foo"),
                             ret_layout: Builtin(Str),
@@ -361,11 +358,7 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let stores = [(
-                    var_x,
-                    Layout::Builtin(Builtin::Bool(Global("False".into()), Global("True".into()))),
-                    Bool(true),
-                )];
+                let stores = [(var_x, Layout::Builtin(Builtin::Bool), Bool(true))];
 
                 let load = Load(var_x);
 
@@ -389,11 +382,7 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let stores = [(
-                    var_x,
-                    Layout::Builtin(Builtin::Bool(Global("No".into()), Global("Yes".into()))),
-                    Bool(false),
-                )];
+                let stores = [(var_x, Layout::Builtin(Builtin::Bool), Bool(false))];
 
                 let load = Load(var_x);
 

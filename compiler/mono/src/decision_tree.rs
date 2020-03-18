@@ -855,10 +855,7 @@ fn decide_to_branching<'a>(
                 jumps,
             ));
 
-            let cond_layout = Layout::Builtin(Builtin::Bool(
-                TagName::Global("False".into()),
-                TagName::Global("True".into()),
-            ));
+            let cond_layout = Layout::Builtin(Builtin::Bool);
 
             Expr::Cond {
                 cond,
