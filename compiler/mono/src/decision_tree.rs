@@ -735,12 +735,17 @@ fn decide_to_branching<'a>(
                 match test {
                     Test::IsCtor { tag_id, .. } => {
                         let lhs = Expr::Byte(tag_id);
-                        let rhs = path_to_expr(
-                            env,
-                            cond_symbol,
-                            &path,
+
+                        let field_layouts = env.arena.alloc([
                             Layout::Builtin(Builtin::Byte(MutMap::default())),
-                        );
+                            Layout::Builtin(Builtin::Int64),
+                        ]);
+                        let rhs = Expr::AccessAtIndex {
+                            index: 0,
+                            field_layouts,
+                            expr: env.arena.alloc(Expr::Load(cond_symbol)),
+                        };
+                        // let rhs = Expr::Byte(tag_id);
                         let fake = MutMap::default();
 
                         let cond = env.arena.alloc(Expr::CallByName(

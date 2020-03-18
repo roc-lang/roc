@@ -77,6 +77,7 @@ mod test_gen {
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
+            dbg!(&mono_expr);
 
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -148,7 +149,7 @@ mod test_gen {
                 builder.finalize();
             }
 
-            module.define_function(main_fn, &mut ctx).expect("declare main");
+            module.define_function(main_fn, &mut ctx).expect("crane declare main");
             module.clear_context(&mut ctx);
 
             // Perform linking
@@ -278,7 +279,7 @@ mod test_gen {
             builder.build_return(Some(&ret));
 
             // Uncomment this to see the module's un-optimized LLVM instruction output:
-            // env.module.print_to_stderr();
+            env.module.print_to_stderr();
 
             if main_fn.verify(true) {
                 fpm.run_on(&main_fn);
@@ -1181,56 +1182,114 @@ mod test_gen {
         );
     }
 
-    #[test]
-    fn applied_tag_nothing() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                Maybe a : [ Just a, Nothing ]
+    //    #[test]
+    //    fn applied_tag_nothing() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                Maybe a : [ Just a, Nothing ]
+    //
+    //                x : Maybe Int
+    //                x = Nothing
+    //
+    //                0x1
+    //                "#
+    //            ),
+    //            1,
+    //            i64
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn applied_tag_just() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                Maybe a : [ Just a, Nothing ]
+    //
+    //                y : Maybe Int
+    //                y = Just 0x4
+    //
+    //                0x1
+    //                "#
+    //            ),
+    //            1,
+    //            i64
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn applied_tag_just_unit() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                Fruit : [ Orange, Apple, Banana ]
+    //                Maybe a : [ Just a, Nothing ]
+    //
+    //                orange : Fruit
+    //                orange = Orange
+    //
+    //                y : Maybe Fruit
+    //                y = Just orange
+    //
+    //                0x1
+    //                "#
+    //            ),
+    //            1,
+    //            i64
+    //        );
+    //    }
 
-                x : Maybe Int
-                x = Nothing
+    //    #[test]
+    //    fn when_on_nothing() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                x : [ Nothing, Just Int ]
+    //                x = Nothing
+    //
+    //                when x is
+    //                    Nothing -> 0x0
+    //                    Just _ -> 0x1
+    //                "#
+    //            ),
+    //            0,
+    //            i64
+    //        );
+    //    }
 
-                0x1
-                "#
-            ),
-            1,
-            i64
-        );
-    }
-
-    #[test]
-    fn applied_tag_just() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                Maybe a : [ Just a, Nothing ]
-
-                y : Maybe Int
-                y = Just 0x4
-
-                0x1
-                "#
-            ),
-            1,
-            i64
-        );
-    }
-
+    //    #[test]
+    //    fn when_on_just() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                x : [ Nothing, Just Int ]
+    //                x = Just 42
+    //
+    //                case x of
+    //                    Just v -> v
+    //                    Nothing -> 0x1
+    //                "#
+    //            ),
+    //            42,
+    //            i64
+    //        );
+    //    }
+    //
     //    #[test]
     //    fn when_on_result() {
     //        assert_evals_to!(
     //            indoc!(
     //                r#"
     //                x : Result Int Int
-    //                x = Ok 42
+    //                x = Err (41 + 1)
     //
     //                when x is
-    //                    Err _ -> 4
-    //                    Ok _ -> 0
+    //                    Err _ -> 42 + 0x0
+    //                    Ok v -> v
     //                "#
     //            ),
-    //            0,
+    //            42,
     //            i64
     //        );
     //    }

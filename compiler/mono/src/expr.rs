@@ -897,6 +897,10 @@ fn store_pattern2<'a>(
 
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
 
+            if is_unwrapped != 0 {
+                arg_layouts.push(Layout::Builtin(Builtin::Byte(MutMap::default())));
+            }
+
             for (_, layout) in arguments {
                 arg_layouts.push(layout.clone());
             }

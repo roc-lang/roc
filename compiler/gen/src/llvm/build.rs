@@ -486,14 +486,74 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .build_extract_value(struct_val, index, "field_access")
                 .unwrap()
         }
-        AccessAtIndex { index, expr, .. } => {
+        AccessAtIndex {
+            index,
+            expr,
+            field_layouts,
+        } => {
             let builder = env.builder;
 
+            let ptr_size = env.pointer_bytes;
+
+            // Determine types
+            // assume the descriminant is in the field layouts
+            let num_fields = field_layouts.len();
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+
+            for field_layout in field_layouts.iter() {
+                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+                field_types.push(field_type);
+            }
+
+            // Create the struct_type
+            let struct_type = env
+                .context
+                .struct_type(field_types.into_bump_slice(), false);
+
             // Get Struct val
-            let struct_val = build_expr(env, &scope, parent, expr, procs).into_struct_value();
+
+            // we have an array of bytes, representing the structure
+            // let raw_bytes = build_expr(env, &scope, parent, expr, procs);
+
+            // here I'm faking the input, to make sure that the problem is here, and not
+            // in storing a tag in memory. stores the tag and an integer value
+            let array_type = env.context.i8_type().array_type(9);
+            let const_1: BasicValueEnum = env.context.i8_type().const_int(1, true).into();
+            let mut zeroes = array_type.const_zero();
+
+            // setting the first bit will toggle between Ok and Err
+            zeroes = builder
+                .build_insert_value(zeroes, const_1, 0, "")
+                .unwrap()
+                .into_array_value();
+
+            let bytes = BasicValueEnum::ArrayValue(zeroes);
+
+            // we make a pointer to the structure we want, but it will pretend
+            // (with the bitcast) to be a pointer to an array of bytes
+            let struct_pointer = builder.build_alloca(array_type, "");
+
+            builder.build_store(struct_pointer, bytes);
+
+            let argument = builder
+                .build_load(
+                    builder
+                        .build_bitcast(
+                            struct_pointer,
+                            struct_type.ptr_type(inkwell::AddressSpace::Generic),
+                            "",
+                        )
+                        .into_pointer_value(),
+                    "",
+                )
+                .into_struct_value();
 
             builder
-                .build_extract_value(struct_val, *index as u32, "tag_field_access")
+                .build_extract_value(
+                    argument,
+                    *index as u32,
+                    env.arena.alloc(format!("tag_field_access_{}_", index)),
+                )
                 .unwrap()
         }
         _ => {
