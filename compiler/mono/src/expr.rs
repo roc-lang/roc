@@ -899,7 +899,8 @@ fn store_pattern2<'a>(
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
 
             if !is_unwrapped {
-                arg_layouts.push(Layout::Builtin(Builtin::Byte(MutMap::default())));
+                // add an element for the tag discriminant
+                arg_layouts.push(Layout::Builtin(Builtin::Int64));
             }
 
             for (_, layout) in arguments {

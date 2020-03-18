@@ -280,7 +280,7 @@ mod test_gen {
             builder.build_return(Some(&ret));
 
             // Uncomment this to see the module's un-optimized LLVM instruction output:
-            env.module.print_to_stderr();
+            // env.module.print_to_stderr();
 
             if main_fn.verify(true) {
                 fpm.run_on(&main_fn);
@@ -452,7 +452,7 @@ mod test_gen {
                 assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
             }
             {
-                // assert_opt_evals_to!($src, $expected, $ty, (|val| val));
+                assert_opt_evals_to!($src, $expected, $ty, (|val| val));
             }
         };
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -464,7 +464,7 @@ mod test_gen {
                 assert_llvm_evals_to!($src, $expected, $ty, $transform);
             }
             {
-                // assert_opt_evals_to!($src, $expected, $ty, $transform);
+                assert_opt_evals_to!($src, $expected, $ty, $transform);
             }
         };
     }
@@ -1189,10 +1189,10 @@ mod test_gen {
             indoc!(
                 r#"
                 Maybe a : [ Just a, Nothing ]
-    
+
                 x : Maybe Int
                 x = Nothing
-    
+
                 0x1
                 "#
             ),
@@ -1206,10 +1206,10 @@ mod test_gen {
             indoc!(
                 r#"
                 Maybe a : [ Just a, Nothing ]
-    
+
                 y : Maybe Int
                 y = Just 0x4
-    
+
                 0x1
                 "#
             ),
@@ -1217,6 +1217,7 @@ mod test_gen {
             i64
         );
     }
+
     //
     //    #[test]
     //    fn applied_tag_just_unit() {
@@ -1247,7 +1248,7 @@ mod test_gen {
                 r#"
                 x : [ Nothing, Just Int ]
                 x = Nothing
-    
+
                 when x is
                     Nothing -> 0x2
                     Just _ -> 0x1
@@ -1264,10 +1265,10 @@ mod test_gen {
     //            indoc!(
     //                r#"
     //                x : [ Nothing, Just Int ]
-    //                x = Just 42
+    //                x = Just 41
     //
     //                case x of
-    //                    Just v -> v
+    //                    Just v -> v + 0x1
     //                    Nothing -> 0x1
     //                "#
     //            ),
@@ -1275,18 +1276,18 @@ mod test_gen {
     //            i64
     //        );
     //    }
-    //
+
     #[test]
     fn when_on_result() {
         assert_evals_to!(
             indoc!(
                 r#"
                 x : Result Int Int
-                x = Err 42 
-    
+                x = Err 41
+
                 when x is
-                    Err e -> e
-                    Ok v -> v
+                    Err v ->  v + 1
+                    Ok _ -> 1
                 "#
             ),
             42,
@@ -1300,8 +1301,8 @@ mod test_gen {
             indoc!(
                 r#"
                 x : [ This Int, These Int Int ]
-                x = These 0x3 0x2 
-    
+                x = These 0x3 0x2
+
                 when x is
                     These a b -> a + b
                     This v -> v

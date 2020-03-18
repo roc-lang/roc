@@ -738,8 +738,10 @@ fn decide_to_branching<'a>(
                     Test::IsCtor { tag_id, union, .. } => {
                         let lhs = Expr::Int(tag_id as i64);
 
+                        // NOTE this is hardcoded, and should be made dynamic
                         let field_layouts = env.arena.alloc([
-                            Layout::Builtin(Builtin::Byte(MutMap::default())),
+                            Layout::Builtin(Builtin::Int64),
+                            Layout::Builtin(Builtin::Int64),
                             Layout::Builtin(Builtin::Int64),
                         ]);
                         let rhs = Expr::AccessAtIndex {
@@ -748,7 +750,6 @@ fn decide_to_branching<'a>(
                             expr: env.arena.alloc(Expr::Load(cond_symbol)),
                             is_unwrapped: union.alternatives.len() == 1,
                         };
-                        // let rhs = Expr::Byte(tag_id);
 
                         let cond = env.arena.alloc(Expr::CallByName(
                             Symbol::INT_EQ_I64,

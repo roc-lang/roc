@@ -113,7 +113,7 @@ impl<'a> Layout<'a> {
             Union(fields) => {
                 // the tag gets converted to a u8, so 1 byte.
                 // But for one-tag unions, we don't store the tag, so 0 bytes
-                let discriminant_size: u32 = (fields.len() > 1) as u32;
+                let discriminant_size: u32 = if fields.len() > 1 { pointer_size } else { 0 };
 
                 let max_tag_size: u32 = fields
                     .values()

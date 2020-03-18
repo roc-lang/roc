@@ -87,16 +87,12 @@ pub fn basic_type_from_layout<'ctx>(
             let ptr_size = std::mem::size_of::<i64>();
             let union_size = layout.stack_size(ptr_size as u32);
 
-            let discriminant_type = context.i64_type().into();
             let array_type = context
                 .i8_type()
-                // subtract the discriminant
-                .array_type(union_size - 1)
+                .array_type(union_size)
                 .as_basic_type_enum();
 
-            let elements = [discriminant_type, array_type];
-
-            context.struct_type(&elements, false).into()
+            context.struct_type(&[array_type], false).into()
         }
 
         Builtin(builtin) => match builtin {
