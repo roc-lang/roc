@@ -446,7 +446,7 @@ mod test_gen {
             // parsing the source, so that there's no chance their passing
             // or failing depends on leftover state from the previous one.
             {
-                // assert_crane_evals_to!($src, $expected, $ty, (|val| val));
+                assert_crane_evals_to!($src, $expected, $ty, (|val| val));
             }
             {
                 assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
@@ -458,7 +458,7 @@ mod test_gen {
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             // Same as above, except with an additional transformation argument.
             {
-                // assert_crane_evals_to!($src, $expected, $ty, $transform);
+                assert_crane_evals_to!($src, $expected, $ty, $transform);
             }
             {
                 assert_llvm_evals_to!($src, $expected, $ty, $transform);

@@ -11,7 +11,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
 };
-use roc_collections::all::{ImMap, MutMap};
+use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};

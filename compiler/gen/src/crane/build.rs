@@ -14,7 +14,7 @@ use cranelift_codegen::Context;
 use cranelift_module::{Backend, FuncId, Linkage, Module};
 
 use crate::crane::convert::{sig_from_layout, type_from_layout};
-use roc_collections::all::{ImMap, MutMap};
+use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
@@ -256,7 +256,7 @@ pub fn build_expr<'a, B: Backend>(
             ));
 
             // put the discriminant in the first slot
-            let discriminant = (Expr::Byte(*tag_id), Layout::Builtin(Builtin::Byte(MutMap::default())));
+            let discriminant = (Expr::Int(*tag_id as i64), Layout::Builtin(Builtin::Int64));
             let it = std::iter::once(&discriminant).chain(arguments.iter());
 
             // Create instructions for storing each field's expression
