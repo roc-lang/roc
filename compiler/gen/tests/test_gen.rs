@@ -210,6 +210,8 @@ mod test_gen {
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("Error creating JIT execution engine for test");
 
+            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
                 arena: &arena,
@@ -217,8 +219,8 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
+                pointer_bytes
             };
-            let target_data = execution_engine.get_target_data();
             let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
@@ -249,7 +251,7 @@ mod test_gen {
                 // (This approach means we don't have to defensively clone name here.)
                 //
                 // println!("\n\nBuilding and then verifying function {}\n\n", name);
-                build_proc(&env, &target_data, proc, &procs, fn_val, arg_basic_types);
+                build_proc(&env, proc, &procs, fn_val, arg_basic_types);
 
                 if fn_val.verify(true) {
                     fpm.run_on(&fn_val);
@@ -269,7 +271,6 @@ mod test_gen {
 
             let ret = roc_gen::llvm::build::build_expr(
                 &env,
-                &target_data,
                 &ImMap::default(),
                 main_fn,
                 &main_body,
@@ -346,6 +347,8 @@ mod test_gen {
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("Error creating JIT execution engine for test");
 
+            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
                 arena: &arena,
@@ -353,8 +356,8 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
+                pointer_bytes
             };
-            let target_data = execution_engine.get_target_data();
             let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
@@ -384,7 +387,7 @@ mod test_gen {
                 // (This approach means we don't have to defensively clone name here.)
                 //
                 // println!("\n\nBuilding and then verifying function {}\n\n", name);
-                build_proc(&env, &target_data, proc, &procs, fn_val, arg_basic_types);
+                build_proc(&env, proc, &procs, fn_val, arg_basic_types);
 
                 if fn_val.verify(true) {
                     fpm.run_on(&fn_val);
@@ -404,7 +407,6 @@ mod test_gen {
 
             let ret = roc_gen::llvm::build::build_expr(
                 &env,
-                &target_data,
                 &ImMap::default(),
                 main_fn,
                 &main_body,
