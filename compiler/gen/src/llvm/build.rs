@@ -7,6 +7,7 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
+use llvm_sys::core::LLVMBuildMemCpy;
 
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
@@ -891,4 +892,31 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
         }
     }
+}
+// pub unsafe extern "C" fn LLVMBuildMalloc(
+//     Ty: LLVMTypeRef,
+//     Name: *const c_char
+// ) -> LLVMValueRef
+// pub unsafe extern "C" fn LLVMBuildMemCpy(
+//     Dst: LLVMValueRef,
+//     DstAlign: c_uint,
+//     Src: LLVMValueRef,
+//     SrcAlign: c_uint,
+//     Size: LLVMValueRef
+// ) -> LLVMValueRef
+
+fn build_memcpy<'ctx>(
+    builder: &Builder<'ctx>,
+    dest: PointerValue<'ctx>,
+    src: PointerValue<'ctx>,
+    alignment_bytes: u32,
+    size: IntValue<'ctx>,
+) -> Result<PointerValue<'ctx>, &'static str> {
+    let src_align: u32 = alignment_bytes;
+    let dest_align: u32 = alignment_bytes;
+
+    let value =
+        unsafe { LLVMBuildMemCpy(builder, dest, alignment_bytes, src, alignment_bytes, size) };
+
+    Ok(PointerValue::new(value))
 }
