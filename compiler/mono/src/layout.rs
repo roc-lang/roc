@@ -175,7 +175,6 @@ impl<'a> Builtin<'a> {
     }
 }
 
-#[allow(clippy::cognitive_complexity)]
 fn layout_from_flat_type<'a>(
     arena: &'a Bump,
     flat_type: FlatType,
@@ -308,83 +307,7 @@ fn layout_from_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            match tags.len() {
-                0 => {
-                    panic!("TODO gracefully handle trying to instantiate Never");
-                }
-                // We can only unwrap a wrapper if it never becomes part of a bigger union
-                // therefore, the ext_var must be the literal empty tag union
-                1 => {
-                    // This is a wrapper. Unwrap it!
-                    let (tag_name, arguments) = tags.into_iter().next().unwrap();
-
-                    match &tag_name {
-                        TagName::Private(Symbol::NUM_AT_NUM) => {
-                            debug_assert!(arguments.len() == 1);
-
-                            let var = arguments.into_iter().next().unwrap();
-
-                            unwrap_num_tag(subs, var)
-                        }
-                        TagName::Private(_) | TagName::Global(_) => {
-                            let mut layouts = MutMap::default();
-                            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
-
-                            for arg in arguments {
-                                arg_layouts.push(Layout::from_var(arena, arg, subs, pointer_size)?);
-                            }
-
-                            layouts.insert(tag_name.clone(), arg_layouts.into_bump_slice());
-
-                            Ok(Layout::Union(arena.alloc(layouts)))
-                        }
-                    }
-                }
-                _ => {
-                    // Check if we can turn this tag union into an enum
-                    // The arguments of all tags must have size 0.
-                    // That is trivially the case when there are no arguments
-                    //
-                    //  [ Orange, Apple, Banana ]
-                    //
-                    //  But when one-tag tag unions are optimized away, we can also use an enum for
-                    //
-                    //  [ Foo [ Unit ], Bar [ Unit ] ]
-
-                    let arguments_have_size_0 = || {
-                        tags.iter().all(|(_, args)| {
-                            args.iter().all(|var| {
-                                Layout::from_var(arena, *var, subs, pointer_size)
-                                    .map(|v| v.stack_size(pointer_size))
-                                    == Ok(0)
-                            })
-                        })
-                    };
-
-                    // up to 256 enum keys can be stored in a byte
-                    if tags.len() <= std::u8::MAX as usize + 1 && arguments_have_size_0() {
-                        if tags.len() <= 2 {
-                            Ok(Layout::Builtin(Builtin::Bool))
-                        } else {
-                            // up to 256 enum tags can be stored in a byte
-                            Ok(Layout::Builtin(Builtin::Byte))
-                        }
-                    } else {
-                        let mut layouts = MutMap::default();
-                        for (tag_name, arguments) in tags {
-                            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
-
-                            for arg in arguments {
-                                arg_layouts.push(Layout::from_var(arena, arg, subs, pointer_size)?);
-                            }
-
-                            layouts.insert(tag_name, arg_layouts.into_bump_slice());
-                        }
-
-                        Ok(Layout::Union(arena.alloc(layouts)))
-                    }
-                }
-            }
+            layout_from_tag_union(arena, tags, subs, pointer_size)
         }
         RecursiveTagUnion(_, _, _) => {
             panic!("TODO make Layout for non-empty Tag Union");
@@ -397,6 +320,91 @@ fn layout_from_flat_type<'a>(
         }
         Erroneous(_) => Err(()),
         EmptyRecord => Ok(Layout::Struct(&[])),
+    }
+}
+
+pub fn layout_from_tag_union<'a>(
+    arena: &'a Bump,
+    tags: MutMap<TagName, std::vec::Vec<Variable>>,
+    subs: &Subs,
+    pointer_size: u32,
+) -> Result<Layout<'a>, ()> {
+    match tags.len() {
+        0 => {
+            panic!("TODO gracefully handle trying to instantiate Never");
+        }
+        // We can only unwrap a wrapper if it never becomes part of a bigger union
+        // therefore, the ext_var must be the literal empty tag union
+        1 => {
+            // This is a wrapper. Unwrap it!
+            let (tag_name, arguments) = tags.into_iter().next().unwrap();
+
+            match &tag_name {
+                TagName::Private(Symbol::NUM_AT_NUM) => {
+                    debug_assert!(arguments.len() == 1);
+
+                    let var = arguments.into_iter().next().unwrap();
+
+                    unwrap_num_tag(subs, var)
+                }
+                TagName::Private(_) | TagName::Global(_) => {
+                    let mut layouts = MutMap::default();
+                    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
+
+                    for arg in arguments {
+                        arg_layouts.push(Layout::from_var(arena, arg, subs, pointer_size)?);
+                    }
+
+                    layouts.insert(tag_name.clone(), arg_layouts.into_bump_slice());
+
+                    Ok(Layout::Union(arena.alloc(layouts)))
+                }
+            }
+        }
+        _ => {
+            // Check if we can turn this tag union into an enum
+            // The arguments of all tags must have size 0.
+            // That is trivially the case when there are no arguments
+            //
+            //  [ Orange, Apple, Banana ]
+            //
+            //  But when one-tag tag unions are optimized away, we can also use an enum for
+            //
+            //  [ Foo [ Unit ], Bar [ Unit ] ]
+
+            let arguments_have_size_0 = || {
+                tags.iter().all(|(_, args)| {
+                    args.iter().all(|var| {
+                        Layout::from_var(arena, *var, subs, pointer_size)
+                            .map(|v| v.stack_size(pointer_size))
+                            == Ok(0)
+                    })
+                })
+            };
+
+            // up to 256 enum keys can be stored in a byte
+            if tags.len() <= std::u8::MAX as usize + 1 && arguments_have_size_0() {
+                if tags.len() <= 2 {
+                    Ok(Layout::Builtin(Builtin::Bool))
+                } else {
+                    // up to 256 enum tags can be stored in a byte
+                    Ok(Layout::Builtin(Builtin::Byte))
+                }
+            } else {
+                let mut layouts = MutMap::default();
+                for (tag_name, arguments) in tags {
+                    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
+
+                    for arg in arguments {
+                        arg_layouts.push(Layout::from_var(arena, arg, subs, pointer_size)?);
+                    }
+
+                    layouts.insert(tag_name, arg_layouts.into_bump_slice());
+                }
+
+                Ok(Layout::Union(arena.alloc(layouts)))
+            }
+        }
     }
 }
 

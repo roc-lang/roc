@@ -1339,11 +1339,32 @@ fn from_can_pattern<'a>(
                 .position(|(key, _)| key == tag_name)
                 .expect("tag must be in its own type");
 
-            match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
+            let enum_size = fields.len();
+
+            let mut ctors = std::vec::Vec::with_capacity(fields.len());
+            for (tag_name, args) in &fields {
+                ctors.push(Ctor {
+                    name: tag_name.clone(),
+                    arity: args.len(),
+                })
+            }
+
+            let union = crate::pattern::Union {
+                alternatives: ctors,
+            };
+
+            let fields_map: MutMap<_, _> = fields.into_iter().collect();
+
+            match crate::layout::layout_from_tag_union(
+                env.arena,
+                fields_map,
+                env.subs,
+                env.pointer_size,
+            ) {
                 Ok(Layout::Builtin(Builtin::Bool)) => Pattern::BitLiteral(tag_id != 0),
                 Ok(Layout::Builtin(Builtin::Byte)) => Pattern::EnumLiteral {
                     tag_id: tag_id as u8,
-                    enum_size: fields.len() as u8,
+                    enum_size: enum_size as u8,
                 },
                 Ok(layout) => {
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -1357,48 +1378,9 @@ fn from_can_pattern<'a>(
                         mono_args.push((from_can_pattern(env, &loc_pat.value), layout));
                     }
 
-                    let mut fields = std::vec::Vec::new();
-                    let union = match roc_types::pretty_print::chase_ext_tag_union(
-                        env.subs,
-                        *whole_var,
-                        &mut fields,
-                    ) {
-                        Ok(()) | Err((_, Content::FlexVar(_))) => {
-                            let mut ctors = std::vec::Vec::with_capacity(fields.len());
-                            for (tag_name, args) in fields {
-                                ctors.push(crate::pattern::Ctor {
-                                    name: tag_name.clone(),
-                                    arity: args.len(),
-                                })
-                            }
-
-                            crate::pattern::Union {
-                                alternatives: ctors,
-                            }
-                        }
-                        Err(content) => panic!("invalid content in ext_var: {:?}", content),
-                    };
-
-                    let mut names: std::vec::Vec<_> = union
-                        .alternatives
-                        .iter()
-                        .map(|Ctor { name, .. }| name)
-                        .collect();
-                    names.sort();
-
-                    let mut opt_tag_id = None;
-                    for (index, name) in names.iter().enumerate() {
-                        if name == &tag_name {
-                            opt_tag_id = Some(index as u8);
-                            break;
-                        }
-                    }
-
-                    let tag_id = opt_tag_id.expect("Tag must be in its own type");
-
                     Pattern::AppliedTag {
                         tag_name: tag_name.clone(),
-                        tag_id,
+                        tag_id: tag_id as u8,
                         arguments: mono_args,
                         union,
                         layout,
