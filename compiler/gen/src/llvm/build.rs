@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
+use inkwell::targets::TargetData;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
@@ -32,7 +33,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub builder: &'env Builder<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
-    pub pointer_bytes: u32,
+    pub target_data: &'env TargetData,
 }
 
 pub fn build_expr<'a, 'ctx, 'env>(
@@ -230,7 +231,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::StructValue(struct_val.into_struct_value())
             } else {
                 let len_u64 = elems.len() as u64;
-                let elem_bytes = elem_layout.stack_size(env.pointer_bytes) as u64;
+                let pointer_bytes = env.target_data.get_pointer_byte_size(None);
+                let elem_bytes = elem_layout.stack_size(pointer_bytes) as u64;
 
                 let ptr = {
                     let bytes_len = elem_bytes * len_u64;

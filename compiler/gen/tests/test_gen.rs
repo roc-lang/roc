@@ -210,8 +210,6 @@ mod test_gen {
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("Error creating JIT execution engine for test");
 
-            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
-
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
                 arena: &arena,
@@ -219,7 +217,7 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
-                pointer_bytes
+                target_data: execution_engine.get_target_data()
             };
             let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -347,8 +345,6 @@ mod test_gen {
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("Error creating JIT execution engine for test");
 
-            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
-
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
                 arena: &arena,
@@ -356,7 +352,7 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
-                pointer_bytes
+                target_data: execution_engine.get_target_data()
             };
             let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
