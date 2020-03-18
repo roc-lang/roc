@@ -27,17 +27,17 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
 type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
-pub struct Env<'a, 'ctx, 'env, 'td> {
+pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
-    pub target_data: &'td TargetData,
 }
 
-pub fn build_expr<'a, 'ctx, 'env, 'td>(
-    env: &Env<'a, 'ctx, 'env, 'td>,
+pub fn build_expr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    target_data: &'ctx TargetData,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     expr: &Expr<'a>,
@@ -64,7 +64,7 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
                 ret_layout: ret_layout.clone(),
             };
 
-            build_branch2(env, scope, parent, conditional, procs)
+            build_branch2(env, target_data, scope, parent, conditional, procs)
         }
         Branches { .. } => {
             panic!("TODO build_branches(env, scope, parent, cond_lhs, branches, procs)");
@@ -85,14 +85,14 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
                 ret_type,
             };
 
-            build_switch(env, scope, parent, switch_args, procs)
+            build_switch(env, target_data, scope, parent, switch_args, procs)
         }
         Store(stores, ret) => {
             let mut scope = im_rc::HashMap::clone(scope);
             let context = &env.context;
 
             for (symbol, layout, expr) in stores.iter() {
-                let val = build_expr(env, &scope, parent, &expr, procs);
+                let val = build_expr(env, target_data, &scope, parent, &expr, procs);
                 let expr_bt = basic_type_from_layout(env.arena, context, &layout);
                 let alloca = create_entry_block_alloca(
                     env,
@@ -113,7 +113,7 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
                 scope.insert(*symbol, (layout.clone(), alloca));
             }
 
-            build_expr(env, &scope, parent, ret, procs)
+            build_expr(env, target_data, &scope, parent, ret, procs)
         }
         CallByName(symbol, args) => match *symbol {
             Symbol::BOOL_OR => {
@@ -127,7 +127,7 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
                     Vec::with_capacity_in(args.len(), env.arena);
 
                 for (arg, _layout) in args.iter() {
-                    arg_vals.push(build_expr(env, scope, parent, arg, procs));
+                    arg_vals.push(build_expr(env, target_data, scope, parent, arg, procs));
                 }
 
                 call_with_args(*symbol, arg_vals.into_bump_slice(), env)
@@ -147,10 +147,10 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
             for arg in args.iter() {
-                arg_vals.push(build_expr(env, scope, parent, arg, procs));
+                arg_vals.push(build_expr(env, target_data, scope, parent, arg, procs));
             }
 
-            let call = match build_expr(env, scope, parent, sub_expr, procs) {
+            let call = match build_expr(env, target_data, scope, parent, sub_expr, procs) {
                 BasicValueEnum::PointerValue(ptr) => {
                     env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
                 }
@@ -231,7 +231,7 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
                 BasicValueEnum::StructValue(struct_val.into_struct_value())
             } else {
                 let len_u64 = elems.len() as u64;
-                let pointer_bytes = env.target_data.get_pointer_byte_size(None);
+                let pointer_bytes = target_data.get_pointer_byte_size(None);
                 let elem_bytes = elem_layout.stack_size(pointer_bytes) as u64;
 
                 let ptr = {
@@ -248,7 +248,7 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
                     let offset = ctx.i32_type().const_int(elem_bytes * index as u64, false);
                     let elem_ptr = unsafe { builder.build_gep(ptr, &[offset], "elem") };
 
-                    let val = build_expr(env, &scope, parent, &elem, procs);
+                    let val = build_expr(env, target_data, &scope, parent, &elem, procs);
 
                     builder.build_store(elem_ptr, val);
                 }
@@ -272,7 +272,7 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
                     .build_insert_value(
                         struct_val,
                         BasicValueEnum::IntValue(
-                            env.target_data
+                            target_data
                                 .ptr_sized_int_type_in_context(ctx, None)
                                 .const_int(len_u64, false),
                         ),
@@ -295,7 +295,7 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in sorted_fields.iter() {
-                let val = build_expr(env, &scope, parent, field_expr, procs);
+                let val = build_expr(env, target_data, &scope, parent, field_expr, procs);
                 let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
 
                 field_types.push(field_type);
@@ -331,7 +331,7 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in it {
-                let val = build_expr(env, &scope, parent, field_expr, procs);
+                let val = build_expr(env, target_data, &scope, parent, field_expr, procs);
                 let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
 
                 field_types.push(field_type);
@@ -491,7 +491,8 @@ pub fn build_expr<'a, 'ctx, 'env, 'td>(
                 .unwrap() as u32; // TODO
 
             // Get Struct val
-            let struct_val = build_expr(env, &scope, parent, record, procs).into_struct_value();
+            let struct_val =
+                build_expr(env, target_data, &scope, parent, record, procs).into_struct_value();
 
             builder
                 .build_extract_value(struct_val, index, "field_access")
@@ -575,8 +576,9 @@ struct Branch2<'a> {
     ret_layout: Layout<'a>,
 }
 
-fn build_branch2<'a, 'ctx, 'env, 'td>(
-    env: &Env<'a, 'ctx, 'env, 'td>,
+fn build_branch2<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    target_data: &'ctx TargetData,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     cond: Branch2<'a>,
@@ -585,11 +587,19 @@ fn build_branch2<'a, 'ctx, 'env, 'td>(
     let ret_layout = cond.ret_layout;
     let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout);
 
-    let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
+    let cond_expr = build_expr(env, target_data, scope, parent, cond.cond, procs);
 
     match cond_expr {
         IntValue(value) => build_phi2(
-            env, scope, parent, value, cond.pass, cond.fail, ret_type, procs,
+            env,
+            target_data,
+            scope,
+            parent,
+            value,
+            cond.pass,
+            cond.fail,
+            ret_type,
+            procs,
         ),
         _ => panic!(
             "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
@@ -606,8 +616,9 @@ struct SwitchArgs<'a, 'ctx> {
     pub ret_type: BasicTypeEnum<'ctx>,
 }
 
-fn build_switch<'a, 'ctx, 'env, 'td>(
-    env: &Env<'a, 'ctx, 'env, 'td>,
+fn build_switch<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    target_data: &'ctx TargetData,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     switch_args: SwitchArgs<'a, 'ctx>,
@@ -628,7 +639,7 @@ fn build_switch<'a, 'ctx, 'env, 'td>(
     let cont_block = context.append_basic_block(parent, "cont");
 
     // Build the condition
-    let cond = build_expr(env, scope, parent, cond_expr, procs).into_int_value();
+    let cond = build_expr(env, target_data, scope, parent, cond_expr, procs).into_int_value();
 
     // Build the cases
     let mut incoming = Vec::with_capacity_in(branches.len(), arena);
@@ -663,7 +674,7 @@ fn build_switch<'a, 'ctx, 'env, 'td>(
     for ((_, branch_expr), (_, block)) in branches.iter().zip(cases) {
         builder.position_at_end(block);
 
-        let branch_val = build_expr(env, scope, parent, branch_expr, procs);
+        let branch_val = build_expr(env, target_data, scope, parent, branch_expr, procs);
 
         builder.build_unconditional_branch(cont_block);
 
@@ -673,7 +684,7 @@ fn build_switch<'a, 'ctx, 'env, 'td>(
     // The block for the conditional's default branch.
     builder.position_at_end(default_block);
 
-    let default_val = build_expr(env, scope, parent, default_branch, procs);
+    let default_val = build_expr(env, target_data, scope, parent, default_branch, procs);
 
     builder.build_unconditional_branch(cont_block);
 
@@ -693,8 +704,9 @@ fn build_switch<'a, 'ctx, 'env, 'td>(
 
 // TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
-fn build_phi2<'a, 'ctx, 'env, 'td>(
-    env: &Env<'a, 'ctx, 'env, 'td>,
+fn build_phi2<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    target_data: &'ctx TargetData,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
@@ -715,14 +727,14 @@ fn build_phi2<'a, 'ctx, 'env, 'td>(
 
     // build then block
     builder.position_at_end(then_block);
-    let then_val = build_expr(env, scope, parent, pass, procs);
+    let then_val = build_expr(env, target_data, scope, parent, pass, procs);
     builder.build_unconditional_branch(cont_block);
 
     let then_block = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(else_block);
-    let else_val = build_expr(env, scope, parent, fail, procs);
+    let else_val = build_expr(env, target_data, scope, parent, fail, procs);
     builder.build_unconditional_branch(cont_block);
 
     let else_block = builder.get_insert_block().unwrap();
@@ -754,7 +766,7 @@ fn set_name(bv_enum: BasicValueEnum<'_>, name: &str) {
 
 /// Creates a new stack allocation instruction in the entry block of the function.
 pub fn create_entry_block_alloca<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_, '_>,
+    env: &Env<'a, 'ctx, '_>,
     parent: FunctionValue<'_>,
     basic_type: BasicTypeEnum<'ctx>,
     name: &str,
@@ -770,8 +782,8 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
     builder.build_alloca(basic_type, name)
 }
 
-pub fn build_proc_header<'a, 'ctx, 'env, 'td>(
-    env: &Env<'a, 'ctx, 'env, 'td>,
+pub fn build_proc_header<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
     symbol: Symbol,
     proc: &Proc<'a>,
 ) -> (FunctionValue<'ctx>, Vec<'a, BasicTypeEnum<'ctx>>) {
@@ -800,8 +812,9 @@ pub fn build_proc_header<'a, 'ctx, 'env, 'td>(
     (fn_val, arg_basic_types)
 }
 
-pub fn build_proc<'a, 'ctx, 'env, 'td>(
-    env: &Env<'a, 'ctx, 'env, 'td>,
+pub fn build_proc<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    target_data: &'ctx TargetData,
     proc: Proc<'a>,
     procs: &Procs<'a>,
     fn_val: FunctionValue<'ctx>,
@@ -832,7 +845,7 @@ pub fn build_proc<'a, 'ctx, 'env, 'td>(
         scope.insert(*arg_symbol, (layout.clone(), alloca));
     }
 
-    let body = build_expr(env, &scope, fn_val, &proc.body, procs);
+    let body = build_expr(env, target_data, &scope, fn_val, &proc.body, procs);
 
     builder.build_return(Some(&body));
 }
@@ -849,10 +862,10 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 
 #[inline(always)]
 #[allow(clippy::cognitive_complexity)]
-fn call_with_args<'a, 'ctx, 'env, 'td>(
+fn call_with_args<'a, 'ctx, 'env>(
     symbol: Symbol,
     args: &[BasicValueEnum<'ctx>],
-    env: &Env<'a, 'ctx, 'env, 'td>,
+    env: &Env<'a, 'ctx, 'env>,
 ) -> BasicValueEnum<'ctx> {
     match symbol {
         Symbol::INT_ADD | Symbol::NUM_ADD => {
