@@ -365,18 +365,17 @@ pub fn build_expr<'a, 'ctx, 'env>(
             tag_layout,
             ..
         } => {
-            // TODO make dynamic
-            let ptr_size = 8;
+            let ptr_size = env.pointer_bytes;
 
-            let whole_size = tag_layout.stack_size(ptr_size);
+            let whole_size = tag_layout.stack_size(ptr_size) - 1;
             let mut filler = tag_layout.stack_size(ptr_size);
             // put the discriminant in the first slot
             let discriminant = (
-                Expr::Byte(*tag_id),
+                Expr::Int(*tag_id as i64),
                 Layout::Builtin(Builtin::Byte(MutMap::default())),
             );
-            let it = std::iter::once(&discriminant).chain(arguments.iter());
-            // let it = arguments.iter();
+            // let it = std::iter::once(&discriminant).chain(arguments.iter());
+            let it = arguments.iter();
 
             let ctx = env.context;
             let builder = env.builder;
@@ -398,7 +397,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             }
 
             if filler > 0 {
-                field_types.push(env.context.i8_type().array_type(filler).into());
+                // field_types.push(env.context.i8_type().array_type(filler).into());
             }
 
             // Create the struct_type
@@ -435,23 +434,38 @@ pub fn build_expr<'a, 'ctx, 'env>(
             // This tricks comes from
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
-            let struct_pointer = builder.build_alloca(ctx.i8_type().array_type(whole_size), "");
+            let array_type = ctx.i8_type().array_type(whole_size);
+            let struct_pointer = builder.build_alloca(array_type, "struct_poitner");
 
             builder.build_store(
                 builder
                     .build_bitcast(
                         struct_pointer,
-                        struct_val
-                            .into_struct_value()
-                            .get_type()
-                            .ptr_type(inkwell::AddressSpace::Generic),
+                        struct_type.ptr_type(inkwell::AddressSpace::Generic),
                         "",
                     )
                     .into_pointer_value(),
                 struct_val,
             );
 
-            builder.build_load(struct_pointer, "")
+            let result = builder.build_load(struct_pointer, "");
+
+            dbg!(&result);
+
+            let i64_type = ctx.i64_type().into();
+            let wrapper_type = ctx.struct_type(&[i64_type, array_type.into()], false);
+
+            let mut wrapper_val = wrapper_type.const_zero().into();
+
+            wrapper_val = builder
+                .build_insert_value(wrapper_val, ctx.i64_type().const_zero(), 0, "insert_field")
+                .unwrap();
+
+            wrapper_val = builder
+                .build_insert_value(wrapper_val, result, 1, "insert_field")
+                .unwrap();
+
+            wrapper_val.into_struct_value().into()
         }
         Access {
             label,
@@ -489,10 +503,33 @@ pub fn build_expr<'a, 'ctx, 'env>(
         AccessAtIndex {
             index,
             expr,
+            is_unwrapped,
+            ..
+        } if *is_unwrapped => {
+            let builder = env.builder;
+
+            // Get Struct val
+            // Since this is a one-element tag union, we get the correct struct immediately
+            let argument = build_expr(env, &scope, parent, expr, procs).into_struct_value();
+
+            builder
+                .build_extract_value(
+                    argument,
+                    *index as u32,
+                    env.arena.alloc(format!("tag_field_access_{}_", index)),
+                )
+                .unwrap()
+        }
+
+        AccessAtIndex {
+            index,
+            expr,
             field_layouts,
+            ..
         } => {
             let builder = env.builder;
 
+            let mut tag_size = 0;
             let ptr_size = env.pointer_bytes;
 
             // Determine types
@@ -503,44 +540,33 @@ pub fn build_expr<'a, 'ctx, 'env>(
             for field_layout in field_layouts.iter() {
                 let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
                 field_types.push(field_type);
+
+                let field_size = field_layout.stack_size(ptr_size);
+                tag_size += field_size;
             }
+
+            field_types.remove(0);
 
             // Create the struct_type
             let struct_type = env
                 .context
                 .struct_type(field_types.into_bump_slice(), false);
 
-            // Get Struct val
+            let argument = build_expr(env, &scope, parent, expr, procs).into_struct_value();
+            let argument_pointer = builder.build_alloca(argument.get_type(), "");
+            builder.build_store(argument_pointer, argument);
 
-            // we have an array of bytes, representing the structure
-            // let raw_bytes = build_expr(env, &scope, parent, expr, procs);
-
-            // here I'm faking the input, to make sure that the problem is here, and not
-            // in storing a tag in memory. stores the tag and an integer value
-            let array_type = env.context.i8_type().array_type(9);
-            let const_1: BasicValueEnum = env.context.i8_type().const_int(1, true).into();
-            let mut zeroes = array_type.const_zero();
-
-            // setting the first bit will toggle between Ok and Err
-            zeroes = builder
-                .build_insert_value(zeroes, const_1, 0, "")
-                .unwrap()
-                .into_array_value();
-
-            let bytes = BasicValueEnum::ArrayValue(zeroes);
-
-            // we make a pointer to the structure we want, but it will pretend
-            // (with the bitcast) to be a pointer to an array of bytes
-            let struct_pointer = builder.build_alloca(array_type, "");
-
-            builder.build_store(struct_pointer, bytes);
+            let i64_type = env.context.i64_type().into();
+            let desired_type = env
+                .context
+                .struct_type(&[i64_type, struct_type.into()], false);
 
             let argument = builder
                 .build_load(
                     builder
                         .build_bitcast(
-                            struct_pointer,
-                            struct_type.ptr_type(inkwell::AddressSpace::Generic),
+                            argument_pointer,
+                            desired_type.ptr_type(inkwell::AddressSpace::Generic),
                             "",
                         )
                         .into_pointer_value(),
@@ -548,13 +574,21 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 )
                 .into_struct_value();
 
-            builder
-                .build_extract_value(
-                    argument,
-                    *index as u32,
-                    env.arena.alloc(format!("tag_field_access_{}_", index)),
-                )
-                .unwrap()
+            if *index == 0 {
+                // the tag discriminant
+                builder.build_extract_value(argument, 0, "").unwrap()
+            } else {
+                // load the byte array representing the other fields
+                let constructor_value = builder
+                    .build_extract_value(argument, 1, "")
+                    .unwrap()
+                    .into_struct_value();
+
+                // and extract the desired field
+                builder
+                    .build_extract_value(constructor_value, (*index - 1) as u32, "")
+                    .unwrap()
+            }
         }
         _ => {
             panic!("I don't yet know how to LLVM build {:?}", expr);

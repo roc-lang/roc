@@ -200,6 +200,7 @@ pub enum Expr<'a> {
         index: u64,
         field_layouts: &'a [Layout<'a>],
         expr: &'a Expr<'a>,
+        is_unwrapped: bool,
     },
 
     Array {
@@ -893,11 +894,11 @@ fn store_pattern2<'a>(
         AppliedTag {
             union, arguments, ..
         } => {
-            let is_unwrapped = (union.alternatives.len() > 1) as usize;
+            let is_unwrapped = union.alternatives.len() == 1;
 
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
 
-            if is_unwrapped != 0 {
+            if !is_unwrapped {
                 arg_layouts.push(Layout::Builtin(Builtin::Byte(MutMap::default())));
             }
 
@@ -907,7 +908,8 @@ fn store_pattern2<'a>(
 
             for (index, (argument, arg_layout)) in arguments.iter().enumerate() {
                 let load = Expr::AccessAtIndex {
-                    index: (is_unwrapped + index) as u64,
+                    is_unwrapped,
+                    index: (!is_unwrapped as usize + index) as u64,
                     field_layouts: arg_layouts.clone().into_bump_slice(),
                     expr: env.arena.alloc(Expr::Load(outer_symbol)),
                 };

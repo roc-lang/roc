@@ -331,9 +331,11 @@ pub fn build_expr<'a, B: Backend>(
             index,
             field_layouts,
             expr,
+            ..
         } => {
             let cfg = env.cfg;
             let mut offset = 0;
+
 
             for (field_index, field_layout) in field_layouts.iter().enumerate() {
                 if *index == field_index as u64 {
