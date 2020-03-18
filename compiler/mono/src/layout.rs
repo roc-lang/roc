@@ -10,7 +10,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [(Lowercase, Layout<'a>)]),
-    Tag(&'a [Layout<'a>]),
+    Union(&'a MutMap<TagName, &'a [Layout<'a>]>),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
 }
@@ -86,7 +86,9 @@ impl<'a> Layout<'a> {
             Struct(fields) => fields
                 .iter()
                 .all(|(_, field_layout)| field_layout.safe_to_memcpy()),
-            Tag(tags) => tags.iter().all(|tag_layout| tag_layout.safe_to_memcpy()),
+            Union(tags) => tags
+                .iter()
+                .all(|(_, tag_layout)| tag_layout.iter().all(|field| field.safe_to_memcpy())),
             FunctionPointer(_, _) => {
                 // Function pointers are immutable and can always be safely copied
                 true
@@ -108,15 +110,23 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Tag(fields) => {
-                // the symbol is a 64-bit value, so 8 bytes
-                let mut sum = 8;
+            Union(fields) => {
+                // the tag gets converted to a u8, so 1 byte.
+                // But for one-tag unions, we don't store the tag, so 0 bytes
+                let discriminant_size: u32 = (fields.len() > 1) as u32;
 
-                for field_layout in *fields {
-                    sum += field_layout.stack_size(pointer_size);
-                }
+                let max_tag_size: u32 = fields
+                    .values()
+                    .map(|tag_layout| {
+                        tag_layout
+                            .iter()
+                            .map(|field| field.stack_size(pointer_size))
+                            .sum()
+                    })
+                    .max()
+                    .unwrap_or_default();
 
-                sum
+                discriminant_size + max_tag_size
             }
             FunctionPointer(_, _) => pointer_size,
         }
@@ -370,8 +380,18 @@ fn layout_from_flat_type<'a>(
                             Ok(Layout::Builtin(Builtin::Byte(tag_to_u8)))
                         }
                     } else {
-                        // panic!("TODO handle a tag union with mutliple tags: {:?}", tags);
-                        Ok(Layout::Tag(&[]))
+                        let mut layouts = MutMap::default();
+                        for (tag_name, arguments) in tags {
+                            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
+
+                            for arg in arguments {
+                                arg_layouts.push(Layout::from_var(arena, arg, subs, pointer_size)?);
+                            }
+
+                            layouts.insert(tag_name, arg_layouts.into_bump_slice());
+                        }
+
+                        Ok(Layout::Union(arena.alloc(layouts)))
                     }
                 }
             }

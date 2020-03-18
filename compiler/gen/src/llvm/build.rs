@@ -11,7 +11,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
 };
-use roc_collections::all::ImMap;
+use roc_collections::all::{ImMap, MutMap};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
@@ -295,6 +295,45 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in sorted_fields.iter() {
+                let val = build_expr(env, &scope, parent, field_expr, procs);
+                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+
+                field_types.push(field_type);
+                field_vals.push(val);
+            }
+
+            // Create the struct_type
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let mut struct_val = struct_type.const_zero().into();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                struct_val = builder
+                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                    .unwrap();
+            }
+
+            BasicValueEnum::StructValue(struct_val.into_struct_value())
+        }
+        Tag {
+            tag_id, arguments, ..
+        } => {
+            // put the discriminant in the first slot
+            let discriminant = (
+                Expr::Byte(*tag_id),
+                Layout::Builtin(Builtin::Byte(MutMap::default())),
+            );
+            let it = std::iter::once(&discriminant).chain(arguments.iter());
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            for (field_expr, field_layout) in it {
                 let val = build_expr(env, &scope, parent, field_expr, procs);
                 let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
 
