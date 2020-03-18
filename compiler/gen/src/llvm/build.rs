@@ -352,18 +352,16 @@ pub fn build_expr<'a, 'ctx, 'env>(
             BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
         Tag {
-            tag_id,
             arguments,
             tag_layout,
+            union_size,
+            tag_id,
             ..
         } => {
             let ptr_size = env.pointer_bytes;
 
             let whole_size = tag_layout.stack_size(ptr_size);
             let mut filler = tag_layout.stack_size(ptr_size);
-            // put the discriminant in the first slot
-            let discriminant = (Expr::Int(*tag_id as i64), Layout::Builtin(Builtin::Int64));
-            let it = std::iter::once(&discriminant).chain(arguments.iter());
 
             let ctx = env.context;
             let builder = env.builder;
@@ -373,7 +371,24 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_expr, field_layout) in it {
+            // insert the discriminant value
+            if *union_size > 1 {
+                let val = env
+                    .context
+                    .i64_type()
+                    .const_int(*tag_id as u64, true)
+                    .into();
+
+                let field_type = env.context.i64_type().into();
+
+                field_types.push(field_type);
+                field_vals.push(val);
+
+                let field_size = ptr_size;
+                filler -= field_size;
+            }
+
+            for (field_expr, field_layout) in arguments.iter() {
                 let val = build_expr(env, &scope, parent, field_expr, procs);
                 let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
 

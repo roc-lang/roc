@@ -110,24 +110,16 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Union(fields) => {
-                // the tag gets converted to a u8, so 1 byte.
-                // But for one-tag unions, we don't store the tag, so 0 bytes
-                let discriminant_size: u32 = if fields.len() > 1 { pointer_size } else { 0 };
-
-                let max_tag_size: u32 = fields
-                    .iter()
-                    .map(|tag_layout| {
-                        tag_layout
-                            .iter()
-                            .map(|field| field.stack_size(pointer_size))
-                            .sum()
-                    })
-                    .max()
-                    .unwrap_or_default();
-
-                discriminant_size + max_tag_size
-            }
+            Union(fields) => fields
+                .iter()
+                .map(|tag_layout| {
+                    tag_layout
+                        .iter()
+                        .map(|field| field.stack_size(pointer_size))
+                        .sum()
+                })
+                .max()
+                .unwrap_or_default(),
             FunctionPointer(_, _) => pointer_size,
         }
     }
@@ -390,9 +382,19 @@ pub fn layout_from_tag_union<'a>(
                     Ok(Layout::Builtin(Builtin::Byte))
                 }
             } else {
+                let add_discriminant = tags.len() != 1;
                 let mut layouts = Vec::with_capacity_in(tags.len(), arena);
+
                 for arguments in tags.values() {
-                    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
+                    // add a field for the discriminant if there is more than one tag in the union
+                    let mut arg_layouts = if add_discriminant {
+                        let discriminant = Layout::Builtin(Builtin::Int64);
+                        let mut result = Vec::with_capacity_in(arguments.len() + 1, arena);
+                        result.push(discriminant);
+                        result
+                    } else {
+                        Vec::with_capacity_in(arguments.len(), arena)
+                    };
 
                     for arg in arguments {
                         arg_layouts.push(Layout::from_var(arena, *arg, subs, pointer_size)?);

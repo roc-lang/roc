@@ -12,6 +12,7 @@ pub struct Union {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Ctor {
     pub name: TagName,
+    // pub tag_id: u8,
     pub arity: usize,
 }
 

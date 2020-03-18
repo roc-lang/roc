@@ -44,7 +44,7 @@ pub enum Test<'a> {
         tag_id: u8,
         tag_name: TagName,
         union: crate::pattern::Union,
-        arguments: Vec<Pattern<'a>>,
+        arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
     IsInt(i64),
     // float patterns are stored as u64 so they are comparable/hashable
@@ -261,7 +261,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>) -> Option<Test<'a>
                 tag_id: *tag_id,
                 tag_name: tag_name.clone(),
                 union: union.clone(),
-                arguments: arguments.clone().into_iter().map(|v| v.0).collect(),
+                arguments: arguments.to_vec(),
             }),
             BitLiteral(v) => Some(IsBit(*v)),
             EnumLiteral { tag_id, enum_size } => Some(IsByte {
@@ -711,7 +711,7 @@ fn decide_to_branching<'a>(
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
-    decider: Decider<Choice<'a>>,
+    decider: Decider<'a, Choice<'a>>,
     jumps: &Vec<(u64, Expr<'a>)>,
 ) -> Expr<'a> {
     use Choice::*;
@@ -733,18 +733,29 @@ fn decide_to_branching<'a>(
 
             for (path, test) in test_chain {
                 match test {
-                    Test::IsCtor { tag_id, union, .. } => {
+                    Test::IsCtor {
+                        tag_id,
+                        union,
+                        arguments,
+                        ..
+                    } => {
                         let lhs = Expr::Int(tag_id as i64);
 
-                        // NOTE this is hardcoded, and should be made dynamic
-                        let field_layouts = env.arena.alloc([
-                            Layout::Builtin(Builtin::Int64),
-                            Layout::Builtin(Builtin::Int64),
-                            Layout::Builtin(Builtin::Int64),
-                        ]);
+                        let mut field_layouts =
+                            bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
+
+                        if union.alternatives.len() > 1 {
+                            // the tag discriminant
+                            field_layouts.push(Layout::Builtin(Builtin::Int64));
+                        }
+
+                        for (_, layout) in arguments {
+                            field_layouts.push(layout);
+                        }
+
                         let rhs = Expr::AccessAtIndex {
                             index: 0,
-                            field_layouts,
+                            field_layouts: field_layouts.into_bump_slice(),
                             expr: env.arena.alloc(Expr::Load(cond_symbol)),
                             is_unwrapped: union.alternatives.len() == 1,
                         };

@@ -8,7 +8,7 @@ use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
@@ -1195,7 +1195,7 @@ fn specialize_proc_body<'a>(
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
@@ -1229,76 +1229,6 @@ pub struct RecordDestruct<'a> {
     pub label: Lowercase,
     pub symbol: Symbol,
     pub guard: Option<Pattern<'a>>,
-}
-
-impl<'a> Hash for Pattern<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        use Pattern::*;
-
-        match self {
-            Identifier(symbol) => {
-                state.write_u8(0);
-                symbol.hash(state);
-            }
-            Underscore => {
-                state.write_u8(1);
-            }
-
-            IntLiteral(v) => {
-                state.write_u8(2);
-                v.hash(state);
-            }
-            FloatLiteral(v) => {
-                state.write_u8(3);
-                v.hash(state);
-            }
-            BitLiteral(v) => {
-                state.write_u8(4);
-                v.hash(state);
-            }
-            EnumLiteral { tag_id, enum_size } => {
-                state.write_u8(5);
-                tag_id.hash(state);
-                enum_size.hash(state);
-            }
-            StrLiteral(v) => {
-                state.write_u8(6);
-                v.hash(state);
-            }
-
-            RecordDestructure(fields, _layout) => {
-                state.write_u8(7);
-                fields.hash(state);
-                // layout is ignored!
-            }
-
-            AppliedTag {
-                tag_name,
-                arguments,
-                union,
-                ..
-            } => {
-                state.write_u8(8);
-                tag_name.hash(state);
-                for (pat, _) in arguments {
-                    pat.hash(state);
-                }
-                union.hash(state);
-                // layout is ignored!
-            }
-
-            Shadowed(region, ident) => {
-                state.write_u8(9);
-                region.hash(state);
-                ident.hash(state);
-            }
-
-            UnsupportedPattern(region) => {
-                state.write_u8(10);
-                region.hash(state);
-            }
-        }
-    }
 }
 
 fn from_can_pattern<'a>(
