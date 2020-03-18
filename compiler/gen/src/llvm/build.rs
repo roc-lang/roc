@@ -27,17 +27,17 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
 type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
-pub struct Env<'a, 'ctx, 'env> {
+pub struct Env<'a, 'ctx, 'env, 'td> {
     pub arena: &'a Bump,
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
-    pub target_data: &'env TargetData,
+    pub target_data: &'td TargetData,
 }
 
-pub fn build_expr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_expr<'a, 'ctx, 'env, 'td>(
+    env: &Env<'a, 'ctx, 'env, 'td>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     expr: &Expr<'a>,
@@ -255,7 +255,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 let ptr_val = BasicValueEnum::PointerValue(ptr);
                 let struct_type = collection_wrapper(ctx, ptr.get_type());
-                let len = BasicValueEnum::IntValue(ctx.i32_type().const_int(len_u64, false));
                 let mut struct_val;
 
                 // Field 0: pointer
@@ -270,16 +269,15 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 // Field 1: length
                 struct_val = builder
-                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                    .unwrap();
-
-                // Field 2: capacity (initially set to length)
-                struct_val = builder
                     .build_insert_value(
                         struct_val,
-                        len,
-                        Builtin::WRAPPER_CAPACITY,
-                        "insert_capacity",
+                        BasicValueEnum::IntValue(
+                            env.target_data
+                                .ptr_sized_int_type_in_context(ctx, None)
+                                .const_int(len_u64, false),
+                        ),
+                        Builtin::WRAPPER_LEN,
+                        "insert_len",
                     )
                     .unwrap();
 
@@ -577,8 +575,8 @@ struct Branch2<'a> {
     ret_layout: Layout<'a>,
 }
 
-fn build_branch2<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_branch2<'a, 'ctx, 'env, 'td>(
+    env: &Env<'a, 'ctx, 'env, 'td>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     cond: Branch2<'a>,
@@ -608,8 +606,8 @@ struct SwitchArgs<'a, 'ctx> {
     pub ret_type: BasicTypeEnum<'ctx>,
 }
 
-fn build_switch<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_switch<'a, 'ctx, 'env, 'td>(
+    env: &Env<'a, 'ctx, 'env, 'td>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     switch_args: SwitchArgs<'a, 'ctx>,
@@ -695,8 +693,8 @@ fn build_switch<'a, 'ctx, 'env>(
 
 // TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
-fn build_phi2<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_phi2<'a, 'ctx, 'env, 'td>(
+    env: &Env<'a, 'ctx, 'env, 'td>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
@@ -756,7 +754,7 @@ fn set_name(bv_enum: BasicValueEnum<'_>, name: &str) {
 
 /// Creates a new stack allocation instruction in the entry block of the function.
 pub fn create_entry_block_alloca<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
+    env: &Env<'a, 'ctx, '_, '_>,
     parent: FunctionValue<'_>,
     basic_type: BasicTypeEnum<'ctx>,
     name: &str,
@@ -772,8 +770,8 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
     builder.build_alloca(basic_type, name)
 }
 
-pub fn build_proc_header<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_proc_header<'a, 'ctx, 'env, 'td>(
+    env: &Env<'a, 'ctx, 'env, 'td>,
     symbol: Symbol,
     proc: &Proc<'a>,
 ) -> (FunctionValue<'ctx>, Vec<'a, BasicTypeEnum<'ctx>>) {
@@ -802,8 +800,8 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     (fn_val, arg_basic_types)
 }
 
-pub fn build_proc<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_proc<'a, 'ctx, 'env, 'td>(
+    env: &Env<'a, 'ctx, 'env, 'td>,
     proc: Proc<'a>,
     procs: &Procs<'a>,
     fn_val: FunctionValue<'ctx>,
@@ -851,10 +849,10 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 
 #[inline(always)]
 #[allow(clippy::cognitive_complexity)]
-fn call_with_args<'a, 'ctx, 'env>(
+fn call_with_args<'a, 'ctx, 'env, 'td>(
     symbol: Symbol,
     args: &[BasicValueEnum<'ctx>],
-    env: &Env<'a, 'ctx, 'env>,
+    env: &Env<'a, 'ctx, 'env, 'td>,
 ) -> BasicValueEnum<'ctx> {
     match symbol {
         Symbol::INT_ADD | Symbol::NUM_ADD => {
