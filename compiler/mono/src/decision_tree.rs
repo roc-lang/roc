@@ -699,9 +699,7 @@ fn path_to_expr<'a>(
         // TODO path contains a nested path. Traverse all the way
         Path::Index { index, .. } => Expr::AccessAtIndex {
             index: *index,
-            field_layouts: env
-                .arena
-                .alloc([Layout::Builtin(Builtin::Byte(MutMap::default()))]),
+            field_layouts: env.arena.alloc([Layout::Builtin(Builtin::Byte)]),
             expr: env.arena.alloc(Expr::Load(symbol)),
             is_unwrapped,
         },
@@ -816,16 +814,14 @@ fn decide_to_branching<'a>(
                             cond_symbol,
                             &path,
                             false,
-                            Layout::Builtin(Builtin::Byte(MutMap::default())),
+                            Layout::Builtin(Builtin::Byte),
                         );
-
-                        let fake = MutMap::default();
 
                         let cond = env.arena.alloc(Expr::CallByName(
                             Symbol::INT_EQ_I8,
                             env.arena.alloc([
-                                (lhs, Layout::Builtin(Builtin::Byte(fake.clone()))),
-                                (rhs, Layout::Builtin(Builtin::Byte(fake))),
+                                (lhs, Layout::Builtin(Builtin::Byte)),
+                                (rhs, Layout::Builtin(Builtin::Byte)),
                             ]),
                         ));
 

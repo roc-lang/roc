@@ -633,7 +633,7 @@ fn build_switch<'a, 'ctx, 'env>(
         let int_val = match cond_layout {
             Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
             Layout::Builtin(Builtin::Bool) => context.bool_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Byte(_)) => context.i8_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Byte) => context.i8_type().const_int(*int as u64, false),
             _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
         };
         let block = context.append_basic_block(parent, format!("branch{}", int).as_str());

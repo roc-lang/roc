@@ -20,7 +20,7 @@ pub enum Builtin<'a> {
     Int64,
     Float64,
     Bool,
-    Byte(MutMap<TagName, u8>),
+    Byte,
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
@@ -157,7 +157,7 @@ impl<'a> Builtin<'a> {
             Int64 => Builtin::I64_SIZE,
             Float64 => Builtin::F64_SIZE,
             Bool => Builtin::BOOL_SIZE,
-            Byte(_) => Builtin::BYTE_SIZE,
+            Byte => Builtin::BYTE_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
@@ -169,7 +169,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int64 | Float64 | Bool | Byte(_) | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
+            Int64 | Float64 | Bool | Byte | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
             Str | Map(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -367,12 +367,7 @@ fn layout_from_flat_type<'a>(
                             Ok(Layout::Builtin(Builtin::Bool))
                         } else {
                             // up to 256 enum tags can be stored in a byte
-                            let mut tag_to_u8 = MutMap::default();
-
-                            for (counter, (name, _)) in tags.into_iter().enumerate() {
-                                tag_to_u8.insert(name, counter as u8);
-                            }
-                            Ok(Layout::Builtin(Builtin::Byte(tag_to_u8)))
+                            Ok(Layout::Builtin(Builtin::Byte))
                         }
                     } else {
                         let mut layouts = MutMap::default();

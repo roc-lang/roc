@@ -446,7 +446,7 @@ fn layout_to_type<'a>(layout: &Layout<'a>, _pointer_type: Type) -> Type {
     match layout {
         Layout::Builtin(builtin) => match builtin {
             Int64 => cranelift::prelude::types::I64,
-            Byte(_) => cranelift::prelude::types::I8,
+            Byte => cranelift::prelude::types::I8,
             Bool => cranelift::prelude::types::B1,
             Float64 => cranelift::prelude::types::F64,
             other => panic!("I don't yet know how to make a type from {:?}", other),

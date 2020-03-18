@@ -520,7 +520,7 @@ fn from_can<'a>(
                                 Builtin::Int64 => Symbol::INT_EQ_I64,
                                 Builtin::Float64 => Symbol::FLOAT_EQ,
                                 Builtin::Bool => Symbol::INT_EQ_I1,
-                                Builtin::Byte(_) => Symbol::INT_EQ_I8,
+                                Builtin::Byte => Symbol::INT_EQ_I8,
                                 _ => panic!("Equality not implemented for {:?}", builtin),
                             },
                             Ok(complex) => panic!(
@@ -695,10 +695,7 @@ fn from_can<'a>(
 
             match Layout::from_var(arena, variant_var, &env.subs, env.pointer_size) {
                 Ok(Layout::Builtin(Builtin::Bool)) => Expr::Bool(tag_id != 0),
-                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&tag_name) {
-                    Some(v) => Expr::Byte(*v),
-                    None => panic!("Tag name is not part of the type"),
-                },
+                Ok(Layout::Builtin(Builtin::Byte)) => Expr::Byte(tag_id as u8),
                 Ok(layout) => {
                     let mut arguments = Vec::with_capacity_in(args.len(), arena);
 
@@ -1344,12 +1341,9 @@ fn from_can_pattern<'a>(
 
             match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
                 Ok(Layout::Builtin(Builtin::Bool)) => Pattern::BitLiteral(tag_id != 0),
-                Ok(Layout::Builtin(Builtin::Byte(conversion))) => match conversion.get(&tag_name) {
-                    Some(index) => Pattern::EnumLiteral {
-                        tag_id: *index,
-                        enum_size: conversion.len() as u8,
-                    },
-                    None => unreachable!("Tag must be in its own type"),
+                Ok(Layout::Builtin(Builtin::Byte)) => Pattern::EnumLiteral {
+                    tag_id: tag_id as u8,
+                    enum_size: fields.len() as u8,
                 },
                 Ok(layout) => {
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
