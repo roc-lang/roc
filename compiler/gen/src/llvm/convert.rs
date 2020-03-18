@@ -2,7 +2,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
-use inkwell::types::{ArrayType, BasicType, FunctionType, PointerType, StructType};
+use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
 use inkwell::AddressSpace;
 
 use roc_mono::layout::Layout;
@@ -38,17 +38,20 @@ pub fn basic_type_from_layout<'ctx>(
     arena: &Bump,
     context: &'ctx Context,
     layout: &Layout<'_>,
+    ptr_bytes: u32,
 ) -> BasicTypeEnum<'ctx> {
     use roc_mono::layout::Builtin::*;
     use roc_mono::layout::Layout::*;
 
     match layout {
         FunctionPointer(args, ret_layout) => {
-            let ret_type = basic_type_from_layout(arena, context, &ret_layout);
+            let ret_type = basic_type_from_layout(arena, context, &ret_layout, ptr_bytes);
             let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
             for arg_layout in args.iter() {
-                arg_basic_types.push(basic_type_from_layout(arena, context, arg_layout));
+                arg_basic_types.push(basic_type_from_layout(
+                    arena, context, arg_layout, ptr_bytes,
+                ));
             }
 
             let fn_type = get_fn_type(&ret_type, arg_basic_types.into_bump_slice());
@@ -61,7 +64,12 @@ pub fn basic_type_from_layout<'ctx>(
             let mut field_types = Vec::with_capacity_in(sorted_fields.len(), arena);
 
             for (_, field_layout) in sorted_fields.iter() {
-                field_types.push(basic_type_from_layout(arena, context, field_layout));
+                field_types.push(basic_type_from_layout(
+                    arena,
+                    context,
+                    field_layout,
+                    ptr_bytes,
+                ));
             }
 
             context
@@ -75,7 +83,7 @@ pub fn basic_type_from_layout<'ctx>(
             let mut field_types = Vec::with_capacity_in(layouts.len(), arena);
 
             for layout in layouts.iter() {
-                field_types.push(basic_type_from_layout(arena, context, layout));
+                field_types.push(basic_type_from_layout(arena, context, layout, ptr_bytes));
             }
 
             context
@@ -107,17 +115,17 @@ pub fn basic_type_from_layout<'ctx>(
             Map(_, _) | EmptyMap => panic!("TODO layout_to_basic_type for Builtin::Map"),
             Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
             List(elem_layout) => {
-                let ptr_type = basic_type_from_layout(arena, context, elem_layout)
+                let ptr_type = basic_type_from_layout(arena, context, elem_layout, ptr_bytes)
                     .ptr_type(AddressSpace::Generic);
 
-                collection_wrapper(context, ptr_type).into()
+                collection_wrapper(context, ptr_type, ptr_bytes).into()
             }
             EmptyList => {
                 let array_type =
                     get_array_type(&context.opaque_struct_type("empty_list_elem").into(), 0);
                 let ptr_type = array_type.ptr_type(AddressSpace::Generic);
 
-                collection_wrapper(context, ptr_type).into()
+                collection_wrapper(context, ptr_type, ptr_bytes).into()
             }
         },
     }
@@ -127,9 +135,24 @@ pub fn basic_type_from_layout<'ctx>(
 pub fn collection_wrapper<'ctx>(
     ctx: &'ctx Context,
     ptr_type: PointerType<'ctx>,
+    ptr_bytes: u32,
 ) -> StructType<'ctx> {
     let ptr_type_enum = BasicTypeEnum::PointerType(ptr_type);
-    let u32_type = BasicTypeEnum::IntType(ctx.i32_type());
+    let len_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
 
-    ctx.struct_type(&[ptr_type_enum, u32_type, u32_type], false)
+    ctx.struct_type(&[ptr_type_enum, len_type], false)
+}
+
+pub fn ptr_int<'ctx>(ctx: &'ctx Context, ptr_bytes: u32) -> IntType<'ctx> {
+    match ptr_bytes {
+        1 => ctx.i8_type(),
+        2 => ctx.i16_type(),
+        4 => ctx.i32_type(),
+        8 => ctx.i64_type(),
+        16 => ctx.i128_type(),
+        _ => panic!(
+            "Invalid target: Roc does't support compiling to {}-bit systems.",
+            ptr_bytes * 8
+        ),
+    }
 }
