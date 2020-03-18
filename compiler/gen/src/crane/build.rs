@@ -189,16 +189,18 @@ pub fn build_expr<'a, B: Backend>(
                 slot_size
             ));
 
+            let mut offset = 0;
+
             // Create instructions for storing each field's expression
-            // NOTE assumes that all fields have the same width!
-            for (index, (field_expr, field_layout)) in sorted_fields.iter().enumerate() {
+            for (field_expr, field_layout) in sorted_fields.iter() {
                 let val = build_expr(env, &scope, module, builder, field_expr, procs);
 
                 let field_size = field_layout.stack_size(ptr_bytes);
-                let offset = i32::try_from(index * field_size as usize)
-                    .expect("TODO handle field size conversion to i32");
 
                 builder.ins().stack_store(val, slot, Offset32::new(offset));
+
+                offset += i32::try_from(field_size)
+                    .expect("TODO handle field size conversion to i32");
             }
 
             builder
