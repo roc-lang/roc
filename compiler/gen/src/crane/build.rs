@@ -14,7 +14,7 @@ use cranelift_codegen::Context;
 use cranelift_module::{Backend, FuncId, Linkage, Module};
 
 use crate::crane::convert::{sig_from_layout, type_from_layout};
-use roc_collections::all::{ImMap, MutMap};
+use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
@@ -205,7 +205,7 @@ pub fn build_expr<'a, B: Backend>(
                 .ins()
                 .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
-        Tag { tag_id, tag_layout, arguments , ..} => {
+        Tag { tag_layout, arguments , tag_id, union_size, .. } => {
             let cfg = env.cfg;
             let ptr_bytes = cfg.pointer_bytes() as u32;
 
@@ -220,13 +220,18 @@ pub fn build_expr<'a, B: Backend>(
                 slot_size
             ));
 
-            // put the discriminant in the first slot
-            let discriminant = (Expr::Byte(*tag_id), Layout::Builtin(Builtin::Byte(MutMap::default())));
-            let it = std::iter::once(&discriminant).chain(arguments.iter());
-
             // Create instructions for storing each field's expression
             let mut offset = 0;
-            for (field_expr, field_layout) in it {
+
+            // still need to insert the tag discriminator for non-single unions
+            // when there are no arguments, e.g. `Nothing : Maybe a`
+            if *union_size > 1 {
+                let val = builder.ins().iconst(types::I64, *tag_id as i64);
+                builder.ins().stack_store(val, slot, Offset32::new(0));
+                offset += ptr_bytes;
+            }
+
+            for (field_expr, field_layout) in arguments.iter() {
                 let val = build_expr(env, &scope, module, builder, field_expr, procs);
 
                 let field_size = field_layout.stack_size(ptr_bytes);
@@ -237,6 +242,7 @@ pub fn build_expr<'a, B: Backend>(
 
                 offset += field_size;
             }
+
 
             builder
                 .ins()
@@ -296,9 +302,12 @@ pub fn build_expr<'a, B: Backend>(
             index,
             field_layouts,
             expr,
+            ..
         } => {
             let cfg = env.cfg;
             let mut offset = 0;
+
+
 
             for (field_index, field_layout) in field_layouts.iter().enumerate() {
                 if *index == field_index as u64 {
@@ -409,8 +418,8 @@ fn layout_to_type<'a>(layout: &Layout<'a>, _pointer_type: Type) -> Type {
     match layout {
         Layout::Builtin(builtin) => match builtin {
             Int64 => cranelift::prelude::types::I64,
-            Byte(_) => cranelift::prelude::types::I8,
-            Bool(_, _) => cranelift::prelude::types::B1,
+            Byte => cranelift::prelude::types::I8,
+            Bool => cranelift::prelude::types::B1,
             Float64 => cranelift::prelude::types::F64,
             other => panic!("I don't yet know how to make a type from {:?}", other),
         },
@@ -450,7 +459,7 @@ fn build_branch2<'a, B: Backend>(
     let fail_block = builder.create_block();
 
     match branch.cond_layout {
-        Layout::Builtin(Builtin::Bool(_, _)) => {
+        Layout::Builtin(Builtin::Bool) => {
             builder.ins().brnz(cond, pass_block, &[]);
         }
         other => panic!("I don't know how to build a conditional for {:?}", other),

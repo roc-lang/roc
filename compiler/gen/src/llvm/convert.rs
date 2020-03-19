@@ -68,21 +68,38 @@ pub fn basic_type_from_layout<'ctx>(
                 .struct_type(field_types.into_bump_slice(), false)
                 .as_basic_type_enum()
         }
+        Union(tags) if tags.len() == 1 => {
+            let layouts = tags.iter().next().unwrap();
+
+            // Determine types
+            let mut field_types = Vec::with_capacity_in(layouts.len(), arena);
+
+            for layout in layouts.iter() {
+                field_types.push(basic_type_from_layout(arena, context, layout));
+            }
+
+            context
+                .struct_type(field_types.into_bump_slice(), false)
+                .as_basic_type_enum()
+        }
         Union(_) => {
             // TODO make this dynamic
             let ptr_size = std::mem::size_of::<i64>();
             let union_size = layout.stack_size(ptr_size as u32);
 
-            context
+            let array_type = context
                 .i8_type()
                 .array_type(union_size)
-                .as_basic_type_enum()
+                .as_basic_type_enum();
+
+            context.struct_type(&[array_type], false).into()
         }
+
         Builtin(builtin) => match builtin {
             Int64 => context.i64_type().as_basic_type_enum(),
             Float64 => context.f64_type().as_basic_type_enum(),
-            Bool(_, _) => context.bool_type().as_basic_type_enum(),
-            Byte(_) => context.i8_type().as_basic_type_enum(),
+            Bool => context.bool_type().as_basic_type_enum(),
+            Byte => context.i8_type().as_basic_type_enum(),
             Str | EmptyStr => context
                 .i8_type()
                 .ptr_type(AddressSpace::Generic)

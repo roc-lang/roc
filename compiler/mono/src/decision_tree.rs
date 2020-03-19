@@ -44,7 +44,7 @@ pub enum Test<'a> {
         tag_id: u8,
         tag_name: TagName,
         union: crate::pattern::Union,
-        arguments: Vec<Pattern<'a>>,
+        arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
     IsInt(i64),
     // float patterns are stored as u64 so they are comparable/hashable
@@ -261,7 +261,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>) -> Option<Test<'a>
                 tag_id: *tag_id,
                 tag_name: tag_name.clone(),
                 union: union.clone(),
-                arguments: arguments.clone().into_iter().collect(),
+                arguments: arguments.to_vec(),
             }),
             BitLiteral(v) => Some(IsBit(*v)),
             EnumLiteral { tag_id, enum_size } => Some(IsByte {
@@ -310,9 +310,10 @@ fn to_relevant_branch<'a>(test: &Test<'a>, path: &Path, branch: Branch<'a>) -> O
             AppliedTag {
                 union,
                 tag_name,
-                mut arguments,
+                arguments,
                 ..
             } => {
+                let mut arguments: Vec<_> = arguments.into_iter().map(|v| v.0).collect();
                 match test {
                     IsCtor {
                         tag_name: test_name,
@@ -680,10 +681,11 @@ fn path_to_expr<'a>(
     env: &mut Env<'a, '_>,
     symbol: Symbol,
     path: &Path,
+    is_unwrapped: bool,
     field_layouts: Layout<'a>,
 ) -> Expr<'a> {
     match path {
-        Path::Unbox(ref path) => path_to_expr(env, symbol, path, field_layouts),
+        Path::Unbox(ref path) => path_to_expr(env, symbol, path, true, field_layouts),
 
         // TODO make this work with AccessAtIndex.
         // that already works for structs, but not for basic types for some reason
@@ -697,10 +699,9 @@ fn path_to_expr<'a>(
         // TODO path contains a nested path. Traverse all the way
         Path::Index { index, .. } => Expr::AccessAtIndex {
             index: *index,
-            field_layouts: env
-                .arena
-                .alloc([Layout::Builtin(Builtin::Byte(MutMap::default()))]),
+            field_layouts: env.arena.alloc([Layout::Builtin(Builtin::Byte)]),
             expr: env.arena.alloc(Expr::Load(symbol)),
+            is_unwrapped,
         },
     }
 }
@@ -710,7 +711,7 @@ fn decide_to_branching<'a>(
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
-    decider: Decider<Choice<'a>>,
+    decider: Decider<'a, Choice<'a>>,
     jumps: &Vec<(u64, Expr<'a>)>,
 ) -> Expr<'a> {
     use Choice::*;
@@ -732,21 +733,38 @@ fn decide_to_branching<'a>(
 
             for (path, test) in test_chain {
                 match test {
-                    Test::IsCtor { tag_id, .. } => {
-                        let lhs = Expr::Byte(tag_id);
-                        let rhs = path_to_expr(
-                            env,
-                            cond_symbol,
-                            &path,
-                            Layout::Builtin(Builtin::Byte(MutMap::default())),
-                        );
-                        let fake = MutMap::default();
+                    Test::IsCtor {
+                        tag_id,
+                        union,
+                        arguments,
+                        ..
+                    } => {
+                        let lhs = Expr::Int(tag_id as i64);
+
+                        let mut field_layouts =
+                            bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
+
+                        if union.alternatives.len() > 1 {
+                            // the tag discriminant
+                            field_layouts.push(Layout::Builtin(Builtin::Int64));
+                        }
+
+                        for (_, layout) in arguments {
+                            field_layouts.push(layout);
+                        }
+
+                        let rhs = Expr::AccessAtIndex {
+                            index: 0,
+                            field_layouts: field_layouts.into_bump_slice(),
+                            expr: env.arena.alloc(Expr::Load(cond_symbol)),
+                            is_unwrapped: union.alternatives.len() == 1,
+                        };
 
                         let cond = env.arena.alloc(Expr::CallByName(
-                            Symbol::INT_EQ_I8,
+                            Symbol::INT_EQ_I64,
                             env.arena.alloc([
-                                (lhs, Layout::Builtin(Builtin::Byte(fake.clone()))),
-                                (rhs, Layout::Builtin(Builtin::Byte(fake))),
+                                (lhs, Layout::Builtin(Builtin::Int64)),
+                                (rhs, Layout::Builtin(Builtin::Int64)),
                             ]),
                         ));
 
@@ -754,8 +772,13 @@ fn decide_to_branching<'a>(
                     }
                     Test::IsInt(test_int) => {
                         let lhs = Expr::Int(test_int);
-                        let rhs =
-                            path_to_expr(env, cond_symbol, &path, Layout::Builtin(Builtin::Int64));
+                        let rhs = path_to_expr(
+                            env,
+                            cond_symbol,
+                            &path,
+                            false,
+                            Layout::Builtin(Builtin::Int64),
+                        );
 
                         let cond = env.arena.alloc(Expr::CallByName(
                             Symbol::INT_EQ_I64,
@@ -776,6 +799,7 @@ fn decide_to_branching<'a>(
                             env,
                             cond_symbol,
                             &path,
+                            false,
                             Layout::Builtin(Builtin::Float64),
                         );
 
@@ -800,16 +824,15 @@ fn decide_to_branching<'a>(
                             env,
                             cond_symbol,
                             &path,
-                            Layout::Builtin(Builtin::Byte(MutMap::default())),
+                            false,
+                            Layout::Builtin(Builtin::Byte),
                         );
-
-                        let fake = MutMap::default();
 
                         let cond = env.arena.alloc(Expr::CallByName(
                             Symbol::INT_EQ_I8,
                             env.arena.alloc([
-                                (lhs, Layout::Builtin(Builtin::Byte(fake.clone()))),
-                                (rhs, Layout::Builtin(Builtin::Byte(fake))),
+                                (lhs, Layout::Builtin(Builtin::Byte)),
+                                (rhs, Layout::Builtin(Builtin::Byte)),
                             ]),
                         ));
 
@@ -839,10 +862,7 @@ fn decide_to_branching<'a>(
                 jumps,
             ));
 
-            let cond_layout = Layout::Builtin(Builtin::Bool(
-                TagName::Global("False".into()),
-                TagName::Global("True".into()),
-            ));
+            let cond_layout = Layout::Builtin(Builtin::Bool);
 
             Expr::Cond {
                 cond,
@@ -857,9 +877,13 @@ fn decide_to_branching<'a>(
             tests,
             fallback,
         } => {
-            let cond = env
-                .arena
-                .alloc(path_to_expr(env, cond_symbol, &path, cond_layout.clone()));
+            let cond = env.arena.alloc(path_to_expr(
+                env,
+                cond_symbol,
+                &path,
+                false,
+                cond_layout.clone(),
+            ));
 
             let default_branch = env.arena.alloc(decide_to_branching(
                 env,

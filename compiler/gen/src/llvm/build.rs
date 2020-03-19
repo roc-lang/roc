@@ -11,7 +11,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
 };
-use roc_collections::all::{ImMap, MutMap};
+use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
@@ -316,14 +316,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
             BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
         Tag {
-            tag_id, arguments, ..
-        } => {
-            // put the discriminant in the first slot
-            let discriminant = (
-                Expr::Byte(*tag_id),
-                Layout::Builtin(Builtin::Byte(MutMap::default())),
-            );
-            let it = std::iter::once(&discriminant).chain(arguments.iter());
+            union_size,
+            arguments,
+            ..
+        } if *union_size == 1 => {
+            let it = arguments.iter();
 
             let ctx = env.context;
             let builder = env.builder;
@@ -353,6 +350,119 @@ pub fn build_expr<'a, 'ctx, 'env>(
             }
 
             BasicValueEnum::StructValue(struct_val.into_struct_value())
+        }
+        Tag {
+            arguments,
+            tag_layout,
+            union_size,
+            tag_id,
+            ..
+        } => {
+            let ptr_size = env.pointer_bytes;
+
+            let whole_size = tag_layout.stack_size(ptr_size);
+            let mut filler = tag_layout.stack_size(ptr_size);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            // insert the discriminant value
+            if *union_size > 1 {
+                let val = env
+                    .context
+                    .i64_type()
+                    .const_int(*tag_id as u64, true)
+                    .into();
+
+                let field_type = env.context.i64_type().into();
+
+                field_types.push(field_type);
+                field_vals.push(val);
+
+                let field_size = ptr_size;
+                filler -= field_size;
+            }
+
+            for (field_expr, field_layout) in arguments.iter() {
+                let val = build_expr(env, &scope, parent, field_expr, procs);
+                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+
+                field_types.push(field_type);
+                field_vals.push(val);
+
+                let field_size = field_layout.stack_size(ptr_size);
+                filler -= field_size;
+            }
+
+            // TODO verify that this is required (better safe than sorry)
+            if filler > 0 {
+                field_types.push(env.context.i8_type().array_type(filler).into());
+            }
+
+            // Create the struct_type
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let mut struct_val = struct_type.const_zero().into();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                struct_val = builder
+                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                    .unwrap();
+            }
+
+            // How we create tag values
+            //
+            // The memory layout of tags can be different. e.g. in
+            //
+            // [ Ok Int, Err Str ]
+            //
+            // the `Ok` tag stores a 64-bit integer, the `Err` tag stores a struct.
+            // All tags of a union must have the same length, for easy addressing (e.g. array lookups).
+            // So we need to ask for the maximum of all tag's sizes, even if most tags won't use
+            // all that memory, and certainly won't use it in the same way (the tags have fields of
+            // different types/sizes)
+            //
+            // In llvm, we must be explicit about the type of value we're creating: we can't just
+            // make a unspecified block of memory. So what we do is create a byte array of the
+            // desired size. Then when we know which tag we have (which is here, in this function),
+            // we need to cast that down to the array of bytes that llvm expects
+            //
+            // There is the bitcast instruction, but it doesn't work for arrays. So we need to jump
+            // through some hoops using store and load to get this to work: the array is put into a
+            // one-element struct, which can be cast to the desired type.
+            //
+            // This tricks comes from
+            // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
+
+            let array_type = ctx.i8_type().array_type(whole_size);
+            let struct_pointer = builder.build_alloca(array_type, "struct_poitner");
+
+            builder.build_store(
+                builder
+                    .build_bitcast(
+                        struct_pointer,
+                        struct_type.ptr_type(inkwell::AddressSpace::Generic),
+                        "",
+                    )
+                    .into_pointer_value(),
+                struct_val,
+            );
+
+            let result = builder.build_load(struct_pointer, "");
+
+            // For unclear reasons, we can't cast an array to a struct on the other side.
+            // the solution is to wrap the array in a struct (yea...)
+            let wrapper_type = ctx.struct_type(&[array_type.into()], false);
+            let mut wrapper_val = wrapper_type.const_zero().into();
+            wrapper_val = builder
+                .build_insert_value(wrapper_val, result, 0, "insert_field")
+                .unwrap();
+            wrapper_val.into_struct_value().into()
         }
         Access {
             label,
@@ -386,6 +496,71 @@ pub fn build_expr<'a, 'ctx, 'env>(
             builder
                 .build_extract_value(struct_val, index, "field_access")
                 .unwrap()
+        }
+        AccessAtIndex {
+            index,
+            expr,
+            is_unwrapped,
+            ..
+        } if *is_unwrapped => {
+            let builder = env.builder;
+
+            // Get Struct val
+            // Since this is a one-element tag union, we get the correct struct immediately
+            let argument = build_expr(env, &scope, parent, expr, procs).into_struct_value();
+
+            builder
+                .build_extract_value(
+                    argument,
+                    *index as u32,
+                    env.arena.alloc(format!("tag_field_access_{}_", index)),
+                )
+                .unwrap()
+        }
+
+        AccessAtIndex {
+            index,
+            expr,
+            field_layouts,
+            ..
+        } => {
+            let builder = env.builder;
+
+            // Determine types, assumes the descriminant is in the field layouts
+            let num_fields = field_layouts.len();
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+
+            for field_layout in field_layouts.iter() {
+                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+                field_types.push(field_type);
+            }
+
+            // Create the struct_type
+            let struct_type = env
+                .context
+                .struct_type(field_types.into_bump_slice(), false);
+
+            // cast the argument bytes into the desired shape for this tag
+            let argument = build_expr(env, &scope, parent, expr, procs).into_struct_value();
+            let argument_pointer = builder.build_alloca(argument.get_type(), "");
+            builder.build_store(argument_pointer, argument);
+
+            let argument = builder
+                .build_load(
+                    builder
+                        .build_bitcast(
+                            argument_pointer,
+                            struct_type.ptr_type(inkwell::AddressSpace::Generic),
+                            "",
+                        )
+                        .into_pointer_value(),
+                    "",
+                )
+                .into_struct_value();
+
+            builder
+                .build_extract_value(argument, *index as u32, "")
+                .expect("desired field did not decode")
         }
         _ => {
             panic!("I don't yet know how to LLVM build {:?}", expr);
@@ -472,10 +647,8 @@ fn build_switch<'a, 'ctx, 'env>(
         // they either need to all be i8, or i64
         let int_val = match cond_layout {
             Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Bool(_, _)) => {
-                context.bool_type().const_int(*int as u64, false)
-            }
-            Layout::Builtin(Builtin::Byte(_)) => context.i8_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Bool) => context.bool_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Byte) => context.i8_type().const_int(*int as u64, false),
             _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
         };
         let block = context.append_basic_block(parent, format!("branch{}", int).as_str());

@@ -13,8 +13,6 @@ mod helpers;
 mod test_mono {
     use crate::helpers::{can_expr, infer_expr, test_home, CanExprOut};
     use bumpalo::Bump;
-    use roc_collections::all::MutMap;
-    use roc_module::ident::TagName::*;
     use roc_module::symbol::{Interns, Symbol};
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::Procs;
@@ -164,7 +162,7 @@ mod test_mono {
 
                 Cond {
                     cond: &Expr::Bool(true),
-                    cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                    cond_layout: Builtin(Bool),
                     pass: &Expr::Str("bar"),
                     fail: &Expr::Str("foo"),
                     ret_layout: Builtin(Str),
@@ -190,11 +188,11 @@ mod test_mono {
 
                 Cond {
                     cond: &Expr::Bool(true),
-                    cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                    cond_layout: Builtin(Bool),
                     pass: &Expr::Str("bar"),
                     fail: &Cond {
                         cond: &Expr::Bool(false),
-                        cond_layout: Builtin(Bool(Global("False".into()), Global("True".into()))),
+                        cond_layout: Builtin(Bool),
                         pass: &Expr::Str("foo"),
                         fail: &Expr::Str("baz"),
                         ret_layout: Builtin(Str),
@@ -228,10 +226,7 @@ mod test_mono {
                         Builtin(Str),
                         Cond {
                             cond: &Expr::Bool(true),
-                            cond_layout: Builtin(Bool(
-                                Global("False".into()),
-                                Global("True".into()),
-                            )),
+                            cond_layout: Builtin(Bool),
                             pass: &Expr::Str("bar"),
                             fail: &Expr::Str("foo"),
                             ret_layout: Builtin(Str),
@@ -361,11 +356,7 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let stores = [(
-                    var_x,
-                    Layout::Builtin(Builtin::Bool(Global("False".into()), Global("True".into()))),
-                    Bool(true),
-                )];
+                let stores = [(var_x, Layout::Builtin(Builtin::Bool), Bool(true))];
 
                 let load = Load(var_x);
 
@@ -389,11 +380,7 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let stores = [(
-                    var_x,
-                    Layout::Builtin(Builtin::Bool(Global("No".into()), Global("Yes".into()))),
-                    Bool(false),
-                )];
+                let stores = [(var_x, Layout::Builtin(Builtin::Bool), Bool(false))];
 
                 let load = Load(var_x);
 
@@ -418,13 +405,8 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let mut fruits = MutMap::default();
-
-                fruits.insert(Global("Banana".into()), 0);
-                fruits.insert(Global("Orange".into()), 1);
-                fruits.insert(Global("Apple".into()), 2);
-
-                let stores = [(var_x, Layout::Builtin(Builtin::Byte(fruits)), Byte(1))];
+                // orange gets index (and therefore tag_id) 1
+                let stores = [(var_x, Layout::Builtin(Builtin::Byte), Byte(2))];
 
                 let load = Load(var_x);
 

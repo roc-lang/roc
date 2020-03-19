@@ -8,7 +8,7 @@ use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
@@ -186,6 +186,7 @@ pub enum Expr<'a> {
         tag_layout: Layout<'a>,
         tag_name: TagName,
         tag_id: u8,
+        union_size: u8,
         arguments: &'a [(Expr<'a>, Layout<'a>)],
     },
     Struct(&'a [(Expr<'a>, Layout<'a>)]),
@@ -199,6 +200,7 @@ pub enum Expr<'a> {
         index: u64,
         field_layouts: &'a [Layout<'a>],
         expr: &'a Expr<'a>,
+        is_unwrapped: bool,
     },
 
     Array {
@@ -426,7 +428,7 @@ fn from_can<'a>(
             store_pattern(
                 env,
                 mono_pattern,
-                loc_expr.value,
+                &loc_expr.value,
                 def.expr_var,
                 procs,
                 &mut stored,
@@ -517,8 +519,8 @@ fn from_can<'a>(
                             Ok(Layout::Builtin(builtin)) => match builtin {
                                 Builtin::Int64 => Symbol::INT_EQ_I64,
                                 Builtin::Float64 => Symbol::FLOAT_EQ,
-                                Builtin::Bool(_, _) => Symbol::INT_EQ_I1,
-                                Builtin::Byte(_) => Symbol::INT_EQ_I8,
+                                Builtin::Bool => Symbol::INT_EQ_I1,
+                                Builtin::Byte => Symbol::INT_EQ_I8,
                                 _ => panic!("Equality not implemented for {:?}", builtin),
                             },
                             Ok(complex) => panic!(
@@ -678,14 +680,22 @@ fn from_can<'a>(
         } => {
             let arena = env.arena;
 
+            let mut fields = std::vec::Vec::new();
+
+            match roc_types::pretty_print::chase_ext_tag_union(env.subs, variant_var, &mut fields) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(content) => panic!("invalid content in ext_var: {:?}", content),
+            }
+
+            fields.sort();
+            let tag_id = fields
+                .iter()
+                .position(|(key, _)| key == &tag_name)
+                .expect("tag must be in its own type");
+
             match Layout::from_var(arena, variant_var, &env.subs, env.pointer_size) {
-                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => {
-                    Expr::Bool(tag_name == larger)
-                }
-                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&tag_name) {
-                    Some(v) => Expr::Byte(*v),
-                    None => panic!("Tag name is not part of the type"),
-                },
+                Ok(Layout::Builtin(Builtin::Bool)) => Expr::Bool(tag_id != 0),
+                Ok(Layout::Builtin(Builtin::Byte)) => Expr::Byte(tag_id as u8),
                 Ok(layout) => {
                     let mut arguments = Vec::with_capacity_in(args.len(), arena);
 
@@ -717,12 +727,15 @@ fn from_can<'a>(
                         }
                     }
 
+                    let union_size = tags.len() as u8;
+
                     let tag_id = opt_tag_id.expect("Tag must be in its own type");
 
                     Expr::Tag {
                         tag_layout: layout,
                         tag_name,
                         tag_id,
+                        union_size,
                         arguments: arguments.into_bump_slice(),
                     }
                 }
@@ -807,7 +820,7 @@ fn from_can<'a>(
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     can_pat: Pattern,
-    can_expr: roc_can::expr::Expr,
+    can_expr: &roc_can::expr::Expr,
     var: Variable,
     procs: &mut Procs<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
@@ -835,19 +848,111 @@ fn store_pattern<'a>(
     //     identity 5
     //
     match can_pat {
-        Identifier(symbol) => stored.push((symbol, layout, from_can(env, can_expr, procs, None))),
+        Identifier(symbol) => {
+            stored.push((symbol, layout, from_can(env, can_expr.clone(), procs, None)))
+        }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
             stored.push((
                 Symbol::UNDERSCORE,
                 layout,
-                from_can(env, can_expr, procs, None),
+                from_can(env, can_expr.clone(), procs, None),
             ))
         }
         _ => {
             panic!("TODO store_pattern for {:?}", can_pat);
         }
     }
+}
+
+fn store_pattern2<'a>(
+    env: &mut Env<'a, '_>,
+    can_pat: &Pattern<'a>,
+    outer_symbol: Symbol,
+    _index: usize,
+    layout: Layout<'a>,
+    stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+) -> Result<(), String> {
+    use Pattern::*;
+
+    match can_pat {
+        Identifier(symbol) => {
+            if true {
+                // stored.push((*symbol, layout, Expr::Load(outer_symbol)))
+                //                let load = Expr::AccessAtIndex {
+                //                    index: index as u64,
+                //                    field_layouts: env.arena.alloc([
+                //                        Layout::Builtin(Builtin::Int64),
+                //                        Layout::Builtin(Builtin::Int64),
+                //                    ]),
+                //                    expr: env.arena.alloc(Expr::Load(outer_symbol)),
+                //                };
+
+                let load = Expr::Load(outer_symbol);
+                stored.push((*symbol, layout, load))
+            } else {
+                todo!()
+            }
+        }
+        Underscore => {
+            // Since _ is never read, it's safe to reassign it.
+            stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
+        }
+        IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+        AppliedTag {
+            union, arguments, ..
+        } => {
+            let is_unwrapped = union.alternatives.len() == 1;
+
+            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            if !is_unwrapped {
+                // add an element for the tag discriminant
+                arg_layouts.push(Layout::Builtin(Builtin::Int64));
+            }
+
+            for (_, layout) in arguments {
+                arg_layouts.push(layout.clone());
+            }
+
+            for (index, (argument, arg_layout)) in arguments.iter().enumerate() {
+                let load = Expr::AccessAtIndex {
+                    is_unwrapped,
+                    index: (!is_unwrapped as usize + index) as u64,
+                    field_layouts: arg_layouts.clone().into_bump_slice(),
+                    expr: env.arena.alloc(Expr::Load(outer_symbol)),
+                };
+                match argument {
+                    Identifier(symbol) => {
+                        // store immediately in the given symbol
+                        stored.push((*symbol, arg_layout.clone(), load));
+                    }
+                    Underscore => {
+                        // ignore
+                    }
+                    _ => {
+                        // store the field in a symbol, and continue matching on it
+                        let symbol = env.fresh_symbol();
+                        stored.push((symbol, layout.clone(), load));
+
+                        store_pattern2(env, argument, symbol, 0, arg_layout.clone(), stored)?;
+                    }
+                }
+            }
+        }
+
+        Shadowed(region, ident) => {
+            return Err(format!(
+                "The pattern at {:?} shadows variable {:?}",
+                region, ident
+            ));
+        }
+        _ => {
+            panic!("TODO store_pattern for {:?}", can_pat);
+        }
+    }
+
+    Ok(())
 }
 
 fn from_can_when<'a>(
@@ -875,20 +980,36 @@ fn from_can_when<'a>(
             let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
 
             let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
-            store_pattern(
-                env,
-                mono_pattern,
-                loc_cond.value,
-                cond_var,
-                procs,
-                &mut stored,
-            );
 
-            let ret = from_can(env, loc_branch.value, procs, None);
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+            let cond_symbol = env.fresh_symbol();
+            let cond = from_can(env, loc_cond.value, procs, None);
+            stored.push((cond_symbol, cond_layout.clone(), cond));
+
+            // NOTE this will still store shadowed names. I think that is fine because the branch
+            // will throw an error anyway.
+            let ret = match store_pattern2(
+                env,
+                &mono_pattern,
+                cond_symbol,
+                0,
+                cond_layout,
+                &mut stored,
+            ) {
+                Ok(_) => from_can(env, loc_branch.value, procs, None),
+                Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+            };
 
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
         _ => {
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+            let cond = from_can(env, loc_cond.value, procs, None);
+            let cond_symbol = env.fresh_symbol();
+
             let mut loc_branches = std::vec::Vec::new();
             let mut opt_branches = std::vec::Vec::new();
 
@@ -897,7 +1018,22 @@ fn from_can_when<'a>(
 
                 loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
 
-                let mono_expr = from_can(env, loc_expr.value, procs, None);
+                let mut stores = Vec::with_capacity_in(1, env.arena);
+
+                let mono_expr = match store_pattern2(
+                    env,
+                    &mono_pattern,
+                    cond_symbol,
+                    0,
+                    cond_layout.clone(),
+                    &mut stores,
+                ) {
+                    Ok(_) => Expr::Store(
+                        stores.into_bump_slice(),
+                        env.arena.alloc(from_can(env, loc_expr.value, procs, None)),
+                    ),
+                    Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+                };
 
                 opt_branches.push((mono_pattern, mono_expr));
             }
@@ -906,13 +1042,6 @@ fn from_can_when<'a>(
                 Ok(_) => {}
                 Err(errors) => panic!("Errors in patterns: {:?}", errors),
             }
-
-            let cond = from_can(env, loc_cond.value, procs, None);
-            let cond_symbol = env.fresh_symbol();
-
-            // TODO store cond in the symbol
-            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
-                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
             let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
                 .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
@@ -1066,7 +1195,7 @@ fn specialize_proc_body<'a>(
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
@@ -1084,7 +1213,7 @@ pub enum Pattern<'a> {
     AppliedTag {
         tag_name: TagName,
         tag_id: u8,
-        arguments: Vec<'a, Pattern<'a>>,
+        arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
         layout: Layout<'a>,
         union: crate::pattern::Union,
     },
@@ -1100,74 +1229,6 @@ pub struct RecordDestruct<'a> {
     pub label: Lowercase,
     pub symbol: Symbol,
     pub guard: Option<Pattern<'a>>,
-}
-
-impl<'a> Hash for Pattern<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        use Pattern::*;
-
-        match self {
-            Identifier(symbol) => {
-                state.write_u8(0);
-                symbol.hash(state);
-            }
-            Underscore => {
-                state.write_u8(1);
-            }
-
-            IntLiteral(v) => {
-                state.write_u8(2);
-                v.hash(state);
-            }
-            FloatLiteral(v) => {
-                state.write_u8(3);
-                v.hash(state);
-            }
-            BitLiteral(v) => {
-                state.write_u8(4);
-                v.hash(state);
-            }
-            EnumLiteral { tag_id, enum_size } => {
-                state.write_u8(5);
-                tag_id.hash(state);
-                enum_size.hash(state);
-            }
-            StrLiteral(v) => {
-                state.write_u8(6);
-                v.hash(state);
-            }
-
-            RecordDestructure(fields, _layout) => {
-                state.write_u8(7);
-                fields.hash(state);
-                // layout is ignored!
-            }
-
-            AppliedTag {
-                tag_name,
-                arguments,
-                union,
-                ..
-            } => {
-                state.write_u8(8);
-                tag_name.hash(state);
-                arguments.hash(state);
-                union.hash(state);
-                // layout is ignored!
-            }
-
-            Shadowed(region, ident) => {
-                state.write_u8(9);
-                region.hash(state);
-                ident.hash(state);
-            }
-
-            UnsupportedPattern(region) => {
-                state.write_u8(10);
-                region.hash(state);
-            }
-        }
-    }
 }
 
 fn from_can_pattern<'a>(
@@ -1194,72 +1255,70 @@ fn from_can_pattern<'a>(
             tag_name,
             arguments,
             ..
-        } => match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
-            Ok(Layout::Builtin(Builtin::Bool(_bottom, top))) => {
-                Pattern::BitLiteral(tag_name == &top)
+        } => {
+            let mut fields = std::vec::Vec::new();
+
+            match roc_types::pretty_print::chase_ext_tag_union(env.subs, *whole_var, &mut fields) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(content) => panic!("invalid content in ext_var: {:?}", content),
             }
-            Ok(Layout::Builtin(Builtin::Byte(conversion))) => match conversion.get(&tag_name) {
-                Some(index) => Pattern::EnumLiteral {
-                    tag_id: *index,
-                    enum_size: conversion.len() as u8,
+
+            fields.sort();
+            let tag_id = fields
+                .iter()
+                .position(|(key, _)| key == tag_name)
+                .expect("tag must be in its own type");
+
+            let enum_size = fields.len();
+
+            let mut ctors = std::vec::Vec::with_capacity(fields.len());
+            for (tag_name, args) in &fields {
+                ctors.push(Ctor {
+                    name: tag_name.clone(),
+                    arity: args.len(),
+                })
+            }
+
+            let union = crate::pattern::Union {
+                alternatives: ctors,
+            };
+
+            let fields_map: MutMap<_, _> = fields.into_iter().collect();
+
+            match crate::layout::layout_from_tag_union(
+                env.arena,
+                &fields_map,
+                env.subs,
+                env.pointer_size,
+            ) {
+                Ok(Layout::Builtin(Builtin::Bool)) => Pattern::BitLiteral(tag_id != 0),
+                Ok(Layout::Builtin(Builtin::Byte)) => Pattern::EnumLiteral {
+                    tag_id: tag_id as u8,
+                    enum_size: enum_size as u8,
                 },
-                None => unreachable!("Tag must be in its own type"),
-            },
-            Ok(layout) => {
-                let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                for (_, loc_pat) in arguments {
-                    mono_args.push(from_can_pattern(env, &loc_pat.value));
-                }
+                Ok(layout) => {
+                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+                    for (pat_var, loc_pat) in arguments {
+                        let layout =
+                            Layout::from_var(env.arena, *pat_var, env.subs, env.pointer_size)
+                                .unwrap_or_else(|err| {
+                                    panic!("TODO turn pat_var into a RuntimeError {:?}", err)
+                                });
 
-                let mut fields = std::vec::Vec::new();
-                let union = match roc_types::pretty_print::chase_ext_tag_union(
-                    env.subs,
-                    *whole_var,
-                    &mut fields,
-                ) {
-                    Ok(()) | Err((_, Content::FlexVar(_))) => {
-                        let mut ctors = std::vec::Vec::with_capacity(fields.len());
-                        for (tag_name, args) in fields {
-                            ctors.push(crate::pattern::Ctor {
-                                name: tag_name.clone(),
-                                arity: args.len(),
-                            })
-                        }
-
-                        crate::pattern::Union {
-                            alternatives: ctors,
-                        }
+                        mono_args.push((from_can_pattern(env, &loc_pat.value), layout));
                     }
-                    Err(content) => panic!("invalid content in ext_var: {:?}", content),
-                };
 
-                let mut names: std::vec::Vec<_> = union
-                    .alternatives
-                    .iter()
-                    .map(|Ctor { name, .. }| name)
-                    .collect();
-                names.sort();
-
-                let mut opt_tag_id = None;
-                for (index, name) in names.iter().enumerate() {
-                    if name == &tag_name {
-                        opt_tag_id = Some(index as u8);
-                        break;
+                    Pattern::AppliedTag {
+                        tag_name: tag_name.clone(),
+                        tag_id: tag_id as u8,
+                        arguments: mono_args,
+                        union,
+                        layout,
                     }
                 }
-
-                let tag_id = opt_tag_id.expect("Tag must be in its own type");
-
-                Pattern::AppliedTag {
-                    tag_name: tag_name.clone(),
-                    tag_id,
-                    arguments: mono_args,
-                    union,
-                    layout,
-                }
+                Err(()) => panic!("Invalid layout"),
             }
-            Err(()) => panic!("Invalid layout"),
-        },
+        }
 
         RecordDestructure {
             whole_var,

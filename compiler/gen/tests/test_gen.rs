@@ -77,6 +77,7 @@ mod test_gen {
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
+
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
 
@@ -136,7 +137,6 @@ mod test_gen {
                 // TODO try deleting this line and seeing if everything still works.
                 builder.append_block_params_for_function_params(block);
 
-                dbg!(&mono_expr);
                 let main_body =
                     roc_gen::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
@@ -148,7 +148,7 @@ mod test_gen {
                 builder.finalize();
             }
 
-            module.define_function(main_fn, &mut ctx).expect("declare main");
+            module.define_function(main_fn, &mut ctx).expect("crane declare main");
             module.clear_context(&mut ctx);
 
             // Perform linking
@@ -226,6 +226,8 @@ mod test_gen {
 
             // Populate Procs and get the low-level Expr from the canonical Expr
             let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
+
+            dbg!(&main_body);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -677,20 +679,68 @@ mod test_gen {
         );
     }
 
-    //    #[test]
-    //    fn branch_store_variable() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                        when 0 is
-    //                            1 -> 12
-    //                            a -> a
-    //                    "#
-    //            ),
-    //            0,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn branch_store_variable() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        when 0 is
+                            1 -> 12
+                            a -> a
+                    "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn one_element_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Pair Int ]
+                x = Pair 2
+
+                0x3
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn when_one_element_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Pair Int Int ]
+                x = Pair 0x2 0x3
+
+                when x is
+                    Pair l r -> l + r
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
+    fn twice_record_access() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x =  {a: 0x2, b: 0x3 }
+
+                x.a + x.b
+                "#
+            ),
+            5,
+            i64
+        );
+    }
 
     #[test]
     fn gen_when_one_branch() {
@@ -1133,33 +1183,55 @@ mod test_gen {
         );
     }
 
+    #[test]
+    fn applied_tag_nothing() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                x : Maybe Int
+                x = Nothing
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+    #[test]
+    fn applied_tag_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                y : Maybe Int
+                y = Just 0x4
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    //
     //    #[test]
-    //    fn applied_tag_nothing() {
+    //    fn applied_tag_just_unit() {
     //        assert_evals_to!(
     //            indoc!(
     //                r#"
+    //                Fruit : [ Orange, Apple, Banana ]
     //                Maybe a : [ Just a, Nothing ]
     //
-    //                x : Maybe Int
-    //                x = Nothing
+    //                orange : Fruit
+    //                orange = Orange
     //
-    //                0x1
-    //                "#
-    //            ),
-    //            1,
-    //            i64
-    //        );
-    //    }
-    //
-    //    #[test]
-    //    fn applied_tag_just() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                Maybe a : [ Just a, Nothing ]
-    //
-    //                y : Maybe Int
-    //                y = Just 0x4
+    //                y : Maybe Fruit
+    //                y = Just orange
     //
     //                0x1
     //                "#
@@ -1169,23 +1241,77 @@ mod test_gen {
     //        );
     //    }
 
+    #[test]
+    fn when_on_nothing() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Nothing, Just Int ]
+                x = Nothing
+
+                when x is
+                    Nothing -> 0x2
+                    Just _ -> 0x1
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
     //    #[test]
-    //    fn when_on_result() {
+    //    fn when_on_just() {
     //        assert_evals_to!(
     //            indoc!(
     //                r#"
-    //                x : Result Int Int
-    //                x = Ok 42
+    //                x : [ Nothing, Just Int ]
+    //                x = Just 41
     //
-    //                when x is
-    //                    Err _ -> 4
-    //                    Ok _ -> 0
+    //                case x of
+    //                    Just v -> v + 0x1
+    //                    Nothing -> 0x1
     //                "#
     //            ),
-    //            0,
+    //            42,
     //            i64
     //        );
     //    }
+
+    #[test]
+    fn when_on_result() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : Result Int Int
+                x = Err 41
+
+                when x is
+                    Err v ->  v + 1
+                    Ok _ -> 1
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    fn when_on_these() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ This Int, These Int Int ]
+                x = These 0x3 0x2
+
+                when x is
+                    These a b -> a + b
+                    This v -> v
+                "#
+            ),
+            5,
+            i64
+        );
+    }
 
     #[test]
     fn basic_record() {
@@ -1294,6 +1420,18 @@ mod test_gen {
                 "#
             ),
             19,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { x: 15, y: 17, z: 19 }
+
+                    rec.z + rec.x
+                "#
+            ),
+            34,
             i64
         );
     }
