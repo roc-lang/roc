@@ -1333,6 +1333,20 @@ mod test_gen {
         );
     }
 
+    #[test]
+    fn when_on_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x: 0x2 } is
+                    { x } -> x + 3
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
     //    #[test]
     //    fn when_on_just_just() {
     //        assert_evals_to!(
