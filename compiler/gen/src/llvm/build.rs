@@ -116,10 +116,33 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
         CallByName(symbol, args) => match *symbol {
             Symbol::BOOL_OR => {
-                panic!("TODO create a phi node for ||");
+                // The (||) operator
+                debug_assert!(args.len() == 2);
+
+                let comparison = build_expr(env, scope, parent, &args[0].0, procs).into_int_value();
+                let then_val: BasicValueEnum =
+                    env.context.bool_type().const_int(true as u64, false).into();
+                let else_val = build_expr(env, scope, parent, &args[1].0, procs);
+
+                let ret_type = env.context.bool_type().into();
+
+                build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
             }
             Symbol::BOOL_AND => {
-                panic!("TODO create a phi node for &&");
+                // The (&&) operator
+                debug_assert!(args.len() == 2);
+
+                let comparison = build_expr(env, scope, parent, &args[0].0, procs).into_int_value();
+                let then_val = build_expr(env, scope, parent, &args[1].0, procs);
+                let else_val: BasicValueEnum = env
+                    .context
+                    .bool_type()
+                    .const_int(false as u64, false)
+                    .into();
+
+                let ret_type = env.context.bool_type().into();
+
+                build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
             }
             _ => {
                 let mut arg_vals: Vec<BasicValueEnum> =
@@ -629,9 +652,12 @@ fn build_branch2<'a, 'ctx, 'env>(
     let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
 
     match cond_expr {
-        IntValue(value) => build_phi2(
-            env, scope, parent, value, cond.pass, cond.fail, ret_type, procs,
-        ),
+        IntValue(value) => {
+            let then_val = build_expr(env, scope, parent, cond.pass, procs);
+            let else_val = build_expr(env, scope, parent, cond.fail, procs);
+
+            build_basic_phi2(env, parent, value, then_val, else_val, ret_type)
+        }
         _ => panic!(
             "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
             cond_expr,
@@ -752,8 +778,9 @@ fn build_switch<'a, 'ctx, 'env>(
 }
 
 // TODO trim down these arguments
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-fn build_phi2<'a, 'ctx, 'env>(
+fn build_expr_phi2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
@@ -762,6 +789,20 @@ fn build_phi2<'a, 'ctx, 'env>(
     fail: &'a Expr<'a>,
     ret_type: BasicTypeEnum<'ctx>,
     procs: &Procs<'a>,
+) -> BasicValueEnum<'ctx> {
+    let then_val = build_expr(env, scope, parent, pass, procs);
+    let else_val = build_expr(env, scope, parent, fail, procs);
+
+    build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
+}
+
+fn build_basic_phi2<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    comparison: IntValue<'ctx>,
+    pass: BasicValueEnum<'a>,
+    fail: BasicValueEnum<'a>,
+    ret_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let context = env.context;
@@ -775,14 +816,12 @@ fn build_phi2<'a, 'ctx, 'env>(
 
     // build then block
     builder.position_at_end(then_block);
-    let then_val = build_expr(env, scope, parent, pass, procs);
     builder.build_unconditional_branch(cont_block);
 
     let then_block = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(else_block);
-    let else_val = build_expr(env, scope, parent, fail, procs);
     builder.build_unconditional_branch(cont_block);
 
     let else_block = builder.get_insert_block().unwrap();
@@ -792,10 +831,7 @@ fn build_phi2<'a, 'ctx, 'env>(
 
     let phi = builder.build_phi(ret_type, "branch");
 
-    phi.add_incoming(&[
-        (&Into::<BasicValueEnum>::into(then_val), then_block),
-        (&Into::<BasicValueEnum>::into(else_val), else_block),
-    ]);
+    phi.add_incoming(&[(&pass, then_block), (&fail, else_block)]);
 
     phi.as_basic_value()
 }
