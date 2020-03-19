@@ -70,7 +70,9 @@ mod test_gen {
                 arena: &arena,
                 interns,
                 cfg,
-                malloc
+                malloc,
+                variable_counter: &mut 0
+
             };
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
@@ -87,7 +89,7 @@ mod test_gen {
             // can look up their Funcs in scope later when calling each other by value.
             for (name, opt_proc) in procs.as_map().into_iter() {
                 if let Some(proc) = opt_proc {
-                    let (func_id, sig) = declare_proc(&env, &mut module, name, &proc);
+                    let (func_id, sig) = declare_proc(&mut env, &mut module, name, &proc);
 
                     declared.push((proc.clone(), sig.clone(), func_id));
 
@@ -97,13 +99,13 @@ mod test_gen {
 
             for (proc, sig, fn_id) in declared {
                 define_proc_body(
-                    &env,
+                    &mut env,
                     &mut ctx,
                     &mut module,
                     fn_id,
                     &scope,
                     sig,
-                    proc,
+                    arena.alloc(proc),
                     &procs,
                 );
 
@@ -137,7 +139,7 @@ mod test_gen {
                 builder.append_block_params_for_function_params(block);
 
                 let main_body =
-                    roc_gen::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
+                    roc_gen::crane::build::build_expr(&mut env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
                 builder.ins().return_(&[main_body]);
                 // TODO re-enable this once Switch stops making unsealed blocks, e.g.

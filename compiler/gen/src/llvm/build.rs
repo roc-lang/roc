@@ -35,6 +35,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub pointer_bytes: u32,
 }
 
+#[allow(clippy::cognitive_complexity)]
 pub fn build_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -816,12 +817,14 @@ fn build_basic_phi2<'a, 'ctx, 'env>(
 
     // build then block
     builder.position_at_end(then_block);
+    let then_val = pass;
     builder.build_unconditional_branch(cont_block);
 
     let then_block = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(else_block);
+    let else_val = fail;
     builder.build_unconditional_branch(cont_block);
 
     let else_block = builder.get_insert_block().unwrap();
@@ -831,7 +834,7 @@ fn build_basic_phi2<'a, 'ctx, 'env>(
 
     let phi = builder.build_phi(ret_type, "branch");
 
-    phi.add_incoming(&[(&pass, then_block), (&fail, else_block)]);
+    phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
 
     phi.as_basic_value()
 }

@@ -1,6 +1,7 @@
 use crate::expr::Env;
 use crate::expr::Expr;
 use crate::expr::Pattern;
+use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
@@ -793,13 +794,13 @@ fn decide_to_branching<'a>(
                             is_unwrapped: union.alternatives.len() == 1,
                         };
 
-                        let cond = env.arena.alloc(Expr::CallByName(
+                        let cond = Expr::CallByName(
                             Symbol::INT_EQ_I64,
                             env.arena.alloc([
                                 (lhs, Layout::Builtin(Builtin::Int64)),
                                 (rhs, Layout::Builtin(Builtin::Int64)),
                             ]),
-                        ));
+                        );
 
                         tests.push(cond);
                     }
@@ -813,13 +814,13 @@ fn decide_to_branching<'a>(
                             env.arena.alloc([Layout::Builtin(Builtin::Int64)]),
                         );
 
-                        let cond = env.arena.alloc(Expr::CallByName(
+                        let cond = Expr::CallByName(
                             Symbol::INT_EQ_I64,
                             env.arena.alloc([
                                 (lhs, Layout::Builtin(Builtin::Int64)),
                                 (rhs, Layout::Builtin(Builtin::Int64)),
                             ]),
-                        ));
+                        );
 
                         tests.push(cond);
                     }
@@ -836,13 +837,13 @@ fn decide_to_branching<'a>(
                             env.arena.alloc([Layout::Builtin(Builtin::Float64)]),
                         );
 
-                        let cond = env.arena.alloc(Expr::CallByName(
+                        let cond = Expr::CallByName(
                             Symbol::FLOAT_EQ,
                             env.arena.alloc([
                                 (lhs, Layout::Builtin(Builtin::Float64)),
                                 (rhs, Layout::Builtin(Builtin::Float64)),
                             ]),
-                        ));
+                        );
 
                         tests.push(cond);
                     }
@@ -861,13 +862,13 @@ fn decide_to_branching<'a>(
                             env.arena.alloc([Layout::Builtin(Builtin::Byte)]),
                         );
 
-                        let cond = env.arena.alloc(Expr::CallByName(
+                        let cond = Expr::CallByName(
                             Symbol::INT_EQ_I8,
                             env.arena.alloc([
                                 (lhs, Layout::Builtin(Builtin::Byte)),
                                 (rhs, Layout::Builtin(Builtin::Byte)),
                             ]),
-                        ));
+                        );
 
                         tests.push(cond);
                     }
@@ -893,14 +894,12 @@ fn decide_to_branching<'a>(
                 jumps,
             ));
 
-            // TODO take the boolean and of all the tests
-            debug_assert!(tests.len() == 1);
-            let cond = tests.remove(0);
+            let cond = boolean_all(env.arena, tests);
 
             let cond_layout = Layout::Builtin(Builtin::Bool);
 
             Expr::Cond {
-                cond,
+                cond: env.arena.alloc(cond),
                 cond_layout,
                 pass,
                 fail,
@@ -963,6 +962,22 @@ fn decide_to_branching<'a>(
             }
         }
     }
+}
+
+fn boolean_all<'a>(arena: &'a Bump, tests: Vec<Expr<'a>>) -> Expr<'a> {
+    let mut expr = Expr::Bool(true);
+
+    for test in tests.into_iter().rev() {
+        expr = Expr::CallByName(
+            Symbol::BOOL_AND,
+            arena.alloc([
+                (test, Layout::Builtin(Builtin::Bool)),
+                (expr, Layout::Builtin(Builtin::Bool)),
+            ]),
+        );
+    }
+
+    expr
 }
 
 /// TREE TO DECIDER
