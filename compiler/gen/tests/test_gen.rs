@@ -227,8 +227,6 @@ mod test_gen {
             // Populate Procs and get the low-level Expr from the canonical Expr
             let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
-            dbg!(&main_body);
-
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
 
@@ -1309,6 +1307,39 @@ mod test_gen {
                 "#
             ),
             5,
+            i64
+        );
+    }
+
+    #[test]
+    fn empty_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                v = {}
+
+                1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn unit_type() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Unit : [ Unit ]
+
+                v : Unit
+                v = Unit
+
+                1
+                "#
+            ),
+            1,
             i64
         );
     }

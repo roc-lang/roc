@@ -672,6 +672,8 @@ fn from_can<'a>(
             Expr::Struct(field_tuples.into_bump_slice())
         }
 
+        EmptyRecord => Expr::Struct(&[]),
+
         Tag {
             variant_var,
             name: tag_name,

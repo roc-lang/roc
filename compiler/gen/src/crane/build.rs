@@ -27,6 +27,10 @@ pub enum ScopeEntry {
     Heap { expr_type: Type, ptr: Value },
     Arg { expr_type: Type, param: Value },
     Func { sig: Signature, func_id: FuncId },
+
+    // For empty records and unit types, storing is a no-op and values can be created "out of thin
+    // air". No need to use stack space for them.
+    ZeroSized,
 }
 
 pub struct Env<'a> {
@@ -101,13 +105,21 @@ pub fn build_expr<'a, B: Backend>(
             let mut scope = im_rc::HashMap::clone(scope);
             let cfg = env.cfg;
 
+            let ptr_size = cfg.pointer_bytes()  as u32;
             for (name, layout, expr) in stores.iter() {
+                let stack_size = layout.stack_size(ptr_size);
+
+                if stack_size == 0 {
+                    scope.insert(*name, ScopeEntry::ZeroSized);
+                    continue;
+                }
+
                 let val = build_expr(env, &scope, module, builder, &expr, procs);
                 let expr_type = type_from_layout(cfg, &layout);
 
                 let slot = builder.create_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
-                    layout.stack_size(cfg.pointer_bytes() as u32),
+                    stack_size,
                 ));
 
                 builder.ins().stack_store(val, slot, Offset32::new(0));
@@ -167,6 +179,17 @@ pub fn build_expr<'a, B: Backend>(
             }
             Some(ScopeEntry::Func { .. }) => {
                 panic!("TODO I don't yet know how to return fn pointers")
+            }
+            Some(ScopeEntry::ZeroSized) => {
+                // Create a slot
+                let slot = builder.create_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    0
+                ));
+
+                builder
+                    .ins()
+                    .stack_addr(env.cfg.pointer_type(), slot, Offset32::new(0))
             }
             None => panic!(
                 "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
