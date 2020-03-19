@@ -11,7 +11,7 @@ mod helpers;
 mod test_report {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
-    use roc_reporting::report::{can_problem, DEFAULT_PALETTE, plain_text, Report, ReportText};
+    use roc_reporting::report::{can_problem, plain_text, Report, ReportText, DEFAULT_PALETTE};
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use roc_types::types;
