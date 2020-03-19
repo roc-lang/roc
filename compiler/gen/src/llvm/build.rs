@@ -132,7 +132,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
                     Vec::with_capacity_in(args.len(), env.arena);
 
-                for (arg, layout) in args.into_iter() {
+                for (arg, layout) in args.iter() {
                     arg_tuples.push((build_expr(env, scope, parent, arg, procs), layout));
                 }
 
@@ -1067,7 +1067,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
-            for (arg, _layout) in args.into_iter() {
+            for (arg, _layout) in args.iter() {
                 arg_vals.push(*arg);
             }
 

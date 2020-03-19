@@ -143,7 +143,7 @@ pub fn collection_wrapper<'ctx>(
     ctx.struct_type(&[ptr_type_enum, len_type], false)
 }
 
-pub fn ptr_int<'ctx>(ctx: &'ctx Context, ptr_bytes: u32) -> IntType<'ctx> {
+pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
     match ptr_bytes {
         1 => ctx.i8_type(),
         2 => ctx.i16_type(),
