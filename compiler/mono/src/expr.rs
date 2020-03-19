@@ -943,7 +943,7 @@ fn store_record_destruct<'a>(
                 stored.push((*symbol, destruct.layout.clone(), load));
             }
             Pattern::Underscore => {
-                // important that this is special-cased: mono record patterns will extract all the
+                // important that this is special-cased to do nothing: mono record patterns will extract all the
                 // fields, but those not bound in the source code are guarded with the underscore
                 // pattern. So given some record `{ x : a, y : b }`, a match
                 //
@@ -992,6 +992,15 @@ fn from_can_when<'a>(
             let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
 
             let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+
+            // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
+            match crate::pattern::check(
+                Region::zero(),
+                &[Located::at(loc_when_pattern.region, mono_pattern.clone())],
+            ) {
+                Ok(_) => {}
+                Err(errors) => panic!("Errors in patterns: {:?}", errors),
+            }
 
             let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
                 .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));

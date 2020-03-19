@@ -77,7 +77,6 @@ mod test_gen {
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
-
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
 
@@ -1339,6 +1338,44 @@ mod test_gen {
             indoc!(
                 r#"
                 when { x: 0x2 } is
+                    { x } -> x + 3
+                "#
+            ),
+            5,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x: 0x2, y: 3.14 } is
+                    { x: var } -> var + 3
+                "#
+            ),
+            5,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { x } = { x: 0x2, y: 3.14 }
+
+                x
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn record_guard_pattern() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x: 0x2, y: 3.14 } is
+                    { x: 0x4 } -> 5
                     { x } -> x + 3
                 "#
             ),

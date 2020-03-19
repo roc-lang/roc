@@ -7,6 +7,7 @@ use roc_module::symbol::Symbol;
 
 use crate::layout::Builtin;
 use crate::layout::Layout;
+use crate::pattern::{Ctor, Union};
 
 /// COMPILE CASES
 
@@ -245,11 +246,33 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>) -> Option<Test<'a>
     {
         None => None,
         Some((_, pattern)) => match pattern {
-            Identifier(_)
-            | RecordDestructure(_, _)
-            | Underscore
-            | Shadowed(_, _)
-            | UnsupportedPattern(_) => None,
+            Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => None,
+
+            RecordDestructure(destructs, _) => {
+                let union = Union {
+                    alternatives: vec![Ctor {
+                        name: TagName::Global("#Record".into()),
+                        arity: destructs.len(),
+                    }],
+                };
+
+                let mut arguments = std::vec::Vec::new();
+
+                for destruct in destructs {
+                    if let Some(guard) = &destruct.guard {
+                        arguments.push((guard.clone(), destruct.layout.clone()));
+                    } else {
+                        arguments.push((Pattern::Underscore, destruct.layout.clone()));
+                    }
+                }
+
+                Some(IsCtor {
+                    tag_id: 0,
+                    tag_name: TagName::Global("#Record".into()),
+                    union,
+                    arguments,
+                })
+            }
 
             AppliedTag {
                 tag_name,
@@ -302,11 +325,42 @@ fn to_relevant_branch<'a>(test: &Test<'a>, path: &Path, branch: Branch<'a>) -> O
             found_pattern: pattern,
             end,
         } => match pattern {
-            RecordDestructure(_, _)
-            | Identifier(_)
-            | Underscore
-            | Shadowed(_, _)
-            | UnsupportedPattern(_) => Some(branch),
+            Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch),
+
+            RecordDestructure(destructs, _) => match test {
+                IsCtor {
+                    tag_name: test_name,
+                    ..
+                } => {
+                    debug_assert!(test_name == &TagName::Global("#Record".into()));
+
+                    let sub_positions =
+                        destructs.into_iter().enumerate().map(|(index, destruct)| {
+                            let pattern = if let Some(guard) = destruct.guard {
+                                guard.clone()
+                            } else {
+                                Pattern::Underscore
+                            };
+
+                            (
+                                Path::Index {
+                                    index: index as u64,
+                                    path: Box::new(path.clone()),
+                                },
+                                pattern,
+                            )
+                        });
+                    start.extend(sub_positions);
+                    start.extend(end);
+
+                    Some(Branch {
+                        goal: branch.goal,
+                        patterns: start,
+                    })
+                }
+                _ => None,
+            },
+
             AppliedTag {
                 union,
                 tag_name,
@@ -349,22 +403,6 @@ fn to_relevant_branch<'a>(test: &Test<'a>, path: &Path, branch: Branch<'a>) -> O
                     }
                     _ => None,
                 }
-                /*
-                 *
-                Can.PCtor _ _ (Can.Union _ _ numAlts _) name _ ctorArgs ->
-                    case test of
-                      IsCtor _ testName _ _ _ | name == testName ->
-                        Just $ Branch goal $
-                          case map dearg ctorArgs of
-                            [arg] | numAlts == 1 ->
-                              start ++ [(Unbox path, arg)] ++ end
-
-                            args ->
-                              start ++ subPositions path args ++ end
-
-                      _ ->
-                        Nothing
-                      */
             }
             StrLiteral(string) => match test {
                 IsStr(test_str) if string == *test_str => {
@@ -682,24 +720,17 @@ fn path_to_expr<'a>(
     symbol: Symbol,
     path: &Path,
     is_unwrapped: bool,
-    field_layouts: Layout<'a>,
+    field_layouts: &'a [Layout<'a>],
 ) -> Expr<'a> {
     match path {
         Path::Unbox(ref path) => path_to_expr(env, symbol, path, true, field_layouts),
 
-        // TODO make this work with AccessAtIndex.
-        // that already works for structs, but not for basic types for some reason
-        //            Expr::AccessAtIndex {
-        //                index: 0,
-        //                field_layouts: env.arena.alloc([field_layouts]),
-        //                expr: env.arena.alloc(Expr::Load(symbol)),
-        //            },
         Path::Empty => Expr::Load(symbol),
 
         // TODO path contains a nested path. Traverse all the way
         Path::Index { index, .. } => Expr::AccessAtIndex {
             index: *index,
-            field_layouts: env.arena.alloc([Layout::Builtin(Builtin::Byte)]),
+            field_layouts,
             expr: env.arena.alloc(Expr::Load(symbol)),
             is_unwrapped,
         },
@@ -739,15 +770,17 @@ fn decide_to_branching<'a>(
                         arguments,
                         ..
                     } => {
+                        // the IsCtor check should never be generated for tag unions of size 1
+                        // (e.g. record pattern guard matches)
+                        debug_assert!(union.alternatives.len() > 1);
+
                         let lhs = Expr::Int(tag_id as i64);
 
                         let mut field_layouts =
                             bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
 
-                        if union.alternatives.len() > 1 {
-                            // the tag discriminant
-                            field_layouts.push(Layout::Builtin(Builtin::Int64));
-                        }
+                        // add the tag discriminant
+                        field_layouts.push(Layout::Builtin(Builtin::Int64));
 
                         for (_, layout) in arguments {
                             field_layouts.push(layout);
@@ -777,7 +810,7 @@ fn decide_to_branching<'a>(
                             cond_symbol,
                             &path,
                             false,
-                            Layout::Builtin(Builtin::Int64),
+                            env.arena.alloc([Layout::Builtin(Builtin::Int64)]),
                         );
 
                         let cond = env.arena.alloc(Expr::CallByName(
@@ -800,7 +833,7 @@ fn decide_to_branching<'a>(
                             cond_symbol,
                             &path,
                             false,
-                            Layout::Builtin(Builtin::Float64),
+                            env.arena.alloc([Layout::Builtin(Builtin::Float64)]),
                         );
 
                         let cond = env.arena.alloc(Expr::CallByName(
@@ -825,7 +858,7 @@ fn decide_to_branching<'a>(
                             cond_symbol,
                             &path,
                             false,
-                            Layout::Builtin(Builtin::Byte),
+                            env.arena.alloc([Layout::Builtin(Builtin::Byte)]),
                         );
 
                         let cond = env.arena.alloc(Expr::CallByName(
@@ -841,8 +874,6 @@ fn decide_to_branching<'a>(
                     _ => todo!(),
                 }
             }
-
-            let cond = tests.remove(0);
 
             let pass = env.arena.alloc(decide_to_branching(
                 env,
@@ -861,6 +892,10 @@ fn decide_to_branching<'a>(
                 *failure,
                 jumps,
             ));
+
+            // TODO take the boolean and of all the tests
+            debug_assert!(tests.len() == 1);
+            let cond = tests.remove(0);
 
             let cond_layout = Layout::Builtin(Builtin::Bool);
 
@@ -882,7 +917,7 @@ fn decide_to_branching<'a>(
                 cond_symbol,
                 &path,
                 false,
-                cond_layout.clone(),
+                env.arena.alloc([cond_layout.clone()]),
             ));
 
             let default_branch = env.arena.alloc(decide_to_branching(
@@ -935,6 +970,15 @@ fn decide_to_branching<'a>(
 /// Decision trees may have some redundancies, so we convert them to a Decider
 /// which has special constructs to avoid code duplication when possible.
 
+/// If a test always succeeds, we don't need to branch on it
+/// this saves on work and jumps
+fn test_always_succeeds(test: &Test) -> bool {
+    match test {
+        Test::IsCtor { union, .. } => union.alternatives.len() == 1,
+        _ => false,
+    }
+}
+
 fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
     use Decider::*;
     use DecisionTree::*;
@@ -958,7 +1002,11 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
                     let (_, failure_tree) = edges.remove(1);
                     let (test, success_tree) = edges.remove(0);
 
-                    to_chain(path, test, success_tree, failure_tree)
+                    if test_always_succeeds(&test) {
+                        tree_to_decider(success_tree)
+                    } else {
+                        to_chain(path, test, success_tree, failure_tree)
+                    }
                 }
 
                 _ => {
@@ -983,7 +1031,11 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
                     let failure_tree = *last;
                     let (test, success_tree) = edges.remove(0);
 
-                    to_chain(path, test, success_tree, failure_tree)
+                    if test_always_succeeds(&test) {
+                        tree_to_decider(success_tree)
+                    } else {
+                        to_chain(path, test, success_tree, failure_tree)
+                    }
                 }
 
                 _ => {

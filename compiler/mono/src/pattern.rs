@@ -72,9 +72,24 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
 
         Underscore => Anything,
         Identifier(_) => Anything,
-        RecordDestructure { .. } => {
-            // TODO we must check the guard conditions!
-            Anything
+        RecordDestructure(destructures, _) => {
+            let union = Union {
+                alternatives: vec![Ctor {
+                    name: TagName::Global("#Record".into()),
+                    arity: destructures.len(),
+                }],
+            };
+
+            let mut patterns = std::vec::Vec::with_capacity(destructures.len());
+
+            for destruct in destructures {
+                match &destruct.guard {
+                    None => patterns.push(Anything),
+                    Some(guard) => patterns.push(simplify(guard)),
+                }
+            }
+
+            Ctor(union, TagName::Global("#Record".into()), patterns)
         }
 
         Shadowed(_region, _ident) => {
