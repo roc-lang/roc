@@ -541,6 +541,7 @@ fn build_switch<'a, B: Backend>(
     let SwitchArgs {
         branches,
         cond_expr,
+        cond_layout,
         default_branch,
         ret_type,
         ..
@@ -570,7 +571,24 @@ fn build_switch<'a, B: Backend>(
     }
 
     // Run the switch. Each branch will mutate ret and then jump to ret_block.
-    let cond = build_expr(env, scope, module, builder, cond_expr, procs);
+    let cond = match cond_layout {
+        Layout::Union(_) => {
+            cond_layout = &Layout::Builtin(Builtin::Int64);
+            // load the tag discriminator
+            let full_cond = build_expr(env, scope, module, builder, cond_expr, procs);
+
+            let mem_flags = MemFlags::new();
+
+            let ret_type = layout_to_type(&cond_layout, env.cfg.pointer_type());
+
+            builder
+                .ins()
+                .load(ret_type, mem_flags, full_cond, Offset32::new(0))
+        }
+        Layout::Builtin(Builtin::Float64) => todo!(),
+        Layout::Builtin(_) => build_expr(env, scope, module, builder, cond_expr, procs),
+        other => todo!("extract the switch value for layout {:?}", other),
+    };
 
     switch.emit(builder, cond, default_block);
 
