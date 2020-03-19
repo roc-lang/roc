@@ -942,6 +942,19 @@ fn store_record_destruct<'a>(
             Pattern::Identifier(symbol) => {
                 stored.push((*symbol, destruct.layout.clone(), load));
             }
+            Pattern::Underscore => {
+                // important that this is special-cased: mono record patterns will extract all the
+                // fields, but those not bound in the source code are guarded with the underscore
+                // pattern. So given some record `{ x : a, y : b }`, a match
+                //
+                // { x } -> ...
+                //
+                // is actually
+                //
+                // { x, y: _ } -> ...
+                //
+                // internally. But `y` is never used, so we must make sure it't not stored/loaded.
+            }
             _ => {
                 let symbol = env.fresh_symbol();
                 stored.push((symbol, destruct.layout.clone(), load));
@@ -1320,15 +1333,42 @@ fn from_can_pattern<'a>(
         } => match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
             Ok(Layout::Struct(field_layouts)) => {
                 let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
-                for (loc_rec_des, (label, field_layout)) in
-                    destructs.iter().zip(field_layouts.iter())
-                {
-                    debug_assert!(&loc_rec_des.value.label == label);
-                    mono_destructs.push(from_can_record_destruct(
-                        env,
-                        &loc_rec_des.value,
-                        field_layout.clone(),
-                    ));
+                let mut destructs = destructs.clone();
+                destructs.sort_by(|a, b| a.value.label.cmp(&b.value.label));
+
+                let mut it = destructs.iter();
+                let mut opt_destruct = it.next();
+
+                // insert underscore patterns for unused fields. We need the record to be fully
+                // matched for pattern exhaustiveness checking
+                for (label, field_layout) in field_layouts.iter() {
+                    if let Some(destruct) = opt_destruct {
+                        if &destruct.value.label == label {
+                            opt_destruct = it.next();
+
+                            mono_destructs.push(from_can_record_destruct(
+                                env,
+                                &destruct.value,
+                                field_layout.clone(),
+                            ));
+                        } else {
+                            // insert underscore pattern
+                            mono_destructs.push(RecordDestruct {
+                                label: label.clone(),
+                                symbol: env.fresh_symbol(),
+                                layout: field_layout.clone(),
+                                guard: Some(Pattern::Underscore),
+                            });
+                        }
+                    } else {
+                        // insert underscore pattern
+                        mono_destructs.push(RecordDestruct {
+                            label: label.clone(),
+                            symbol: env.fresh_symbol(),
+                            layout: field_layout.clone(),
+                            guard: Some(Pattern::Underscore),
+                        });
+                    }
                 }
 
                 Pattern::RecordDestructure(mono_destructs, Layout::Struct(field_layouts))
