@@ -1257,23 +1257,23 @@ mod test_gen {
         );
     }
 
-    //    #[test]
-    //    fn when_on_just() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                x : [ Nothing, Just Int ]
-    //                x = Just 41
-    //
-    //                case x of
-    //                    Just v -> v + 0x1
-    //                    Nothing -> 0x1
-    //                "#
-    //            ),
-    //            42,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn when_on_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Nothing, Just Int ]
+                x = Just 41
+
+                when x is
+                    Just v -> v + 0x1
+                    Nothing -> 0x1
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
     #[test]
     fn when_on_result() {
