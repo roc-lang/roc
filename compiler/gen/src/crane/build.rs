@@ -252,41 +252,19 @@ pub fn build_expr<'a, B: Backend>(
         Access {
             label,
             field_layout,
-            struct_layout: Layout::Struct(fields),
+            struct_layout: Layout::Struct(sorted_fields),
             record,
         } => {
             let cfg = env.cfg;
 
-            // Reconstruct the struct to determine the combined layout
-            // TODO get rid of clones
-            let mut reconstructed_struct_layout =
-                Vec::with_capacity_in(fields.len() + 1, env.arena);
-            for field in fields.iter() {
-                reconstructed_struct_layout.push(field.clone());
-            }
-            reconstructed_struct_layout.push((label.clone(), field_layout.clone()));
-            reconstructed_struct_layout.sort_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .expect("TODO: failed to sort struct fields in crane access")
-            });
-
             // Find the offset we are trying to access
             let mut offset = 0;
-            for (local_label, layout) in reconstructed_struct_layout.iter() {
+            for (local_label, local_field_layout) in sorted_fields.iter() {
                 if local_label == label {
                     break;
                 }
 
-                let field_size = match layout {
-                    Layout::Builtin(Builtin::Int64) => std::mem::size_of::<i64>(),
-                    Layout::Builtin(Builtin::Float64) => std::mem::size_of::<f64>(),
-                    _ => panic!(
-                        "Missing struct field size in offset calculation for struct access for {:?}",
-                        layout
-                    ),
-                };
-
-                offset += field_size;
+                offset += local_field_layout.stack_size(ptr_bytes);
             }
 
             let offset = i32::try_from(offset)

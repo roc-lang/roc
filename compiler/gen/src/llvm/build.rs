@@ -466,26 +466,14 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
         Access {
             label,
-            field_layout,
-            struct_layout: Layout::Struct(fields),
+            struct_layout: Layout::Struct(sorted_fields),
             record,
+            ..
         } => {
             let builder = env.builder;
 
-            // Reconstruct struct layout
-            let mut reconstructed_struct_layout =
-                Vec::with_capacity_in(fields.len() + 1, env.arena);
-            for field in fields.iter() {
-                reconstructed_struct_layout.push(field.clone());
-            }
-            reconstructed_struct_layout.push((label.clone(), field_layout.clone()));
-            reconstructed_struct_layout.sort_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .expect("TODO: failed to sort struct fields in crane access")
-            });
-
             // Get index
-            let index = reconstructed_struct_layout
+            let index = sorted_fields
                 .iter()
                 .position(|(local_label, _)| local_label == label)
                 .unwrap() as u32; // TODO
