@@ -3,9 +3,9 @@ use bumpalo::Bump;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::BasicTypeEnum;
+use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use crate::llvm::convert::{
@@ -440,20 +440,26 @@ pub fn build_expr<'a, 'ctx, 'env>(
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
             let array_type = ctx.i8_type().array_type(whole_size);
-            let struct_pointer = builder.build_alloca(array_type, "struct_poitner");
 
-            builder.build_store(
-                builder
-                    .build_bitcast(
-                        struct_pointer,
-                        struct_type.ptr_type(inkwell::AddressSpace::Generic),
-                        "",
-                    )
-                    .into_pointer_value(),
-                struct_val,
+            let result = cast_basic_basic(
+                builder,
+                struct_val.into_struct_value().into(),
+                array_type.into(),
             );
 
-            let result = builder.build_load(struct_pointer, "");
+            //            let struct_pointer = builder.build_alloca(array_type, "struct_poitner");
+            //            builder.build_store(
+            //                builder
+            //                    .build_bitcast(
+            //                        struct_pointer,
+            //                        struct_type.ptr_type(inkwell::AddressSpace::Generic),
+            //                        "",
+            //                    )
+            //                    .into_pointer_value(),
+            //                struct_val,
+            //            );
+            //
+            //            let result = builder.build_load(struct_pointer, "");
 
             // For unclear reasons, we can't cast an array to a struct on the other side.
             // the solution is to wrap the array in a struct (yea...)
@@ -542,30 +548,65 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             // cast the argument bytes into the desired shape for this tag
             let argument = build_expr(env, &scope, parent, expr, procs).into_struct_value();
-            let argument_pointer = builder.build_alloca(argument.get_type(), "");
-            builder.build_store(argument_pointer, argument);
 
-            let argument = builder
-                .build_load(
-                    builder
-                        .build_bitcast(
-                            argument_pointer,
-                            struct_type.ptr_type(inkwell::AddressSpace::Generic),
-                            "",
-                        )
-                        .into_pointer_value(),
-                    "",
-                )
-                .into_struct_value();
+            let struct_value = cast_struct_struct(builder, argument, struct_type);
 
             builder
-                .build_extract_value(argument, *index as u32, "")
+                .build_extract_value(struct_value, *index as u32, "")
                 .expect("desired field did not decode")
         }
         _ => {
             panic!("I don't yet know how to LLVM build {:?}", expr);
         }
     }
+}
+
+/// Cast a struct to another struct of the same (or smaller?) size
+fn cast_struct_struct<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: StructValue<'ctx>,
+    to_type: StructType<'ctx>,
+) -> StructValue<'ctx> {
+    cast_basic_basic(builder, from_value.into(), to_type.into()).into_struct_value()
+}
+
+/// Cast a value to another value of the same (or smaller?) size
+fn cast_basic_basic<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: BasicValueEnum<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
+    // store the value in memory
+    let argument_pointer = builder.build_alloca(from_value.get_type(), "");
+    builder.build_store(argument_pointer, from_value);
+
+    // then read it back as a different type
+    let to_type_pointer = builder
+        .build_bitcast(
+            argument_pointer,
+            to_type.ptr_type(inkwell::AddressSpace::Generic),
+            "",
+        )
+        .into_pointer_value();
+
+    builder.build_load(to_type_pointer, "")
+}
+
+fn extract_tag_discriminant<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    from_value: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    let struct_type = env
+        .context
+        .struct_type(&[env.context.i64_type().into()], false);
+
+    let struct_value = cast_struct_struct(env.builder, from_value, struct_type);
+
+    env.builder
+        .build_extract_value(struct_value, 0, "")
+        .expect("desired field did not decode")
+        .into_int_value()
 }
 
 struct Branch2<'a> {
@@ -619,7 +660,7 @@ fn build_switch<'a, 'ctx, 'env>(
     let SwitchArgs {
         branches,
         cond_expr,
-        cond_layout,
+        mut cond_layout,
         default_branch,
         ret_type,
         ..
@@ -628,7 +669,17 @@ fn build_switch<'a, 'ctx, 'env>(
     let cont_block = context.append_basic_block(parent, "cont");
 
     // Build the condition
-    let cond = build_expr(env, scope, parent, cond_expr, procs).into_int_value();
+    let cond = match cond_layout {
+        Layout::Builtin(_) => build_expr(env, scope, parent, cond_expr, procs).into_int_value(),
+        Layout::Union(_) => {
+            // we match on the discriminant, not the whole Tag
+            cond_layout = Layout::Builtin(Builtin::Int64);
+            let full_cond = build_expr(env, scope, parent, cond_expr, procs).into_struct_value();
+
+            extract_tag_discriminant(env, full_cond)
+        }
+        other => todo!("Build switch value from layout: {:?}", other),
+    };
 
     // Build the cases
     let mut incoming = Vec::with_capacity_in(branches.len(), arena);
