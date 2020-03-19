@@ -520,6 +520,11 @@ pub fn chase_ext_tag_union(
 
             chase_ext_tag_union(subs, ext_var, fields)
         }
+        Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
+            debug_assert!(arguments.len() == 2);
+            chase_ext_tag_union(subs, arguments[1], fields)
+        }
+        Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
 
         content => Err((var, content)),
     }

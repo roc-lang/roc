@@ -10,12 +10,12 @@ pub fn type_from_layout(cfg: TargetFrontendConfig, layout: &Layout<'_>) -> Type 
     use roc_mono::layout::Layout::*;
 
     match layout {
-        Pointer(_) | FunctionPointer(_, _) | Struct(_) | Tag(_) => cfg.pointer_type(),
+        FunctionPointer(_, _) | Struct(_) | Union(_) => cfg.pointer_type(),
         Builtin(builtin) => match builtin {
             Int64 => types::I64,
             Float64 => types::F64,
-            Bool(_, _) => types::B1,
-            Byte(_) => types::I8,
+            Bool => types::B1,
+            Byte => types::I8,
             Str | EmptyStr | Map(_, _) | EmptyMap | Set(_) | EmptySet | List(_) | EmptyList => {
                 cfg.pointer_type()
             }

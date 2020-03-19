@@ -16,4 +16,6 @@ pub mod layout;
 // Temporary, while we can build up test cases and optimize the exhaustiveness checking.
 // For now, following this warning's advice will lead to nasty type inference errors.
 #[allow(clippy::ptr_arg)]
+pub mod decision_tree;
+#[allow(clippy::ptr_arg)]
 pub mod pattern;

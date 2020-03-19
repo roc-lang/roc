@@ -77,6 +77,7 @@ mod test_gen {
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
 
+
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
 
@@ -147,7 +148,7 @@ mod test_gen {
                 builder.finalize();
             }
 
-            module.define_function(main_fn, &mut ctx).expect("declare main");
+            module.define_function(main_fn, &mut ctx).expect("crane declare main");
             module.clear_context(&mut ctx);
 
             // Perform linking
@@ -200,16 +201,16 @@ mod test_gen {
             // Compute main_fn_type before moving subs to Env
             let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_fn_type = basic_type_from_layout(&arena, &context, &layout)
-                .fn_type(&[], false);
-            let main_fn_name = "$Test.main";
-
             let execution_engine =
                 module
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("Error creating JIT execution engine for test");
 
-            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+            let ptr_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+
+            let main_fn_type = basic_type_from_layout(&arena, &context, &layout, ptr_bytes)
+                .fn_type(&[], false);
+            let main_fn_name = "$Test.main";
 
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
@@ -218,13 +219,15 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
-                pointer_bytes
+                ptr_bytes
             };
             let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and get the low-level Expr from the canonical Expr
             let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
+
+            dbg!(&main_body);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -335,16 +338,16 @@ mod test_gen {
             // Compute main_fn_type before moving subs to Env
             let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_fn_type = basic_type_from_layout(&arena, &context, &layout)
-                .fn_type(&[], false);
-            let main_fn_name = "$Test.main";
 
             let execution_engine =
                 module
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("Error creating JIT execution engine for test");
 
-            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+            let ptr_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+            let main_fn_type = basic_type_from_layout(&arena, &context, &layout, ptr_bytes)
+                .fn_type(&[], false);
+            let main_fn_name = "$Test.main";
 
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
@@ -353,7 +356,7 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
-                pointer_bytes
+                ptr_bytes
             };
             let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -550,7 +553,26 @@ mod test_gen {
     }
 
     #[test]
-    fn get_shared_int_list() {
+    fn set_shared_int_list() {
+        assert_crane_evals_to!(
+            indoc!(
+                r#"
+                    shared = [ 2, 4 ]
+
+                    # This should not mutate the original
+                    x = List.set shared 1 77
+
+                    List.getUnsafe shared 1
+                "#
+            ),
+            4,
+            i64,
+            |x| x
+        );
+    }
+
+    #[test]
+    fn get_unique_int_list() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -594,6 +616,23 @@ mod test_gen {
         );
     }
 
+    // doesn't work yet. The condition must be cast to an integer to use a jump table
+    //    #[test]
+    //    fn branch_third_float() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                when 10.0 is
+    //                    1.0 -> 63
+    //                    2 -> 48
+    //                    _ -> 112
+    //                "#
+    //            ),
+    //            112.0,
+    //            f64
+    //        );
+    //    }
+
     #[test]
     fn branch_first_int() {
         assert_evals_to!(
@@ -620,6 +659,85 @@ mod test_gen {
                     "#
             ),
             48,
+            i64
+        );
+    }
+
+    #[test]
+    fn branch_third_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 10 is
+                    1 -> 63
+                    2 -> 48
+                    _ -> 112
+                "#
+            ),
+            112,
+            i64
+        );
+    }
+
+    #[test]
+    fn branch_store_variable() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        when 0 is
+                            1 -> 12
+                            a -> a
+                    "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn one_element_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Pair Int ]
+                x = Pair 2
+
+                0x3
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn when_one_element_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Pair Int Int ]
+                x = Pair 0x2 0x3
+
+                when x is
+                    Pair l r -> l + r
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
+    fn twice_record_access() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x =  {a: 0x2, b: 0x3 }
+
+                x.a + x.b
+                "#
+            ),
+            5,
             i64
         );
     }
@@ -1066,6 +1184,136 @@ mod test_gen {
     }
 
     #[test]
+    fn applied_tag_nothing() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                x : Maybe Int
+                x = Nothing
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+    #[test]
+    fn applied_tag_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                y : Maybe Int
+                y = Just 0x4
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    //
+    //    #[test]
+    //    fn applied_tag_just_unit() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                Fruit : [ Orange, Apple, Banana ]
+    //                Maybe a : [ Just a, Nothing ]
+    //
+    //                orange : Fruit
+    //                orange = Orange
+    //
+    //                y : Maybe Fruit
+    //                y = Just orange
+    //
+    //                0x1
+    //                "#
+    //            ),
+    //            1,
+    //            i64
+    //        );
+    //    }
+
+    #[test]
+    fn when_on_nothing() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Nothing, Just Int ]
+                x = Nothing
+
+                when x is
+                    Nothing -> 0x2
+                    Just _ -> 0x1
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    //    #[test]
+    //    fn when_on_just() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                x : [ Nothing, Just Int ]
+    //                x = Just 41
+    //
+    //                case x of
+    //                    Just v -> v + 0x1
+    //                    Nothing -> 0x1
+    //                "#
+    //            ),
+    //            42,
+    //            i64
+    //        );
+    //    }
+
+    #[test]
+    fn when_on_result() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : Result Int Int
+                x = Err 41
+
+                when x is
+                    Err v ->  v + 1
+                    Ok _ -> 1
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    fn when_on_these() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ This Int, These Int Int ]
+                x = These 0x3 0x2
+
+                when x is
+                    These a b -> a + b
+                    This v -> v
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
     fn basic_record() {
         assert_evals_to!(
             indoc!(
@@ -1172,6 +1420,18 @@ mod test_gen {
                 "#
             ),
             19,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { x: 15, y: 17, z: 19 }
+
+                    rec.z + rec.x
+                "#
+            ),
+            34,
             i64
         );
     }

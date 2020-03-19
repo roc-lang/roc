@@ -6,22 +6,21 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 
 /// Types for code gen must be monomorphic. No type variables allowed!
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [(Lowercase, Layout<'a>)]),
-    Tag(&'a [Layout<'a>]),
-    Pointer(&'a Layout<'a>),
+    Union(&'a [&'a [Layout<'a>]]),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
     Int64,
     Float64,
-    Bool(TagName, TagName),
-    Byte(MutMap<TagName, u8>),
+    Bool,
+    Byte,
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
@@ -79,6 +78,24 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn safe_to_memcpy(&self) -> bool {
+        use Layout::*;
+
+        match self {
+            Builtin(builtin) => builtin.safe_to_memcpy(),
+            Struct(fields) => fields
+                .iter()
+                .all(|(_, field_layout)| field_layout.safe_to_memcpy()),
+            Union(tags) => tags
+                .iter()
+                .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
+            FunctionPointer(_, _) => {
+                // Function pointers are immutable and can always be safely copied
+                true
+            }
+        }
+    }
+
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         use Layout::*;
 
@@ -93,17 +110,17 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Tag(fields) => {
-                // the symbol is a 64-bit value, so 8 bytes
-                let mut sum = 8;
-
-                for field_layout in *fields {
-                    sum += field_layout.stack_size(pointer_size);
-                }
-
-                sum
-            }
-            Pointer(_) | FunctionPointer(_, _) => pointer_size,
+            Union(fields) => fields
+                .iter()
+                .map(|tag_layout| {
+                    tag_layout
+                        .iter()
+                        .map(|field| field.stack_size(pointer_size))
+                        .sum()
+                })
+                .max()
+                .unwrap_or_default(),
+            FunctionPointer(_, _) => pointer_size,
         }
     }
 }
@@ -131,17 +148,25 @@ impl<'a> Builtin<'a> {
         match self {
             Int64 => Builtin::I64_SIZE,
             Float64 => Builtin::F64_SIZE,
-            Bool(_, _) => Builtin::BOOL_SIZE,
-            Byte(_) => Builtin::BYTE_SIZE,
+            Bool => Builtin::BOOL_SIZE,
+            Byte => Builtin::BYTE_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
             List(_) | EmptyList => Builtin::LIST_WORDS * pointer_size,
         }
     }
+
+    pub fn safe_to_memcpy(&self) -> bool {
+        use Builtin::*;
+
+        match self {
+            Int64 | Float64 | Bool | Byte | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
+            Str | Map(_, _) | Set(_) | List(_) => false,
+        }
+    }
 }
 
-#[allow(clippy::cognitive_complexity)]
 fn layout_from_flat_type<'a>(
     arena: &'a Bump,
     flat_type: FlatType,
@@ -274,81 +299,7 @@ fn layout_from_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            match tags.len() {
-                0 => {
-                    panic!("TODO gracefully handle trying to instantiate Never");
-                }
-                // We can only unwrap a wrapper if it never becomes part of a bigger union
-                // therefore, the ext_var must be the literal empty tag union
-                1 => {
-                    // This is a wrapper. Unwrap it!
-                    let (tag, args) = tags.into_iter().next().unwrap();
-
-                    match tag {
-                        TagName::Private(Symbol::NUM_AT_NUM) => {
-                            debug_assert!(args.len() == 1);
-
-                            let var = args.into_iter().next().unwrap();
-
-                            unwrap_num_tag(subs, var)
-                        }
-                        TagName::Private(symbol) => {
-                            panic!("TODO emit wrapped private tag for {:?} {:?}", symbol, args);
-                        }
-                        TagName::Global(ident) => {
-                            panic!("TODO emit wrapped global tag for {:?} {:?}", ident, args);
-                        }
-                    }
-                }
-                _ => {
-                    // Check if we can turn this tag union into an enum
-                    // The arguments of all tags must have size 0.
-                    // That is trivially the case when there are no arguments
-                    //
-                    //  [ Orange, Apple, Banana ]
-                    //
-                    //  But when one-tag tag unions are optimized away, we can also use an enum for
-                    //
-                    //  [ Foo [ Unit ], Bar [ Unit ] ]
-
-                    let arguments_have_size_0 = || {
-                        tags.iter().all(|(_, args)| {
-                            args.iter().all(|var| {
-                                Layout::from_var(arena, *var, subs, pointer_size)
-                                    .map(|v| v.stack_size(pointer_size))
-                                    == Ok(0)
-                            })
-                        })
-                    };
-
-                    // up to 256 enum keys can be stored in a byte
-                    if tags.len() <= std::u8::MAX as usize + 1 && arguments_have_size_0() {
-                        if tags.len() <= 2 {
-                            // Up to 2 enum tags can be stored (in theory) in one bit
-                            let mut it = tags.keys();
-                            let a: TagName = it.next().unwrap().clone();
-                            let b: TagName = it.next().unwrap().clone();
-
-                            if a < b {
-                                Ok(Layout::Builtin(Builtin::Bool(a, b)))
-                            } else {
-                                Ok(Layout::Builtin(Builtin::Bool(b, a)))
-                            }
-                        } else {
-                            // up to 256 enum tags can be stored in a byte
-                            let mut tag_to_u8 = MutMap::default();
-
-                            for (counter, (name, _)) in tags.into_iter().enumerate() {
-                                tag_to_u8.insert(name, counter as u8);
-                            }
-                            Ok(Layout::Builtin(Builtin::Byte(tag_to_u8)))
-                        }
-                    } else {
-                        // panic!("TODO handle a tag union with mutliple tags: {:?}", tags);
-                        Ok(Layout::Tag(&[]))
-                    }
-                }
-            }
+            layout_from_tag_union(arena, &tags, subs, pointer_size)
         }
         RecursiveTagUnion(_, _, _) => {
             panic!("TODO make Layout for non-empty Tag Union");
@@ -361,6 +312,100 @@ fn layout_from_flat_type<'a>(
         }
         Erroneous(_) => Err(()),
         EmptyRecord => Ok(Layout::Struct(&[])),
+    }
+}
+
+pub fn layout_from_tag_union<'a>(
+    arena: &'a Bump,
+    tags: &MutMap<TagName, std::vec::Vec<Variable>>,
+    subs: &Subs,
+    pointer_size: u32,
+) -> Result<Layout<'a>, ()> {
+    match tags.len() {
+        0 => {
+            panic!("TODO gracefully handle trying to instantiate Never");
+        }
+        // We can only unwrap a wrapper if it never becomes part of a bigger union
+        // therefore, the ext_var must be the literal empty tag union
+        1 => {
+            // This is a wrapper. Unwrap it!
+            let (tag_name, arguments) = tags.iter().next().unwrap();
+
+            match &tag_name {
+                TagName::Private(Symbol::NUM_AT_NUM) => {
+                    debug_assert!(arguments.len() == 1);
+
+                    let var = arguments.iter().next().unwrap();
+
+                    unwrap_num_tag(subs, *var)
+                }
+                TagName::Private(_) | TagName::Global(_) => {
+                    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
+
+                    for arg in arguments {
+                        arg_layouts.push(Layout::from_var(arena, *arg, subs, pointer_size)?);
+                    }
+
+                    let layouts = [arg_layouts.into_bump_slice()];
+
+                    Ok(Layout::Union(arena.alloc(layouts)))
+                }
+            }
+        }
+        _ => {
+            // Check if we can turn this tag union into an enum
+            // The arguments of all tags must have size 0.
+            // That is trivially the case when there are no arguments
+            //
+            //  [ Orange, Apple, Banana ]
+            //
+            //  But when one-tag tag unions are optimized away, we can also use an enum for
+            //
+            //  [ Foo [ Unit ], Bar [ Unit ] ]
+
+            let arguments_have_size_0 = || {
+                tags.iter().all(|(_, args)| {
+                    args.iter().all(|var| {
+                        Layout::from_var(arena, *var, subs, pointer_size)
+                            .map(|v| v.stack_size(pointer_size))
+                            == Ok(0)
+                    })
+                })
+            };
+
+            // up to 256 enum keys can be stored in a byte
+            if tags.len() <= std::u8::MAX as usize + 1 && arguments_have_size_0() {
+                if tags.len() <= 2 {
+                    Ok(Layout::Builtin(Builtin::Bool))
+                } else {
+                    // up to 256 enum tags can be stored in a byte
+                    Ok(Layout::Builtin(Builtin::Byte))
+                }
+            } else {
+                let add_discriminant = tags.len() != 1;
+                let mut layouts = Vec::with_capacity_in(tags.len(), arena);
+
+                for arguments in tags.values() {
+                    // add a field for the discriminant if there is more than one tag in the union
+                    let mut arg_layouts = if add_discriminant {
+                        let discriminant = Layout::Builtin(Builtin::Int64);
+                        let mut result = Vec::with_capacity_in(arguments.len() + 1, arena);
+                        result.push(discriminant);
+                        result
+                    } else {
+                        Vec::with_capacity_in(arguments.len(), arena)
+                    };
+
+                    for arg in arguments {
+                        arg_layouts.push(Layout::from_var(arena, *arg, subs, pointer_size)?);
+                    }
+
+                    layouts.push(arg_layouts.into_bump_slice());
+                }
+
+                Ok(Layout::Union(arena.alloc(layouts)))
+            }
+        }
     }
 }
 

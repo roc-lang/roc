@@ -1,4 +1,5 @@
 use crate::layout::{Builtin, Layout};
+use crate::pattern::Ctor;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can;
@@ -7,6 +8,7 @@ use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
+use std::hash::Hash;
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
@@ -97,13 +99,14 @@ pub struct Proc<'a> {
     pub ret_layout: Layout<'a>,
 }
 
-struct Env<'a, 'i> {
+pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'a mut Subs,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
     symbol_counter: usize,
+    pub jump_counter: &'a mut u64,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -181,8 +184,10 @@ pub enum Expr<'a> {
     },
     Tag {
         tag_layout: Layout<'a>,
-        name: TagName,
-        arguments: &'a [Expr<'a>],
+        tag_name: TagName,
+        tag_id: u8,
+        union_size: u8,
+        arguments: &'a [(Expr<'a>, Layout<'a>)],
     },
     Struct(&'a [(Expr<'a>, Layout<'a>)]),
     Access {
@@ -191,11 +196,20 @@ pub enum Expr<'a> {
         struct_layout: Layout<'a>,
         record: &'a Expr<'a>,
     },
+    AccessAtIndex {
+        index: u64,
+        field_layouts: &'a [Layout<'a>],
+        expr: &'a Expr<'a>,
+        is_unwrapped: bool,
+    },
 
     Array {
         elem_layout: Layout<'a>,
         elems: &'a [Expr<'a>],
     },
+
+    Label(u64, &'a Expr<'a>),
+    Jump(u64),
 
     RuntimeError(&'a str),
 }
@@ -217,6 +231,7 @@ impl<'a> Expr<'a> {
             ident_ids,
             pointer_size,
             symbol_counter: 0,
+            jump_counter: arena.alloc(0),
         };
 
         from_can(&mut env, can_expr, procs, None)
@@ -359,6 +374,7 @@ fn pattern_to_when<'a>(
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn from_can<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -412,7 +428,7 @@ fn from_can<'a>(
             store_pattern(
                 env,
                 mono_pattern,
-                loc_expr.value,
+                &loc_expr.value,
                 def.expr_var,
                 procs,
                 &mut stored,
@@ -503,8 +519,8 @@ fn from_can<'a>(
                             Ok(Layout::Builtin(builtin)) => match builtin {
                                 Builtin::Int64 => Symbol::INT_EQ_I64,
                                 Builtin::Float64 => Symbol::FLOAT_EQ,
-                                Builtin::Bool(_, _) => Symbol::INT_EQ_I1,
-                                Builtin::Byte(_) => Symbol::INT_EQ_I8,
+                                Builtin::Bool => Symbol::INT_EQ_I1,
+                                Builtin::Byte => Symbol::INT_EQ_I8,
                                 _ => panic!("Equality not implemented for {:?}", builtin),
                             },
                             Ok(complex) => panic!(
@@ -572,6 +588,10 @@ fn from_can<'a>(
                     // It might even be the anonymous result of a conditional:
                     //
                     // ((if x > 0 then \a -> a else \_ -> 0) 5)
+                    //
+                    // It could be named too:
+                    //
+                    // ((if x > 0 then foo else bar) 5)
                     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
                     for (_, loc_arg) in loc_args {
@@ -654,28 +674,68 @@ fn from_can<'a>(
 
         Tag {
             variant_var,
-            name,
+            name: tag_name,
             arguments: args,
             ..
         } => {
             let arena = env.arena;
 
+            let mut fields = std::vec::Vec::new();
+
+            match roc_types::pretty_print::chase_ext_tag_union(env.subs, variant_var, &mut fields) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(content) => panic!("invalid content in ext_var: {:?}", content),
+            }
+
+            fields.sort();
+            let tag_id = fields
+                .iter()
+                .position(|(key, _)| key == &tag_name)
+                .expect("tag must be in its own type");
+
             match Layout::from_var(arena, variant_var, &env.subs, env.pointer_size) {
-                Ok(Layout::Builtin(Builtin::Bool(_smaller, larger))) => Expr::Bool(name == larger),
-                Ok(Layout::Builtin(Builtin::Byte(tags))) => match tags.get(&name) {
-                    Some(v) => Expr::Byte(*v),
-                    None => panic!("Tag name is not part of the type"),
-                },
+                Ok(Layout::Builtin(Builtin::Bool)) => Expr::Bool(tag_id != 0),
+                Ok(Layout::Builtin(Builtin::Byte)) => Expr::Byte(tag_id as u8),
                 Ok(layout) => {
                     let mut arguments = Vec::with_capacity_in(args.len(), arena);
 
-                    for (_, arg) in args {
-                        arguments.push(from_can(env, arg.value, procs, None));
+                    for (arg_var, arg) in args {
+                        let arg_layout =
+                            Layout::from_var(env.arena, arg_var, env.subs, env.pointer_size)
+                                .expect("invalid ret_layout");
+
+                        arguments.push((from_can(env, arg.value, procs, None), arg_layout));
                     }
+
+                    let mut tags = std::vec::Vec::new();
+                    match roc_types::pretty_print::chase_ext_tag_union(
+                        env.subs,
+                        variant_var,
+                        &mut tags,
+                    ) {
+                        Ok(()) => {
+                            tags.sort();
+                        }
+                        other => panic!("invalid value in ext_var {:?}", other),
+                    }
+
+                    let mut opt_tag_id = None;
+                    for (index, (name, _)) in tags.iter().enumerate() {
+                        if name == &tag_name {
+                            opt_tag_id = Some(index as u8);
+                            break;
+                        }
+                    }
+
+                    let union_size = tags.len() as u8;
+
+                    let tag_id = opt_tag_id.expect("Tag must be in its own type");
 
                     Expr::Tag {
                         tag_layout: layout,
-                        name,
+                        tag_name,
+                        tag_id,
+                        union_size,
                         arguments: arguments.into_bump_slice(),
                     }
                 }
@@ -760,7 +820,7 @@ fn from_can<'a>(
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     can_pat: Pattern,
-    can_expr: roc_can::expr::Expr,
+    can_expr: &roc_can::expr::Expr,
     var: Variable,
     procs: &mut Procs<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
@@ -788,19 +848,111 @@ fn store_pattern<'a>(
     //     identity 5
     //
     match can_pat {
-        Identifier(symbol) => stored.push((symbol, layout, from_can(env, can_expr, procs, None))),
+        Identifier(symbol) => {
+            stored.push((symbol, layout, from_can(env, can_expr.clone(), procs, None)))
+        }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
             stored.push((
                 Symbol::UNDERSCORE,
                 layout,
-                from_can(env, can_expr, procs, None),
+                from_can(env, can_expr.clone(), procs, None),
             ))
         }
         _ => {
             panic!("TODO store_pattern for {:?}", can_pat);
         }
     }
+}
+
+fn store_pattern2<'a>(
+    env: &mut Env<'a, '_>,
+    can_pat: &Pattern<'a>,
+    outer_symbol: Symbol,
+    _index: usize,
+    layout: Layout<'a>,
+    stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+) -> Result<(), String> {
+    use Pattern::*;
+
+    match can_pat {
+        Identifier(symbol) => {
+            if true {
+                // stored.push((*symbol, layout, Expr::Load(outer_symbol)))
+                //                let load = Expr::AccessAtIndex {
+                //                    index: index as u64,
+                //                    field_layouts: env.arena.alloc([
+                //                        Layout::Builtin(Builtin::Int64),
+                //                        Layout::Builtin(Builtin::Int64),
+                //                    ]),
+                //                    expr: env.arena.alloc(Expr::Load(outer_symbol)),
+                //                };
+
+                let load = Expr::Load(outer_symbol);
+                stored.push((*symbol, layout, load))
+            } else {
+                todo!()
+            }
+        }
+        Underscore => {
+            // Since _ is never read, it's safe to reassign it.
+            stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
+        }
+        IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+        AppliedTag {
+            union, arguments, ..
+        } => {
+            let is_unwrapped = union.alternatives.len() == 1;
+
+            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            if !is_unwrapped {
+                // add an element for the tag discriminant
+                arg_layouts.push(Layout::Builtin(Builtin::Int64));
+            }
+
+            for (_, layout) in arguments {
+                arg_layouts.push(layout.clone());
+            }
+
+            for (index, (argument, arg_layout)) in arguments.iter().enumerate() {
+                let load = Expr::AccessAtIndex {
+                    is_unwrapped,
+                    index: (!is_unwrapped as usize + index) as u64,
+                    field_layouts: arg_layouts.clone().into_bump_slice(),
+                    expr: env.arena.alloc(Expr::Load(outer_symbol)),
+                };
+                match argument {
+                    Identifier(symbol) => {
+                        // store immediately in the given symbol
+                        stored.push((*symbol, arg_layout.clone(), load));
+                    }
+                    Underscore => {
+                        // ignore
+                    }
+                    _ => {
+                        // store the field in a symbol, and continue matching on it
+                        let symbol = env.fresh_symbol();
+                        stored.push((symbol, layout.clone(), load));
+
+                        store_pattern2(env, argument, symbol, 0, arg_layout.clone(), stored)?;
+                    }
+                }
+            }
+        }
+
+        Shadowed(region, ident) => {
+            return Err(format!(
+                "The pattern at {:?} shadows variable {:?}",
+                region, ident
+            ));
+        }
+        _ => {
+            panic!("TODO store_pattern for {:?}", can_pat);
+        }
+    }
+
+    Ok(())
 }
 
 fn from_can_when<'a>(
@@ -814,8 +966,6 @@ fn from_can_when<'a>(
     )>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
-    use Pattern::*;
-
     match branches.len() {
         0 => {
             // A when-expression with no branches is a runtime error.
@@ -830,241 +980,83 @@ fn from_can_when<'a>(
             let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
 
             let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
-            store_pattern(
-                env,
-                mono_pattern,
-                loc_cond.value,
-                cond_var,
-                procs,
-                &mut stored,
-            );
 
-            let ret = from_can(env, loc_branch.value, procs, None);
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+            let cond_symbol = env.fresh_symbol();
+            let cond = from_can(env, loc_cond.value, procs, None);
+            stored.push((cond_symbol, cond_layout.clone(), cond));
+
+            // NOTE this will still store shadowed names. I think that is fine because the branch
+            // will throw an error anyway.
+            let ret = match store_pattern2(
+                env,
+                &mono_pattern,
+                cond_symbol,
+                0,
+                cond_layout,
+                &mut stored,
+            ) {
+                Ok(_) => from_can(env, loc_branch.value, procs, None),
+                Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+            };
 
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
         }
-        2 => {
-            let loc_branches: std::vec::Vec<_> = branches
-                .iter()
-                .map(|(loc_branch, _)| {
-                    Located::at(loc_branch.region, from_can_pattern(env, &loc_branch.value))
-                })
-                .collect();
-
-            match crate::pattern::check(Region::zero(), &loc_branches) {
-                Ok(_) => {}
-                Err(errors) => panic!("Errors in patterns: {:?}", errors),
-            }
-
-            // A when-expression with exactly 2 branches compiles to a Cond.
-            let arena = env.arena;
-            let mut iter = branches.into_iter();
-            let (can_loc_when_pat1, loc_then) = iter.next().unwrap();
-            let (can_loc_when_pat2, loc_else) = iter.next().unwrap();
-
-            let when_pat1 = from_can_pattern(env, &can_loc_when_pat1.value);
-            let when_pat2 = from_can_pattern(env, &can_loc_when_pat2.value);
-
-            let cond_layout = Layout::Builtin(Builtin::Bool(
-                TagName::Global("False".into()),
-                TagName::Global("True".into()),
-            ));
-
-            match (&when_pat1, &when_pat2) {
-                (IntLiteral(int), Underscore) => {
-                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
-                    let cond_rhs = Expr::Int(*int);
-
-                    let cond = arena.alloc(Expr::CallByName(
-                        Symbol::INT_EQ_I64,
-                        arena.alloc([
-                            (cond_lhs, Layout::Builtin(Builtin::Int64)),
-                            (cond_rhs, Layout::Builtin(Builtin::Int64)),
-                        ]),
-                    ));
-
-                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
-                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn this into a RuntimeError {:?}", err)
-                        });
-
-                    Expr::Cond {
-                        cond_layout,
-                        cond,
-                        pass,
-                        fail,
-                        ret_layout,
-                    }
-                }
-                (FloatLiteral(float), Underscore) => {
-                    let cond_lhs = from_can(env, loc_cond.value, procs, None);
-                    let cond_rhs = Expr::Float(*float);
-
-                    let cond = arena.alloc(Expr::CallByName(
-                        Symbol::FLOAT_EQ,
-                        arena.alloc([
-                            (cond_lhs, Layout::Builtin(Builtin::Float64)),
-                            (cond_rhs, Layout::Builtin(Builtin::Float64)),
-                        ]),
-                    ));
-
-                    let pass = arena.alloc(from_can(env, loc_then.value, procs, None));
-                    let fail = arena.alloc(from_can(env, loc_else.value, procs, None));
-                    let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn this into a RuntimeError {:?}", err)
-                        });
-
-                    Expr::Cond {
-                        cond_layout,
-                        cond,
-                        pass,
-                        fail,
-                        ret_layout,
-                    }
-                }
-                _ => {
-                    panic!("TODO handle more conds");
-                }
-            }
-        }
         _ => {
-            let loc_branches: std::vec::Vec<_> = branches
-                .iter()
-                .map(|(loc_branch, _)| {
-                    Located::at(loc_branch.region, from_can_pattern(env, &loc_branch.value))
-                })
-                .collect();
+            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+            let cond = from_can(env, loc_cond.value, procs, None);
+            let cond_symbol = env.fresh_symbol();
+
+            let mut loc_branches = std::vec::Vec::new();
+            let mut opt_branches = std::vec::Vec::new();
+
+            for (loc_pattern, loc_expr) in branches {
+                let mono_pattern = from_can_pattern(env, &loc_pattern.value);
+
+                loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
+
+                let mut stores = Vec::with_capacity_in(1, env.arena);
+
+                let mono_expr = match store_pattern2(
+                    env,
+                    &mono_pattern,
+                    cond_symbol,
+                    0,
+                    cond_layout.clone(),
+                    &mut stores,
+                ) {
+                    Ok(_) => Expr::Store(
+                        stores.into_bump_slice(),
+                        env.arena.alloc(from_can(env, loc_expr.value, procs, None)),
+                    ),
+                    Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+                };
+
+                opt_branches.push((mono_pattern, mono_expr));
+            }
 
             match crate::pattern::check(Region::zero(), &loc_branches) {
                 Ok(_) => {}
                 Err(errors) => panic!("Errors in patterns: {:?}", errors),
             }
 
-            // This is a when-expression with 3+ branches.
-            let arena = env.arena;
-            let cond = from_can(env, loc_cond.value, procs, None);
-            let subs = &env.subs;
-            let layout = Layout::from_var(arena, cond_var, subs, env.pointer_size)
-                .unwrap_or_else(|_| panic!("TODO generate a runtime error in from_can_when here!"));
+            let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
-            // We can Switch on integers and tags, because they both have
-            // representations that work as integer values.
-            //
-            // TODO we can also Switch on record fields if we're pattern matching
-            // on a record field that's also Switchable.
-            //
-            // TODO we can also convert floats to integer representations.
-            let is_switchable = match layout {
-                Layout::Builtin(Builtin::Int64) => true,
-                Layout::Builtin(Builtin::Bool(_, _)) => true,
-                Layout::Builtin(Builtin::Byte(_)) => true,
-                _ => false,
-            };
+            let branching = crate::decision_tree::optimize_when(
+                env,
+                cond_symbol,
+                cond_layout.clone(),
+                ret_layout,
+                opt_branches,
+            );
 
-            // If the condition is an Int or Float, we can potentially use
-            // a Switch for more efficiency.
-            if is_switchable {
-                // These are integer literals or underscore patterns,
-                // so they're eligible for user in a jump table.
-                let mut jumpable_branches = Vec::with_capacity_in(branches.len(), arena);
-                let mut opt_default_branch = None;
+            let stores = env.arena.alloc([(cond_symbol, cond_layout, cond)]);
 
-                let mut is_last = true;
-                for (loc_when_pat, loc_expr) in branches.into_iter().rev() {
-                    let mono_expr = from_can(env, loc_expr.value, procs, None);
-                    let when_pat = from_can_pattern(env, &loc_when_pat.value);
-
-                    if is_last {
-                        opt_default_branch = match &when_pat {
-                            Identifier(symbol) => {
-                                // TODO does this evaluate `cond` twice?
-                                Some(arena.alloc(Expr::Store(
-                                    arena.alloc([(*symbol, layout.clone(), cond.clone())]),
-                                    arena.alloc(mono_expr.clone()),
-                                )))
-                            }
-                            Shadowed(_region, _ident) => {
-                                panic!("TODO make runtime exception out of the branch");
-                            }
-                            _ => Some(arena.alloc(mono_expr.clone())),
-                        };
-                        is_last = false;
-                    }
-
-                    match &when_pat {
-                        IntLiteral(int) => {
-                            // Switch only compares the condition to the
-                            // alternatives based on their bit patterns,
-                            // so casting from i64 to u64 makes no difference here.
-                            jumpable_branches.push((*int as u64, mono_expr));
-                        }
-                        BitLiteral(v) => jumpable_branches.push((*v as u64, mono_expr)),
-                        EnumLiteral { tag_id, .. } => {
-                            jumpable_branches.push((*tag_id as u64, mono_expr))
-                        }
-                        Identifier(_) => {
-                            // store is handled above
-                        }
-                        Underscore => {}
-                        Shadowed(_, _) => {
-                            panic!("TODO runtime error for shadowing in a pattern");
-                        }
-                        UnsupportedPattern(_region) => unreachable!("When accepts all patterns"),
-                        AppliedTag { .. }
-                        | StrLiteral(_)
-                        | RecordDestructure(_, _)
-                        | FloatLiteral(_) => {
-                            // The type checker should have converted these mismatches into RuntimeErrors already!
-                            if cfg!(debug_assertions) {
-                                panic!("A type mismatch in a pattern was not converted to a runtime error: {:?}", when_pat);
-                            } else {
-                                unreachable!();
-                            }
-                        }
-                    }
-                }
-
-                // If the default branch was never set, that means
-                // our canonical Expr didn't have one. An earlier
-                // step in the compilation process should have
-                // ruled this out!
-                debug_assert!(opt_default_branch.is_some());
-                let default_branch = opt_default_branch.unwrap();
-
-                let cond_layout = Layout::from_var(arena, cond_var, env.subs, env.pointer_size)
-                    .unwrap_or_else(|err| {
-                        panic!("TODO turn cond_layout into a RuntimeError {:?}", err)
-                    });
-
-                let ret_layout = Layout::from_var(arena, expr_var, env.subs, env.pointer_size)
-                    .unwrap_or_else(|err| {
-                        panic!("TODO turn ret_layout into a RuntimeError {:?}", err)
-                    });
-
-                Expr::Switch {
-                    cond: arena.alloc(cond),
-                    branches: jumpable_branches.into_bump_slice(),
-                    default_branch,
-                    ret_layout,
-                    cond_layout,
-                }
-            } else {
-                // /// More than two conditional branches, e.g. a 3-way when-expression
-                // Expr::Branches {
-                //     /// The left-hand side of the conditional. We compile this to LLVM once,
-                //     /// then reuse it to test against each different compiled cond_rhs value.
-                //     cond_lhs: &'a Expr<'a>,
-                //     /// ( cond_rhs, pass, fail )
-                //     branches: &'a [(Expr<'a>, Expr<'a>, Expr<'a>)],
-                //     ret_var: Variable,
-                // },
-                panic!(
-                    "TODO support when-expressions of 3+ branches whose conditions aren't integers."
-                );
-            }
+            Expr::Store(stores, env.arena.alloc(branching))
         }
     }
 }
@@ -1203,25 +1195,28 @@ fn specialize_proc_body<'a>(
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern<'a> {
     Identifier(Symbol),
-    AppliedTag {
-        tag_name: TagName,
-        arguments: Vec<'a, Pattern<'a>>,
-        layout: Layout<'a>,
-        union: crate::pattern::Union,
-    },
+    Underscore,
+
+    IntLiteral(i64),
+    FloatLiteral(u64),
     BitLiteral(bool),
     EnumLiteral {
         tag_id: u8,
         enum_size: u8,
     },
-    IntLiteral(i64),
-    FloatLiteral(f64),
     StrLiteral(Box<str>),
+
     RecordDestructure(Vec<'a, RecordDestruct<'a>>, Layout<'a>),
-    Underscore,
+    AppliedTag {
+        tag_name: TagName,
+        tag_id: u8,
+        arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
+        layout: Layout<'a>,
+        union: crate::pattern::Union,
+    },
 
     // Runtime Exceptions
     Shadowed(Region, Located<Ident>),
@@ -1229,7 +1224,7 @@ pub enum Pattern<'a> {
     UnsupportedPattern(Region),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RecordDestruct<'a> {
     pub label: Lowercase,
     pub symbol: Symbol,
@@ -1245,14 +1240,14 @@ fn from_can_pattern<'a>(
         Underscore => Pattern::Underscore,
         Identifier(symbol) => Pattern::Identifier(*symbol),
         IntLiteral(v) => Pattern::IntLiteral(*v),
-        FloatLiteral(v) => Pattern::FloatLiteral(*v),
+        FloatLiteral(v) => Pattern::FloatLiteral(f64::to_bits(*v)),
         StrLiteral(v) => Pattern::StrLiteral(v.clone()),
         Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
         UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),
 
         NumLiteral(var, num) => match to_int_or_float(env.subs, *var) {
             IntOrFloat::IntType => Pattern::IntLiteral(*num),
-            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as f64),
+            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
         },
 
         AppliedTag {
@@ -1260,54 +1255,70 @@ fn from_can_pattern<'a>(
             tag_name,
             arguments,
             ..
-        } => match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
-            Ok(Layout::Builtin(Builtin::Bool(_bottom, top))) => {
-                Pattern::BitLiteral(tag_name == &top)
+        } => {
+            let mut fields = std::vec::Vec::new();
+
+            match roc_types::pretty_print::chase_ext_tag_union(env.subs, *whole_var, &mut fields) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(content) => panic!("invalid content in ext_var: {:?}", content),
             }
-            Ok(Layout::Builtin(Builtin::Byte(conversion))) => match conversion.get(&tag_name) {
-                Some(index) => Pattern::EnumLiteral {
-                    tag_id: *index,
-                    enum_size: conversion.len() as u8,
+
+            fields.sort();
+            let tag_id = fields
+                .iter()
+                .position(|(key, _)| key == tag_name)
+                .expect("tag must be in its own type");
+
+            let enum_size = fields.len();
+
+            let mut ctors = std::vec::Vec::with_capacity(fields.len());
+            for (tag_name, args) in &fields {
+                ctors.push(Ctor {
+                    name: tag_name.clone(),
+                    arity: args.len(),
+                })
+            }
+
+            let union = crate::pattern::Union {
+                alternatives: ctors,
+            };
+
+            let fields_map: MutMap<_, _> = fields.into_iter().collect();
+
+            match crate::layout::layout_from_tag_union(
+                env.arena,
+                &fields_map,
+                env.subs,
+                env.pointer_size,
+            ) {
+                Ok(Layout::Builtin(Builtin::Bool)) => Pattern::BitLiteral(tag_id != 0),
+                Ok(Layout::Builtin(Builtin::Byte)) => Pattern::EnumLiteral {
+                    tag_id: tag_id as u8,
+                    enum_size: enum_size as u8,
                 },
-                None => unreachable!("Tag must be in its own type"),
-            },
-            Ok(layout) => {
-                let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                for (_, loc_pat) in arguments {
-                    mono_args.push(from_can_pattern(env, &loc_pat.value));
-                }
+                Ok(layout) => {
+                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+                    for (pat_var, loc_pat) in arguments {
+                        let layout =
+                            Layout::from_var(env.arena, *pat_var, env.subs, env.pointer_size)
+                                .unwrap_or_else(|err| {
+                                    panic!("TODO turn pat_var into a RuntimeError {:?}", err)
+                                });
 
-                let mut fields = std::vec::Vec::new();
-                let union = match roc_types::pretty_print::chase_ext_tag_union(
-                    env.subs,
-                    *whole_var,
-                    &mut fields,
-                ) {
-                    Ok(()) | Err((_, Content::FlexVar(_))) => {
-                        let mut ctors = std::vec::Vec::with_capacity(fields.len());
-                        for (tag_name, args) in fields {
-                            ctors.push(crate::pattern::Ctor {
-                                name: tag_name.clone(),
-                                arity: args.len(),
-                            })
-                        }
-
-                        crate::pattern::Union {
-                            alternatives: ctors,
-                        }
+                        mono_args.push((from_can_pattern(env, &loc_pat.value), layout));
                     }
-                    Err(content) => panic!("invalid content in ext_var: {:?}", content),
-                };
 
-                Pattern::AppliedTag {
-                    tag_name: tag_name.clone(),
-                    arguments: mono_args,
-                    union,
-                    layout,
+                    Pattern::AppliedTag {
+                        tag_name: tag_name.clone(),
+                        tag_id: tag_id as u8,
+                        arguments: mono_args,
+                        union,
+                        layout,
+                    }
                 }
+                Err(()) => panic!("Invalid layout"),
             }
-            Err(()) => panic!("Invalid layout"),
-        },
+        }
 
         RecordDestructure {
             whole_var,
