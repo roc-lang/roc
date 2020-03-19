@@ -573,19 +573,24 @@ fn build_switch<'a, B: Backend>(
     // Run the switch. Each branch will mutate ret and then jump to ret_block.
     let cond = match cond_layout {
         Layout::Union(_) => {
-            cond_layout = &Layout::Builtin(Builtin::Int64);
+            let new_cond_layout = &Layout::Builtin(Builtin::Int64);
             // load the tag discriminator
             let full_cond = build_expr(env, scope, module, builder, cond_expr, procs);
 
             let mem_flags = MemFlags::new();
 
-            let ret_type = layout_to_type(&cond_layout, env.cfg.pointer_type());
+            let ret_type = layout_to_type(&new_cond_layout, env.cfg.pointer_type());
 
             builder
                 .ins()
                 .load(ret_type, mem_flags, full_cond, Offset32::new(0))
         }
-        Layout::Builtin(Builtin::Float64) => todo!(),
+        Layout::Builtin(Builtin::Float64) => {
+            // for floats, we match on the bit pattern
+            let full_cond = build_expr(env, scope, module, builder, cond_expr, procs);
+
+            builder.ins().bitcast(types::I64, full_cond)
+        }
         Layout::Builtin(_) => build_expr(env, scope, module, builder, cond_expr, procs),
         other => todo!("extract the switch value for layout {:?}", other),
     };
