@@ -1216,28 +1216,27 @@ mod test_gen {
         );
     }
 
-    //
-    //    #[test]
-    //    fn applied_tag_just_unit() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                Fruit : [ Orange, Apple, Banana ]
-    //                Maybe a : [ Just a, Nothing ]
-    //
-    //                orange : Fruit
-    //                orange = Orange
-    //
-    //                y : Maybe Fruit
-    //                y = Just orange
-    //
-    //                0x1
-    //                "#
-    //            ),
-    //            1,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn applied_tag_just_unit() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Fruit : [ Orange, Apple, Banana ]
+                Maybe a : [ Just a, Nothing ]
+
+                orange : Fruit
+                orange = Orange
+
+                y : Maybe Fruit
+                y = Just orange
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 
     #[test]
     fn when_on_nothing() {
