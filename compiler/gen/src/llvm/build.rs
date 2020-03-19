@@ -675,7 +675,9 @@ fn build_switch<'a, 'ctx, 'env>(
             cond_layout = Layout::Builtin(Builtin::Int64);
             let full_cond = build_expr(env, scope, parent, cond_expr, procs);
 
-            cast_basic_basic(builder, full_cond, env.context.i64_type().into()).into_int_value()
+            builder
+                .build_bitcast(full_cond, env.context.i64_type(), "")
+                .into_int_value()
         }
         Layout::Union(_) => {
             // we match on the discriminant, not the whole Tag
