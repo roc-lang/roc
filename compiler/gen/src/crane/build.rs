@@ -279,6 +279,7 @@ pub fn build_expr<'a, B: Backend>(
 
                 let field_size = match layout {
                     Layout::Builtin(Builtin::Int64) => std::mem::size_of::<i64>(),
+                    Layout::Builtin(Builtin::Float64) => std::mem::size_of::<f64>(),
                     _ => panic!(
                         "Missing struct field size in offset calculation for struct access for {:?}",
                         layout
@@ -293,10 +294,11 @@ pub fn build_expr<'a, B: Backend>(
 
             let mem_flags = MemFlags::new();
             let record = build_expr(env, scope, module, builder, record, procs);
+            let field_type = type_from_layout(cfg, field_layout);
 
             builder
                 .ins()
-                .load(cfg.pointer_type(), mem_flags, record, Offset32::new(offset))
+                .load(field_type, mem_flags, record, Offset32::new(offset))
         }
         AccessAtIndex {
             index,
