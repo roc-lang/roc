@@ -670,7 +670,13 @@ fn build_switch<'a, 'ctx, 'env>(
 
     // Build the condition
     let cond = match cond_layout {
-        Layout::Builtin(_) => build_expr(env, scope, parent, cond_expr, procs).into_int_value(),
+        Layout::Builtin(Builtin::Float64) => {
+            // float matches are done on the bit pattern
+            cond_layout = Layout::Builtin(Builtin::Int64);
+            let full_cond = build_expr(env, scope, parent, cond_expr, procs);
+
+            cast_basic_basic(builder, full_cond, env.context.i64_type().into()).into_int_value()
+        }
         Layout::Union(_) => {
             // we match on the discriminant, not the whole Tag
             cond_layout = Layout::Builtin(Builtin::Int64);
@@ -678,6 +684,7 @@ fn build_switch<'a, 'ctx, 'env>(
 
             extract_tag_discriminant(env, full_cond)
         }
+        Layout::Builtin(_) => build_expr(env, scope, parent, cond_expr, procs).into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
     };
 
