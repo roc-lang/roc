@@ -156,7 +156,7 @@ fn flatten<'a>(path_pattern: (Path, Pattern<'a>), path_patterns: &mut Vec<(Path,
                 // dearg (Can.PatternCtorArg _ _ pattern) =
                 //   pattern
 
-                todo!()
+                todo!("alternatives: {:?}", union.alternatives)
             } else {
                 path_patterns.push(path_pattern);
             }
@@ -911,7 +911,8 @@ fn decide_to_branching<'a>(
                     Test::IsFloat(v) => v as u64,
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
-                    _ => todo!(),
+                    Test::IsCtor { tag_id, .. } => tag_id as u64,
+                    other => todo!("other {:?}", other),
                 };
 
                 branches.push((tag, branch));
@@ -921,9 +922,7 @@ fn decide_to_branching<'a>(
             Expr::Switch {
                 cond,
                 cond_layout,
-                // branches: &'a [(u64, Expr<'a>)],
                 branches: branches.into_bump_slice(),
-                // default_branch: &'a Expr<'a>,
                 default_branch,
                 ret_layout,
             }

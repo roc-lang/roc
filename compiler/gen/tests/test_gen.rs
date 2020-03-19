@@ -614,22 +614,21 @@ mod test_gen {
         );
     }
 
-    // doesn't work yet. The condition must be cast to an integer to use a jump table
-    //    #[test]
-    //    fn branch_third_float() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                when 10.0 is
-    //                    1.0 -> 63
-    //                    2 -> 48
-    //                    _ -> 112
-    //                "#
-    //            ),
-    //            112.0,
-    //            f64
-    //        );
-    //    }
+    #[test]
+    fn branch_third_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   when 10.0 is
+                       1.0 -> 63
+                       2.0 -> 48
+                       _ -> 112
+                   "#
+            ),
+            112,
+            i64
+        );
+    }
 
     #[test]
     fn branch_first_int() {
@@ -1297,11 +1296,14 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [ This Int, These Int Int ]
+                These a b : [ This a, That b, These a b ]
+
+                x : These Int Int
                 x = These 0x3 0x2
 
                 when x is
                     These a b -> a + b
+                    That v -> 8
                     This v -> v
                 "#
             ),
@@ -1330,6 +1332,26 @@ mod test_gen {
             bool
         );
     }
+
+    //    #[test]
+    //    fn when_on_just_just() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                Maybe a : [ Nothing, Just a ]
+    //
+    //                x : Maybe (Maybe a)
+    //                x = Just (Just 41)
+    //
+    //                when x is
+    //                    Just (Just v) -> v + 0x1
+    //                    _ -> 0x1
+    //                "#
+    //            ),
+    //            42,
+    //            i64
+    //        );
+    //    }
 
     //    #[test]
     //    fn linked_list_empty() {
