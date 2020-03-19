@@ -715,7 +715,7 @@ fn from_can<'a>(
                         variant_var,
                         &mut tags,
                     ) {
-                        Ok(()) => {
+                        Ok(()) | Err((_, Content::FlexVar(_))) => {
                             tags.sort();
                         }
                         other => panic!("invalid value in ext_var {:?}", other),

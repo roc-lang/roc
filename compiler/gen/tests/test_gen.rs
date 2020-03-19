@@ -1312,6 +1312,84 @@ mod test_gen {
     }
 
     #[test]
+    fn maybe_is_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                isJust : Maybe a -> Bool
+                isJust = \list ->
+                    when list is
+                        Nothing -> False
+                        Just _ -> True
+
+                isJust (Just 42)
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    //    #[test]
+    //    fn linked_list_empty() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                LinkedList a : [ Cons a (LinkedList a), Nil ]
+    //
+    //                empty : LinkedList Int
+    //                empty = Nil
+    //
+    //                1
+    //                "#
+    //            ),
+    //            1,
+    //            i64
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn linked_list_singleton() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                LinkedList a : [ Cons a (LinkedList a), Nil ]
+    //
+    //                singleton : LinkedList Int
+    //                singleton = Cons 0x1 Nil
+    //
+    //                1
+    //                "#
+    //            ),
+    //            1,
+    //            i64
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn linked_list_is_empty() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                LinkedList a : [ Cons a (LinkedList a), Nil ]
+    //
+    //                isEmpty : LinkedList a -> Bool
+    //                isEmpty = \list ->
+    //                    when list is
+    //                        Nil -> True
+    //                        Cons _ _ -> False
+    //
+    //                isEmpty (Cons 4 Nil)
+    //                "#
+    //            ),
+    //            false,
+    //            bool
+    //        );
+    //    }
+
+    #[test]
     fn empty_record() {
         assert_evals_to!(
             indoc!(
