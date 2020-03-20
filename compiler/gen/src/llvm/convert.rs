@@ -59,6 +59,9 @@ pub fn basic_type_from_layout<'ctx>(
 
             ptr_type.as_basic_type_enum()
         }
+        Pointer(layout) => basic_type_from_layout(arena, context, &layout, ptr_bytes)
+            .ptr_type(AddressSpace::Generic)
+            .into(),
         Struct(sorted_fields) => {
             // Determine types
             let mut field_types = Vec::with_capacity_in(sorted_fields.len(), arena);
