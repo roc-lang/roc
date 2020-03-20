@@ -11,6 +11,32 @@ pub struct Report {
     pub text: ReportText,
 }
 
+pub struct Palette {
+    pub primary: Color,
+    pub error: Color,
+}
+
+pub enum Color {
+    White,
+    Red,
+}
+
+pub const DEFAULT_PALETTE: Palette = Palette {
+    primary: Color::White,
+    error: Color::Red,
+};
+
+impl Color {
+    pub fn render(self, str: &str) -> String {
+        use Color::*;
+
+        match self {
+            Red => red(str),
+            White => white(str),
+        }
+    }
+}
+
 pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     let mut texts = Vec::new();
 
@@ -77,6 +103,28 @@ fn newline() -> ReportText {
     plain_text("\n")
 }
 
+fn red(str: &str) -> String {
+    let mut buf = String::new();
+
+    buf.push_str("\u{001b}[31m");
+    buf.push_str(str);
+    buf.push_str("\u{001b}[0m");
+
+    buf
+}
+
+fn white(str: &str) -> String {
+    let mut buf = String::new();
+
+    buf.push_str("\u{001b}[31m");
+    buf.push_str(str);
+    buf.push_str(RESET);
+
+    buf
+}
+
+const RESET: &str = "\u{001b}[0m";
+
 impl ReportText {
     /// Render to CI console output, where no colors are available.
     pub fn render_ci(
@@ -116,12 +164,12 @@ impl ReportText {
             Region(region) => {
                 for i in region.start_line..=region.end_line {
                     buf.push_str(i.to_string().as_str());
-                    buf.push_str(" |");
+                    buf.push_str(" ┆");
 
                     let line = src_lines[i as usize];
 
                     if !line.is_empty() {
-                        buf.push(' ');
+                        buf.push_str("  ");
                         buf.push_str(src_lines[i as usize]);
                     }
 
@@ -144,13 +192,21 @@ impl ReportText {
     /// Render to a color terminal using ANSI escape sequences
     pub fn render_color_terminal(
         &self,
-        _buf: &mut String,
+        buf: &mut String,
         _subs: &mut Subs,
         _home: ModuleId,
         _src_lines: &[&str],
         _interns: &Interns,
+        palette: Palette,
     ) {
-        // TODO do the same stuff as render_ci, but with colors via ANSI terminal escape codes!
-        // Examples of how to do this are in the source code of https://github.com/rtfeldman/console-print
+        use ReportText::*;
+
+        match self {
+            Plain(string) => {
+                buf.push_str(&palette.primary.render(string));
+            }
+
+            _ => panic!("TODO implement more ReportTexts in render color terminal"),
+        }
     }
 }

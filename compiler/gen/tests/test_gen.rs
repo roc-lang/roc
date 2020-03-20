@@ -1618,4 +1618,43 @@ mod test_gen {
             i64
         );
     }
+
+    #[test]
+    fn f64_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   rec = { y: 17.2, x: 15.1, z: 19.3 }
+
+                   rec.x
+                "#
+            ),
+            15.1,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   rec = { y: 17.2, x: 15.1, z: 19.3 }
+
+                   rec.y
+                "#
+            ),
+            17.2,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { y: 17.2, x: 15.1, z: 19.3 }
+
+                    rec.z
+                "#
+            ),
+            19.3,
+            f64
+        );
+    }
 }
