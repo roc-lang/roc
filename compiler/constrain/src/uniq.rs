@@ -4,7 +4,7 @@ use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
 use roc_can::def::{Declaration, Def};
 use roc_can::expected::{Expected, PExpected};
-use roc_can::expr::{Expr, Field};
+use roc_can::expr::{Expr, Field, WhenBranch};
 use roc_can::pattern::{Pattern, RecordDestruct};
 use roc_collections::all::{ImMap, ImSet, SendMap};
 use roc_module::ident::{Ident, Lowercase};
@@ -1006,15 +1006,14 @@ pub fn constrain_expr(
                 Expected::FromAnnotation(name, arity, _, typ) => {
                     constraints.push(Eq(Type::Variable(*expr_var), expected.clone(), region));
 
-                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, when_branch) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             var_store,
                             var_usage,
                             applied_usage_constraint,
                             env,
                             region,
-                            &loc_pattern,
-                            loc_expr,
+                            when_branch,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
                                 cond_type.clone(),
@@ -1040,15 +1039,14 @@ pub fn constrain_expr(
                     let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, (loc_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, when_branch) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             var_store,
                             var_usage,
                             applied_usage_constraint,
                             env,
                             region,
-                            &loc_pattern,
-                            loc_expr,
+                            when_branch,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
                                 cond_type.clone(),
@@ -1440,8 +1438,7 @@ fn constrain_when_branch(
     applied_usage_constraint: &mut ImSet<Symbol>,
     env: &Env,
     region: Region,
-    loc_pattern: &Located<Pattern>,
-    loc_expr: &Located<Expr>,
+    when_branch: &WhenBranch,
     pattern_expected: PExpected<Type>,
     expr_expected: Expected<Type>,
 ) -> Constraint {
@@ -1451,7 +1448,7 @@ fn constrain_when_branch(
         var_usage,
         applied_usage_constraint,
         region,
-        &loc_expr.value,
+        &when_branch.value.value,
         expr_expected,
     );
 
@@ -1461,8 +1458,34 @@ fn constrain_when_branch(
         constraints: Vec::with_capacity(1),
     };
 
-    // mutates the state, so return value is not used
-    constrain_pattern(var_store, &mut state, &loc_pattern, pattern_expected);
+    for loc_pattern in &when_branch.patterns {
+        // mutates the state, so return value is not used
+        constrain_pattern(
+            var_store,
+            &mut state,
+            &loc_pattern,
+            pattern_expected.clone(),
+        );
+    }
+
+    if let Some(loc_guard) = &when_branch.guard {
+        let guard_uniq_var = var_store.fresh();
+        state.vars.push(guard_uniq_var);
+
+        let bool_type = attr_type(
+            Bool::variable(guard_uniq_var),
+            Type::Variable(Variable::BOOL),
+        );
+        state.constraints.push(constrain_expr(
+            env,
+            var_store,
+            var_usage,
+            applied_usage_constraint,
+            loc_guard.region,
+            &loc_guard.value,
+            Expected::ForReason(Reason::WhenGuard, bool_type, loc_guard.region),
+        ));
+    }
 
     Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),

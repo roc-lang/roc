@@ -7,7 +7,7 @@ use roc_can::def::{Declaration, Def};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::Field;
+use roc_can::expr::{Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, SendMap};
 use roc_module::ident::Lowercase;
@@ -451,12 +451,11 @@ pub fn constrain_expr(
                     let ast_con = Eq(Type::Variable(*expr_var), expected.clone(), region);
                     constraints.push(ast_con);
 
-                    for (index, (loc_when_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, when_branch) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             env,
                             region,
-                            &loc_when_pattern,
-                            loc_expr,
+                            when_branch,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
                                 cond_type.clone(),
@@ -478,12 +477,11 @@ pub fn constrain_expr(
                     let branch_type = Variable(*expr_var);
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
-                    for (index, (loc_when_pattern, loc_expr)) in branches.iter().enumerate() {
+                    for (index, when_branch) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             env,
                             region,
-                            &loc_when_pattern,
-                            loc_expr,
+                            when_branch,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
                                 cond_type.clone(),
@@ -662,12 +660,11 @@ pub fn constrain_expr(
 fn constrain_when_branch(
     env: &Env,
     region: Region,
-    loc_pattern: &Located<Pattern>,
-    loc_expr: &Located<Expr>,
+    when_branch: &WhenBranch,
     pattern_expected: PExpected<Type>,
     expr_expected: Expected<Type>,
 ) -> Constraint {
-    let ret_constraint = constrain_expr(env, region, &loc_expr.value, expr_expected);
+    let ret_constraint = constrain_expr(env, region, &when_branch.value.value, expr_expected);
 
     let mut state = PatternState {
         headers: SendMap::default(),
@@ -675,12 +672,30 @@ fn constrain_when_branch(
         constraints: Vec::with_capacity(1),
     };
 
-    constrain_pattern(
-        &loc_pattern.value,
-        loc_pattern.region,
-        pattern_expected,
-        &mut state,
-    );
+    // TODO ensure this is correct
+    // TODO investigate for error messages, is it better to unify all branches with a variable,
+    // then unify that variable with the expectation?
+    for loc_pattern in &when_branch.patterns {
+        constrain_pattern(
+            &loc_pattern.value,
+            loc_pattern.region,
+            pattern_expected.clone(),
+            &mut state,
+        );
+    }
+
+    if let Some(loc_guard) = &when_branch.guard {
+        state.constraints.push(constrain_expr(
+            env,
+            region,
+            &when_branch.value.value,
+            Expected::ForReason(
+                Reason::WhenGuard,
+                Type::Variable(Variable::BOOL),
+                loc_guard.region,
+            ),
+        ));
+    };
 
     Constraint::Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),

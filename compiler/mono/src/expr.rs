@@ -338,6 +338,7 @@ fn pattern_to_when<'a>(
     body: Located<roc_can::expr::Expr>,
 ) -> (Symbol, Located<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
+    use roc_can::expr::WhenBranch;
     use roc_can::pattern::Pattern::*;
 
     match &pattern.value {
@@ -360,7 +361,7 @@ fn pattern_to_when<'a>(
                 cond_var: pattern_var,
                 expr_var: body_var,
                 loc_cond: Box::new(Located::at_zero(Var(symbol))),
-                branches: vec![(pattern, body)],
+                branches: vec![WhenBranch{ patterns: vec![pattern], value: body, guard: None }],
             };
 
             (symbol, Located::at_zero(wrapped_body))
@@ -975,24 +976,23 @@ fn from_can_when<'a>(
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<roc_can::expr::Expr>,
-    branches: std::vec::Vec<(
-        Located<roc_can::pattern::Pattern>,
-        Located<roc_can::expr::Expr>,
-    )>,
+    mut branches: std::vec::Vec<roc_can::expr::WhenBranch>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
-    match branches.len() {
-        0 => {
-            // A when-expression with no branches is a runtime error.
-            // We can't know what to return!
-            panic!("TODO compile a 0-branch when-expression to a RuntimeError");
-        }
-        1 => {
+    if branches.is_empty() {
+        // A when-expression with no branches is a runtime error.
+        // We can't know what to return!
+        panic!("TODO compile a 0-branch when-expression to a RuntimeError");
+    } else {
+        let mut first = branches.remove(0);
+
+        if branches.is_empty() && first.patterns.len() == 1 && first.guard.is_none() {
             // A when-expression with exactly 1 branch is essentially a LetNonRec.
             // As such, we can compile it direcly to a Store.
             let arena = env.arena;
             let mut stored = Vec::with_capacity_in(1, arena);
-            let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
+
+            let loc_when_pattern = first.patterns.remove(0);
 
             let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
 
@@ -1015,13 +1015,12 @@ fn from_can_when<'a>(
             // will throw an error anyway.
             let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored)
             {
-                Ok(_) => from_can(env, loc_branch.value, procs, None),
+                Ok(_) => from_can(env, first.value.value, procs, None),
                 Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
             };
 
             Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
-        }
-        _ => {
+        } else {
             let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
                 .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
@@ -1031,7 +1030,10 @@ fn from_can_when<'a>(
             let mut loc_branches = std::vec::Vec::new();
             let mut opt_branches = std::vec::Vec::new();
 
-            for (loc_pattern, loc_expr) in branches {
+            for when_branch in branches {
+                let loc_pattern = &when_branch.patterns[0];
+                let loc_expr = when_branch.value;
+
                 let mono_pattern = from_can_pattern(env, &loc_pattern.value);
 
                 loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
@@ -1247,6 +1249,13 @@ pub struct RecordDestruct<'a> {
     pub layout: Layout<'a>,
     pub symbol: Symbol,
     pub guard: Option<Pattern<'a>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WhenBranch<'a> {
+    pub patterns: Vec<'a, Pattern<'a>>,
+    pub value: Expr<'a>,
+    pub guard: Option<Expr<'a>>,
 }
 
 fn from_can_pattern<'a>(
