@@ -1329,6 +1329,44 @@ mod test_gen {
         );
     }
 
+    /*
+    #[test]
+    fn pair_with_guard_pattern() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Pair 2 3 is
+                    Pair 4 _ -> 9
+                    Pair 3 _ -> 9
+                    Pair a b -> a + b
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+    */
+
+    #[test]
+    fn result_with_guard_pattern() {
+        // This test revealed an issue with hashing Test values
+        assert_evals_to!(
+            indoc!(
+                r#"
+            x : Result Int Int
+            x = Ok 2
+
+            when x is
+                Ok 3 -> 1
+                Ok _ -> 2
+                Err _ -> 3
+            "#
+            ),
+            2,
+            i64
+        );
+    }
+
     #[test]
     fn maybe_is_just() {
         assert_evals_to!(
