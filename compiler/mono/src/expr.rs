@@ -890,6 +890,7 @@ fn store_pattern<'a>(
                     Underscore => {
                         // ignore
                     }
+                    IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
                     _ => {
                         // store the field in a symbol, and continue matching on it
                         let symbol = env.fresh_symbol();
@@ -927,6 +928,7 @@ fn store_record_destruct<'a>(
     struct_layout: Layout<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) -> Result<(), String> {
+    use Pattern::*;
     let record = env.arena.alloc(Expr::Load(outer_symbol));
     let load = Expr::Access {
         label: destruct.label.clone(),
@@ -939,10 +941,10 @@ fn store_record_destruct<'a>(
             stored.push((destruct.symbol, destruct.layout.clone(), load));
         }
         Some(guard_pattern) => match &guard_pattern {
-            Pattern::Identifier(symbol) => {
+            Identifier(symbol) => {
                 stored.push((*symbol, destruct.layout.clone(), load));
             }
-            Pattern::Underscore => {
+            Underscore => {
                 // important that this is special-cased to do nothing: mono record patterns will extract all the
                 // fields, but those not bound in the source code are guarded with the underscore
                 // pattern. So given some record `{ x : a, y : b }`, a match
@@ -955,6 +957,7 @@ fn store_record_destruct<'a>(
                 //
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
             }
+            IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
             _ => {
                 let symbol = env.fresh_symbol();
                 stored.push((symbol, destruct.layout.clone(), load));

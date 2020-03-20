@@ -1329,15 +1329,14 @@ mod test_gen {
         );
     }
 
-    /*
     #[test]
     fn pair_with_guard_pattern() {
         assert_evals_to!(
             indoc!(
                 r#"
                 when Pair 2 3 is
-                    Pair 4 _ -> 9
-                    Pair 3 _ -> 9
+                    Pair 4 _ -> 1
+                    Pair 3 _ -> 2
                     Pair a b -> a + b
                 "#
             ),
@@ -1345,7 +1344,6 @@ mod test_gen {
             i64
         );
     }
-    */
 
     #[test]
     fn result_with_guard_pattern() {

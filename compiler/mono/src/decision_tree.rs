@@ -969,9 +969,9 @@ fn decide_to_branching<'a>(
             tests,
             fallback,
         } => {
-            let cond = env
-                .arena
-                .alloc(path_to_expr(env, cond_symbol, &path, &cond_layout));
+            // the cond_layout can change in the process. E.g. if the cond is a Tag, we actually
+            // switch on the tag discriminant (currently an i64 value)
+            let (cond, cond_layout) = path_to_expr_help(env, cond_symbol, &path, cond_layout);
 
             let default_branch = env.arena.alloc(decide_to_branching(
                 env,
@@ -1008,7 +1008,7 @@ fn decide_to_branching<'a>(
 
             // make a jump table based on the tests
             Expr::Switch {
-                cond,
+                cond: env.arena.alloc(cond),
                 cond_layout,
                 branches: branches.into_bump_slice(),
                 default_branch,
