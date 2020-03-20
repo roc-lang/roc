@@ -11,7 +11,7 @@ mod helpers;
 mod test_report {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
-    use roc_reporting::report::{can_problem, plain_text, Report, ReportText};
+    use roc_reporting::report::{can_problem, plain_text, Report, ReportText, DEFAULT_PALETTE};
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use roc_types::types;
@@ -80,6 +80,38 @@ mod test_report {
             .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
 
         assert_eq!(buf, expected_rendering);
+    }
+
+    fn report_renders_in_color_from_src(src: &str, report: Report, expected_rendering: &str) {
+        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let mut buf: String = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        report.text.render_color_terminal(
+            &mut buf,
+            &mut subs,
+            home,
+            &src_lines,
+            &interns,
+            DEFAULT_PALETTE,
+        );
+
+        assert_eq!(buf, expected_rendering);
+    }
+
+    fn report_renders_in_color(report: Report, expected_rendering: &str) {
+        report_renders_in_color_from_src(
+            indoc!(
+                r#"
+                    x = 1
+                    y = 2
+
+                    x
+                "#
+            ),
+            report,
+            expected_rendering,
+        )
     }
 
     fn report_renders_as(report: Report, expected_rendering: &str) {
@@ -202,12 +234,20 @@ mod test_report {
             buf,
             indoc!(
                 r#"
-            y is not used anywhere in your code.
+                y is not used anywhere in your code.
 
-            1 | y = 2
+                1 ┆  y = 2
 
-            If you didn't intend on using y then remove it so future readers of your code don't wonder why it is there."#
+                If you didn't intend on using y then remove it so future readers of your code don't wonder why it is there."#
             )
+        );
+    }
+
+    #[test]
+    fn report_in_color() {
+        report_renders_in_color(
+            to_simple_report(plain_text("y")),
+            "\u{001b}[31my\u{001b}[0m",
         );
     }
 
@@ -218,7 +258,7 @@ mod test_report {
                 r#"
                     x = 1
                     y = 2
-                    f = \a ->  a + 4
+                    f = \a -> a + 4
 
                     f x
                 "#
@@ -231,9 +271,9 @@ mod test_report {
             })),
             indoc!(
                 r#"
-                    1 | y = 2
-                    2 | f = \a ->  a + 4
-                    3 |"#
+                    1 ┆  y = 2
+                    2 ┆  f = \a -> a + 4
+                    3 ┆"#
             ),
         );
     }
