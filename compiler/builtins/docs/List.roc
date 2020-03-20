@@ -59,8 +59,7 @@ fromResult : Result elem * -> List elem
 
 reverse : List elem -> List elem
 
-sort : List elem, (elem, elem -> [ Eq, Lt, Gt ]) -> List elem
-sortBy : List elem, (elem -> field), (field, field -> [ Eq, Lt, Gt ]) -> List elem
+sort : List elem, Sorter elem -> List elem
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
@@ -157,13 +156,13 @@ zipMap :
 ## elements for which the function returned `True`.
 ##
 ## >>> List.keepIf [ 1, 2, 3, 4 ] (\num -> num > 2)
-keepIf : List elem, (elem -> Bool) -> List elem
+keepIf : List elem, (elem -> [True, False]) -> List elem
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `False`.
 ##
 ## >>> List.dropIf [ 1, 2, 3, 4 ] (\num -> num > 2)
-dropIf : List elem, (elem -> Bool) -> List elem
+dropIf : List elem, (elem -> [True, False]) -> List elem
 
 ## Takes the requested number of elements from the front of a list
 ## and returns them.
@@ -229,4 +228,3 @@ contains : List elem, elem -> Bool
 all : List elem, (elem -> Bool) -> Bool
 
 any : List elem, (elem -> Bool) -> Bool
-

@@ -239,8 +239,8 @@ here's how that code might look:
 
 ```elm
 doStuff = \filename ->
-    after (File.read filename) \fileData ->
-    after (Http.get (urlFromData fileData)) \response ->
+    Task.after (File.read filename) \fileData ->
+    Task.after (Http.get (urlFromData fileData)) \response ->
     File.write filename (responseToData response)
 ```
 
@@ -248,7 +248,7 @@ A few things to note before getting into how this relates to custom types:
 
 1. This is written in a style designed for chained effects. It's kinda like [`do` notation](https://en.wikibooks.org/wiki/Haskell/do_notation), but implemented as a formatting convention instead of special syntax.
 2. In Elm you'd need to add a `<|` before the anonymous functions (e.g. `<| \response ->`) but in Roc you don't. (That parsing design decision was partly motivated by supporting this style of chained effects.)
-3. `after` is like a flipped `Task.andThen`. The idea would be to import it unqualified so it could be used like this.
+3. `Task.after` is `Task.andThen` with its arguments flipped.
 
 What would the type of the above expression be? Let's say these function calls
 have the following types:
@@ -779,7 +779,7 @@ Either way, you get `+` being able to work on both `Int` and `Float`!
 These don't exist in Roc.
 
 * `appendable` is only used in Elm for the `(++)` operator, and Roc doesn't have that operator.
-* `comparable` is used for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's `List.sort` accepts a `Sorter` argument which specifies how to sort the elements. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), and their keys have no visible type restrictions.
+* `comparable` is used for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's `List.sort` accepts a `Sorter` argument which specifies how to sort the elements. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are have no visible restrictions.
 * `number` is replaced by `Num`, as described earlier.
 
 Like in Elm, number literals with decimal points are `Float`. However, number
@@ -976,27 +976,57 @@ possible to ship Roc's standard library as a separate package!)
 
 Roc's standard library has these modules:
 
-* `Str`
 * `Bool`
-* `Num`
-* `Int`
+* `Str`
 * `Float`
+* `Int`
+* `Num`
 * `List`
-* `Result`
-* `Pair`
 
 Some differences to note:
 
-* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `Int`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
+* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `Int`, `Str`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
 * In Roc it's called `Str` instead of `String`.
 * No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have a string be the smallest indivisible unit. If you want to iterate over grapheme clusters, use a `Str -> List Str` function which breaks the string down on grapheme boundaries. For this reason there also isn't a `Str.length` function; in the context of strings, "length" is ambiguous. (Does it refer to number of bytes? Number of Unicode code points? Number of grapheme clusters?)
 * No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.isEq` or `Num.add` or `Float.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implmement it: `never = \a -> never a`.)
 * No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in Roc's standard library.
 * No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
-* No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) If you want to describe something that's not an operation that can fail, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]*`.
+* No `Result` or `Maybe`. Instead, we use a more self-decriptive inline type, like so: `List.first : List elem -> [Ok elem, ListWasEmpty]*` - this way, it's clear from the type what the error condition was (the list was empty). If a type isn't representing potential failre (meaning `Ok` wouldn't make sense), use a more desriptive inline tag instead of `Maybe`. For example: `nullable : Decoder a -> Decoder [Null, NonNull a]*`. The `roc/collections` package does have an `Ok` module with functions like `Ok.map : [Ok a]x, (a -> b) -> [Ok b]x` which is a bit like a `Result` replacement, but by design there is no `Maybe` replacement.
 * `List` refers to something closer to Elm's `Array`, as noted earlier.
-* `Sort` is similar to [`elm-sorter-experiment`](https://package.elm-lang.org/packages/rtfeldman/elm-sorter-experiment) but the main reason it exists is to expose `Sort.compare : a, a -> [ Eq, Gt, Lt ]`. This is needed for `roc/collections` (and other custom data strucure packages) to implement things like `SortedMap`.
-* `Pair` instead of `Tuple`. Roc doesn't have tuple syntax, but it does have the "rocket" operator `=>`. The expression `a => b` desugars to `Pair a b`, with `Pair` being an ordinary global tag. By convention, `=>` is intended to describe "key-value pairs" (e.g. `Map.fromPairs [ "a" => 1, "b" => 2 ]`) as opposed to pairs where the elements have no particular key-value relationship. The `Pair` module has functions like `Pair.first : Pair a * -> a` and `Pair.mapSecond : Pair a b, (b -> c) -> Pair a c`. If you want a larger tuple, you can make one using a tag - e.g. `T4 "a" "b" "c" "d"` - but there are only built-in convenience functions for working with `Pair` specifically.
+* No `Tuple`. Roc doesn't have tuple syntax, but it does have a `=>` operator. The expression `a => b` desugars to `Pair a b`, with `Pair` being an ordinary global tag. By convention, `=>` is intended to describe "key-value pairs" (e.g. `Map.fromPairs [ "a" => 1, "b" => 2 ]`) as opposed to pairs where the elements have no particular key-value relationship. `roc/collections` has a `Pair` module with functions like `Pair.first : Pair a * -> a` and `Pair.mapSecond : Pair a b, (b -> c) -> Pair a c`. If you want a larger tuple, you can make one up on the spot using a tag - e.g. `T4 "a" "b" "c" "d"`.
+
+The separate `roc/collections` package contains these modules, each written in pure Roc:
+
+* `Ok` (similar to Elm's `Result` - offers `Ok.map` etc.)
+* `Pair` (similar to Elm's `Tuple`)
+* `Buf` (like a `List`, but optimized for growing in place - at the expense of taking up slightly more memory)
+* `StrBuf` (like `Buf` but for strings)
+* `Map` (hash map, implemented using `Int.hash64 : a, a -> U64` - meaning no `comparable` or `hashable` restriction)
+* `Set` (hash set, essentially `Set a : [@Set (Map a {}`)])
+* `Sort` (similar to [`elm-sorter-experiment`](https://package.elm-lang.org/packages/rtfeldman/elm-sorter-experiment))
+* `SortedMap` (b-tree map based on `Sort`; usually slower than `Map`, but faster at converting to a sorted `List`)
+* `SortedSet` (b-tree set, essentially `SortedSet a : [@SortedSet (SortedMap a {})]`)
+
+Since these are all necessarily implemented in pure Roc, they might not turn out to be
+quite as efficient as if they were implemented in a systems language. That said,
+fast data structures are generally built by mutating C arrays and trees.
+Between `List`, recursive tags, and in-place mutation optimizations, Roc
+has all of those primitives - so the performance gap should be small (if not zero) in practice.
+(If someone has a use case where it's important to squeeze that last drop of
+performance out of a specialized basic collection, they can still do that through the host.)
+
+One cultural benefit to having all collections (other than the primitive `List`)
+implemented in an ordinary package is that it encourages creating and using
+data structures specific to the problem at hand. This can benefit not only
+data modeling, but also performance.
+
+Another benefit is that it can motivate performance optimizations. For example,
+the process for making `Map.fromPairs [ "a" => 1, "b" => 2 ]` run as efficiently
+as if you'd done two `insert` calls on an empty `Map` (without having instantiated
+an intermediate `List`) would involve optimizing `List.fold` to avoid unnecessarily 
+allocating a list in the specific case where it gets passed a list literal, plus
+inlining (and potentially constant propagation) so the optimization could trigger
+on `Map.fromPairs`. That optimization would benefit all Roc code, not just `roc/collections`.
 
 ## Operator Desugaring Table
 
@@ -1004,6 +1034,7 @@ Here are various Roc expressions involving operators, and what they desugar to.
 
 | Expression      | Desugars to      |
 | --------------- | ---------------- |
+| `a => b`          | `Pair a b`         |
 | `a + b`           | `Num.add a b`      |
 | `a - b`           | `Num.sub a b`      |
 | `a * b`           | `Num.mul a b`      |

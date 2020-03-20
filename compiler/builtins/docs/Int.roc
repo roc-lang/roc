@@ -127,10 +127,10 @@ ULen : Int @ULen
 ## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## There are also two variable-size integer types: #Iword and #Uword.
-## Their sizes are determined by the machine word size for the system you're
-## compiling for. For example, on a 64-bit system, #Iword is the same as #I64,
-## and #Uword is the same as #U64.
+## There are also two variable-size integer types: #ILen and #ULen.
+## Their sizes are determined by the [machine word length](https://en.wikipedia.org/wiki/Word_(computer_architecture))
+## of the system you're compiling for. For example, when compiling for a 64-bit target,
+## #ILen is the same as #I64, and #ULen is the same as #U64.
 ##
 ## If any operation would result in an #Int that is either too big
 ## or too small to fit in that range (e.g. calling `Int.highest32 + 1`),
