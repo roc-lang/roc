@@ -202,16 +202,16 @@ mod test_gen {
             // Compute main_fn_type before moving subs to Env
             let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_fn_type = basic_type_from_layout(&arena, &context, &layout)
-                .fn_type(&[], false);
-            let main_fn_name = "$Test.main";
-
             let execution_engine =
                 module
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("Error creating JIT execution engine for test");
 
-            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+            let ptr_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+
+            let main_fn_type = basic_type_from_layout(&arena, &context, &layout, ptr_bytes)
+                .fn_type(&[], false);
+            let main_fn_name = "$Test.main";
 
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
@@ -220,7 +220,7 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
-                pointer_bytes
+                ptr_bytes
             };
             let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -337,16 +337,16 @@ mod test_gen {
             // Compute main_fn_type before moving subs to Env
             let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_fn_type = basic_type_from_layout(&arena, &context, &layout)
-                .fn_type(&[], false);
-            let main_fn_name = "$Test.main";
 
             let execution_engine =
                 module
                 .create_jit_execution_engine(OptimizationLevel::None)
                 .expect("Error creating JIT execution engine for test");
 
-            let pointer_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+            let ptr_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
+            let main_fn_type = basic_type_from_layout(&arena, &context, &layout, ptr_bytes)
+                .fn_type(&[], false);
+            let main_fn_name = "$Test.main";
 
             // Compile and add all the Procs before adding main
             let mut env = roc_gen::llvm::build::Env {
@@ -355,7 +355,7 @@ mod test_gen {
                 context: &context,
                 interns,
                 module: arena.alloc(module),
-                pointer_bytes
+                ptr_bytes
             };
             let mut procs = Procs::default();
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();

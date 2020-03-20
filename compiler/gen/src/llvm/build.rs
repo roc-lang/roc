@@ -3,13 +3,13 @@ use bumpalo::Bump;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicTypeEnum, StructType};
+use inkwell::types::{BasicTypeEnum, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use crate::llvm::convert::{
-    basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type,
+    basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type, ptr_int,
 };
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
@@ -32,7 +32,13 @@ pub struct Env<'a, 'ctx, 'env> {
     pub builder: &'env Builder<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
-    pub pointer_bytes: u32,
+    pub ptr_bytes: u32,
+}
+
+impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
+    pub fn ptr_int(&self) -> IntType<'ctx> {
+        ptr_int(self.context, self.ptr_bytes)
+    }
 }
 
 #[allow(clippy::cognitive_complexity)]
@@ -76,7 +82,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
             ret_layout,
             cond_layout,
         } => {
-            let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout);
+            let ret_type =
+                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
             let switch_args = SwitchArgs {
                 cond_layout: cond_layout.clone(),
                 cond_expr: cond,
@@ -93,7 +100,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             for (symbol, layout, expr) in stores.iter() {
                 let val = build_expr(env, &scope, parent, &expr, procs);
-                let expr_bt = basic_type_from_layout(env.arena, context, &layout);
+                let expr_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
                 let alloca = create_entry_block_alloca(
                     env,
                     parent,
@@ -146,14 +153,14 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
             }
             _ => {
-                let mut arg_vals: Vec<BasicValueEnum> =
+                let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
                     Vec::with_capacity_in(args.len(), env.arena);
 
-                for (arg, _layout) in args.iter() {
-                    arg_vals.push(build_expr(env, scope, parent, arg, procs));
+                for (arg, layout) in args.iter() {
+                    arg_tuples.push((build_expr(env, scope, parent, arg, procs), layout));
                 }
 
-                call_with_args(*symbol, arg_vals.into_bump_slice(), env)
+                call_with_args(*symbol, arg_tuples.into_bump_slice(), env)
             }
         },
         FunctionPointer(symbol) => {
@@ -189,7 +196,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
-
         Load(symbol) => match scope.get(symbol) {
             Some((_, ptr)) => env
                 .builder
@@ -233,13 +239,13 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
         Array { elem_layout, elems } => {
             let ctx = env.context;
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout);
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
             let builder = env.builder;
 
             if elems.is_empty() {
                 let array_type = get_array_type(&elem_type, 0);
                 let ptr_type = array_type.ptr_type(AddressSpace::Generic);
-                let struct_type = collection_wrapper(ctx, ptr_type);
+                let struct_type = collection_wrapper(ctx, ptr_type, env.ptr_bytes);
 
                 // The first field in the struct should be the pointer.
                 let struct_val = builder
@@ -254,11 +260,12 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::StructValue(struct_val.into_struct_value())
             } else {
                 let len_u64 = elems.len() as u64;
-                let elem_bytes = elem_layout.stack_size(env.pointer_bytes) as u64;
+                let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
 
                 let ptr = {
                     let bytes_len = elem_bytes * len_u64;
-                    let len = ctx.i32_type().const_int(bytes_len, false);
+                    let len_type = env.ptr_int();
+                    let len = len_type.const_int(bytes_len, false);
 
                     env.builder
                         .build_array_malloc(elem_type, len, "create_list_ptr")
@@ -276,8 +283,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 }
 
                 let ptr_val = BasicValueEnum::PointerValue(ptr);
-                let struct_type = collection_wrapper(ctx, ptr.get_type());
-                let len = BasicValueEnum::IntValue(ctx.i32_type().const_int(len_u64, false));
+                let struct_type = collection_wrapper(ctx, ptr.get_type(), env.ptr_bytes);
+                let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
                 let mut struct_val;
 
                 // Field 0: pointer
@@ -295,16 +302,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
                     .unwrap();
 
-                // Field 2: capacity (initially set to length)
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        len,
-                        Builtin::WRAPPER_CAPACITY,
-                        "insert_capacity",
-                    )
-                    .unwrap();
-
                 BasicValueEnum::StructValue(struct_val.into_struct_value())
             }
         }
@@ -320,7 +317,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             for (field_expr, field_layout) in sorted_fields.iter() {
                 let val = build_expr(env, &scope, parent, field_expr, procs);
-                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+                let field_type =
+                    basic_type_from_layout(env.arena, env.context, &field_layout, env.ptr_bytes);
 
                 field_types.push(field_type);
                 field_vals.push(val);
@@ -356,7 +354,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             for (field_expr, field_layout) in it {
                 let val = build_expr(env, &scope, parent, field_expr, procs);
-                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+                let field_type =
+                    basic_type_from_layout(env.arena, env.context, &field_layout, env.ptr_bytes);
 
                 field_types.push(field_type);
                 field_vals.push(val);
@@ -382,7 +381,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             tag_id,
             ..
         } => {
-            let ptr_size = env.pointer_bytes;
+            let ptr_size = env.ptr_bytes;
 
             let whole_size = tag_layout.stack_size(ptr_size);
             let mut filler = tag_layout.stack_size(ptr_size);
@@ -414,7 +413,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             for (field_expr, field_layout) in arguments.iter() {
                 let val = build_expr(env, &scope, parent, field_expr, procs);
-                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+                let field_type =
+                    basic_type_from_layout(env.arena, env.context, &field_layout, ptr_size);
 
                 field_types.push(field_type);
                 field_vals.push(val);
@@ -559,9 +559,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
             // Determine types, assumes the descriminant is in the field layouts
             let num_fields = field_layouts.len();
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let ptr_bytes = env.ptr_bytes;
 
             for field_layout in field_layouts.iter() {
-                let field_type = basic_type_from_layout(env.arena, env.context, &field_layout);
+                let field_type =
+                    basic_type_from_layout(env.arena, env.context, &field_layout, ptr_bytes);
                 field_types.push(field_type);
             }
 
@@ -648,7 +650,7 @@ fn build_branch2<'a, 'ctx, 'env>(
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     let ret_layout = cond.ret_layout;
-    let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout);
+    let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
     let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
 
@@ -877,12 +879,12 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     let args = proc.args;
     let arena = env.arena;
     let context = &env.context;
-    let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout);
+    let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
     let mut arg_symbols = Vec::new_in(arena);
 
     for (layout, arg_symbol) in args.iter() {
-        let arg_type = basic_type_from_layout(arena, env.context, &layout);
+        let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
 
         arg_basic_types.push(arg_type);
         arg_symbols.push(arg_symbol);
@@ -950,7 +952,7 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 #[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
     symbol: Symbol,
-    args: &[BasicValueEnum<'ctx>],
+    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
 ) -> BasicValueEnum<'ctx> {
     match symbol {
@@ -958,8 +960,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             debug_assert!(args.len() == 2);
 
             let int_val = env.builder.build_int_add(
-                args[0].into_int_value(),
-                args[1].into_int_value(),
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
                 "add_i64",
             );
 
@@ -969,8 +971,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             debug_assert!(args.len() == 2);
 
             let float_val = env.builder.build_float_add(
-                args[0].into_float_value(),
-                args[1].into_float_value(),
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
                 "add_f64",
             );
 
@@ -980,8 +982,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             debug_assert!(args.len() == 2);
 
             let int_val = env.builder.build_int_sub(
-                args[0].into_int_value(),
-                args[1].into_int_value(),
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
                 "sub_I64",
             );
 
@@ -991,8 +993,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             debug_assert!(args.len() == 2);
 
             let float_val = env.builder.build_float_sub(
-                args[0].into_float_value(),
-                args[1].into_float_value(),
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
                 "sub_f64",
             );
 
@@ -1002,8 +1004,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             debug_assert!(args.len() == 2);
 
             let int_val = env.builder.build_int_mul(
-                args[0].into_int_value(),
-                args[1].into_int_value(),
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
                 "mul_i64",
             );
 
@@ -1014,29 +1016,26 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let int_val = env
                 .builder
-                .build_int_neg(args[0].into_int_value(), "negate_i64");
+                .build_int_neg(args[0].0.into_int_value(), "negate_i64");
 
             BasicValueEnum::IntValue(int_val)
         }
         Symbol::LIST_LEN => {
             debug_assert!(args.len() == 1);
 
-            let wrapper_struct = args[0].into_struct_value();
+            let wrapper_struct = args[0].0.into_struct_value();
             let builder = env.builder;
 
-            // Get the 32-bit int length
-            let i32_val = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
-
-            // cast the 32-bit length to a 64-bit int
-            BasicValueEnum::IntValue(builder.build_int_cast(i32_val, env.context.i64_type(), "i32_to_i64"))
+            // Get the usize int length
+            builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value().into()
         }
         Symbol::LIST_IS_EMPTY => {
             debug_assert!(args.len() == 1);
 
-            let list_struct = args[0].into_struct_value();
+            let list_struct = args[0].0.into_struct_value();
             let builder = env.builder;
             let list_len = builder.build_extract_value(list_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
-            let zero = env.context.i32_type().const_zero();
+            let zero = env.ptr_int().const_zero();
             let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
 
             BasicValueEnum::IntValue(answer)
@@ -1046,8 +1045,8 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let int_val = env.builder.build_int_compare(
                 IntPredicate::EQ,
-                args[0].into_int_value(),
-                args[1].into_int_value(),
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
                 "cmp_i64",
             );
 
@@ -1058,8 +1057,8 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let int_val = env.builder.build_int_compare(
                 IntPredicate::EQ,
-                args[0].into_int_value(),
-                args[1].into_int_value(),
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
                 "cmp_i1",
             );
 
@@ -1070,8 +1069,8 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let int_val = env.builder.build_int_compare(
                 IntPredicate::EQ,
-                args[0].into_int_value(),
-                args[1].into_int_value(),
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
                 "cmp_i8",
             );
 
@@ -1082,8 +1081,8 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let int_val = env.builder.build_float_compare(
                 FloatPredicate::OEQ,
-                args[0].into_float_value(),
-                args[1].into_float_value(),
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
                 "cmp_f64",
             );
 
@@ -1095,36 +1094,45 @@ fn call_with_args<'a, 'ctx, 'env>(
             // List.get : List elem, Int -> Result elem [ OutOfBounds ]*
             debug_assert!(args.len() == 2);
 
-            let wrapper_struct = args[0].into_struct_value();
-            let elem_index = args[1].into_int_value();
+            let (_list_expr, list_layout) = &args[0];
 
-            // Slot 1 in the wrapper struct is the length
+            let wrapper_struct = args[0].0.into_struct_value();
+            let elem_index = args[1].0.into_int_value();
+
+            // Get the length from the wrapper struct
             let _list_len = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
 
             // TODO here, check to see if the requested index exceeds the length of the array.
 
-            // Slot 0 in the wrapper struct is the pointer to the array data
-            let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
+            match list_layout {
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    // Get the pointer to the array data
+                    let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
 
-            let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
-            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
+                    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+                    let elem_size = env.context.i64_type().const_int(elem_bytes, false);
 
-            // Calculate the offset at runtime by multiplying the index by the size of an element.
-            let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
+                    // Calculate the offset at runtime by multiplying the index by the size of an element.
+                    let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
-            // We already checked the bounds earlier.
-            let elem_ptr = unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
+                    // We already checked the bounds earlier.
+                    let elem_ptr = unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
 
-            builder.build_load(elem_ptr, "List.get")
+                    builder.build_load(elem_ptr, "List.get")
+                }
+                _ => {
+                    unreachable!("Invalid List layout for List.get: {:?}", list_layout);
+                }
+            }
         }
         Symbol::LIST_SET /* TODO clone first for LIST_SET! */ | Symbol::LIST_SET_IN_PLACE => {
             let builder = env.builder;
 
             debug_assert!(args.len() == 3);
 
-            let wrapper_struct = args[0].into_struct_value();
-            let elem_index = args[1].into_int_value();
-            let elem = args[2];
+            let wrapper_struct = args[0].0.into_struct_value();
+            let elem_index = args[1].0.into_int_value();
+            let (elem, elem_layout) = args[2];
 
             // Slot 1 in the wrapper struct is the length
             let _list_len = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
@@ -1135,7 +1143,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             // Slot 0 in the wrapper struct is the pointer to the array data
             let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
 
-            let elem_bytes = 8; // TODO Look this size up instead of hardcoding it!
+            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
 
             // Calculate the offset at runtime by multiplying the index by the size of an element.
@@ -1156,7 +1164,13 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .get_function(symbol.ident_string(&env.interns))
                 .unwrap_or_else(|| panic!("Unrecognized function: {:?}", symbol));
 
-            let call = env.builder.build_call(fn_val, args, "tmp");
+            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
+
+            for (arg, _layout) in args.iter() {
+                arg_vals.push(*arg);
+            }
+
+            let call = env.builder.build_call(fn_val, arg_vals.into_bump_slice(), "call");
 
             call.try_as_basic_value()
                 .left()

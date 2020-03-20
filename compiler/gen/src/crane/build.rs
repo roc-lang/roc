@@ -422,18 +422,19 @@ pub fn build_expr<'a, B: Backend>(
                 elems_ptr
             };
 
-            // Store the pointer in slot 0
-            builder
-                .ins()
-                .stack_store(elems_ptr, slot, Offset32::new(0));
+            // Store the pointer
+            {
+                let offset = Offset32::new((Builtin::WRAPPER_PTR * ptr_bytes) as i32);
 
-            // Store the length in slot 1
+                builder.ins().stack_store(elems_ptr, slot, offset);
+            }
+
+            // Store the length
             {
                 let length = builder.ins().iconst(env.ptr_sized_int(), elems.len() as i64);
+                let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
 
-                builder
-                    .ins()
-                    .stack_store(length, slot, Offset32::new(ptr_bytes as i32));
+                builder.ins().stack_store(length, slot, offset);
             }
 
             // Return the pointer to the wrapper
@@ -797,14 +798,13 @@ fn call_by_name<'a, B: Backend>(
             debug_assert!(args.len() == 1);
 
             let list_ptr = build_arg(&args[0], env, scope, module, builder, procs);
+            let ptr_bytes = env.cfg.pointer_bytes() as u32;
+            let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
 
             // Get the usize list length
-            builder.ins().load(
-                env.ptr_sized_int(),
-                MemFlags::new(),
-                list_ptr,
-                Offset32::new(env.cfg.pointer_bytes() as i32),
-            )
+            builder
+                .ins()
+                .load(env.ptr_sized_int(), MemFlags::new(), list_ptr, offset)
         }
         Symbol::INT_EQ_I64 | Symbol::INT_EQ_I8 | Symbol::INT_EQ_I1 => {
             debug_assert!(args.len() == 2);
@@ -853,12 +853,12 @@ fn call_by_name<'a, B: Backend>(
             let (_list_expr, list_layout) = &args[0];
 
             // Get the usize list length
-            let _list_len = builder.ins().load(
-                env.ptr_sized_int(),
-                MemFlags::new(),
-                wrapper_ptr,
-                Offset32::new(env.cfg.pointer_bytes() as i32),
-            );
+            let ptr_bytes = env.cfg.pointer_bytes() as u32;
+            let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
+            let _list_len =
+                builder
+                    .ins()
+                    .load(env.ptr_sized_int(), MemFlags::new(), wrapper_ptr, offset);
 
             // TODO compare elem_index to _list_len to do array bounds checking.
 
@@ -898,6 +898,16 @@ fn call_by_name<'a, B: Backend>(
             let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
             let (_list_expr, list_layout) = &args[0];
 
+            // Get the usize list length
+            let ptr_bytes = env.cfg.pointer_bytes() as u32;
+            let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
+            let _list_len =
+                builder
+                    .ins()
+                    .load(env.ptr_sized_int(), MemFlags::new(), wrapper_ptr, offset);
+
+            // TODO do array bounds checking, and early return the original List if out of bounds
+
             match list_layout {
                 Layout::Builtin(Builtin::List(elem_layout)) => {
                     let wrapper_ptr = clone_list(env, builder, module, wrapper_ptr, elem_layout);
@@ -917,6 +927,17 @@ fn call_by_name<'a, B: Backend>(
         Symbol::LIST_SET_IN_PLACE => {
             // set : List elem, Int, elem -> List elem
             debug_assert!(args.len() == 3);
+
+            // Get the usize list length
+            let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
+            let ptr_bytes = env.cfg.pointer_bytes() as u32;
+            let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
+            let _list_len =
+                builder
+                    .ins()
+                    .load(env.ptr_sized_int(), MemFlags::new(), wrapper_ptr, offset);
+
+            // TODO do array bounds checking, and early return the original List if out of bounds
 
             let (list_expr, list_layout) = &args[0];
             let list_val = build_expr(env, scope, module, builder, list_expr, procs);
@@ -1014,22 +1035,28 @@ fn clone_list<B: Backend>(
     elem_layout: &Layout<'_>,
 ) -> Value {
     let cfg = env.cfg;
+    let ptr_bytes = env.cfg.pointer_bytes() as u32;
 
     // Load the pointer we got to the wrapper struct
-    let elems_ptr = builder.ins().load(
-        cfg.pointer_type(),
-        MemFlags::new(),
-        src_wrapper_ptr,
-        Offset32::new(0),
-    );
+    let elems_ptr = {
+        let offset = Offset32::new((Builtin::WRAPPER_PTR * ptr_bytes) as i32);
+
+        builder
+            .ins()
+            .load(cfg.pointer_type(), MemFlags::new(), src_wrapper_ptr, offset)
+    };
 
     // Get the usize list length
-    let list_len = builder.ins().load(
-        env.ptr_sized_int(),
-        MemFlags::new(),
-        src_wrapper_ptr,
-        Offset32::new(env.cfg.pointer_bytes() as i32),
-    );
+    let list_len = {
+        let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
+
+        builder.ins().load(
+            env.ptr_sized_int(),
+            MemFlags::new(),
+            src_wrapper_ptr,
+            offset,
+        )
+    };
 
     // Calculate the number of bytes we'll need to allocate.
     let elem_bytes = builder.ins().iconst(
