@@ -471,20 +471,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 array_type.into(),
             );
 
-            //            let struct_pointer = builder.build_alloca(array_type, "struct_poitner");
-            //            builder.build_store(
-            //                builder
-            //                    .build_bitcast(
-            //                        struct_pointer,
-            //                        struct_type.ptr_type(inkwell::AddressSpace::Generic),
-            //                        "",
-            //                    )
-            //                    .into_pointer_value(),
-            //                struct_val,
-            //            );
-            //
-            //            let result = builder.build_load(struct_pointer, "");
-
             // For unclear reasons, we can't cast an array to a struct on the other side.
             // the solution is to wrap the array in a struct (yea...)
             let wrapper_type = ctx.struct_type(&[array_type.into()], false);
