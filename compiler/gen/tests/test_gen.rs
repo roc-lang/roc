@@ -70,13 +70,14 @@ mod test_gen {
                 arena: &arena,
                 interns,
                 cfg,
-                malloc
+                malloc,
+                variable_counter: &mut 0
+
             };
             let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
-
 
             // Put this module's ident_ids back in the interns
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -88,7 +89,7 @@ mod test_gen {
             // can look up their Funcs in scope later when calling each other by value.
             for (name, opt_proc) in procs.as_map().into_iter() {
                 if let Some(proc) = opt_proc {
-                    let (func_id, sig) = declare_proc(&env, &mut module, name, &proc);
+                    let (func_id, sig) = declare_proc(&mut env, &mut module, name, &proc);
 
                     declared.push((proc.clone(), sig.clone(), func_id));
 
@@ -98,13 +99,13 @@ mod test_gen {
 
             for (proc, sig, fn_id) in declared {
                 define_proc_body(
-                    &env,
+                    &mut env,
                     &mut ctx,
                     &mut module,
                     fn_id,
                     &scope,
                     sig,
-                    proc,
+                    arena.alloc(proc),
                     &procs,
                 );
 
@@ -138,7 +139,7 @@ mod test_gen {
                 builder.append_block_params_for_function_params(block);
 
                 let main_body =
-                    roc_gen::crane::build::build_expr(&env, &scope, &mut module, &mut builder, &mono_expr, &procs);
+                    roc_gen::crane::build::build_expr(&mut env, &scope, &mut module, &mut builder, &mono_expr, &procs);
 
                 builder.ins().return_(&[main_body]);
                 // TODO re-enable this once Switch stops making unsealed blocks, e.g.
@@ -226,8 +227,6 @@ mod test_gen {
 
             // Populate Procs and get the low-level Expr from the canonical Expr
             let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
-
-            dbg!(&main_body);
 
             // Put this module's ident_ids back in the interns, so we can use them in Env.
             env.interns.all_ident_ids.insert(home, ident_ids);
@@ -616,22 +615,21 @@ mod test_gen {
         );
     }
 
-    // doesn't work yet. The condition must be cast to an integer to use a jump table
-    //    #[test]
-    //    fn branch_third_float() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                when 10.0 is
-    //                    1.0 -> 63
-    //                    2 -> 48
-    //                    _ -> 112
-    //                "#
-    //            ),
-    //            112.0,
-    //            f64
-    //        );
-    //    }
+    #[test]
+    fn branch_third_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   when 10.0 is
+                       1.0 -> 63
+                       2.0 -> 48
+                       _ -> 112
+                   "#
+            ),
+            112,
+            i64
+        );
+    }
 
     #[test]
     fn branch_first_int() {
@@ -1218,28 +1216,27 @@ mod test_gen {
         );
     }
 
-    //
-    //    #[test]
-    //    fn applied_tag_just_unit() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                Fruit : [ Orange, Apple, Banana ]
-    //                Maybe a : [ Just a, Nothing ]
-    //
-    //                orange : Fruit
-    //                orange = Orange
-    //
-    //                y : Maybe Fruit
-    //                y = Just orange
-    //
-    //                0x1
-    //                "#
-    //            ),
-    //            1,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn applied_tag_just_unit() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Fruit : [ Orange, Apple, Banana ]
+                Maybe a : [ Just a, Nothing ]
+
+                orange : Fruit
+                orange = Orange
+
+                y : Maybe Fruit
+                y = Just orange
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 
     #[test]
     fn when_on_nothing() {
@@ -1259,23 +1256,23 @@ mod test_gen {
         );
     }
 
-    //    #[test]
-    //    fn when_on_just() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                x : [ Nothing, Just Int ]
-    //                x = Just 41
-    //
-    //                case x of
-    //                    Just v -> v + 0x1
-    //                    Nothing -> 0x1
-    //                "#
-    //            ),
-    //            42,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn when_on_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [ Nothing, Just Int ]
+                x = Just 41
+
+                when x is
+                    Just v -> v + 0x1
+                    Nothing -> 0x1
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
     #[test]
     fn when_on_result() {
@@ -1300,15 +1297,201 @@ mod test_gen {
         assert_evals_to!(
             indoc!(
                 r#"
-                x : [ This Int, These Int Int ]
+                These a b : [ This a, That b, These a b ]
+
+                x : These Int Int
                 x = These 0x3 0x2
 
                 when x is
                     These a b -> a + b
+                    That v -> 8
                     This v -> v
                 "#
             ),
             5,
+            i64
+        );
+    }
+
+    #[test]
+    fn maybe_is_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                isJust : Maybe a -> Bool
+                isJust = \list ->
+                    when list is
+                        Nothing -> False
+                        Just _ -> True
+
+                isJust (Just 42)
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn when_on_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x: 0x2 } is
+                    { x } -> x + 3
+                "#
+            ),
+            5,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x: 0x2, y: 3.14 } is
+                    { x: var } -> var + 3
+                "#
+            ),
+            5,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { x } = { x: 0x2, y: 3.14 }
+
+                x
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn record_guard_pattern() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x: 0x2, y: 3.14 } is
+                    { x: 0x4 } -> 5
+                    { x } -> x + 3
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    //    #[test]
+    //    fn when_on_just_just() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                Maybe a : [ Nothing, Just a ]
+    //
+    //                x : Maybe (Maybe a)
+    //                x = Just (Just 41)
+    //
+    //                when x is
+    //                    Just (Just v) -> v + 0x1
+    //                    _ -> 0x1
+    //                "#
+    //            ),
+    //            42,
+    //            i64
+    //        );
+    //    }
+
+    //    #[test]
+    //    fn linked_list_empty() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                LinkedList a : [ Cons a (LinkedList a), Nil ]
+    //
+    //                empty : LinkedList Int
+    //                empty = Nil
+    //
+    //                1
+    //                "#
+    //            ),
+    //            1,
+    //            i64
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn linked_list_singleton() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                LinkedList a : [ Cons a (LinkedList a), Nil ]
+    //
+    //                singleton : LinkedList Int
+    //                singleton = Cons 0x1 Nil
+    //
+    //                1
+    //                "#
+    //            ),
+    //            1,
+    //            i64
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn linked_list_is_empty() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                LinkedList a : [ Cons a (LinkedList a), Nil ]
+    //
+    //                isEmpty : LinkedList a -> Bool
+    //                isEmpty = \list ->
+    //                    when list is
+    //                        Nil -> True
+    //                        Cons _ _ -> False
+    //
+    //                isEmpty (Cons 4 Nil)
+    //                "#
+    //            ),
+    //            false,
+    //            bool
+    //        );
+    //    }
+
+    #[test]
+    fn empty_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                v = {}
+
+                1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn unit_type() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Unit : [ Unit ]
+
+                v : Unit
+                v = Unit
+
+                1
+                "#
+            ),
+            1,
             i64
         );
     }

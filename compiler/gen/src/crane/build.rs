@@ -5,6 +5,7 @@ use bumpalo::Bump;
 use cranelift::frontend::Switch;
 use cranelift::prelude::{
     AbiParam, ExternalName, FloatCC, FunctionBuilder, FunctionBuilderContext, IntCC, MemFlags,
+    Variable,
 };
 use cranelift_codegen::ir::entities::{StackSlot, Value};
 use cranelift_codegen::ir::stackslot::{StackSlotData, StackSlotKind};
@@ -27,6 +28,10 @@ pub enum ScopeEntry {
     Heap { expr_type: Type, ptr: Value },
     Arg { expr_type: Type, param: Value },
     Func { sig: Signature, func_id: FuncId },
+
+    // For empty records and unit types, storing is a no-op and values can be created "out of thin
+    // air". No need to use stack space for them.
+    ZeroSized,
 }
 
 pub struct Env<'a> {
@@ -34,6 +39,7 @@ pub struct Env<'a> {
     pub cfg: TargetFrontendConfig,
     pub interns: Interns,
     pub malloc: FuncId,
+    pub variable_counter: &'a mut u32,
 }
 
 impl<'a> Env<'a> {
@@ -43,15 +49,23 @@ impl<'a> Env<'a> {
     pub fn ptr_sized_int(&self) -> Type {
         Type::int(self.cfg.pointer_bits() as u16).unwrap()
     }
+
+    /// Cranelift creates variables by index.
+    /// For nested conditionals, we need unique variables
+    pub fn fresh_variable(&mut self) -> Variable {
+        let result = cranelift::frontend::Variable::with_u32(*self.variable_counter);
+        *self.variable_counter += 1;
+        result
+    }
 }
 
 pub fn build_expr<'a, B: Backend>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     scope: &Scope,
     module: &mut Module<B>,
     builder: &mut FunctionBuilder,
-    expr: &Expr<'a>,
-    procs: &Procs<'a>,
+    expr: &'a Expr<'a>,
+    procs: &'a Procs<'a>,
 ) -> Value {
     use roc_mono::expr::Expr::*;
 
@@ -101,13 +115,21 @@ pub fn build_expr<'a, B: Backend>(
             let mut scope = im_rc::HashMap::clone(scope);
             let cfg = env.cfg;
 
+            let ptr_size = cfg.pointer_bytes()  as u32;
             for (name, layout, expr) in stores.iter() {
+                let stack_size = layout.stack_size(ptr_size);
+
+                if stack_size == 0 {
+                    scope.insert(*name, ScopeEntry::ZeroSized);
+                    continue;
+                }
+
                 let val = build_expr(env, &scope, module, builder, &expr, procs);
                 let expr_type = type_from_layout(cfg, &layout);
 
                 let slot = builder.create_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
-                    layout.stack_size(cfg.pointer_bytes() as u32),
+                    stack_size,
                 ));
 
                 builder.ins().stack_store(val, slot, Offset32::new(0));
@@ -167,6 +189,17 @@ pub fn build_expr<'a, B: Backend>(
             }
             Some(ScopeEntry::Func { .. }) => {
                 panic!("TODO I don't yet know how to return fn pointers")
+            }
+            Some(ScopeEntry::ZeroSized) => {
+                // Create a slot
+                let slot = builder.create_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    0
+                ));
+
+                builder
+                    .ins()
+                    .stack_addr(env.cfg.pointer_type(), slot, Offset32::new(0))
             }
             None => panic!(
                 "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
@@ -417,18 +450,18 @@ struct Branch2<'a> {
 }
 
 fn build_branch2<'a, B: Backend>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     scope: &Scope,
     module: &mut Module<B>,
     builder: &mut FunctionBuilder,
     branch: Branch2<'a>,
-    procs: &Procs<'a>,
+    procs: &'a Procs<'a>,
 ) -> Value {
     let ret_layout = branch.ret_layout;
     let ret_type = type_from_layout(env.cfg, &ret_layout);
     // Declare a variable which each branch will mutate to be the value of that branch.
     // At the end of the expression, we will evaluate to this.
-    let ret = cranelift::frontend::Variable::with_u32(0);
+    let ret = env.fresh_variable();
 
     // The block we'll jump to once the switch has completed.
     let ret_block = builder.create_block();
@@ -488,17 +521,18 @@ struct SwitchArgs<'a> {
 }
 
 fn build_switch<'a, B: Backend>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     scope: &Scope,
     module: &mut Module<B>,
     builder: &mut FunctionBuilder,
     switch_args: SwitchArgs<'a>,
-    procs: &Procs<'a>,
+    procs: &'a Procs<'a>,
 ) -> Value {
     let mut switch = Switch::new();
     let SwitchArgs {
         branches,
         cond_expr,
+        cond_layout,
         default_branch,
         ret_type,
         ..
@@ -528,7 +562,29 @@ fn build_switch<'a, B: Backend>(
     }
 
     // Run the switch. Each branch will mutate ret and then jump to ret_block.
-    let cond = build_expr(env, scope, module, builder, cond_expr, procs);
+    let cond = match cond_layout {
+        Layout::Union(_) => {
+            let new_cond_layout = &Layout::Builtin(Builtin::Int64);
+            // load the tag discriminator
+            let full_cond = build_expr(env, scope, module, builder, cond_expr, procs);
+
+            let mem_flags = MemFlags::new();
+
+            let ret_type = layout_to_type(&new_cond_layout, env.cfg.pointer_type());
+
+            builder
+                .ins()
+                .load(ret_type, mem_flags, full_cond, Offset32::new(0))
+        }
+        Layout::Builtin(Builtin::Float64) => {
+            // for floats, we match on the bit pattern
+            let full_cond = build_expr(env, scope, module, builder, cond_expr, procs);
+
+            builder.ins().bitcast(types::I64, full_cond)
+        }
+        Layout::Builtin(_) => build_expr(env, scope, module, builder, cond_expr, procs),
+        other => todo!("extract the switch value for layout {:?}", other),
+    };
 
     switch.emit(builder, cond, default_block);
 
@@ -568,7 +624,7 @@ fn build_switch<'a, B: Backend>(
 }
 
 pub fn declare_proc<'a, B: Backend>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     module: &mut Module<B>,
     symbol: Symbol,
     proc: &Proc<'a>,
@@ -602,14 +658,14 @@ pub fn declare_proc<'a, B: Backend>(
 // TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
 pub fn define_proc_body<'a, B: Backend>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     ctx: &mut Context,
     module: &mut Module<B>,
     fn_id: FuncId,
     scope: &Scope,
     sig: Signature,
-    proc: Proc<'a>,
-    procs: &Procs<'a>,
+    proc: &'a Proc<'a>,
+    procs: &'a Procs<'a>,
 ) {
     let args = proc.args;
     let cfg = env.cfg;
@@ -656,11 +712,11 @@ pub fn define_proc_body<'a, B: Backend>(
 
 fn build_arg<'a, B: Backend>(
     (arg, _): &'a (Expr<'a>, Layout<'a>),
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     scope: &Scope,
     module: &mut Module<B>,
     builder: &mut FunctionBuilder,
-    procs: &Procs<'a>,
+    procs: &'a Procs<'a>,
 ) -> Value {
     build_expr(env, scope, module, builder, arg, procs)
 }
@@ -668,13 +724,13 @@ fn build_arg<'a, B: Backend>(
 #[inline(always)]
 #[allow(clippy::cognitive_complexity)]
 fn call_by_name<'a, B: Backend>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     symbol: Symbol,
     args: &'a [(Expr<'a>, Layout<'a>)],
     scope: &Scope,
     module: &mut Module<B>,
     builder: &mut FunctionBuilder,
-    procs: &Procs<'a>,
+    procs: &'a Procs<'a>,
 ) -> Value {
     match symbol {
         Symbol::INT_ADD | Symbol::NUM_ADD => {
@@ -744,6 +800,30 @@ fn call_by_name<'a, B: Backend>(
 
             builder.ins().fcmp(FloatCC::Equal, a, b)
         }
+        Symbol::BOOL_OR => {
+            debug_assert!(args.len() == 2);
+
+            let branch2 = Branch2 {
+                cond: &args[0].0,
+                cond_layout: &Layout::Builtin(Builtin::Bool),
+                pass: &Expr::Bool(true),
+                fail: &args[1].0,
+                ret_layout: &Layout::Builtin(Builtin::Bool),
+            };
+            build_branch2(env, scope, module, builder, branch2, procs)
+        }
+        Symbol::BOOL_AND => {
+            debug_assert!(args.len() == 2);
+
+            let branch2 = Branch2 {
+                cond: &args[0].0,
+                cond_layout: &Layout::Builtin(Builtin::Bool),
+                pass: &args[1].0,
+                fail: &Expr::Bool(false),
+                ret_layout: &Layout::Builtin(Builtin::Bool),
+            };
+            build_branch2(env, scope, module, builder, branch2, procs)
+        }
         Symbol::LIST_GET_UNSAFE => {
             debug_assert!(args.len() == 2);
 
@@ -812,14 +892,10 @@ fn call_by_name<'a, B: Backend>(
                 Layout::Builtin(Builtin::List(elem_layout)) => {
                     let wrapper_ptr = clone_list(env, builder, module, wrapper_ptr, elem_layout);
 
-                    list_set_in_place(
-                        env,
-                        wrapper_ptr,
-                        build_arg(&args[1], env, scope, module, builder, procs),
-                        build_arg(&args[2], env, scope, module, builder, procs),
-                        elem_layout,
-                        builder,
-                    );
+                    let arg1 = build_arg(&args[1], env, scope, module, builder, procs);
+                    let arg2 = build_arg(&args[2], env, scope, module, builder, procs);
+
+                    list_set_in_place(env, wrapper_ptr, arg1, arg2, elem_layout, builder);
 
                     wrapper_ptr
                 }
@@ -847,14 +923,11 @@ fn call_by_name<'a, B: Backend>(
             let list_val = build_expr(env, scope, module, builder, list_expr, procs);
 
             match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => list_set_in_place(
-                    env,
-                    list_val,
-                    build_arg(&args[1], env, scope, module, builder, procs),
-                    build_arg(&args[2], env, scope, module, builder, procs),
-                    elem_layout,
-                    builder,
-                ),
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    let arg1 = build_arg(&args[1], env, scope, module, builder, procs);
+                    let arg2 = build_arg(&args[2], env, scope, module, builder, procs);
+                    list_set_in_place(env, list_val, arg1, arg2, elem_layout, builder)
+                }
                 _ => {
                     unreachable!("Invalid List layout for List.set: {:?}", list_layout);
                 }
@@ -904,7 +977,7 @@ fn call_malloc<B: Backend>(
 }
 
 fn list_set_in_place<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     wrapper_ptr: Value,
     elem_index: Value,
     elem: Value,

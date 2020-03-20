@@ -425,14 +425,35 @@ fn from_can<'a>(
 
             // If it wasn't specifically an Identifier & Closure, proceed as normal.
             let mono_pattern = from_can_pattern(env, &loc_pattern.value);
-            store_pattern(
-                env,
-                mono_pattern,
-                &loc_expr.value,
-                def.expr_var,
-                procs,
-                &mut stored,
-            );
+
+            let layout = Layout::from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
+                .expect("invalid layout");
+
+            match &mono_pattern {
+                Pattern::Identifier(symbol) => {
+                    stored.push((
+                        *symbol,
+                        layout.clone(),
+                        from_can(env, loc_expr.value, procs, None),
+                    ));
+                }
+                _ => {
+                    let symbol = env.fresh_symbol();
+                    stored.push((
+                        symbol,
+                        layout.clone(),
+                        from_can(env, loc_expr.value, procs, None),
+                    ));
+
+                    match store_pattern(env, &mono_pattern, symbol, layout, &mut stored) {
+                        Ok(()) => {}
+                        Err(message) => todo!(
+                            "generate runtime error, the pattern was invalid: {:?}",
+                            message
+                        ),
+                    }
+                }
+            }
 
             // At this point, it's safe to assume we aren't assigning a Closure to a def.
             // Extract Procs from the def body and the ret expression, and return the result!
@@ -672,6 +693,8 @@ fn from_can<'a>(
             Expr::Struct(field_tuples.into_bump_slice())
         }
 
+        EmptyRecord => Expr::Struct(&[]),
+
         Tag {
             variant_var,
             name: tag_name,
@@ -713,7 +736,7 @@ fn from_can<'a>(
                         variant_var,
                         &mut tags,
                     ) {
-                        Ok(()) => {
+                        Ok(()) | Err((_, Content::FlexVar(_))) => {
                             tags.sort();
                         }
                         other => panic!("invalid value in ext_var {:?}", other),
@@ -819,57 +842,8 @@ fn from_can<'a>(
 
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
-    can_pat: Pattern,
-    can_expr: &roc_can::expr::Expr,
-    var: Variable,
-    procs: &mut Procs<'a>,
-    stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
-) {
-    use Pattern::*;
-
-    let layout = match Layout::from_var(env.arena, var, env.subs, env.pointer_size) {
-        Ok(layout) => layout,
-        Err(()) => {
-            panic!("TODO gen a runtime error here");
-        }
-    };
-
-    // If we're defining a named closure, insert it into Procs and then
-    // remove the Let. When code gen later goes to look it up, it'll be in Procs!
-    //
-    // Before:
-    //
-    //     identity = \a -> a
-    //
-    //     identity 5
-    //
-    // After: (`identity` is now in Procs)
-    //
-    //     identity 5
-    //
-    match can_pat {
-        Identifier(symbol) => {
-            stored.push((symbol, layout, from_can(env, can_expr.clone(), procs, None)))
-        }
-        Underscore => {
-            // Since _ is never read, it's safe to reassign it.
-            stored.push((
-                Symbol::UNDERSCORE,
-                layout,
-                from_can(env, can_expr.clone(), procs, None),
-            ))
-        }
-        _ => {
-            panic!("TODO store_pattern for {:?}", can_pat);
-        }
-    }
-}
-
-fn store_pattern2<'a>(
-    env: &mut Env<'a, '_>,
     can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
-    _index: usize,
     layout: Layout<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) -> Result<(), String> {
@@ -877,22 +851,8 @@ fn store_pattern2<'a>(
 
     match can_pat {
         Identifier(symbol) => {
-            if true {
-                // stored.push((*symbol, layout, Expr::Load(outer_symbol)))
-                //                let load = Expr::AccessAtIndex {
-                //                    index: index as u64,
-                //                    field_layouts: env.arena.alloc([
-                //                        Layout::Builtin(Builtin::Int64),
-                //                        Layout::Builtin(Builtin::Int64),
-                //                    ]),
-                //                    expr: env.arena.alloc(Expr::Load(outer_symbol)),
-                //                };
-
-                let load = Expr::Load(outer_symbol);
-                stored.push((*symbol, layout, load))
-            } else {
-                todo!()
-            }
+            let load = Expr::Load(outer_symbol);
+            stored.push((*symbol, layout, load))
         }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
@@ -935,9 +895,14 @@ fn store_pattern2<'a>(
                         let symbol = env.fresh_symbol();
                         stored.push((symbol, layout.clone(), load));
 
-                        store_pattern2(env, argument, symbol, 0, arg_layout.clone(), stored)?;
+                        store_pattern(env, argument, symbol, arg_layout.clone(), stored)?;
                     }
                 }
+            }
+        }
+        RecordDestructure(destructs, layout) => {
+            for destruct in destructs {
+                store_record_destruct(env, destruct, outer_symbol, layout.clone(), stored)?;
             }
         }
 
@@ -950,6 +915,53 @@ fn store_pattern2<'a>(
         _ => {
             panic!("TODO store_pattern for {:?}", can_pat);
         }
+    }
+
+    Ok(())
+}
+
+fn store_record_destruct<'a>(
+    env: &mut Env<'a, '_>,
+    destruct: &RecordDestruct<'a>,
+    outer_symbol: Symbol,
+    struct_layout: Layout<'a>,
+    stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+) -> Result<(), String> {
+    let record = env.arena.alloc(Expr::Load(outer_symbol));
+    let load = Expr::Access {
+        label: destruct.label.clone(),
+        field_layout: destruct.layout.clone(),
+        struct_layout,
+        record,
+    };
+    match &destruct.guard {
+        None => {
+            stored.push((destruct.symbol, destruct.layout.clone(), load));
+        }
+        Some(guard_pattern) => match &guard_pattern {
+            Pattern::Identifier(symbol) => {
+                stored.push((*symbol, destruct.layout.clone(), load));
+            }
+            Pattern::Underscore => {
+                // important that this is special-cased to do nothing: mono record patterns will extract all the
+                // fields, but those not bound in the source code are guarded with the underscore
+                // pattern. So given some record `{ x : a, y : b }`, a match
+                //
+                // { x } -> ...
+                //
+                // is actually
+                //
+                // { x, y: _ } -> ...
+                //
+                // internally. But `y` is never used, so we must make sure it't not stored/loaded.
+            }
+            _ => {
+                let symbol = env.fresh_symbol();
+                stored.push((symbol, destruct.layout.clone(), load));
+
+                store_pattern(env, guard_pattern, symbol, destruct.layout.clone(), stored)?;
+            }
+        },
     }
 
     Ok(())
@@ -981,6 +993,15 @@ fn from_can_when<'a>(
 
             let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
 
+            // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
+            match crate::pattern::check(
+                Region::zero(),
+                &[Located::at(loc_when_pattern.region, mono_pattern.clone())],
+            ) {
+                Ok(_) => {}
+                Err(errors) => panic!("Errors in patterns: {:?}", errors),
+            }
+
             let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
                 .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
             let cond_symbol = env.fresh_symbol();
@@ -989,14 +1010,8 @@ fn from_can_when<'a>(
 
             // NOTE this will still store shadowed names. I think that is fine because the branch
             // will throw an error anyway.
-            let ret = match store_pattern2(
-                env,
-                &mono_pattern,
-                cond_symbol,
-                0,
-                cond_layout,
-                &mut stored,
-            ) {
+            let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored)
+            {
                 Ok(_) => from_can(env, loc_branch.value, procs, None),
                 Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
             };
@@ -1020,11 +1035,10 @@ fn from_can_when<'a>(
 
                 let mut stores = Vec::with_capacity_in(1, env.arena);
 
-                let mono_expr = match store_pattern2(
+                let mono_expr = match store_pattern(
                     env,
                     &mono_pattern,
                     cond_symbol,
-                    0,
                     cond_layout.clone(),
                     &mut stores,
                 ) {
@@ -1227,6 +1241,7 @@ pub enum Pattern<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RecordDestruct<'a> {
     pub label: Lowercase,
+    pub layout: Layout<'a>,
     pub symbol: Symbol,
     pub guard: Option<Pattern<'a>>,
 }
@@ -1325,15 +1340,49 @@ fn from_can_pattern<'a>(
             destructs,
             ..
         } => match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
-            Ok(layout) => {
+            Ok(Layout::Struct(field_layouts)) => {
                 let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
-                for loc_rec_des in destructs {
-                    mono_destructs.push(from_can_record_destruct(env, &loc_rec_des.value));
+                let mut destructs = destructs.clone();
+                destructs.sort_by(|a, b| a.value.label.cmp(&b.value.label));
+
+                let mut it = destructs.iter();
+                let mut opt_destruct = it.next();
+
+                // insert underscore patterns for unused fields. We need the record to be fully
+                // matched for pattern exhaustiveness checking
+                for (label, field_layout) in field_layouts.iter() {
+                    if let Some(destruct) = opt_destruct {
+                        if &destruct.value.label == label {
+                            opt_destruct = it.next();
+
+                            mono_destructs.push(from_can_record_destruct(
+                                env,
+                                &destruct.value,
+                                field_layout.clone(),
+                            ));
+                        } else {
+                            // insert underscore pattern
+                            mono_destructs.push(RecordDestruct {
+                                label: label.clone(),
+                                symbol: env.fresh_symbol(),
+                                layout: field_layout.clone(),
+                                guard: Some(Pattern::Underscore),
+                            });
+                        }
+                    } else {
+                        // insert underscore pattern
+                        mono_destructs.push(RecordDestruct {
+                            label: label.clone(),
+                            symbol: env.fresh_symbol(),
+                            layout: field_layout.clone(),
+                            guard: Some(Pattern::Underscore),
+                        });
+                    }
                 }
 
-                Pattern::RecordDestructure(mono_destructs, layout)
+                Pattern::RecordDestructure(mono_destructs, Layout::Struct(field_layouts))
             }
-            Err(()) => panic!("Invalid layout"),
+            Ok(_) | Err(()) => panic!("Invalid layout"),
         },
     }
 }
@@ -1341,10 +1390,12 @@ fn from_can_pattern<'a>(
 fn from_can_record_destruct<'a>(
     env: &mut Env<'a, '_>,
     can_rd: &roc_can::pattern::RecordDestruct,
+    field_layout: Layout<'a>,
 ) -> RecordDestruct<'a> {
     RecordDestruct {
         label: can_rd.label.clone(),
         symbol: can_rd.symbol,
+        layout: field_layout,
         guard: match &can_rd.guard {
             None => None,
             Some((_, loc_pattern)) => Some(from_can_pattern(env, &loc_pattern.value)),
