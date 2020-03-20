@@ -123,7 +123,7 @@ joinMap : List before, (before -> List after) -> List after
 ## >>>     |> List.joinOks
 joinOks : List (Result elem *) -> List elem
 
-## Iterates over the shortest of the given lists and returns a list of `Tuple`
+## Iterates over the shortest of the given lists and returns a list of `Pair`
 ## tags, each wrapping one of the elements in that list, along with the elements
 ## in the same position in # the other lists.
 ##
@@ -131,12 +131,12 @@ joinOks : List (Result elem *) -> List elem
 ##
 ## Accepts up to 8 lists.
 ##
-## > For a generalized version that returns whatever you like, instead of a `Tup`,
+## > For a generalized version that returns whatever you like, instead of a `Pair`,
 ## > see `zipMap`.
 zip :
-    List a, List b, -> List [ Tup a b ]*
-    List a, List b, List c, -> List [ Tup a b c ]*
-    List a, List b, List c, List d  -> List [ Tup a b c d ]*
+    List a, List b, -> List [ Pair a b ]*
+    List a, List b, List c, -> List [ Pair a b c ]*
+    List a, List b, List c, List d  -> List [ Pair a b c d ]*
 
 ## Like `zip` but you can specify what to do with each element.
 ##
@@ -186,6 +186,24 @@ take : List elem, Int -> List elem
 ##
 ## >>> drop 5 [ 1, 2 ]
 drop : List elem, Int -> List elem
+
+## Access
+
+#get : List elem, ULen -> Result elem [ OutOfBounds ]*
+
+first : List elem -> [Ok elem, ListWasEmpty]*
+
+last : List elem -> [Ok elem, ListWasEmpty]*
+
+get : List elem, ULen -> [Ok elem, OutOfBounds]*
+
+max : List (Num a) -> [Ok (Num a), ListWasEmpty]*
+
+min : List (Num a) -> [Ok (Num a), ListWasEmpty]*
+
+## Modify
+
+set : List elem, ULen, elem -> List elem
 
 ## Deconstruct
 
