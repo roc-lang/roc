@@ -893,7 +893,7 @@ fn store_pattern<'a>(
                     _ => {
                         // store the field in a symbol, and continue matching on it
                         let symbol = env.fresh_symbol();
-                        stored.push((symbol, layout.clone(), load));
+                        stored.push((symbol, arg_layout.clone(), load));
 
                         store_pattern(env, argument, symbol, arg_layout.clone(), stored)?;
                     }
@@ -1401,4 +1401,27 @@ fn from_can_record_destruct<'a>(
             Some((_, loc_pattern)) => Some(from_can_pattern(env, &loc_pattern.value)),
         },
     }
+}
+
+pub fn specialize_equality<'a>(
+    arena: &'a Bump,
+    lhs: Expr<'a>,
+    rhs: Expr<'a>,
+    layout: Layout<'a>,
+) -> Expr<'a> {
+    let symbol = match &layout {
+        Layout::Builtin(builtin) => match builtin {
+            Builtin::Int64 => Symbol::INT_EQ_I64,
+            Builtin::Float64 => Symbol::FLOAT_EQ,
+            Builtin::Byte => Symbol::INT_EQ_I8,
+            Builtin::Bool => Symbol::INT_EQ_I1,
+            other => todo!("Cannot yet compare for equality {:?}", other),
+        },
+        other => todo!("Cannot yet compare for equality {:?}", other),
+    };
+
+    Expr::CallByName(
+        symbol,
+        arena.alloc([(lhs, layout.clone()), (rhs, layout.clone())]),
+    )
 }

@@ -1314,6 +1314,22 @@ mod test_gen {
     }
 
     #[test]
+    fn match_on_two_values() {
+        // this will produce a Chain internally
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Pair 2 3 is
+                    Pair 4 3 -> 9
+                    Pair a b -> a + b
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
     fn maybe_is_just() {
         assert_evals_to!(
             indoc!(
