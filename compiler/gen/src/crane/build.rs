@@ -330,7 +330,7 @@ pub fn build_expr<'a, B: Backend>(
                     let mem_flags = MemFlags::new();
                     let expr = build_expr(env, scope, module, builder, expr, procs);
 
-                    let ret_type = layout_to_type(&field_layout, cfg.pointer_type());
+                    let ret_type = type_from_layout(cfg, field_layout);
 
                     return builder
                         .ins()
@@ -423,21 +423,6 @@ pub fn build_expr<'a, B: Backend>(
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
         }
-    }
-}
-
-fn layout_to_type<'a>(layout: &Layout<'a>, _pointer_type: Type) -> Type {
-    use roc_mono::layout::Builtin::*;
-
-    match layout {
-        Layout::Builtin(builtin) => match builtin {
-            Int64 => cranelift::prelude::types::I64,
-            Byte => cranelift::prelude::types::I8,
-            Bool => cranelift::prelude::types::B1,
-            Float64 => cranelift::prelude::types::F64,
-            other => panic!("I don't yet know how to make a type from {:?}", other),
-        },
-        other => panic!("I don't yet know how to make a type from {:?}", other),
     }
 }
 
@@ -570,7 +555,7 @@ fn build_switch<'a, B: Backend>(
 
             let mem_flags = MemFlags::new();
 
-            let ret_type = layout_to_type(&new_cond_layout, env.cfg.pointer_type());
+            let ret_type = type_from_layout(env.cfg, &new_cond_layout);
 
             builder
                 .ins()

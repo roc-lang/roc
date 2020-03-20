@@ -1438,25 +1438,62 @@ mod test_gen {
         );
     }
 
-    //    #[test]
-    //    fn when_on_just_just() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                Maybe a : [ Nothing, Just a ]
-    //
-    //                x : Maybe (Maybe a)
-    //                x = Just (Just 41)
-    //
-    //                when x is
-    //                    Just (Just v) -> v + 0x1
-    //                    _ -> 0x1
-    //                "#
-    //            ),
-    //            42,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn nested_tag_union() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Nothing, Just a ]
+
+                x : Maybe (Maybe a)
+                x = Just (Just 41)
+
+                5
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
+    fn nested_record_load() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Nothing, Just a ]
+
+                x = { a : { b : 0x5 } }
+
+                y = x.a
+
+                y.b
+                "#
+            ),
+            5,
+            i64
+        );
+    }
+
+    #[test]
+    fn nested_pattern_match() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Nothing, Just a ]
+
+                x : Maybe (Maybe a)
+                x = Just (Just 41)
+
+                when x is
+                    Just (Just v) -> v + 0x1
+                    _ -> 0x1
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
     //    #[test]
     //    fn linked_list_empty() {
