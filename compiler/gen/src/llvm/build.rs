@@ -1101,7 +1101,6 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             debug_assert!(args.len() == 3);
 
-            let elem_index = args[1].0.into_int_value();
             let (elem, elem_layout) = args[2];
             let (wrapper_struct, array_data_ptr) = {
                 // This original wrapper_struct should only stay in scope long enough to clone it.
@@ -1126,6 +1125,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let elem_size = env.ptr_int().const_int(elem_bytes, false);
 
             // Calculate the offset at runtime by multiplying the index by the size of an element.
+            let elem_index = args[1].0.into_int_value();
             let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
             // We already checked the bounds earlier.
@@ -1135,8 +1135,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             // Mutate the array in-place.
             builder.build_store(elem_ptr, elem);
 
-            // Return the wrapper unchanged, since pointer, length and capacity are all unchanged
-            wrapper_struct.into()
+            // Return the cloned wrapper
+            BasicValueEnum::StructValue(wrapper_struct)
         }
         Symbol::LIST_SET_IN_PLACE => {
             let builder = env.builder;
@@ -1169,8 +1169,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             // Mutate the array in-place.
             builder.build_store(elem_ptr, elem);
 
-            // Return the wrapper unchanged, since pointer, length and capacity are all unchanged
-            wrapper_struct.into()
+            // Return the wrapper unchanged, since pointer and length are unchanged
+            BasicValueEnum::StructValue(wrapper_struct)
         }
         _ => {
             let fn_val = env
