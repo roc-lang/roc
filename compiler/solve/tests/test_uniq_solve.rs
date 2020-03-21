@@ -2393,7 +2393,7 @@ mod test_uniq_solve {
                         _ -> 3
                 "#
             ),
-            "Attr * (Attr * (Num *)-> Attr * (Num *))",
+            "Attr * (Attr * (Num (Attr * *)) -> Attr * (Num (Attr * *)))",
         );
     }
 }
