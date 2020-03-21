@@ -563,6 +563,16 @@ mod test_gen {
     }
 
     #[test]
+    fn set_unique_int_list() {
+        assert_llvm_evals_to!(
+            "List.set [ 12, 9, 7, 1, 5 ] 2 33",
+            &[12, 9, 33, 1, 5],
+            &'static [i64],
+            |x| x
+        );
+    }
+
+    #[test]
     fn set_shared_int_list() {
         assert_evals_to!(
             indoc!(
